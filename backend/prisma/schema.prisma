@@ -1,0 +1,1171 @@
+// =============================================================================
+// AICRM Prisma Schema
+// 기준 문서: 02_AICRM_데이터모델설계서_v0.1 (16장 테이블 전체 목록)
+//
+// [주의] rental_allocations 기간 중복 방지 EXCLUDE 제약(문서 11.6)은 Prisma로
+// 표현할 수 없으므로 마이그레이션 SQL에 아래 구문을 수기로 추가해야 한다:
+//
+//   CREATE EXTENSION IF NOT EXISTS btree_gist;
+//   ALTER TABLE rental_allocations
+//     ADD CONSTRAINT rental_allocation_no_overlap EXCLUDE USING gist (
+//       rental_inventory_item_id WITH =,
+//       daterange(pickup_date, availability_end_date, '[]') WITH &&
+//     ) WHERE (status <> 'CANCELLED');
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// -----------------------------------------------------------------------------
+// 1. 기반: 사용자·권한
+// -----------------------------------------------------------------------------
+
+model User {
+  id           String    @id @db.Uuid
+  loginId      String    @unique @map("login_id") @db.VarChar(80)
+  displayName  String    @map("display_name") @db.VarChar(80)
+  passwordHash String    @map("password_hash") @db.VarChar(255)
+  status       String    @default("ACTIVE") @map("status") @db.VarChar(20)
+  lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz(6)
+  rowVersion   Int       @default(0) @map("row_version")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  userRoles                   UserRole[]
+  refreshTokens               RefreshToken[]
+  idempotencyKeys             IdempotencyKey[]
+  auditLogs                   AuditLog[]
+  consultations               Consultation[]               @relation("ConsultationStaff")
+  confirmedContractVersions   ContractVersion[]            @relation("ContractVersionConfirmedBy")
+  createdContractVersions     ContractVersion[]            @relation("ContractVersionCreatedBy")
+  createdOptionSetVersions    OptionSetVersion[]           @relation("OptionSetVersionCreatedBy")
+  optionSelectionValues       OptionSelectionValue[]       @relation("OptionSelectionValueSelectedBy")
+  createdMeasurementSessions  MeasurementSession[]         @relation("MeasurementSessionCreatedBy")
+  linkedOrderItemMeasurements OrderItemMeasurement[]       @relation("OrderItemMeasurementLinkedBy")
+  issuedWorkOrderVersions     WorkOrderVersion[]           @relation("WorkOrderVersionIssuedBy")
+  productionEvents            ProductionEvent[]            @relation("ProductionEventActor")
+  assignedRentalAllocations   RentalAllocation[]           @relation("RentalAllocationAssignedBy")
+  rentalAllocationEvents      RentalAllocationEvent[]      @relation("RentalAllocationEventActor")
+  rentalInventoryStatusEvents RentalInventoryStatusEvent[] @relation("RentalInventoryStatusEventActor")
+  repairStatusEvents          RepairStatusEvent[]          @relation("RepairStatusEventActor")
+  createdPayments             Payment[]                    @relation("PaymentCreatedBy")
+  targetedSharedNotes         SharedNote[]                 @relation("SharedNoteTarget")
+  authoredSharedNotes         SharedNote[]                 @relation("SharedNoteAuthor")
+  dashboardTaskActions        DashboardTaskAction[]        @relation("DashboardTaskActionActionBy")
+  journeyEvents               JourneyEvent[]               @relation("JourneyEventActor")
+
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @db.Uuid
+  code        String   @unique @map("code") @db.VarChar(50)
+  name        String   @map("name") @db.VarChar(80)
+  description String?  @map("description")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  userRoles       UserRole[]
+  rolePermissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @db.Uuid
+  code        String   @unique @map("code") @db.VarChar(80)
+  name        String   @map("name") @db.VarChar(100)
+  description String?  @map("description")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+model UserRole {
+  userId    String   @map("user_id") @db.Uuid
+  roleId    String   @map("role_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id])
+  role Role @relation(fields: [roleId], references: [id])
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+model RolePermission {
+  roleId       String   @map("role_id") @db.Uuid
+  permissionId String   @map("permission_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  role       Role       @relation(fields: [roleId], references: [id])
+  permission Permission @relation(fields: [permissionId], references: [id])
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+// -----------------------------------------------------------------------------
+// 1. 기반: 파일·감사로그
+// -----------------------------------------------------------------------------
+
+model File {
+  id             String   @id @db.Uuid
+  storageKey     String   @unique @map("storage_key") @db.VarChar(255)
+  originalName   String   @map("original_name") @db.VarChar(255)
+  mimeType       String   @map("mime_type") @db.VarChar(100)
+  sizeBytes      BigInt   @map("size_bytes")
+  checksumSha256 String?  @map("checksum_sha256") @db.VarChar(64)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  entityFiles             EntityFile[]
+  optionChoices           OptionChoice[]
+  workOrderVersionOutputs WorkOrderVersion[]
+
+  @@map("files")
+}
+
+model EntityFile {
+  id         String   @id @db.Uuid
+  fileId     String   @map("file_id") @db.Uuid
+  entityType String   @map("entity_type") @db.VarChar(50)
+  entityId   String   @map("entity_id") @db.Uuid
+  purpose    String   @map("purpose") @db.VarChar(30)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  file File @relation(fields: [fileId], references: [id])
+
+  @@index([entityType, entityId])
+  @@map("entity_files")
+}
+
+model AuditLog {
+  id         String   @id @db.Uuid
+  userId     String?  @map("user_id") @db.Uuid
+  action     String   @map("action") @db.VarChar(50)
+  entityType String   @map("entity_type") @db.VarChar(60)
+  entityId   String   @map("entity_id") @db.Uuid
+  beforeJson Json?    @map("before_json")
+  afterJson  Json?    @map("after_json")
+  reason     String?  @map("reason")
+  ipAddress  String?  @map("ip_address") @db.Inet
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([entityType, entityId, createdAt(sort: Desc)])
+  @@index([action])
+  @@map("audit_logs")
+}
+
+// -----------------------------------------------------------------------------
+// 2. 고객·예약·상담
+// -----------------------------------------------------------------------------
+
+model Customer {
+  id              String    @id @db.Uuid
+  name            String    @map("name") @db.VarChar(80)
+  phone           String    @map("phone") @db.VarChar(30)
+  phoneNormalized String    @unique @map("phone_normalized") @db.VarChar(20)
+  email           String?   @map("email") @db.VarChar(255)
+  customerStatus  String    @default("PROSPECT") @map("customer_status") @db.VarChar(20)
+  firstReservedAt DateTime? @map("first_reserved_at") @db.Timestamptz(6)
+  contractedAt    DateTime? @map("contracted_at") @db.Timestamptz(6)
+  notes           String?   @map("notes")
+  rowVersion      Int       @default(0) @map("row_version")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  appointments          Appointment[]
+  consultations         Consultation[]
+  contracts             Contract[]
+  measurementSessions   MeasurementSession[]
+  repairRequests        RepairRequest[]
+  notificationHistories NotificationHistory[]
+  journeys              CustomerJourney[]
+
+  @@index([name])
+  @@map("customers")
+}
+
+model AppointmentPurpose {
+  id        String   @id @db.Uuid
+  code      String   @unique @map("code") @db.VarChar(40)
+  name      String   @map("name") @db.VarChar(80)
+  sortOrder Int      @default(0) @map("sort_order")
+  active    Boolean  @default(true) @map("active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  appointments Appointment[]
+
+  @@map("appointment_purposes")
+}
+
+model Appointment {
+  id             String    @id @db.Uuid
+  customerId     String    @map("customer_id") @db.Uuid
+  source         String    @map("source") @db.VarChar(20)
+  externalId     String?   @map("external_id") @db.VarChar(100)
+  purposeId      String    @map("purpose_id") @db.Uuid
+  scheduledStart DateTime  @map("scheduled_start") @db.Timestamptz(6)
+  scheduledEnd   DateTime? @map("scheduled_end") @db.Timestamptz(6)
+  status         String    @default("RESERVED") @map("status") @db.VarChar(20)
+  notes          String?   @map("notes")
+  naverUpdatedAt DateTime? @map("naver_updated_at") @db.Timestamptz(6)
+  syncedAt       DateTime? @map("synced_at") @db.Timestamptz(6)
+  localOverride  Boolean   @default(false) @map("local_override")
+  rowVersion     Int       @default(0) @map("row_version")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  customer        Customer           @relation(fields: [customerId], references: [id])
+  purpose         AppointmentPurpose @relation(fields: [purposeId], references: [id])
+  consultations   Consultation[]
+  fittingSessions FittingSession[]
+
+  @@unique([source, externalId])
+  @@index([scheduledStart, status])
+  @@index([customerId])
+  @@map("appointments")
+}
+
+model Consultation {
+  id                   String    @id @db.Uuid
+  customerId           String    @map("customer_id") @db.Uuid
+  appointmentId        String?   @map("appointment_id") @db.Uuid
+  consultedAt          DateTime  @map("consulted_at") @db.Timestamptz(6)
+  consultationCategory String?   @map("consultation_category") @db.VarChar(30)
+  content              String    @map("content")
+  /**
+   * 용도 (BUSINESS_CUSTOM | WEDDING_RENTAL) — 진행 단계 trackType과 1:1 대응
+   */
+  usageType            String?   @map("usage_type") @db.VarChar(30)
+  /**
+   * 예산 범위 (정수 원). 단일값이면 min=max
+   */
+  budgetMin            Int?      @map("budget_min")
+  budgetMax            Int?      @map("budget_max")
+  preferredStyle       String?   @map("preferred_style") @db.VarChar(200)
+  /**
+   * 고객이 희망한 납기 — 계약 시 orders.completion_due_date 기본값으로 제안
+   */
+  desiredDueDate       DateTime? @map("desired_due_date") @db.Date
+  staffId              String    @map("staff_id") @db.Uuid
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  customer    Customer     @relation(fields: [customerId], references: [id])
+  appointment Appointment? @relation(fields: [appointmentId], references: [id])
+  staff       User         @relation("ConsultationStaff", fields: [staffId], references: [id])
+
+  @@index([customerId, consultedAt(sort: Desc)])
+  @@map("consultations")
+}
+
+// -----------------------------------------------------------------------------
+// 2. 계약 구분·계약 버전
+// -----------------------------------------------------------------------------
+
+model ContractType {
+  id          String   @id @db.Uuid
+  code        String   @unique @map("code") @db.VarChar(40)
+  name        String   @map("name") @db.VarChar(100)
+  description String?  @map("description")
+  sortOrder   Int      @default(0) @map("sort_order")
+  active      Boolean  @default(true) @map("active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  lines     ContractTypeLine[]
+  contracts Contract[]
+
+  @@map("contract_types")
+}
+
+model ContractTypeLine {
+  id              String   @id @db.Uuid
+  contractTypeId  String   @map("contract_type_id") @db.Uuid
+  transactionType String   @map("transaction_type") @db.VarChar(20)
+  productCategory String   @map("product_category") @db.VarChar(20)
+  defaultQuantity Int      @default(1) @map("default_quantity")
+  sortOrder       Int      @default(0) @map("sort_order")
+  active          Boolean  @default(true) @map("active")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  contractType ContractType @relation(fields: [contractTypeId], references: [id])
+
+  @@map("contract_type_lines")
+}
+
+model Contract {
+  id               String    @id @db.Uuid
+  contractNo       String    @unique @map("contract_no") @db.VarChar(40)
+  customerId       String    @map("customer_id") @db.Uuid
+  contractTypeId   String?   @map("contract_type_id") @db.Uuid
+  status           String    @default("DRAFT") @map("status") @db.VarChar(20)
+  currentVersionId String?   @map("current_version_id") @db.Uuid
+  contractedAt     DateTime? @map("contracted_at") @db.Timestamptz(6)
+  balanceDueDate   DateTime? @map("balance_due_date") @db.Date
+  rowVersion       Int       @default(0) @map("row_version")
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  customer       Customer          @relation(fields: [customerId], references: [id])
+  contractType   ContractType?     @relation(fields: [contractTypeId], references: [id])
+  currentVersion ContractVersion?  @relation("ContractCurrentVersion", fields: [currentVersionId], references: [id])
+  versions       ContractVersion[] @relation("ContractVersions")
+  orders         Order[]
+  payments       Payment[]
+
+  @@index([customerId, contractedAt(sort: Desc)])
+  @@map("contracts")
+}
+
+model ContractVersion {
+  id                String    @id @db.Uuid
+  contractId        String    @map("contract_id") @db.Uuid
+  versionNo         Int       @map("version_no")
+  versionStatus     String    @default("DRAFT") @map("version_status") @db.VarChar(20)
+  changeReason      String?   @map("change_reason")
+  totalAmount       Decimal   @default(0) @map("total_amount") @db.Decimal(14, 2)
+  depositAmount     Decimal   @default(0) @map("deposit_amount") @db.Decimal(14, 2)
+  balanceAmount     Decimal   @default(0) @map("balance_amount") @db.Decimal(14, 2)
+  completionDueDate DateTime? @map("completion_due_date") @db.Date
+  photoDate         DateTime? @map("photo_date") @db.Date
+  weddingDate       DateTime? @map("wedding_date") @db.Date
+  confirmedBy       String?   @map("confirmed_by") @db.Uuid
+  confirmedAt       DateTime? @map("confirmed_at") @db.Timestamptz(6)
+  createdBy         String    @map("created_by") @db.Uuid
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  contract           Contract       @relation("ContractVersions", fields: [contractId], references: [id])
+  confirmedByUser    User?          @relation("ContractVersionConfirmedBy", fields: [confirmedBy], references: [id])
+  createdByUser      User           @relation("ContractVersionCreatedBy", fields: [createdBy], references: [id])
+  currentOfContracts Contract[]     @relation("ContractCurrentVersion")
+  lines              ContractLine[]
+
+  @@unique([contractId, versionNo])
+  @@map("contract_versions")
+}
+
+model ContractLine {
+  id                String   @id @db.Uuid
+  contractVersionId String   @map("contract_version_id") @db.Uuid
+  transactionType   String   @map("transaction_type") @db.VarChar(20)
+  productCategory   String   @map("product_category") @db.VarChar(20)
+  itemDescription   String?  @map("item_description") @db.VarChar(150)
+  quantity          Int      @map("quantity")
+  unitPrice         Decimal? @map("unit_price") @db.Decimal(14, 2)
+  lineAmount        Decimal  @default(0) @map("line_amount") @db.Decimal(14, 2)
+  notes             String?  @map("notes")
+  sortOrder         Int      @default(0) @map("sort_order")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  contractVersion ContractVersion @relation(fields: [contractVersionId], references: [id])
+  orderItems      OrderItem[]
+
+  @@index([contractVersionId, transactionType, productCategory])
+  @@map("contract_lines")
+}
+
+// -----------------------------------------------------------------------------
+// 2. 주문·품목·구성품
+// -----------------------------------------------------------------------------
+
+model Order {
+  id                String    @id @db.Uuid
+  orderNo           String    @unique @map("order_no") @db.VarChar(40)
+  contractId        String    @map("contract_id") @db.Uuid
+  transactionType   String    @map("transaction_type") @db.VarChar(20)
+  status            String    @default("CREATED") @map("status") @db.VarChar(30)
+  completionDueDate DateTime? @map("completion_due_date") @db.Date
+  photoDate         DateTime? @map("photo_date") @db.Date
+  weddingDate       DateTime? @map("wedding_date") @db.Date
+  rowVersion        Int       @default(0) @map("row_version")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  contract              Contract              @relation(fields: [contractId], references: [id])
+  items                 OrderItem[]
+  measurementSessions   MeasurementSession[]
+  repairRequests        RepairRequest[]
+  notificationHistories NotificationHistory[]
+  journeys              CustomerJourney[]
+
+  @@unique([contractId, transactionType])
+  @@map("orders")
+}
+
+model OrderItem {
+  id                   String    @id @db.Uuid
+  orderId              String    @map("order_id") @db.Uuid
+  sourceContractLineId String    @map("source_contract_line_id") @db.Uuid
+  productCategory      String    @map("product_category") @db.VarChar(20)
+  sequenceNo           Int       @map("sequence_no")
+  displayName          String    @map("display_name") @db.VarChar(100)
+  status               String    @default("CREATED") @map("status") @db.VarChar(30)
+  cancelledReason      String?   @map("cancelled_reason")
+  cancelledAt          DateTime? @map("cancelled_at") @db.Timestamptz(6)
+  rowVersion           Int       @default(0) @map("row_version")
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  order                   Order                    @relation(fields: [orderId], references: [id])
+  sourceContractLine      ContractLine             @relation(fields: [sourceContractLineId], references: [id])
+  components              OrderItemComponent[]
+  optionSelectionSessions OptionSelectionSession[]
+  measurementLinks        OrderItemMeasurement[]
+  workOrder               WorkOrder?
+  productionEvents        ProductionEvent[]
+  fittingSessions         FittingSession[]
+  repairRequests          RepairRequest[]
+
+  @@unique([orderId, productCategory, sequenceNo])
+  @@map("order_items")
+}
+
+model OrderItemComponent {
+  id                  String    @id @db.Uuid
+  orderItemId         String    @map("order_item_id") @db.Uuid
+  componentType       String    @map("component_type") @db.VarChar(20)
+  sequenceNo          Int       @default(1) @map("sequence_no")
+  status              String    @default("CREATED") @map("status") @db.VarChar(30)
+  expectedInboundDate DateTime? @map("expected_inbound_date") @db.Date
+  actualInboundAt     DateTime? @map("actual_inbound_at") @db.Timestamptz(6)
+  actualOutboundAt    DateTime? @map("actual_outbound_at") @db.Timestamptz(6)
+  notes               String?   @map("notes")
+  active              Boolean   @default(true) @map("active")
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  orderItem          OrderItem           @relation(fields: [orderItemId], references: [id])
+  productionEvents   ProductionEvent[]
+  fittingAdjustments FittingAdjustment[]
+  rentalAllocations  RentalAllocation[]
+  repairRequests     RepairRequest[]
+
+  @@index([orderItemId, componentType])
+  @@map("order_item_components")
+}
+
+// -----------------------------------------------------------------------------
+// 3. 옵션 세트·임시저장·확정
+// -----------------------------------------------------------------------------
+
+model OptionSet {
+  id              String   @id @db.Uuid
+  productCategory String   @unique @map("product_category") @db.VarChar(20)
+  name            String   @map("name") @db.VarChar(100)
+  activeVersionId String?  @map("active_version_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  activeVersion OptionSetVersion?  @relation("OptionSetActiveVersion", fields: [activeVersionId], references: [id])
+  versions      OptionSetVersion[] @relation("OptionSetVersions")
+
+  @@map("option_sets")
+}
+
+model OptionSetVersion {
+  id            String    @id @db.Uuid
+  optionSetId   String    @map("option_set_id") @db.Uuid
+  versionNo     Int       @map("version_no")
+  status        String    @default("DRAFT") @map("status") @db.VarChar(20)
+  effectiveFrom DateTime? @map("effective_from") @db.Date
+  description   String?   @map("description")
+  createdBy     String    @map("created_by") @db.Uuid
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  optionSet          OptionSet                @relation("OptionSetVersions", fields: [optionSetId], references: [id])
+  createdByUser      User                     @relation("OptionSetVersionCreatedBy", fields: [createdBy], references: [id])
+  activeOfOptionSets OptionSet[]              @relation("OptionSetActiveVersion")
+  stages             OptionStage[]
+  selectionSessions  OptionSelectionSession[]
+
+  @@unique([optionSetId, versionNo])
+  @@map("option_set_versions")
+}
+
+model OptionStage {
+  id                 String   @id @db.Uuid
+  optionSetVersionId String   @map("option_set_version_id") @db.Uuid
+  stageCode          String   @map("stage_code") @db.VarChar(40)
+  stageName          String   @map("stage_name") @db.VarChar(100)
+  sequenceNo         Int      @map("sequence_no")
+  required           Boolean  @default(true) @map("required")
+  active             Boolean  @default(true) @map("active")
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  optionSetVersion OptionSetVersion         @relation(fields: [optionSetVersionId], references: [id])
+  choices          OptionChoice[]
+  selectionValues  OptionSelectionValue[]
+  currentSessions  OptionSelectionSession[] @relation("OptionSelectionSessionCurrentStage")
+
+  @@unique([optionSetVersionId, stageCode])
+  @@unique([optionSetVersionId, sequenceNo])
+  @@map("option_stages")
+}
+
+model OptionChoice {
+  id            String   @id @db.Uuid
+  optionStageId String   @map("option_stage_id") @db.Uuid
+  choiceCode    String   @map("choice_code") @db.Char(1)
+  choiceName    String   @map("choice_name") @db.VarChar(100)
+  factoryLabel  String?  @map("factory_label") @db.VarChar(100)
+  imageFileId   String   @map("image_file_id") @db.Uuid
+  active        Boolean  @default(true) @map("active")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  optionStage     OptionStage            @relation(fields: [optionStageId], references: [id])
+  imageFile       File                   @relation(fields: [imageFileId], references: [id])
+  selectionValues OptionSelectionValue[]
+
+  @@unique([optionStageId, choiceCode])
+  @@map("option_choices")
+}
+
+model OptionSelectionSession {
+  id                 String    @id @db.Uuid
+  orderItemId        String    @map("order_item_id") @db.Uuid
+  optionSetVersionId String    @map("option_set_version_id") @db.Uuid
+  selectionVersionNo Int       @map("selection_version_no")
+  status             String    @default("NOT_STARTED") @map("status") @db.VarChar(20)
+  currentStageId     String?   @map("current_stage_id") @db.Uuid
+  fabricName         String?   @map("fabric_name") @db.VarChar(150)
+  startedAt          DateTime? @map("started_at") @db.Timestamptz(6)
+  lastSavedAt        DateTime? @map("last_saved_at") @db.Timestamptz(6)
+  reviewedAt         DateTime? @map("reviewed_at") @db.Timestamptz(6)
+  confirmedAt        DateTime? @map("confirmed_at") @db.Timestamptz(6)
+  isCurrent          Boolean   @default(true) @map("is_current")
+  rowVersion         Int       @default(0) @map("row_version")
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  orderItem         OrderItem              @relation(fields: [orderItemId], references: [id])
+  optionSetVersion  OptionSetVersion       @relation(fields: [optionSetVersionId], references: [id])
+  currentStage      OptionStage?           @relation("OptionSelectionSessionCurrentStage", fields: [currentStageId], references: [id])
+  values            OptionSelectionValue[]
+  workOrderVersions WorkOrderVersion[]
+
+  @@unique([orderItemId, selectionVersionNo])
+  @@index([orderItemId, isCurrent, status])
+  @@map("option_selection_sessions")
+}
+
+model OptionSelectionValue {
+  id                 String   @id @db.Uuid
+  selectionSessionId String   @map("selection_session_id") @db.Uuid
+  optionStageId      String   @map("option_stage_id") @db.Uuid
+  optionChoiceId     String   @map("option_choice_id") @db.Uuid
+  selectedBy         String   @map("selected_by") @db.Uuid
+  selectedAt         DateTime @default(now()) @map("selected_at") @db.Timestamptz(6)
+
+  selectionSession OptionSelectionSession @relation(fields: [selectionSessionId], references: [id])
+  optionStage      OptionStage            @relation(fields: [optionStageId], references: [id])
+  optionChoice     OptionChoice           @relation(fields: [optionChoiceId], references: [id])
+  selectedByUser   User                   @relation("OptionSelectionValueSelectedBy", fields: [selectedBy], references: [id])
+
+  @@unique([selectionSessionId, optionStageId])
+  @@map("option_selection_values")
+}
+
+// -----------------------------------------------------------------------------
+// 3. 채촌·버전 비교
+// -----------------------------------------------------------------------------
+
+model MeasurementSession {
+  id                String    @id @db.Uuid
+  customerId        String    @map("customer_id") @db.Uuid
+  relatedOrderId    String?   @map("related_order_id") @db.Uuid
+  versionNo         Int       @map("version_no")
+  measurementDate   DateTime  @map("measurement_date") @db.Date
+  measurementType   String    @default("INITIAL") @map("measurement_type") @db.VarChar(20)
+  previousSessionId String?   @map("previous_session_id") @db.Uuid
+  fitPreference     String?   @map("fit_preference") @db.VarChar(100)
+  bodyNotes         String?   @map("body_notes")
+  notes             String?   @map("notes")
+  completedAt       DateTime? @map("completed_at") @db.Timestamptz(6)
+  createdBy         String    @map("created_by") @db.Uuid
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  customer          Customer               @relation(fields: [customerId], references: [id])
+  relatedOrder      Order?                 @relation(fields: [relatedOrderId], references: [id])
+  previousSession   MeasurementSession?    @relation("MeasurementSessionPrevious", fields: [previousSessionId], references: [id])
+  nextSessions      MeasurementSession[]   @relation("MeasurementSessionPrevious")
+  createdByUser     User                   @relation("MeasurementSessionCreatedBy", fields: [createdBy], references: [id])
+  values            MeasurementValue[]
+  orderItemLinks    OrderItemMeasurement[]
+  workOrderVersions WorkOrderVersion[]
+
+  @@unique([customerId, versionNo])
+  @@index([customerId, measurementDate(sort: Desc)])
+  @@map("measurement_sessions")
+}
+
+model MeasurementValue {
+  id                   String   @id @db.Uuid
+  measurementSessionId String   @map("measurement_session_id") @db.Uuid
+  bodySection          String   @map("body_section") @db.VarChar(20)
+  measurementCode      String   @map("measurement_code") @db.VarChar(40)
+  numericValue         Decimal? @map("numeric_value") @db.Decimal(8, 2)
+  textValue            String?  @map("text_value") @db.VarChar(40)
+  unit                 String   @default("CM") @map("unit") @db.VarChar(10)
+  sortOrder            Int      @default(0) @map("sort_order")
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  measurementSession MeasurementSession @relation(fields: [measurementSessionId], references: [id])
+
+  @@unique([measurementSessionId, measurementCode])
+  @@index([bodySection])
+  @@map("measurement_values")
+}
+
+model OrderItemMeasurement {
+  id                   String   @id @db.Uuid
+  orderItemId          String   @map("order_item_id") @db.Uuid
+  measurementSessionId String   @map("measurement_session_id") @db.Uuid
+  isCurrent            Boolean  @default(true) @map("is_current")
+  linkedBy             String   @map("linked_by") @db.Uuid
+  linkedAt             DateTime @default(now()) @map("linked_at") @db.Timestamptz(6)
+
+  orderItem          OrderItem          @relation(fields: [orderItemId], references: [id])
+  measurementSession MeasurementSession @relation(fields: [measurementSessionId], references: [id])
+  linkedByUser       User               @relation("OrderItemMeasurementLinkedBy", fields: [linkedBy], references: [id])
+
+  @@index([orderItemId, isCurrent])
+  @@map("order_item_measurements")
+}
+
+// -----------------------------------------------------------------------------
+// 4. 작업지시서·제작·입출고
+// -----------------------------------------------------------------------------
+
+model WorkOrder {
+  id               String   @id @db.Uuid
+  orderItemId      String   @unique @map("order_item_id") @db.Uuid
+  currentVersionId String?  @map("current_version_id") @db.Uuid
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  orderItem      OrderItem          @relation(fields: [orderItemId], references: [id])
+  currentVersion WorkOrderVersion?  @relation("WorkOrderCurrentVersion", fields: [currentVersionId], references: [id])
+  versions       WorkOrderVersion[] @relation("WorkOrderVersions")
+
+  @@map("work_orders")
+}
+
+model WorkOrderVersion {
+  id                         String    @id @db.Uuid
+  workOrderId                String    @map("work_order_id") @db.Uuid
+  versionNo                  Int       @map("version_no")
+  sourceOptionSessionId      String    @map("source_option_session_id") @db.Uuid
+  sourceMeasurementSessionId String    @map("source_measurement_session_id") @db.Uuid
+  optionSnapshot             Json      @map("option_snapshot")
+  measurementSnapshot        Json      @map("measurement_snapshot")
+  sourceHash                 String    @map("source_hash") @db.VarChar(64)
+  changeReason               String?   @map("change_reason")
+  outputFileId               String    @map("output_file_id") @db.Uuid
+  status                     String    @default("ISSUED") @map("status") @db.VarChar(20)
+  issuedBy                   String    @map("issued_by") @db.Uuid
+  issuedAt                   DateTime  @map("issued_at") @db.Timestamptz(6)
+  sentAt                     DateTime? @map("sent_at") @db.Timestamptz(6)
+  updatedAt                  DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  workOrder                WorkOrder              @relation("WorkOrderVersions", fields: [workOrderId], references: [id])
+  sourceOptionSession      OptionSelectionSession @relation(fields: [sourceOptionSessionId], references: [id])
+  sourceMeasurementSession MeasurementSession     @relation(fields: [sourceMeasurementSessionId], references: [id])
+  outputFile               File                   @relation(fields: [outputFileId], references: [id])
+  issuedByUser             User                   @relation("WorkOrderVersionIssuedBy", fields: [issuedBy], references: [id])
+  currentOfWorkOrders      WorkOrder[]            @relation("WorkOrderCurrentVersion")
+
+  @@unique([workOrderId, versionNo])
+  @@index([workOrderId, issuedAt(sort: Desc)])
+  @@index([sourceHash])
+  @@map("work_order_versions")
+}
+
+model ProductionEvent {
+  id             String    @id @db.Uuid
+  orderItemId    String    @map("order_item_id") @db.Uuid
+  componentId    String?   @map("component_id") @db.Uuid
+  eventType      String    @map("event_type") @db.VarChar(40)
+  previousStatus String?   @map("previous_status") @db.VarChar(30)
+  newStatus      String    @map("new_status") @db.VarChar(30)
+  expectedDate   DateTime? @map("expected_date") @db.Date
+  eventDate      DateTime  @map("event_date") @db.Date
+  notes          String?   @map("notes")
+  actorId        String    @map("actor_id") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  orderItem OrderItem           @relation(fields: [orderItemId], references: [id])
+  component OrderItemComponent? @relation(fields: [componentId], references: [id])
+  actor     User                @relation("ProductionEventActor", fields: [actorId], references: [id])
+
+  @@index([orderItemId, eventDate])
+  @@index([eventType])
+  @@index([expectedDate, newStatus])
+  @@map("production_events")
+}
+
+model FittingSession {
+  id                  String    @id @db.Uuid
+  orderItemId         String    @map("order_item_id") @db.Uuid
+  appointmentId       String?   @map("appointment_id") @db.Uuid
+  fittingDate         DateTime  @map("fitting_date") @db.Date
+  notes               String?   @map("notes")
+  nextAppointmentDate DateTime? @map("next_appointment_date") @db.Date
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  orderItem   OrderItem           @relation(fields: [orderItemId], references: [id])
+  appointment Appointment?        @relation(fields: [appointmentId], references: [id])
+  adjustments FittingAdjustment[]
+
+  @@index([fittingDate])
+  @@map("fitting_sessions")
+}
+
+model FittingAdjustment {
+  id               String   @id @db.Uuid
+  fittingSessionId String   @map("fitting_session_id") @db.Uuid
+  componentId      String?  @map("component_id") @db.Uuid
+  /**
+   * 표준 확인 항목 (SILHOUETTE | BALANCE | EASE | LENGTH | ETC) — 설계서 1페이지 가봉 단계
+   */
+  areaCode         String   @default("ETC") @map("area_code") @db.VarChar(20)
+  /**
+   * 세부 부위 자유입력 (예: 왼쪽 소매)
+   */
+  area             String   @map("area") @db.VarChar(80)
+  instruction      String   @map("instruction")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  fittingSession FittingSession      @relation(fields: [fittingSessionId], references: [id])
+  component      OrderItemComponent? @relation(fields: [componentId], references: [id])
+
+  @@map("fitting_adjustments")
+}
+
+// -----------------------------------------------------------------------------
+// 5. 렌탈 실물·기간 배정
+// -----------------------------------------------------------------------------
+
+model RentalSku {
+  id            String   @id @db.Uuid
+  componentType String   @map("component_type") @db.VarChar(20)
+  design        String   @map("design") @db.VarChar(100)
+  color         String   @map("color") @db.VarChar(80)
+  size          String   @map("size") @db.VarChar(40)
+  description   String?  @map("description")
+  active        Boolean  @default(true) @map("active")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  inventoryItems RentalInventoryItem[]
+
+  @@index([componentType, design, color, size])
+  @@map("rental_skus")
+}
+
+model RentalInventoryItem {
+  id             String    @id @db.Uuid
+  managementCode String    @unique @map("management_code") @db.VarChar(60)
+  rentalSkuId    String    @map("rental_sku_id") @db.Uuid
+  status         String    @default("AVAILABLE") @map("status") @db.VarChar(25)
+  availableFrom  DateTime? @map("available_from") @db.Date
+  notes          String?   @map("notes")
+  active         Boolean   @default(true) @map("active")
+  acquiredAt     DateTime? @map("acquired_at") @db.Date
+  retiredAt      DateTime? @map("retired_at") @db.Date
+  rowVersion     Int       @default(0) @map("row_version")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  rentalSku           RentalSku                    @relation(fields: [rentalSkuId], references: [id])
+  statusEvents        RentalInventoryStatusEvent[]
+  allocations         RentalAllocation[]
+  oldAllocationEvents RentalAllocationEvent[]      @relation("RentalAllocationEventOldItem")
+  newAllocationEvents RentalAllocationEvent[]      @relation("RentalAllocationEventNewItem")
+  repairRequests      RepairRequest[]
+
+  @@index([status, availableFrom])
+  @@map("rental_inventory_items")
+}
+
+model RentalAllocation {
+  id                    String    @id @db.Uuid
+  orderItemComponentId  String    @map("order_item_component_id") @db.Uuid
+  rentalInventoryItemId String    @map("rental_inventory_item_id") @db.Uuid
+  pickupDate            DateTime  @map("pickup_date") @db.Date
+  returnDueDate         DateTime  @map("return_due_date") @db.Date
+  availabilityEndDate   DateTime  @map("availability_end_date") @db.Date
+  actualPickupAt        DateTime? @map("actual_pickup_at") @db.Timestamptz(6)
+  actualReturnAt        DateTime? @map("actual_return_at") @db.Timestamptz(6)
+  status                String    @default("RESERVED") @map("status") @db.VarChar(25)
+  assignedBy            String    @map("assigned_by") @db.Uuid
+  assignedAt            DateTime  @map("assigned_at") @db.Timestamptz(6)
+  rowVersion            Int       @default(0) @map("row_version")
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  orderItemComponent  OrderItemComponent      @relation(fields: [orderItemComponentId], references: [id])
+  rentalInventoryItem RentalInventoryItem     @relation(fields: [rentalInventoryItemId], references: [id])
+  assignedByUser      User                    @relation("RentalAllocationAssignedBy", fields: [assignedBy], references: [id])
+  events              RentalAllocationEvent[]
+
+  @@index([rentalInventoryItemId, pickupDate, availabilityEndDate])
+  @@index([returnDueDate, status])
+  @@map("rental_allocations")
+}
+
+model RentalAllocationEvent {
+  id                 String   @id @db.Uuid
+  rentalAllocationId String   @map("rental_allocation_id") @db.Uuid
+  eventType          String   @map("event_type") @db.VarChar(30)
+  oldInventoryItemId String?  @map("old_inventory_item_id") @db.Uuid
+  newInventoryItemId String?  @map("new_inventory_item_id") @db.Uuid
+  reason             String?  @map("reason")
+  actorId            String   @map("actor_id") @db.Uuid
+  occurredAt         DateTime @default(now()) @map("occurred_at") @db.Timestamptz(6)
+
+  rentalAllocation RentalAllocation     @relation(fields: [rentalAllocationId], references: [id])
+  oldInventoryItem RentalInventoryItem? @relation("RentalAllocationEventOldItem", fields: [oldInventoryItemId], references: [id])
+  newInventoryItem RentalInventoryItem? @relation("RentalAllocationEventNewItem", fields: [newInventoryItemId], references: [id])
+  actor            User                 @relation("RentalAllocationEventActor", fields: [actorId], references: [id])
+
+  @@index([rentalAllocationId, eventType])
+  @@map("rental_allocation_events")
+}
+
+model RentalInventoryStatusEvent {
+  id                    String    @id @db.Uuid
+  rentalInventoryItemId String    @map("rental_inventory_item_id") @db.Uuid
+  previousStatus        String?   @map("previous_status") @db.VarChar(25)
+  newStatus             String    @map("new_status") @db.VarChar(25)
+  availableFrom         DateTime? @map("available_from") @db.Date
+  reason                String?   @map("reason")
+  actorId               String    @map("actor_id") @db.Uuid
+  occurredAt            DateTime  @default(now()) @map("occurred_at") @db.Timestamptz(6)
+
+  rentalInventoryItem RentalInventoryItem @relation(fields: [rentalInventoryItemId], references: [id])
+  actor               User                @relation("RentalInventoryStatusEventActor", fields: [actorId], references: [id])
+
+  @@index([rentalInventoryItemId, occurredAt(sort: Desc)])
+  @@map("rental_inventory_status_events")
+}
+
+// -----------------------------------------------------------------------------
+// 6. 수선·결제
+// -----------------------------------------------------------------------------
+
+model RepairRequest {
+  id                    String    @id @db.Uuid
+  customerId            String    @map("customer_id") @db.Uuid
+  orderId               String?   @map("order_id") @db.Uuid
+  orderItemId           String?   @map("order_item_id") @db.Uuid
+  componentId           String?   @map("component_id") @db.Uuid
+  rentalInventoryItemId String?   @map("rental_inventory_item_id") @db.Uuid
+  repairType            String    @map("repair_type") @db.VarChar(30)
+  requestDate           DateTime  @map("request_date") @db.Date
+  dueDate               DateTime? @map("due_date") @db.Date
+  status                String    @default("RECEIVED") @map("status") @db.VarChar(25)
+  description           String    @map("description")
+  cost                  Decimal?  @map("cost") @db.Decimal(14, 2)
+  /**
+   * 접수 방식 (VISIT 고객 방문 | PICKUP 방문 수거)
+   */
+  receiptMethod         String?   @map("receipt_method") @db.VarChar(20)
+  /**
+   * 출고 방식 (VISIT 고객 방문 | DELIVERY 방문 배송)
+   */
+  releaseMethod         String?   @map("release_method") @db.VarChar(20)
+  pickupAddress         String?   @map("pickup_address") @db.VarChar(300)
+  deliveryAddress       String?   @map("delivery_address") @db.VarChar(300)
+  notes                 String?   @map("notes")
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  customer            Customer             @relation(fields: [customerId], references: [id])
+  order               Order?               @relation(fields: [orderId], references: [id])
+  orderItem           OrderItem?           @relation(fields: [orderItemId], references: [id])
+  component           OrderItemComponent?  @relation(fields: [componentId], references: [id])
+  rentalInventoryItem RentalInventoryItem? @relation(fields: [rentalInventoryItemId], references: [id])
+  statusEvents        RepairStatusEvent[]
+
+  @@index([requestDate])
+  @@index([dueDate, status])
+  @@map("repair_requests")
+}
+
+model RepairStatusEvent {
+  id              String   @id @db.Uuid
+  repairRequestId String   @map("repair_request_id") @db.Uuid
+  previousStatus  String?  @map("previous_status") @db.VarChar(25)
+  newStatus       String   @map("new_status") @db.VarChar(25)
+  eventDate       DateTime @map("event_date") @db.Date
+  notes           String?  @map("notes")
+  actorId         String   @map("actor_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  repairRequest RepairRequest @relation(fields: [repairRequestId], references: [id])
+  actor         User          @relation("RepairStatusEventActor", fields: [actorId], references: [id])
+
+  @@index([repairRequestId, eventDate])
+  @@map("repair_status_events")
+}
+
+model Payment {
+  id            String   @id @db.Uuid
+  contractId    String   @map("contract_id") @db.Uuid
+  paymentType   String   @map("payment_type") @db.VarChar(20)
+  amount        Decimal  @map("amount") @db.Decimal(14, 2)
+  paymentDate   DateTime @map("payment_date") @db.Date
+  paymentMethod String?  @map("payment_method") @db.VarChar(30)
+  status        String   @default("COMPLETED") @map("status") @db.VarChar(20)
+  memo          String?  @map("memo")
+  createdBy     String   @map("created_by") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  contract      Contract @relation(fields: [contractId], references: [id])
+  createdByUser User     @relation("PaymentCreatedBy", fields: [createdBy], references: [id])
+
+  @@index([contractId, paymentType])
+  @@index([paymentDate, status])
+  @@map("payments")
+}
+
+// -----------------------------------------------------------------------------
+// 6. 알림·운영
+// -----------------------------------------------------------------------------
+
+model NotificationTemplate {
+  id             String   @id @db.Uuid
+  code           String   @unique @map("code") @db.VarChar(60)
+  name           String   @map("name") @db.VarChar(120)
+  channel        String   @map("channel") @db.VarChar(20)
+  body           String   @map("body")
+  approvalStatus String   @map("approval_status") @db.VarChar(20)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  rules         NotificationRule[]
+  histories     NotificationHistory[]
+  journeyStages JourneyStage[]
+
+  @@map("notification_templates")
+}
+
+model NotificationRule {
+  id          String   @id @db.Uuid
+  templateId  String   @map("template_id") @db.Uuid
+  triggerType String   @map("trigger_type") @db.VarChar(40)
+  autoSend    Boolean  @default(false) @map("auto_send")
+  active      Boolean  @default(true) @map("active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  template NotificationTemplate @relation(fields: [templateId], references: [id])
+
+  @@index([triggerType])
+  @@map("notification_rules")
+}
+
+model NotificationHistory {
+  id             String    @id @db.Uuid
+  templateId     String?   @map("template_id") @db.Uuid
+  customerId     String    @map("customer_id") @db.Uuid
+  orderId        String?   @map("order_id") @db.Uuid
+  recipientPhone String    @map("recipient_phone") @db.VarChar(30)
+  /** 실제 발송 채널. 템플릿 채널과 다를 수 있다(알림톡 실패 → SMS 대체). */
+  channel        String    @default("ALIMTALK") @map("channel") @db.VarChar(20)
+  /** 변수 치환까지 끝난 실제 발송 본문. */
+  body           String?   @map("body")
+  status         String    @default("REQUESTED") @map("status") @db.VarChar(20)
+  sentAt         DateTime? @map("sent_at") @db.Timestamptz(6)
+  errorMessage   String?   @map("error_message")
+  /** 재시도·대체 발송의 원본 이력. */
+  retryOfId      String?   @map("retry_of_id") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  template      NotificationTemplate? @relation(fields: [templateId], references: [id])
+  customer      Customer              @relation(fields: [customerId], references: [id])
+  order         Order?                @relation(fields: [orderId], references: [id])
+  retryOf       NotificationHistory?  @relation("NotificationRetry", fields: [retryOfId], references: [id])
+  retries       NotificationHistory[] @relation("NotificationRetry")
+  journeyEvents JourneyEvent[]
+
+  @@index([customerId, createdAt(sort: Desc)])
+  @@map("notification_history")
+}
+
+model SharedNote {
+  id           String    @id @db.Uuid
+  content      String    @map("content")
+  targetUserId String?   @map("target_user_id") @db.Uuid
+  authorId     String    @map("author_id") @db.Uuid
+  status       String    @default("ACTIVE") @map("status") @db.VarChar(20)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  targetUser User? @relation("SharedNoteTarget", fields: [targetUserId], references: [id])
+  author     User  @relation("SharedNoteAuthor", fields: [authorId], references: [id])
+
+  @@map("shared_notes")
+}
+
+model DashboardTaskAction {
+  id         String   @id @db.Uuid
+  taskType   String   @map("task_type") @db.VarChar(30)
+  entityType String   @map("entity_type") @db.VarChar(40)
+  entityId   String   @map("entity_id") @db.Uuid
+  status     String   @default("ACKNOWLEDGED") @map("status") @db.VarChar(20)
+  memo       String?  @map("memo")
+  actionBy   String   @map("action_by") @db.Uuid
+  actionAt   DateTime @map("action_at") @db.Timestamptz(6)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  actionByUser User @relation("DashboardTaskActionActionBy", fields: [actionBy], references: [id])
+
+  @@index([taskType, entityType, entityId])
+  @@map("dashboard_task_actions")
+}
+
+// -----------------------------------------------------------------------------
+// 인프라 (문서 외 추가 테이블)
+// -----------------------------------------------------------------------------
+
+model RefreshToken {
+  id        String    @id @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @map("token_hash") @db.VarChar(255)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model IdempotencyKey {
+  id           String   @id @db.Uuid
+  key          String   @unique @map("key") @db.VarChar(120)
+  userId       String?  @map("user_id") @db.Uuid
+  endpoint     String   @map("endpoint") @db.VarChar(150)
+  responseJson Json?    @map("response_json")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@map("idempotency_keys")
+}
+
+// -----------------------------------------------------------------------------
+// 12. 고객 진행 단계 (설계 PDF 1페이지 업무흐름 — 개발설계서 05 G-11)
+//
+// 사람이 관리하는 표시 레이어다. order_items.status 등 시스템이 계산하는 상태를
+// 대체하거나 자동 연동하지 않는다(이중 관리·롤백 충돌 방지). 단계 변경이 곧
+// 고객 연락 트리거이며, 발송은 화면의 확인창을 거친다.
+// -----------------------------------------------------------------------------
+
+/**
+ * 진행 단계 마스터. 시드 고정이되 이름·연락 템플릿 매핑은 관리자가 조정한다.
+ */
+model JourneyStage {
+  id         String   @id @db.Uuid
+  /**
+   * CUSTOM(비즈니스 맞춤) | RENTAL(웨딩패키지 렌탈)
+   */
+  trackType  String   @map("track_type") @db.VarChar(20)
+  code       String   @map("code") @db.VarChar(30)
+  name       String   @map("name") @db.VarChar(60)
+  sequenceNo Int      @map("sequence_no")
+  /**
+   * 이 단계 진입 시 제안할 알림 템플릿. 없으면 발송 제안 없음
+   */
+  templateId String?  @map("template_id") @db.Uuid
+  active     Boolean  @default(true) @map("active")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  template NotificationTemplate? @relation(fields: [templateId], references: [id])
+  events   JourneyEvent[]
+
+  @@unique([trackType, code])
+  @@unique([trackType, sequenceNo])
+  @@map("journey_stages")
+}
+
+/**
+ * 거래 1건의 진행. 계약 전에는 orderId가 비어 있다.
+ */
+model CustomerJourney {
+  id               String    @id @db.Uuid
+  customerId       String    @map("customer_id") @db.Uuid
+  orderId          String?   @map("order_id") @db.Uuid
+  trackType        String    @map("track_type") @db.VarChar(20)
+  currentStageCode String    @map("current_stage_code") @db.VarChar(30)
+  /**
+   * ACTIVE | COMPLETED | CANCELLED
+   */
+  status           String    @default("ACTIVE") @map("status") @db.VarChar(20)
+  startedAt        DateTime  @map("started_at") @db.Timestamptz(6)
+  completedAt      DateTime? @map("completed_at") @db.Timestamptz(6)
+  rowVersion       Int       @default(0) @map("row_version")
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  customer Customer       @relation(fields: [customerId], references: [id])
+  order    Order?         @relation(fields: [orderId], references: [id])
+  events   JourneyEvent[]
+
+  @@index([customerId, startedAt(sort: Desc)])
+  @@index([status, currentStageCode])
+  @@map("customer_journeys")
+}
+
+/**
+ * 단계 변경 이력 + 그 시점의 고객 연락 처리 결과
+ */
+model JourneyEvent {
+  id                    String   @id @db.Uuid
+  journeyId             String   @map("journey_id") @db.Uuid
+  stageId               String   @map("stage_id") @db.Uuid
+  fromStageCode         String?  @map("from_stage_code") @db.VarChar(30)
+  toStageCode           String   @map("to_stage_code") @db.VarChar(30)
+  /**
+   * 되돌리기(후진) 시 필수
+   */
+  reason                String?  @map("reason")
+  notes                 String?  @map("notes")
+  /**
+   * NONE | SENT | DEFERRED | SKIPPED — 이 변경 시점의 고객 연락 처리 결과
+   */
+  notificationOutcome   String   @default("NONE") @map("notification_outcome") @db.VarChar(20)
+  notificationHistoryId String?  @map("notification_history_id") @db.Uuid
+  actorId               String   @map("actor_id") @db.Uuid
+  changedAt             DateTime @map("changed_at") @db.Timestamptz(6)
+
+  journey             CustomerJourney      @relation(fields: [journeyId], references: [id])
+  stage               JourneyStage         @relation(fields: [stageId], references: [id])
+  notificationHistory NotificationHistory? @relation(fields: [notificationHistoryId], references: [id])
+  actor               User                 @relation("JourneyEventActor", fields: [actorId], references: [id])
+
+  @@index([journeyId, changedAt(sort: Desc)])
+  @@index([notificationOutcome])
+  @@map("journey_events")
+}
