@@ -276,7 +276,7 @@ export function fetchOptionSession(sessionId: string): Promise<OptionSessionDeta
 export function saveOptionStage(
   sessionId: string,
   stageId: string,
-  body: { choiceId: string; currentStageOrder: number; fabric?: string; version: number },
+  body: { choiceId: string; currentStageOrder: number; version: number },
 ): Promise<OptionStageSaveResult> {
   return request<OptionStageSaveResult>({
     url: `/option-sessions/${sessionId}/stages/${stageId}`,

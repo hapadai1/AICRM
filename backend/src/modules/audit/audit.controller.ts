@@ -11,6 +11,8 @@ class AuditQueryDto extends PageQueryDto {
   @IsOptional() @IsString() action?: string;
   @IsOptional() @IsISO8601() from?: string;
   @IsOptional() @IsISO8601() to?: string;
+  /** 대상 통합 검색: 엔티티 유형·엔티티 ID·액션에 대해 부분 일치 */
+  @IsOptional() @IsString() query?: string;
 }
 
 /**
@@ -30,11 +32,24 @@ export class AuditController {
   @Get()
   @RequirePermission('AUDIT_LOG_VIEW')
   async list(@Query() query: AuditQueryDto) {
+    const q = query.query?.trim();
     const where = {
       ...(query.entityType ? { entityType: query.entityType } : {}),
       ...(query.entityId ? { entityId: query.entityId } : {}),
       ...(query.userId ? { userId: query.userId } : {}),
       ...(query.action ? { action: query.action } : {}),
+      ...(q
+        ? {
+            // entity_id는 uuid 컬럼이라 부분검색 불가 — 완전한 UUID일 때만 정확 매칭한다.
+            OR: [
+              { entityType: { contains: q, mode: 'insensitive' as const } },
+              { action: { contains: q, mode: 'insensitive' as const } },
+              ...(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(q)
+                ? [{ entityId: q }]
+                : []),
+            ],
+          }
+        : {}),
       ...(query.from || query.to
         ? {
             createdAt: {

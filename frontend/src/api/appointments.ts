@@ -149,7 +149,16 @@ export function createAppointment(body: AppointmentSaveBody): Promise<Appointmen
 }
 
 export function updateAppointment(id: string, body: Partial<AppointmentSaveBody>): Promise<Appointment> {
-  return request({ url: `/appointments/${id}`, method: 'PATCH', data: body });
+  // UpdateAppointmentDto 허용 필드로만 정제한다. 고객명·전화는 예약이 아니라 고객 엔티티 소관이라
+  // 수정 대상이 아니고(백엔드에 없음), forbidNonWhitelisted에서 400이므로 반드시 제외한다.
+  const data: Record<string, unknown> = {};
+  if (body.purposeCode !== undefined) data.purposeCode = body.purposeCode;
+  if (body.scheduledStart !== undefined) data.scheduledStart = body.scheduledStart;
+  if (body.scheduledEnd !== undefined) data.scheduledEnd = body.scheduledEnd;
+  if (body.notes !== undefined) data.notes = body.notes;
+  if (body.customerId !== undefined) data.customerId = body.customerId;
+  if (body.version !== undefined) data.version = body.version;
+  return request({ url: `/appointments/${id}`, method: 'PATCH', data });
 }
 
 export function confirmAppointment(id: string): Promise<Appointment> {

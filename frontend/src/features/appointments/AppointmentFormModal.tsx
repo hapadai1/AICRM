@@ -88,7 +88,9 @@ export function AppointmentFormModal({ open, appointment, defaultDate, onClose }
         notes: values.memo,
       };
       if (isEdit && appointment) {
-        return updateAppointment(appointment.id, { ...body, version: appointment.version });
+        // 수정 시 고객명·전화는 예약이 아니라 고객 소관이라 보내지 않는다(백엔드 미지원).
+        const { customerName: _n, phone: _p, ...editable } = body;
+        return updateAppointment(appointment.id, { ...editable, version: appointment.version });
       }
       return createAppointment(body);
     },

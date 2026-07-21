@@ -60,6 +60,8 @@ export class UpdateAppointmentDto {
   @IsOptional() @IsISO8601() scheduledStart?: string;
   @IsOptional() @IsISO8601() scheduledEnd?: string;
   @IsOptional() @IsString() notes?: string;
+  /** 예약을 기존 고객에 연결(고객 상세의 "기존 고객 연결") */
+  @IsOptional() @IsUUID() customerId?: string;
   /** 낙관적 잠금: 조회 시점의 rowVersion */
   @Type(() => Number) @IsInt() @Min(0) version: number;
 }

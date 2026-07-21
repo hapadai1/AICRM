@@ -383,7 +383,11 @@ export interface ContractSearchParams {
 // ---------- 계약 구분 (CONT-001) ----------
 
 export function fetchContractTypes(includeInactive = false) {
-  return request<ContractType[]>({ url: '/contract-types', params: { includeInactive } });
+  // 백엔드 쿼리 파라미터는 active(문자열)다. 비활성 포함 시엔 보내지 않아 전체를 받는다.
+  return request<ContractType[]>({
+    url: '/contract-types',
+    params: includeInactive ? {} : { active: 'true' },
+  });
 }
 
 export function createContractType(body: ContractTypeInput) {
@@ -420,14 +424,54 @@ export function fetchContract(id: string): Promise<ContractDetail> {
   return request<ContractDetailApiRow>({ url: `/contracts/${id}` }).then(toContractDetail);
 }
 
+/**
+ * 화면 품목(amount/note/id)을 백엔드 ContractLineDto(lineAmount/notes)로 변환한다.
+ * id는 백엔드가 받지 않고, 미전송 필드는 forbidNonWhitelisted에서 400이므로 반드시 정제한다.
+ */
+function toLinePayload(lines: ContractLineInput[]) {
+  return lines.map((l) => ({
+    transactionType: l.transactionType,
+    productCategory: l.productCategory,
+    quantity: l.quantity,
+    unitPrice: l.unitPrice,
+    lineAmount: l.amount,
+    ...(l.note ? { notes: l.note } : {}),
+  }));
+}
+
+/**
+ * 계약 초안 본문을 백엔드 CreateContractDto 허용 필드로만 정제한다.
+ * appointmentId·contractTypeName·contractedAt·note는 백엔드에 컬럼/필드가 없어 제외한다(전엔 조용히 버려짐).
+ */
+function toDraftPayload(body: Partial<ContractDraftInput>): Record<string, unknown> {
+  return {
+    ...(body.customerId ? { customerId: body.customerId } : {}),
+    ...(body.contractTypeId ? { contractTypeId: body.contractTypeId } : {}),
+    ...(body.completionDueDate !== undefined ? { completionDueDate: body.completionDueDate } : {}),
+    ...(body.photoDate !== undefined ? { photoDate: body.photoDate } : {}),
+    ...(body.weddingDate !== undefined ? { weddingDate: body.weddingDate } : {}),
+    ...(body.totalAmount !== undefined ? { totalAmount: body.totalAmount } : {}),
+    ...(body.depositAmount !== undefined ? { depositAmount: body.depositAmount } : {}),
+    ...(body.lines ? { lines: toLinePayload(body.lines) } : {}),
+  };
+}
+
 export function createContractDraft(body: ContractDraftInput): Promise<ContractDetail> {
-  return request<ContractDetailApiRow>({ url: '/contracts', method: 'POST', data: body }).then(toContractDetail);
+  return request<ContractDetailApiRow>({
+    url: '/contracts',
+    method: 'POST',
+    data: toDraftPayload(body),
+  }).then(toContractDetail);
 }
 
 export function updateContractDraft(id: string, body: Partial<ContractDraftInput>): Promise<ContractDetail> {
-  return request<ContractDetailApiRow>({ url: `/contracts/${id}`, method: 'PATCH', data: body }).then(
-    toContractDetail,
-  );
+  // 초안 수정은 customerId를 바꾸지 않는다(UpdateContractDto에 없음) → 정제 시 제외된다.
+  const { customerId: _customerId, ...rest } = body;
+  return request<ContractDetailApiRow>({
+    url: `/contracts/${id}`,
+    method: 'PATCH',
+    data: toDraftPayload(rest),
+  }).then(toContractDetail);
 }
 
 export function confirmContract(id: string, body: { version: number; confirmedDate?: string }) {
@@ -451,7 +495,14 @@ export function confirmContractRevision(id: string, revisionId: string, body: Re
   return request<RevisionConfirmResult>({
     url: `/contracts/${id}/revisions/${revisionId}/confirm`,
     method: 'POST',
-    data: body,
+    // 품목은 lineAmount/notes로 변환한다(ConfirmRevisionDto.lines = ContractLineDto).
+    data: {
+      ...(body.changeReason !== undefined ? { changeReason: body.changeReason } : {}),
+      version: body.version,
+      totalAmount: body.totalAmount,
+      depositAmount: body.depositAmount,
+      lines: toLinePayload(body.lines),
+    },
   });
 }
 

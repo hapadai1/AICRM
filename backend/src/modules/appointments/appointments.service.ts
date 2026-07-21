@@ -186,13 +186,18 @@ export class AppointmentsService {
     const before = await this.prisma.appointment.findUnique({ where: { id } });
     if (!before) throw new BusinessException('NOT_FOUND', '예약이 없습니다.');
 
-    const data: Prisma.AppointmentUpdateManyMutationInput & { purposeId?: string } = {};
+    const data: Prisma.AppointmentUpdateManyMutationInput & { purposeId?: string; customerId?: string } = {};
     if (dto.purposeCode !== undefined) {
       data.purposeId = (await this.resolvePurpose(dto.purposeCode)).id;
     }
     if (dto.scheduledStart !== undefined) data.scheduledStart = new Date(dto.scheduledStart);
     if (dto.scheduledEnd !== undefined) data.scheduledEnd = new Date(dto.scheduledEnd);
     if (dto.notes !== undefined) data.notes = dto.notes;
+    if (dto.customerId !== undefined) {
+      const customer = await this.prisma.customer.findUnique({ where: { id: dto.customerId } });
+      if (!customer) throw new BusinessException('CUSTOMER_NOT_FOUND', '연결할 고객이 없습니다.');
+      data.customerId = dto.customerId;
+    }
     if (before.source === 'NAVER') data.localOverride = true;
 
     const result = await this.prisma.appointment.updateMany({

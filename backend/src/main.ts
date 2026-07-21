@@ -13,7 +13,11 @@ async function bootstrap(): Promise<void> {
     req.requestId = (req.headers['x-request-id'] as string) ?? `req_${randomUUID()}`;
     next();
   });
-  app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+  // forbidNonWhitelisted: DTO에 없는 필드가 오면 조용히 버리지 않고 400으로 막는다.
+  // (프론트 요청 필드명이 어긋나 데이터가 소리 없이 유실되는 것을 방지 — docs/dev/08 §2.3)
+  app.useGlobalPipes(
+    new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
+  );
 
   await app.listen(Number(process.env.PORT ?? 3000));
 }
