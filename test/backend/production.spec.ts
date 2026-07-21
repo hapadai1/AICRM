@@ -299,5 +299,99 @@ describe('제작 상태·부분 입출고·가봉 (ProductionModule)', () => {
         .expect(400);
       expect(res.body.error.code).toBe('VALIDATION_ERROR');
     });
+    /** 개발설계서 05 G-04 — 설계 PDF 1페이지 "실루엣·균형·여유분·길이 확인" */
+    it('4대 표준 항목 기재 여부를 알려주되 막지는 않는다', async () => {
+      const { item, components } = await seedOrderItem(ctx.prisma, {
+        itemStatus: 'BASTING_RECEIVED',
+      });
+      const res = await api(ctx)
+        .post(`/api/v1/order-items/${item.id}/fittings`)
+        .set(auth(ctx))
+        .send({
+          fittingDate: '2026-07-21',
+          adjustments: [
+            {
+              componentId: components[0].id,
+              areaCode: 'LENGTH',
+              area: '소매',
+              instruction: '1cm 줄임',
+            },
+            { areaCode: 'BALANCE', area: '어깨', instruction: '좌우 균형 보정' },
+            // 항목을 지정하지 않으면 기타로 저장된다.
+            { area: '기타', instruction: '단추 위치 확인' },
+          ],
+        })
+        .expect(201);
+
+      // 일부만 기재해도 접수된다. 무엇이 빠졌는지만 알려준다.
+      expect(res.body.data.coverage).toEqual({
+        SILHOUETTE: false,
+        BALANCE: true,
+        EASE: false,
+        LENGTH: true,
+      });
+      const codes = res.body.data.adjustments.map((a: { areaCode: string }) => a.areaCode);
+      expect(codes).toContain('ETC');
+
+      const list = await api(ctx)
+        .get(`/api/v1/order-items/${item.id}/fittings`)
+        .set(auth(ctx))
+        .expect(200);
+      expect(list.body.data[0].coverage.LENGTH).toBe(true);
+    });
+
+    it('허용하지 않은 확인 항목 코드는 거부한다', async () => {
+      const { item } = await seedOrderItem(ctx.prisma);
+      await api(ctx)
+        .post(`/api/v1/order-items/${item.id}/fittings`)
+        .set(auth(ctx))
+        .send({
+          fittingDate: '2026-07-21',
+          adjustments: [{ areaCode: 'COLOR', area: '색상', instruction: '변경' }],
+        })
+        .expect(400);
+    });
+
+    it('가봉 수정지시서 Excel을 내려받는다 (공장에 메일로 첨부할 문서)', async () => {
+      const { item, components } = await seedOrderItem(ctx.prisma, {
+        itemStatus: 'BASTING_RECEIVED',
+      });
+      const created = await api(ctx)
+        .post(`/api/v1/order-items/${item.id}/fittings`)
+        .set(auth(ctx))
+        .send({
+          fittingDate: '2026-07-21',
+          adjustments: [
+            {
+              componentId: components[0].id,
+              areaCode: 'EASE',
+              area: '가슴',
+              instruction: '여유분 1cm 추가',
+            },
+          ],
+        })
+        .expect(201);
+
+      const res = await api(ctx)
+        .get(`/api/v1/fittings/${created.body.data.id}/sheet`)
+        .set(auth(ctx))
+        .buffer(true)
+        .parse((r, cb) => {
+          const chunks: Buffer[] = [];
+          r.on('data', (c: Buffer) => chunks.push(c));
+          r.on('end', () => cb(null, Buffer.concat(chunks)));
+        })
+        .expect(200);
+      expect(res.headers['content-type']).toContain('spreadsheetml');
+      expect(res.headers['content-disposition']).toContain('attachment');
+      // xlsx는 zip이므로 PK 시그니처로 시작한다.
+      expect((res.body as Buffer).subarray(0, 2).toString()).toBe('PK');
+
+      // 출력은 감사로그에 남는다.
+      const logs = await ctx.prisma.auditLog.findMany({
+        where: { entityType: 'FITTING_SESSION', entityId: created.body.data.id, action: 'EXPORT' },
+      });
+      expect(logs).toHaveLength(1);
+    });
   });
 });

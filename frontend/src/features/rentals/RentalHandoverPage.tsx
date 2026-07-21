@@ -65,10 +65,12 @@ export function RentalHandoverPage() {
     queryKey: ['rentals', 'change-candidates', checkoutTarget?.id, checkoutTarget?.managementCode],
     queryFn: () =>
       fetchAvailability({
+        // 백엔드 필수 파라미터 — 같은 구분의 실물끼리만 교체할 수 있다.
+        componentType: checkoutTarget!.componentType!,
         pickupDate: checkoutTarget!.pickupDate,
         availabilityEndDate: checkoutTarget!.availabilityEndDate,
       }),
-    enabled: changeOpen && !!checkoutTarget,
+    enabled: changeOpen && !!checkoutTarget?.componentType,
   });
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['rentals'] });

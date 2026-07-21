@@ -1,4 +1,4 @@
-import { request, type ListResult } from './client';
+import { api, request, type ListResult } from './client';
 import { labelOf } from '../shared/status-meta';
 import { toDateOnly, toDateTime } from './transform';
 
@@ -223,6 +223,33 @@ export interface ComponentChangeResult {
 }
 
 /** 가봉 보정 항목 */
+/**
+ * 가봉 표준 확인 항목 (개발설계서 05 G-04).
+ * 설계 PDF 1페이지 "실루엣·균형·여유분·길이 확인" 대응.
+ */
+export const FITTING_AREA_CODES = ['SILHOUETTE', 'BALANCE', 'EASE', 'LENGTH', 'ETC'] as const;
+export type FittingAreaCode = (typeof FITTING_AREA_CODES)[number];
+
+export const FITTING_AREA_LABELS: Record<FittingAreaCode, string> = {
+  SILHOUETTE: '실루엣',
+  BALANCE: '균형',
+  EASE: '여유분',
+  LENGTH: '길이',
+  ETC: '기타',
+};
+
+/** 커버리지 판정 대상 (기타 제외) */
+export const FITTING_STANDARD_AREAS: FittingAreaCode[] = [
+  'SILHOUETTE',
+  'BALANCE',
+  'EASE',
+  'LENGTH',
+];
+
+export function fittingAreaLabel(code: string): string {
+  return FITTING_AREA_LABELS[code as FittingAreaCode] ?? code;
+}
+
 export interface FittingAdjustment {
   id: string;
   componentId: string | null;
@@ -245,6 +272,8 @@ export interface FittingRecord {
   nextAppointmentDate?: string;
   createdAt: string;
   adjustments: FittingAdjustment[];
+  /** 4대 표준 항목 기재 여부 — 미기재는 막지 않고 화면에서 경고만 한다 */
+  coverage: Record<string, boolean>;
 }
 
 interface FittingApiRow {
@@ -263,6 +292,7 @@ interface FittingApiRow {
     instruction: string;
     component: { id: string; componentType: string } | null;
   }[];
+  coverage?: Record<string, boolean>;
 }
 
 function toFitting(row: FittingApiRow): FittingRecord {
@@ -284,6 +314,7 @@ function toFitting(row: FittingApiRow): FittingRecord {
       area: a.area,
       instruction: a.instruction,
     })),
+    coverage: row.coverage ?? {},
   };
 }
 
@@ -303,31 +334,34 @@ export function postComponentStatusEvent(
   return request<ComponentChangeResult>({
     url: `/components/${componentId}/status-events`,
     method: 'POST',
-    data: body,
+    // 백엔드 DTO 필드는 newStatus 다 (CreateProductionEventDto)
+    data: { newStatus: body.toStatus, reason: body.reason, eventDate: body.eventDate },
   });
 }
 
 /** 구성품 입고 — POST /components/{id}/receive (§13.5) */
 export function receiveComponent(
   componentId: string,
-  body: { receivedDate: string },
+  body: { receivedDate: string; notes?: string },
 ): Promise<ComponentChangeResult> {
   return request<ComponentChangeResult>({
     url: `/components/${componentId}/receive`,
     method: 'POST',
-    data: body,
+    // 백엔드 DTO 필드는 receivedAt 이다 (ReceiveComponentDto)
+    data: { receivedAt: body.receivedDate, notes: body.notes },
   });
 }
 
 /** 구성품 출고 — POST /components/{id}/release (§13.5) */
 export function releaseComponent(
   componentId: string,
-  body: { releasedDate: string },
+  body: { releasedDate: string; notes?: string },
 ): Promise<ComponentChangeResult> {
   return request<ComponentChangeResult>({
     url: `/components/${componentId}/release`,
     method: 'POST',
-    data: body,
+    // 백엔드 DTO 필드는 releasedAt 이다 (ReleaseComponentDto)
+    data: { releasedAt: body.releasedDate, notes: body.notes },
   });
 }
 
@@ -339,7 +373,8 @@ export function postItemProductionEvent(
   return request<ProductionEvent>({
     url: `/order-items/${orderItemId}/production-events`,
     method: 'POST',
-    data: body,
+    // 백엔드 DTO 필드는 newStatus 다 (CreateProductionEventDto)
+    data: { newStatus: body.toStatus, reason: body.reason },
   });
 }
 
@@ -351,13 +386,45 @@ export function fetchFittings(orderItemId: string): Promise<FittingRecord[]> {
 }
 
 /** 가봉 기록 저장 — POST /order-items/{id}/fittings (§13.5) */
+export interface CreateFittingInput {
+  fittingDate: string;
+  /** 보정 지시 — 구성품별로 부위·지시를 남긴다 */
+  adjustments: { componentId?: string; areaCode?: FittingAreaCode; area: string; instruction: string }[];
+  notes?: string;
+  /** 다음 방문(가봉) 예정일 */
+  nextAppointmentDate?: string;
+}
+
 export function createFitting(
   orderItemId: string,
-  body: { fittingDate: string; componentIds: string[]; correction: string; nextVisitDate?: string },
+  body: CreateFittingInput,
 ): Promise<FittingRecord> {
   return request<FittingApiRow>({
     url: `/order-items/${orderItemId}/fittings`,
     method: 'POST',
-    data: body,
+    data: {
+      fittingDate: body.fittingDate,
+      adjustments: body.adjustments,
+      ...(body.notes ? { notes: body.notes } : {}),
+      ...(body.nextAppointmentDate ? { nextAppointmentDate: body.nextAppointmentDate } : {}),
+    },
   }).then(toFitting);
+}
+
+/**
+ * 가봉 수정지시서 Excel 다운로드 (개발설계서 05 G-04).
+ * 공장 전달은 이메일 수동 발송이므로 파일만 받아 첨부한다.
+ */
+export async function downloadFittingSheet(fittingId: string): Promise<void> {
+  const res = await api.get(`/fittings/${fittingId}/sheet`, { responseType: 'blob' });
+  const disposition = String(res.headers['content-disposition'] ?? '');
+  const match = /filename\*=UTF-8''([^;]+)/.exec(disposition);
+  const fileName = match ? decodeURIComponent(match[1]) : `fitting-${fittingId}.xlsx`;
+
+  const url = URL.createObjectURL(res.data as Blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
 }

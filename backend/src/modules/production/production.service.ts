@@ -14,6 +14,8 @@ import {
   ITEM_STATUS_FLOW,
   validateTransition,
 } from './production-status';
+import { buildFittingSheetExcel } from './fitting-sheet-excel';
+import { fittingCoverage } from './fitting.constants';
 import {
   CreateFittingDto,
   CreateProductionEventDto,
@@ -386,6 +388,7 @@ export class ProductionService {
             create: (dto.adjustments ?? []).map((adj) => ({
               id: randomUUID(),
               componentId: adj.componentId,
+              areaCode: adj.areaCode ?? 'ETC',
               area: adj.area,
               instruction: adj.instruction,
             })),
@@ -407,19 +410,71 @@ export class ProductionService {
       );
       return created;
     });
-    return session;
+    // 4대 표준 항목 기재 여부는 막지 않고 알려만 준다 (개발설계서 05 G-04).
+    return { ...session, coverage: fittingCoverage(session.adjustments) };
   }
 
   async listFittings(orderItemId: string) {
     const item = await this.prisma.orderItem.findUnique({ where: { id: orderItemId }, select: { id: true } });
     if (!item) throw new NotFoundException('주문 품목이 없습니다.');
-    return this.prisma.fittingSession.findMany({
+    const sessions = await this.prisma.fittingSession.findMany({
       where: { orderItemId },
       include: {
         adjustments: { include: { component: { select: { id: true, componentType: true } } } },
       },
       orderBy: [{ fittingDate: 'desc' }, { createdAt: 'desc' }],
     });
+    return sessions.map((s) => ({ ...s, coverage: fittingCoverage(s.adjustments) }));
+  }
+
+  /**
+   * 가봉 수정지시서 Excel (개발설계서 05 G-04).
+   * 공장 전달은 이메일 수동 발송이므로 시스템은 첨부할 문서만 만든다.
+   * 파일로 보관하지 않고 요청 시 즉시 생성해 흘려보낸다.
+   */
+  async buildFittingSheet(fittingId: string, actor: AuthUser) {
+    const session = await this.prisma.fittingSession.findUnique({
+      where: { id: fittingId },
+      include: {
+        adjustments: {
+          include: { component: { select: { id: true, componentType: true, sequenceNo: true } } },
+        },
+        orderItem: {
+          include: {
+            order: { include: { contract: { include: { customer: true } } } },
+          },
+        },
+      },
+    });
+    if (!session) throw new NotFoundException('가봉 기록이 없습니다.');
+
+    const buffer = await buildFittingSheetExcel({
+      customerName: session.orderItem.order.contract.customer.name,
+      orderNo: session.orderItem.order.orderNo,
+      itemLabel: session.orderItem.displayName,
+      fittingDate: session.fittingDate,
+      nextAppointmentDate: session.nextAppointmentDate,
+      notes: session.notes,
+      adjustments: session.adjustments.map((a) => ({
+        areaCode: a.areaCode,
+        area: a.area,
+        instruction: a.instruction,
+        componentType: a.component?.componentType ?? null,
+        componentSequenceNo: a.component?.sequenceNo ?? null,
+      })),
+    });
+
+    await this.audit.log({
+      userId: actor.id,
+      action: 'EXPORT',
+      entityType: 'FITTING_SESSION',
+      entityId: fittingId,
+    });
+
+    const fileName = `fitting-${session.orderItem.order.orderNo}-${session.fittingDate
+      .toISOString()
+      .slice(0, 10)}.xlsx`;
+    return { buffer, fileName };
   }
 
   private async findComponent(componentId: string) {

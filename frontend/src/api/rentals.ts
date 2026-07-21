@@ -349,8 +349,9 @@ export function retireRentalItem(id: string, body: { reason?: string }): Promise
 }
 
 /** 기간 가용 조회 — GET /rental-inventory/availability (§13.6, §14.6 — size 파라미터 사용) */
+/** 가용 실물 조회 — 백엔드는 componentType을 필수로 요구한다(rentals.dto.ts). */
 export function fetchAvailability(params: {
-  componentType?: RentalComponentType;
+  componentType: RentalComponentType;
   design?: string;
   color?: string;
   size?: string;

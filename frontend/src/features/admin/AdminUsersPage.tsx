@@ -34,15 +34,14 @@ import {
   fetchUsers,
   saveRolePermissions,
 } from '../../api/admin';
-import type { AdminUser, PermissionDef } from '../../api/admin';
+import type { AdminUser } from '../../api/admin';
 import { ApiError } from '../../api/client';
-
-const PERMISSION_GROUPS = ['조회', '수정', '확정', '출력'] as const;
 
 interface CreateUserValues {
   loginId: string;
   name: string;
-  roleId: string;
+  password: string;
+  roleCodes: string[];
 }
 
 export function AdminUsersPage() {
@@ -140,16 +139,16 @@ export function AdminUsersPage() {
     },
   ];
 
-  /** 도메인별 권한을 그룹 열로 배치한 체크표 데이터 */
+  /**
+   * 업무 영역별 권한 체크표.
+   * 백엔드 permissions에는 분류 컬럼이 없어 코드 접두어로 묶는다 (docs/dev/08 §4).
+   */
   const permissionRows = useMemo(() => {
     const defs = permissionsQuery.data ?? [];
-    const domains = Array.from(new Set(defs.map((d) => d.domain)));
-    return domains.map((domain) => ({
-      domain,
-      byGroup: PERMISSION_GROUPS.reduce<Record<string, PermissionDef[]>>((acc, group) => {
-        acc[group] = defs.filter((d) => d.domain === domain && d.group === group);
-        return acc;
-      }, {}),
+    const groups = Array.from(new Set(defs.map((d) => d.group)));
+    return groups.map((group) => ({
+      group,
+      items: defs.filter((d) => d.group === group),
     }));
   }, [permissionsQuery.data]);
 
@@ -165,30 +164,24 @@ export function AdminUsersPage() {
 
   type PermissionRow = (typeof permissionRows)[number];
   const permissionColumns: ColumnsType<PermissionRow> = [
-    { title: '업무 영역', dataIndex: 'domain', width: 110, fixed: 'left' },
-    ...PERMISSION_GROUPS.map(
-      (group) =>
-        ({
-          title: group,
-          key: group,
-          render: (_, row: PermissionRow) => (
-            <Space direction="vertical" size={2}>
-              {row.byGroup[group].map((def) => (
-                <Checkbox
-                  key={def.code}
-                  checked={checkedPermissions.has(def.code)}
-                  onChange={(e) => togglePermission(def.code, e.target.checked)}
-                >
-                  {def.label}
-                </Checkbox>
-              ))}
-              {row.byGroup[group].length === 0 && (
-                <Typography.Text type="secondary">-</Typography.Text>
-              )}
-            </Space>
-          ),
-        }) as ColumnsType<PermissionRow>[number],
-    ),
+    { title: '업무 영역', dataIndex: 'group', width: 120 },
+    {
+      title: '권한',
+      key: 'items',
+      render: (_, row: PermissionRow) => (
+        <Space wrap size={[16, 4]}>
+          {row.items.map((def) => (
+            <Checkbox
+              key={def.code}
+              checked={checkedPermissions.has(def.code)}
+              onChange={(e) => togglePermission(def.code, e.target.checked)}
+            >
+              {def.label}
+            </Checkbox>
+          ))}
+        </Space>
+      ),
+    },
   ];
 
   return (
@@ -254,7 +247,7 @@ export function AdminUsersPage() {
               />
             )}
             <Table<PermissionRow>
-              rowKey="domain"
+              rowKey="group"
               size="small"
               loading={permissionsQuery.isLoading || rolesQuery.isLoading}
               dataSource={permissionRows}
@@ -292,11 +285,22 @@ export function AdminUsersPage() {
             <Input />
           </Form.Item>
           <Form.Item
+            label="초기 비밀번호"
+            name="password"
+            rules={[
+              { required: true, message: '초기 비밀번호를 입력해 주세요.' },
+              { min: 8, message: '8자 이상 입력해 주세요.' },
+            ]}
+          >
+            <Input.Password autoComplete="new-password" placeholder="8자 이상" />
+          </Form.Item>
+          <Form.Item
             label="역할"
-            name="roleId"
+            name="roleCodes"
             rules={[{ required: true, message: '역할을 선택해 주세요.' }]}
           >
-            <Select options={roles.map((r) => ({ value: r.id, label: r.name }))} />
+            {/* 백엔드는 역할을 코드로 배정한다 (roleCodes[]) */}
+            <Select mode="multiple" options={roles.map((r) => ({ value: r.code, label: r.name }))} />
           </Form.Item>
         </Form>
       </Modal>

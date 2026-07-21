@@ -49,7 +49,8 @@ interface SearchCriteria {
   pickupDate: string;
   returnDueDate: string;
   availabilityEndDate: string;
-  componentType?: RentalComponentType;
+  /** 백엔드 가용 조회 필수 파라미터 — 대상 구성품 구분이 기본값이다. */
+  componentType: RentalComponentType;
   design?: string;
   color?: string;
   size?: string;
@@ -141,11 +142,19 @@ export function RentalAllocatePage() {
   const onSearch = (values: SearchValues) => {
     setAllocError(null);
     setSelectedItemId(undefined);
+    if (!values.componentType && !target?.componentType) {
+      setAllocError({
+        code: 'VALIDATION_ERROR',
+        message: '구분을 선택하거나 배정 대상 구성품을 먼저 고르세요.',
+      });
+      return;
+    }
     setCriteria({
       pickupDate: values.pickupDate.format('YYYY-MM-DD'),
       returnDueDate: values.returnDueDate.format('YYYY-MM-DD'),
       availabilityEndDate: values.availabilityEndDate.format('YYYY-MM-DD'),
-      componentType: values.componentType,
+      // 백엔드가 필수로 요구하므로 미선택 시 대상 구성품 구분을 쓴다.
+      componentType: (values.componentType ?? target?.componentType) as RentalComponentType,
       design: values.design,
       color: values.color,
       size: values.size,
@@ -278,8 +287,13 @@ export function RentalAllocatePage() {
           >
             <DatePicker />
           </Form.Item>
-          <Form.Item name="componentType" label="구분">
-            <Select allowClear placeholder="전체" style={{ width: 140 }} options={componentTypeOptions} />
+          <Form.Item name="componentType" label="구분" extra="대상 구성품 선택 시 자동 지정">
+            <Select
+              allowClear
+              placeholder="구분 선택"
+              style={{ width: 140 }}
+              options={componentTypeOptions}
+            />
           </Form.Item>
           <Form.Item name="design" label="디자인">
             <Select allowClear placeholder="전체" style={{ width: 120 }} options={DESIGN_OPTIONS} />

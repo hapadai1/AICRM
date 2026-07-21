@@ -1,4 +1,4 @@
-import { LeftOutlined, PlusOutlined, RightOutlined, SyncOutlined } from '@ant-design/icons';
+import { LeftOutlined, PlusOutlined, PrinterOutlined, RightOutlined, SyncOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { App, Button, Card, DatePicker, Empty, Segmented, Select, Space, Spin, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -25,11 +25,12 @@ import {
   TIMETABLE_START_HOUR,
 } from './appointment-constants';
 import { AppointmentFormModal } from './AppointmentFormModal';
+import { MonthCalendar } from './MonthCalendar';
 import { metaOf } from '../../shared/status-meta';
 
 const { RangePicker } = DatePicker;
 
-type ViewMode = 'day' | 'week' | 'list';
+type ViewMode = 'day' | 'week' | 'month' | 'list';
 
 /** 타임테이블 셀에 표시하는 예약 카드 */
 function AppointmentCard({ appointment, onOpen }: { appointment: Appointment; onOpen: (id: string) => void }) {
@@ -164,6 +165,9 @@ export function AppointmentsPage() {
   const [from, to] = useMemo<[Dayjs, Dayjs]>(() => {
     if (mode === 'day') return [baseDate, baseDate];
     if (mode === 'week') return [baseDate.startOf('week'), baseDate.endOf('week')];
+    // 월간은 앞뒤 주가 캘린더에 걸쳐 보이므로 그 범위까지 함께 가져온다.
+    if (mode === 'month')
+      return [baseDate.startOf('month').startOf('week'), baseDate.endOf('month').endOf('week')];
     return listRange;
   }, [mode, baseDate, listRange]);
   const fromStr = from.format('YYYY-MM-DD');
@@ -196,7 +200,15 @@ export function AppointmentsPage() {
   const openDetail = (id: string) => navigate(`/appointments/${id}`);
 
   const moveBase = (diff: number) => {
-    setBaseDate((d) => d.add(diff, mode === 'week' ? 'week' : 'day'));
+    const unit = mode === 'week' ? 'week' : mode === 'month' ? 'month' : 'day';
+    setBaseDate((d) => d.add(diff, unit));
+  };
+
+  /** 현재 필터·기간 그대로 인쇄 페이지를 새 탭으로 연다 (개발설계서 05 G-02). */
+  const openPrint = () => {
+    const query = new URLSearchParams({ from: fromStr, to: toStr });
+    if (purposeCodes.length > 0) query.set('purposeCodes', purposeCodes.join(','));
+    window.open(`/appointments/print?${query.toString()}`, '_blank');
   };
 
   const columns: ColumnsType<Appointment> = [
@@ -256,6 +268,10 @@ export function AppointmentsPage() {
             예약 캘린더·목록
           </Typography.Title>
           <Space wrap>
+            {/* 설계 PDF 1페이지 "CRM 일정 달력 출력" */}
+            <Button icon={<PrinterOutlined />} onClick={openPrint}>
+              인쇄
+            </Button>
             <Can permission="NAVER_SYNC">
               <Button icon={<SyncOutlined />} loading={syncMutation.isPending} onClick={() => syncMutation.mutate()}>
                 네이버 동기화
@@ -276,6 +292,7 @@ export function AppointmentsPage() {
             options={[
               { label: '일', value: 'day' },
               { label: '주', value: 'week' },
+              { label: '월', value: 'month' },
               { label: '목록', value: 'list' },
             ]}
           />
@@ -343,6 +360,16 @@ export function AppointmentsPage() {
           <div style={{ textAlign: 'center', padding: 48 }}>
             <Spin />
           </div>
+        ) : mode === 'month' ? (
+          <MonthCalendar
+            baseDate={baseDate}
+            appointments={appointments}
+            onSelectDate={(d) => {
+              setBaseDate(d);
+              setMode('day');
+            }}
+            onOpen={openDetail}
+          />
         ) : (
           <Timetable
             days={

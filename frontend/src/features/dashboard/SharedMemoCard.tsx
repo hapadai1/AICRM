@@ -121,7 +121,7 @@ export function SharedMemoCard() {
               <Typography.Text strong>{memo.authorName}</Typography.Text>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 {dayjs(memo.createdAt).format('MM-DD HH:mm')}
-                {memo.updatedAt ? ' (수정됨)' : ''}
+                {memo.edited ? ' (수정됨)' : ''}
               </Typography.Text>
               {memo.completed && <Tag color="green">완료</Tag>}
             </Space>

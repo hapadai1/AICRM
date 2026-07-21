@@ -39,8 +39,33 @@ export interface Consultation {
   /** 거래 관심 (비즈니스 맞춤, 웨딩 렌탈 등) */
   interests: string[];
   content: string;
+  /** 초도 상담 항목 (개발설계서 05 G-01) */
+  usageType?: string | null;
+  usageTypeName?: string | null;
+  budgetMin?: number | null;
+  budgetMax?: number | null;
+  preferredStyle?: string | null;
+  desiredDueDate?: string | null;
   createdBy: string;
   createdAt: string;
+}
+
+/** 용도 — 진행 단계 trackType과 1:1 대응 */
+export const USAGE_TYPES = ['BUSINESS_CUSTOM', 'WEDDING_RENTAL'] as const;
+export type UsageType = (typeof USAGE_TYPES)[number];
+
+export const USAGE_TYPE_LABELS: Record<UsageType, string> = {
+  BUSINESS_CUSTOM: '비즈니스 맞춤',
+  WEDDING_RENTAL: '웨딩패키지 렌탈',
+};
+
+/** 초도 상담 항목 입력값 */
+export interface ConsultationIntake {
+  usageType?: UsageType;
+  budgetMin?: number;
+  budgetMax?: number;
+  preferredStyle?: string;
+  desiredDueDate?: string;
 }
 
 export interface AppointmentDetail extends Appointment {
@@ -150,9 +175,17 @@ export function resolveAppointmentConflict(id: string, choice: 'NAVER' | 'CRM'):
 
 export function saveConsultation(
   appointmentId: string,
-  body: { interests: string[]; content: string },
+  body: { interests: string[]; content: string } & ConsultationIntake,
 ): Promise<Consultation> {
   return request({ url: `/appointments/${appointmentId}/consultations`, method: 'POST', data: body });
+}
+
+/** 상담 내용 정정 — PATCH /consultations/{id} */
+export function updateConsultation(
+  id: string,
+  body: { interests?: string[]; content?: string } & ConsultationIntake,
+): Promise<Consultation> {
+  return request({ url: `/consultations/${id}`, method: 'PATCH', data: body });
 }
 
 export function syncNaverReservations(): Promise<NaverSyncResult> {

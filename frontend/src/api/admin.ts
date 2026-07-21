@@ -306,60 +306,163 @@ export async function activateOptionSetVersion(
 // 사용자·역할·권한 (ADMIN-003)
 // ---------------------------------------------------------------------------
 
+/** 백엔드 USER_SELECT 원본 행 */
+interface AdminUserApiRow {
+  id: string;
+  loginId: string;
+  displayName: string;
+  status: string;
+  lastLoginAt?: string | null;
+  createdAt: string;
+  userRoles?: { role: { code: string; name: string } }[];
+}
+
 export interface AdminUser {
   id: string;
   loginId: string;
+  /** 백엔드 displayName */
   name: string;
-  roleId: string;
+  /** 역할 코드 (백엔드는 코드로 배정한다) */
+  roleCodes: string[];
   roleName: string;
-  status: 'ACTIVE' | 'INACTIVE';
+  status: string;
+  /** `YYYY-MM-DD` */
   createdAt: string;
+  lastLoginAt?: string;
+}
+
+function toAdminUser(row: AdminUserApiRow): AdminUser {
+  const roles = row.userRoles ?? [];
+  return {
+    id: row.id,
+    loginId: row.loginId,
+    name: row.displayName,
+    roleCodes: roles.map((r) => r.role.code),
+    roleName: roles.map((r) => r.role.name).join(', ') || '-',
+    status: row.status,
+    createdAt: dateOnly(row.createdAt) ?? '',
+    lastLoginAt: dateOnly(row.lastLoginAt),
+  };
+}
+
+interface RoleApiRow {
+  id: string;
+  code: string;
+  name: string;
+  description?: string | null;
+  rolePermissions?: { permission: { code: string; name: string } }[];
 }
 
 export interface Role {
   id: string;
+  code: string;
   name: string;
   description?: string;
+  /** 권한 코드 목록 */
   permissions: string[];
+}
+
+function toRole(row: RoleApiRow): Role {
+  return {
+    id: row.id,
+    code: row.code,
+    name: row.name,
+    description: row.description ?? undefined,
+    permissions: (row.rolePermissions ?? []).map((rp) => rp.permission.code),
+  };
+}
+
+interface PermissionApiRow {
+  id: string;
+  code: string;
+  name: string;
+  description?: string | null;
 }
 
 export interface PermissionDef {
   code: string;
   label: string;
-  domain: string;
+  /** 코드 접두어에서 파생한 분류 (백엔드에 분류 컬럼이 없다 — docs/dev/08 §4) */
   group: string;
+  description?: string;
+}
+
+/** `CONTRACT_EDIT` → `CONTRACT` 처럼 코드 앞부분을 분류로 쓴다. */
+const PERMISSION_GROUP_LABELS: Record<string, string> = {
+  APPOINTMENT: '예약',
+  CUSTOMER: '고객',
+  CONTRACT: '계약',
+  ORDER: '주문',
+  OPTION: '옵션',
+  MEASUREMENT: '채촌',
+  WORK: '작업지시서',
+  PRODUCTION: '제작',
+  RENTAL: '렌탈',
+  REPAIR: '수선',
+  PAYMENT: '결제',
+  NOTIFICATION: '알림',
+  DASHBOARD: '대시보드',
+  ADMIN: '기준정보',
+  USER: '사용자',
+  ROLE: '역할',
+  AUDIT: '감사로그',
+  FILE: '파일',
+};
+
+function toPermission(row: PermissionApiRow): PermissionDef {
+  const prefix = row.code.split('_')[0];
+  return {
+    code: row.code,
+    label: row.name,
+    group: PERMISSION_GROUP_LABELS[prefix] ?? prefix,
+    description: row.description ?? undefined,
+  };
 }
 
 export function fetchUsers(): Promise<AdminUser[]> {
-  return request<AdminUser[]>({ url: '/users' });
+  return request<AdminUserApiRow[]>({ url: '/users' }).then((rows) => (rows ?? []).map(toAdminUser));
 }
 
+/** 사용자 추가 — 백엔드는 displayName·password(8자 이상)·roleCodes[]를 요구한다. */
 export function createUser(payload: {
   loginId: string;
   name: string;
-  roleId: string;
+  password: string;
+  roleCodes: string[];
 }): Promise<AdminUser> {
-  return request<AdminUser>({ url: '/users', method: 'POST', data: payload });
+  return request<AdminUserApiRow>({
+    url: '/users',
+    method: 'POST',
+    data: {
+      loginId: payload.loginId,
+      displayName: payload.name,
+      password: payload.password,
+      roleCodes: payload.roleCodes,
+    },
+  }).then(toAdminUser);
 }
 
 export function deactivateUser(id: string): Promise<AdminUser> {
-  return request<AdminUser>({ url: `/users/${id}/deactivate`, method: 'POST' });
+  return request<AdminUserApiRow>({ url: `/users/${id}/deactivate`, method: 'POST' }).then(toAdminUser);
 }
 
 export function fetchRoles(): Promise<Role[]> {
-  return request<Role[]>({ url: '/roles' });
+  return request<RoleApiRow[]>({ url: '/roles' }).then((rows) => (rows ?? []).map(toRole));
 }
 
 export function fetchPermissions(): Promise<PermissionDef[]> {
-  return request<PermissionDef[]>({ url: '/permissions' });
+  return request<PermissionApiRow[]>({ url: '/permissions' }).then((rows) =>
+    (rows ?? []).map(toPermission),
+  );
 }
 
+/** 역할 권한 저장 — 백엔드 DTO 필드는 permissionCodes 다. */
 export function saveRolePermissions(roleId: string, permissions: string[]): Promise<Role> {
-  return request<Role>({
+  return request<RoleApiRow>({
     url: `/roles/${roleId}/permissions`,
     method: 'PUT',
-    data: { permissions },
-  });
+    data: { permissionCodes: permissions },
+  }).then(toRole);
 }
 
 // ---------------------------------------------------------------------------

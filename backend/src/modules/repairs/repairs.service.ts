@@ -47,6 +47,10 @@ const REPAIR_SUMMARY_SELECT = {
   description: true,
   cost: true,
   notes: true,
+  receiptMethod: true,
+  releaseMethod: true,
+  pickupAddress: true,
+  deliveryAddress: true,
   createdAt: true,
   updatedAt: true,
   customer: { select: { id: true, name: true, phone: true } },
@@ -199,6 +203,7 @@ export class RepairsService {
       ]);
 
     const links = await this.resolveLinks(dto);
+    this.assertMethodAddresses(dto);
 
     const repair = await this.prisma.$transaction(async (tx) => {
       const requestDate = new Date(dto.requestDate);
@@ -217,6 +222,7 @@ export class RepairsService {
           description: dto.description,
           cost: dto.cost,
           notes: dto.notes,
+          ...this.methodData(dto),
           statusEvents: {
             create: {
               id: randomUUID(),
@@ -252,6 +258,14 @@ export class RepairsService {
     const before = await this.prisma.repairRequest.findUnique({ where: { id }, select: REPAIR_SUMMARY_SELECT });
     if (!before) throw new NotFoundException('수선 요청이 없습니다.');
 
+    // 방식을 바꿀 때는 기존 값과 합쳐 판정해야 한다(주소만 지우는 경우 방지).
+    this.assertMethodAddresses({
+      receiptMethod: dto.receiptMethod ?? before.receiptMethod ?? undefined,
+      releaseMethod: dto.releaseMethod ?? before.releaseMethod ?? undefined,
+      pickupAddress: dto.pickupAddress ?? before.pickupAddress ?? undefined,
+      deliveryAddress: dto.deliveryAddress ?? before.deliveryAddress ?? undefined,
+    });
+
     const updated = await this.prisma.repairRequest.update({
       where: { id },
       data: {
@@ -259,6 +273,7 @@ export class RepairsService {
         ...(dto.description !== undefined ? { description: dto.description } : {}),
         ...(dto.cost !== undefined ? { cost: dto.cost } : {}),
         ...(dto.notes !== undefined ? { notes: dto.notes } : {}),
+        ...this.methodData(dto),
       },
       select: REPAIR_DETAIL_SELECT,
     });
@@ -340,6 +355,39 @@ export class RepairsService {
       // 같은 수선의 같은 상태는 한 번만 발송된다.
       triggerKey: `repair:${repair.id}:${newStatus}`,
     });
+  }
+
+  /**
+   * 방문 수거·배송이면 주소가 있어야 한다 (개발설계서 05 G-07).
+   * 접수·출고 방식이 없으면(기존 데이터·미입력) 검증하지 않는다.
+   */
+  private assertMethodAddresses(dto: {
+    receiptMethod?: string;
+    releaseMethod?: string;
+    pickupAddress?: string;
+    deliveryAddress?: string;
+  }): void {
+    const errors: FieldError[] = [];
+    if (dto.receiptMethod === 'PICKUP' && !dto.pickupAddress?.trim())
+      errors.push({ field: 'pickupAddress', reason: 'REQUIRED_FOR_PICKUP' });
+    if (dto.releaseMethod === 'DELIVERY' && !dto.deliveryAddress?.trim())
+      errors.push({ field: 'deliveryAddress', reason: 'REQUIRED_FOR_DELIVERY' });
+    if (errors.length > 0)
+      throw new BusinessException('VALIDATION_ERROR', '방문 주소를 입력해 주세요.', errors);
+  }
+
+  private methodData(dto: {
+    receiptMethod?: string;
+    releaseMethod?: string;
+    pickupAddress?: string;
+    deliveryAddress?: string;
+  }) {
+    return {
+      ...(dto.receiptMethod !== undefined ? { receiptMethod: dto.receiptMethod } : {}),
+      ...(dto.releaseMethod !== undefined ? { releaseMethod: dto.releaseMethod } : {}),
+      ...(dto.pickupAddress !== undefined ? { pickupAddress: dto.pickupAddress } : {}),
+      ...(dto.deliveryAddress !== undefined ? { deliveryAddress: dto.deliveryAddress } : {}),
+    };
   }
 
   private validateStatusTransition(current: string, next: string): void {

@@ -8,8 +8,10 @@ import {
   Col,
   Descriptions,
   Empty,
+  DatePicker,
   Form,
   Input,
+  InputNumber,
   List,
   Modal,
   Result,
@@ -32,7 +34,10 @@ import {
   saveConsultation,
   updateAppointment,
   visitAppointment,
+  USAGE_TYPES,
+  USAGE_TYPE_LABELS,
   type Appointment,
+  type UsageType,
 } from '../../api/appointments';
 import { ApiError } from '../../api/client';
 import { findCustomerByPhone } from '../../api/customers';
@@ -42,6 +47,25 @@ import { CUSTOMER_STATUS_META } from '../customers/customer-constants';
 import { APPT_STATUS_META, CONSULTATION_INTERESTS, SOURCE_META, SYNC_STATUS_META } from './appointment-constants';
 import { AppointmentFormModal } from './AppointmentFormModal';
 import { metaOf } from '../../shared/status-meta';
+import type { Dayjs } from 'dayjs';
+
+/** 상담 기록 폼 값 — 설계 PDF 1페이지 "용도·예산·희망 스타일·납기" */
+interface ConsultationFormValues {
+  interests?: string[];
+  content: string;
+  usageType?: UsageType;
+  budgetMin?: number;
+  budgetMax?: number;
+  preferredStyle?: string;
+  desiredDueDate?: Dayjs;
+}
+
+/** 예산 범위 표기. 하한·상한이 같으면 한 값만 보여준다. */
+function formatBudget(min: number, max?: number | null): string {
+  const toManwon = (v: number) => `${Math.round(v / 10000).toLocaleString()}만원`;
+  if (max == null || max === min) return toManwon(min);
+  return `${toManwon(min)}~${toManwon(max)}`;
+}
 
 function formatDateTime(v?: string): string {
   return v ? dayjs(v).format('YYYY-MM-DD (dd) HH:mm') : '-';
@@ -57,7 +81,7 @@ export function AppointmentDetailPage() {
   const [editOpen, setEditOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
-  const [consultForm] = Form.useForm<{ interests?: string[]; content: string }>();
+  const [consultForm] = Form.useForm<ConsultationFormValues>();
 
   const { data: appointment, isLoading, isError, error } = useQuery({
     queryKey: ['appointments', id],
@@ -127,8 +151,16 @@ export function AppointmentDetailPage() {
   });
 
   const consultMutation = useMutation({
-    mutationFn: (values: { interests?: string[]; content: string }) =>
-      saveConsultation(id, { interests: values.interests ?? [], content: values.content }),
+    mutationFn: (values: ConsultationFormValues) =>
+      saveConsultation(id, {
+        interests: values.interests ?? [],
+        content: values.content,
+        usageType: values.usageType,
+        budgetMin: values.budgetMin,
+        budgetMax: values.budgetMax,
+        preferredStyle: values.preferredStyle,
+        desiredDueDate: values.desiredDueDate?.format('YYYY-MM-DD'),
+      }),
     onSuccess: () => {
       message.success('상담 기록을 저장했습니다.');
       consultForm.resetFields();
@@ -354,6 +386,50 @@ export function AppointmentDetailPage() {
                 options={CONSULTATION_INTERESTS.map((v) => ({ value: v, label: v }))}
               />
             </Form.Item>
+            {/* 설계 PDF 1페이지 "방문 목적 파악 (용도, 예산, 희망 스타일, 납기 확인)" */}
+            <Row gutter={12}>
+              <Col xs={24} md={8}>
+                <Form.Item label="용도" name="usageType">
+                  <Select
+                    allowClear
+                    placeholder="선택"
+                    options={USAGE_TYPES.map((v) => ({ value: v, label: USAGE_TYPE_LABELS[v] }))}
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={12} md={5}>
+                <Form.Item label="예산 (하한)" name="budgetMin">
+                  <InputNumber
+                    style={{ width: '100%' }}
+                    min={0}
+                    step={100000}
+                    formatter={(v) => (v ? `${Number(v).toLocaleString()}` : '')}
+                    parser={(v) => Number((v ?? '').replace(/[^0-9]/g, '')) as 0}
+                    placeholder="원"
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={12} md={5}>
+                <Form.Item label="예산 (상한)" name="budgetMax">
+                  <InputNumber
+                    style={{ width: '100%' }}
+                    min={0}
+                    step={100000}
+                    formatter={(v) => (v ? `${Number(v).toLocaleString()}` : '')}
+                    parser={(v) => Number((v ?? '').replace(/[^0-9]/g, '')) as 0}
+                    placeholder="원"
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={6}>
+                <Form.Item label="희망 납기" name="desiredDueDate">
+                  <DatePicker style={{ width: '100%' }} placeholder="납기일" />
+                </Form.Item>
+              </Col>
+            </Row>
+            <Form.Item label="희망 스타일" name="preferredStyle">
+              <Input placeholder="예: 네이비 쓰리피스, 피크 라펠" maxLength={200} />
+            </Form.Item>
             <Form.Item
               label="상담 내용"
               name="content"
@@ -379,9 +455,27 @@ export function AppointmentDetailPage() {
                     {c.interests.map((i) => (
                       <Tag key={i}>{i}</Tag>
                     ))}
+                    {c.usageTypeName && <Tag color="blue">{c.usageTypeName}</Tag>}
+                    {c.budgetMin != null && (
+                      <Tag color="gold">{formatBudget(c.budgetMin, c.budgetMax)}</Tag>
+                    )}
+                    {c.desiredDueDate && (
+                      <Tag color="purple">납기 {c.desiredDueDate.slice(0, 10)}</Tag>
+                    )}
                   </Space>
                 }
-                description={<Typography.Paragraph style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>{c.content}</Typography.Paragraph>}
+                description={
+                  <>
+                    {c.preferredStyle && (
+                      <Typography.Paragraph type="secondary" style={{ marginBottom: 4 }}>
+                        희망 스타일: {c.preferredStyle}
+                      </Typography.Paragraph>
+                    )}
+                    <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>
+                      {c.content}
+                    </Typography.Paragraph>
+                  </>
+                }
               />
             </List.Item>
           )}

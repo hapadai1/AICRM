@@ -40,6 +40,8 @@ export interface ContractType {
 }
 
 export interface ContractTypeInput {
+  /** 관리 코드 — 백엔드 필수(CreateContractTypeDto.code). 수정 시에는 보내지 않는다. */
+  code?: string;
   name: string;
   description?: string;
   sortOrder?: number;
@@ -392,8 +394,9 @@ export function updateContractType(id: string, body: Partial<ContractTypeInput>)
   return request<ContractType>({ url: `/contract-types/${id}`, method: 'PATCH', data: body });
 }
 
-export function cloneContractType(id: string) {
-  return request<ContractType>({ url: `/contract-types/${id}/clone`, method: 'POST' });
+/** 복제 — 백엔드는 새 관리 코드를 필수로 요구한다(CloneContractTypeDto.code). */
+export function cloneContractType(id: string, body: { code: string; name?: string }) {
+  return request<ContractType>({ url: `/contract-types/${id}/clone`, method: 'POST', data: body });
 }
 
 export function retireContractType(id: string) {

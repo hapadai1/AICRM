@@ -498,4 +498,82 @@ describe('수선 (RepairsModule)', () => {
       });
     });
   });
+  /** 개발설계서 05 G-07 — 설계 PDF 1페이지 "수선 물품 방문" 대응 */
+  describe('접수·출고 방식', () => {
+    it('방문 수거/배송이면 주소를 요구하고, 저장 후 응답에 담긴다', async () => {
+      const { customer } = await seedRepairTargets(ctx.prisma);
+
+      const missing = await api(ctx)
+        .post('/api/v1/repairs')
+        .set(auth(ctx))
+        .send({
+          customerId: customer.id,
+          repairType: 'GENERAL',
+          requestDate: '2026-07-21',
+          description: '바지 기장',
+          receiptMethod: 'PICKUP',
+        });
+      expect(missing.status).toBe(400);
+      expect(missing.body.error.fieldErrors?.[0]).toMatchObject({
+        field: 'pickupAddress',
+        reason: 'REQUIRED_FOR_PICKUP',
+      });
+
+      const created = await api(ctx)
+        .post('/api/v1/repairs')
+        .set(auth(ctx))
+        .send({
+          customerId: customer.id,
+          repairType: 'GENERAL',
+          requestDate: '2026-07-21',
+          description: '바지 기장',
+          receiptMethod: 'PICKUP',
+          pickupAddress: '서울시 강남구 테헤란로 1',
+          releaseMethod: 'VISIT',
+        })
+        .expect(201);
+      expect(created.body.data).toMatchObject({
+        receiptMethod: 'PICKUP',
+        pickupAddress: '서울시 강남구 테헤란로 1',
+        releaseMethod: 'VISIT',
+      });
+
+      // 출고를 방문 배송으로 바꾸면 배송 주소가 필요하다.
+      const badUpdate = await api(ctx)
+        .patch(`/api/v1/repairs/${created.body.data.id}`)
+        .set(auth(ctx))
+        .send({ releaseMethod: 'DELIVERY' });
+      expect(badUpdate.status).toBe(400);
+      expect(badUpdate.body.error.fieldErrors?.[0]).toMatchObject({
+        field: 'deliveryAddress',
+        reason: 'REQUIRED_FOR_DELIVERY',
+      });
+
+      const okUpdate = await api(ctx)
+        .patch(`/api/v1/repairs/${created.body.data.id}`)
+        .set(auth(ctx))
+        .send({ releaseMethod: 'DELIVERY', deliveryAddress: '서울시 서초구 서초대로 2' })
+        .expect(200);
+      expect(okUpdate.body.data).toMatchObject({
+        releaseMethod: 'DELIVERY',
+        deliveryAddress: '서울시 서초구 서초대로 2',
+      });
+    });
+
+    it('방식을 지정하지 않아도 접수된다 (기존 동작 유지)', async () => {
+      const { customer } = await seedRepairTargets(ctx.prisma);
+      const res = await api(ctx)
+        .post('/api/v1/repairs')
+        .set(auth(ctx))
+        .send({
+          customerId: customer.id,
+          repairType: 'GENERAL',
+          requestDate: '2026-07-21',
+          description: '단추 교체',
+        })
+        .expect(201);
+      expect(res.body.data.receiptMethod).toBeNull();
+      expect(res.body.data.releaseMethod).toBeNull();
+    });
+  });
 });

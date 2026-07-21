@@ -6,6 +6,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  MaxLength,
   Min,
 } from 'class-validator';
 import { PageQueryDto } from '../../common/pagination';
@@ -19,6 +20,24 @@ export const REPAIR_TYPES = [
   'GENERAL',
 ] as const;
 
+/**
+ * 접수·출고 방식 (개발설계서 05 G-07).
+ * 설계 PDF 1페이지 수선 구분의 "수선 물품 수선 요청 방문 / 출고 방문" 대응.
+ * 택배는 운영하지 않으므로 방문 2종만 둔다.
+ */
+export const REPAIR_RECEIPT_METHODS = ['VISIT', 'PICKUP'] as const;
+export const REPAIR_RELEASE_METHODS = ['VISIT', 'DELIVERY'] as const;
+
+/** 접수·출고 방식 공통 필드 */
+class RepairMethodDto {
+  /** VISIT 고객 방문 | PICKUP 방문 수거 */
+  @IsOptional() @IsIn([...REPAIR_RECEIPT_METHODS]) receiptMethod?: string;
+  /** VISIT 고객 방문 | DELIVERY 방문 배송 */
+  @IsOptional() @IsIn([...REPAIR_RELEASE_METHODS]) releaseMethod?: string;
+  @IsOptional() @IsString() @MaxLength(300) pickupAddress?: string;
+  @IsOptional() @IsString() @MaxLength(300) deliveryAddress?: string;
+}
+
 export class ListRepairsQueryDto extends PageQueryDto {
   @IsOptional() @IsString() status?: string;
   @IsOptional() @IsUUID() customerId?: string;
@@ -29,7 +48,7 @@ export class LinkTargetsQueryDto {
   @IsUUID() customerId: string;
 }
 
-export class CreateRepairDto {
+export class CreateRepairDto extends RepairMethodDto {
   @IsUUID() customerId: string;
   @IsIn([...REPAIR_TYPES]) repairType: string;
   @IsDateString() requestDate: string;
@@ -44,7 +63,7 @@ export class CreateRepairDto {
   @IsOptional() @IsUUID() rentalInventoryItemId?: string;
 }
 
-export class UpdateRepairDto {
+export class UpdateRepairDto extends RepairMethodDto {
   @IsOptional() @IsDateString() dueDate?: string;
   @IsOptional() @IsString() @IsNotEmpty() description?: string;
   @IsOptional() @IsNumber() @Min(0) cost?: number;

@@ -84,8 +84,20 @@ export function ContractTypeAdminPage() {
     onError,
   });
 
+  /** 기존 코드와 겹치지 않는 복제용 관리 코드를 만든다 (백엔드 필수, 40자 제한). */
+  const nextCloneCode = (source: ContractType): string => {
+    const used = new Set((types ?? []).map((t) => t.code));
+    const base = source.code.slice(0, 33);
+    for (let i = 1; i < 100; i += 1) {
+      const candidate = i === 1 ? `${base}_COPY` : `${base}_COPY${i}`;
+      if (!used.has(candidate)) return candidate;
+    }
+    return `${base}_COPY${Date.now() % 1000}`;
+  };
+
   const cloneMutation = useMutation({
-    mutationFn: (id: string) => cloneContractType(id),
+    mutationFn: (t: ContractType) =>
+      cloneContractType(t.id, { code: nextCloneCode(t), name: `${t.name} 복사본` }),
     onSuccess: (created) => {
       message.success(`'${created.name}' 구분을 생성했습니다.`);
       void invalidate();
@@ -184,8 +196,8 @@ export function ContractTypeAdminPage() {
             <Button
               size="small"
               icon={<CopyOutlined />}
-              loading={cloneMutation.isPending && cloneMutation.variables === t.id}
-              onClick={() => cloneMutation.mutate(t.id)}
+              loading={cloneMutation.isPending && cloneMutation.variables?.id === t.id}
+              onClick={() => cloneMutation.mutate(t)}
             >
               복제
             </Button>
@@ -250,6 +262,22 @@ export function ContractTypeAdminPage() {
         destroyOnClose
       >
         <Form form={form} layout="vertical" style={{ marginTop: 8 }}>
+          {!editing && (
+            <Form.Item
+              name="code"
+              label="관리 코드"
+              rules={[
+                { required: true, whitespace: true, message: '관리 코드를 입력해 주세요.' },
+                {
+                  pattern: /^[A-Z0-9_]+$/,
+                  message: '영문 대문자·숫자·밑줄만 사용합니다.',
+                },
+              ]}
+              extra="등록 후에는 변경할 수 없습니다. 예: BUSINESS_SUIT_CUSTOM"
+            >
+              <Input placeholder="BUSINESS_SUIT_CUSTOM" maxLength={40} />
+            </Form.Item>
+          )}
           <Form.Item
             name="name"
             label="계약 구분명"

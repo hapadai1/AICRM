@@ -36,8 +36,13 @@ import {
   repairLinkKind,
   repairStatusMeta,
   repairTypeLabel,
+  REPAIR_METHOD_LABELS,
+  REPAIR_RECEIPT_METHODS,
+  REPAIR_RELEASE_METHODS,
   type Repair,
   type RepairNotificationSuggestion,
+  type RepairReceiptMethod,
+  type RepairReleaseMethod,
   type RepairStatus,
   type RepairType,
 } from '../../api/repairs';
@@ -56,6 +61,11 @@ interface ReceiptValues {
   description: string;
   cost?: number;
   notes?: string;
+  /** 접수·출고 방식 (개발설계서 05 G-07) */
+  receiptMethod?: RepairReceiptMethod;
+  releaseMethod?: RepairReleaseMethod;
+  pickupAddress?: string;
+  deliveryAddress?: string;
 }
 
 interface StatusChangeState {
@@ -138,6 +148,10 @@ export function RepairsPage() {
         description: v.description,
         cost: v.cost,
         notes: v.notes,
+        receiptMethod: v.receiptMethod,
+        releaseMethod: v.releaseMethod,
+        pickupAddress: v.pickupAddress,
+        deliveryAddress: v.deliveryAddress,
         orderItemId: v.componentId ? undefined : v.orderItemId,
         componentId: v.componentId,
         rentalInventoryItemId: v.rentalInventoryItemId,
@@ -249,6 +263,29 @@ export function RepairsPage() {
       ),
     },
     { title: '접수일', dataIndex: 'requestDate', width: 110 },
+    {
+      // 설계 PDF 1페이지 "수선 물품 방문" — 오가는 건이 한눈에 보이게 한다.
+      title: '접수·출고',
+      key: 'methods',
+      width: 130,
+      render: (_, r) =>
+        r.receiptMethod || r.releaseMethod ? (
+          <Space size={4} wrap>
+            {r.receiptMethod && (
+              <Tag color={r.receiptMethod === 'PICKUP' ? 'orange' : 'default'}>
+                {REPAIR_METHOD_LABELS[r.receiptMethod]}
+              </Tag>
+            )}
+            {r.releaseMethod && (
+              <Tag color={r.releaseMethod === 'DELIVERY' ? 'orange' : 'default'}>
+                {REPAIR_METHOD_LABELS[r.releaseMethod]}
+              </Tag>
+            )}
+          </Space>
+        ) : (
+          <Typography.Text type="secondary">-</Typography.Text>
+        ),
+    },
     {
       title: '완료 예정일',
       dataIndex: 'dueDate',
@@ -558,6 +595,61 @@ export function RepairsPage() {
           >
             <Input.TextArea rows={3} placeholder="예: 하의 기장 1.5cm 줄임" />
           </Form.Item>
+          {/* 설계 PDF 1페이지 "수선 물품 방문" — 고객 방문인지 우리가 오가는지 구분 */}
+          <Space size="large" wrap align="start">
+            <Form.Item name="receiptMethod" label="접수 방식">
+              <Select
+                allowClear
+                style={{ width: 150 }}
+                placeholder="선택"
+                options={REPAIR_RECEIPT_METHODS.map((v) => ({
+                  value: v,
+                  label: REPAIR_METHOD_LABELS[v],
+                }))}
+              />
+            </Form.Item>
+            <Form.Item name="releaseMethod" label="출고 방식">
+              <Select
+                allowClear
+                style={{ width: 150 }}
+                placeholder="선택"
+                options={REPAIR_RELEASE_METHODS.map((v) => ({
+                  value: v,
+                  label: REPAIR_METHOD_LABELS[v],
+                }))}
+              />
+            </Form.Item>
+          </Space>
+          <Form.Item
+            noStyle
+            shouldUpdate={(prev, cur) =>
+              prev.receiptMethod !== cur.receiptMethod || prev.releaseMethod !== cur.releaseMethod
+            }
+          >
+            {({ getFieldValue }) => (
+              <>
+                {getFieldValue('receiptMethod') === 'PICKUP' && (
+                  <Form.Item
+                    name="pickupAddress"
+                    label="수거 주소"
+                    rules={[{ required: true, message: '수거 주소를 입력해 주세요.' }]}
+                  >
+                    <Input placeholder="고객 물품을 받으러 갈 주소" maxLength={300} />
+                  </Form.Item>
+                )}
+                {getFieldValue('releaseMethod') === 'DELIVERY' && (
+                  <Form.Item
+                    name="deliveryAddress"
+                    label="배송 주소"
+                    rules={[{ required: true, message: '배송 주소를 입력해 주세요.' }]}
+                  >
+                    <Input placeholder="완료된 물품을 가져다줄 주소" maxLength={300} />
+                  </Form.Item>
+                )}
+              </>
+            )}
+          </Form.Item>
+
           <Form.Item name="notes" label="비고">
             <Input placeholder="예: 반납 검수 중 발견" />
           </Form.Item>

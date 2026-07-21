@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Res } from '@nestjs/common';
+import { Response } from 'express';
 import { AuthUser, CurrentUser, RequirePermission } from '../../common/decorators';
 import {
   CreateFittingDto,
@@ -80,5 +81,30 @@ export class ProductionController {
   @RequirePermission('FITTING_VIEW')
   listFittings(@Param('id') id: string) {
     return this.productionService.listFittings(id);
+  }
+
+  /**
+   * 가봉 수정지시서 Excel 다운로드 (개발설계서 05 G-04).
+   * 공장 전달은 이메일 수동 발송이므로 파일만 만들어 준다.
+   */
+  @Get('fittings/:id/sheet')
+  @RequirePermission('FITTING_VIEW')
+  async downloadFittingSheet(
+    @Param('id') id: string,
+    @CurrentUser() actor: AuthUser,
+    @Res() res: Response,
+  ): Promise<void> {
+    const { buffer, fileName } = await this.productionService.buildFittingSheet(id, actor);
+    const encodedName = encodeURIComponent(fileName);
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader('Content-Length', String(buffer.length));
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${encodedName}"; filename*=UTF-8''${encodedName}`,
+    );
+    res.end(buffer);
   }
 }

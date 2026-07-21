@@ -91,6 +91,10 @@ interface RepairApiRow {
   description: string;
   cost?: string | number | null;
   notes?: string | null;
+  receiptMethod?: string | null;
+  releaseMethod?: string | null;
+  pickupAddress?: string | null;
+  deliveryAddress?: string | null;
   createdAt: string;
   updatedAt: string;
   customer: { id: string; name: string; phone: string };
@@ -120,6 +124,18 @@ export interface RepairEvent {
   actorName: string;
 }
 
+/** 접수·출고 방식 (개발설계서 05 G-07) — 택배는 운영하지 않는다 */
+export const REPAIR_RECEIPT_METHODS = ['VISIT', 'PICKUP'] as const;
+export const REPAIR_RELEASE_METHODS = ['VISIT', 'DELIVERY'] as const;
+export type RepairReceiptMethod = (typeof REPAIR_RECEIPT_METHODS)[number];
+export type RepairReleaseMethod = (typeof REPAIR_RELEASE_METHODS)[number];
+
+export const REPAIR_METHOD_LABELS: Record<string, string> = {
+  VISIT: '고객 방문',
+  PICKUP: '방문 수거',
+  DELIVERY: '방문 배송',
+};
+
 /** 화면용 수선 행 — 날짜·금액·대상 라벨을 정규화한 형태 */
 export interface Repair {
   id: string;
@@ -136,6 +152,10 @@ export interface Repair {
   description: string;
   cost?: number;
   notes?: string;
+  receiptMethod?: RepairReceiptMethod;
+  releaseMethod?: RepairReleaseMethod;
+  pickupAddress?: string;
+  deliveryAddress?: string;
   events: RepairEvent[];
 }
 
@@ -184,6 +204,10 @@ function toRepair(row: RepairApiRow): Repair {
     description: row.description,
     cost: toNumber(row.cost),
     notes: row.notes ?? undefined,
+    receiptMethod: (row.receiptMethod as RepairReceiptMethod) ?? undefined,
+    releaseMethod: (row.releaseMethod as RepairReleaseMethod) ?? undefined,
+    pickupAddress: row.pickupAddress ?? undefined,
+    deliveryAddress: row.deliveryAddress ?? undefined,
     events: (row.statusEvents ?? []).map((e) => ({
       id: e.id,
       previousStatus: e.previousStatus ?? undefined,
@@ -222,6 +246,10 @@ export function fetchRepair(id: string): Promise<Repair> {
 
 export interface CreateRepairInput {
   customerId: string;
+  receiptMethod?: RepairReceiptMethod;
+  releaseMethod?: RepairReleaseMethod;
+  pickupAddress?: string;
+  deliveryAddress?: string;
   repairType: RepairType;
   requestDate: string;
   dueDate?: string;

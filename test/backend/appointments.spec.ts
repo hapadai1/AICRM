@@ -323,4 +323,67 @@ describe('예약·상담 (Phase 2 + 연동정합화 §1)', () => {
       .expect(201);
     expect(res.body.data).toEqual({ fetched: 0, created: 0, updated: 0, cancelled: 0 });
   });
+  /** 개발설계서 05 G-01 — 설계 PDF 1페이지 "용도·예산·희망 스타일·납기 확인" */
+  it('초도 상담 항목(용도·예산·스타일·납기)을 저장하고 정정할 수 있다', async () => {
+    const purpose = await ctx.prisma.appointmentPurpose.findUniqueOrThrow({
+      where: { code: 'INITIAL_CONSULTATION' },
+    });
+    const customer = await ctx.prisma.customer.findUniqueOrThrow({
+      where: { phoneNormalized: '01033331111' },
+    });
+    const appt = await ctx.prisma.appointment.create({
+      data: {
+        id: randomUUID(),
+        customerId: customer.id,
+        source: 'CRM',
+        purposeId: purpose.id,
+        scheduledStart: new Date('2026-08-22T10:00:00+09:00'),
+        status: 'RESERVED',
+      },
+    });
+
+    const created = await api(ctx)
+      .post(`/api/v1/appointments/${appt.id}/consultations`)
+      .set(auth(ctx))
+      .send({
+        content: '9월 결혼식',
+        usageType: 'WEDDING_RENTAL',
+        budgetMin: 3_000_000,
+        budgetMax: 4_000_000,
+        preferredStyle: '네이비 쓰리피스, 피크 라펠',
+        desiredDueDate: '2026-09-12',
+      })
+      .expect(201);
+    expect(created.body.data).toMatchObject({
+      usageType: 'WEDDING_RENTAL',
+      usageTypeName: '웨딩패키지 렌탈',
+      budgetMin: 3_000_000,
+      budgetMax: 4_000_000,
+      preferredStyle: '네이비 쓰리피스, 피크 라펠',
+    });
+    expect(created.body.data.desiredDueDate).toContain('2026-09-12');
+
+    // 예산을 한쪽만 주면 같은 값으로 채워 범위를 온전히 남긴다.
+    const single = await api(ctx)
+      .patch(`/api/v1/consultations/${created.body.data.id}`)
+      .set(auth(ctx))
+      .send({ budgetMax: 5_000_000 })
+      .expect(200);
+    expect(single.body.data).toMatchObject({ budgetMin: 5_000_000, budgetMax: 5_000_000 });
+
+    // 하한이 상한보다 크면 거부한다.
+    const invalid = await api(ctx)
+      .patch(`/api/v1/consultations/${created.body.data.id}`)
+      .set(auth(ctx))
+      .send({ budgetMin: 9_000_000, budgetMax: 1_000_000 });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.error.fieldErrors?.[0]).toMatchObject({ field: 'budgetMin' });
+
+    // 허용하지 않은 용도 코드는 거부한다.
+    const badUsage = await api(ctx)
+      .post(`/api/v1/appointments/${appt.id}/consultations`)
+      .set(auth(ctx))
+      .send({ content: '문의', usageType: 'GRADUATION' });
+    expect(badUsage.status).toBe(400);
+  });
 });

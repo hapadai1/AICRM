@@ -50,6 +50,17 @@ export interface DashboardTask {
   acknowledgedAt?: string;
 }
 
+/** 백엔드 shared_memos 원본 행 */
+interface SharedMemoApiRow {
+  id: string;
+  content: string;
+  authorId: string;
+  status: string;
+  createdAt: string;
+  updatedAt?: string | null;
+  author?: { id: string; displayName: string } | null;
+}
+
 export interface SharedMemo {
   id: string;
   content: string;
@@ -57,7 +68,23 @@ export interface SharedMemo {
   authorName: string;
   createdAt: string;
   updatedAt?: string;
+  /** 백엔드 status(ACTIVE|COMPLETED) 파생 */
   completed: boolean;
+  /** 생성 이후 실제로 수정된 적이 있는지 (@updatedAt은 항상 채워진다) */
+  edited: boolean;
+}
+
+function toSharedMemo(row: SharedMemoApiRow): SharedMemo {
+  return {
+    id: row.id,
+    content: row.content,
+    authorId: row.authorId,
+    authorName: row.author?.displayName ?? '-',
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt ?? undefined,
+    completed: row.status === 'COMPLETED',
+    edited: !!row.updatedAt && row.updatedAt !== row.createdAt,
+  };
 }
 
 export function fetchDashboardSummary(date: string): Promise<DashboardSummary> {
@@ -76,18 +103,32 @@ export function acknowledgeDashboardTask(taskId: string): Promise<DashboardTask>
 }
 
 export function fetchSharedMemos(): Promise<SharedMemo[]> {
-  return request<SharedMemo[]>({ url: '/shared-memos' });
+  return request<SharedMemoApiRow[]>({ url: '/shared-memos' }).then((rows) =>
+    (rows ?? []).map(toSharedMemo),
+  );
 }
 
 export function createSharedMemo(content: string): Promise<SharedMemo> {
-  return request<SharedMemo>({ url: '/shared-memos', method: 'POST', data: { content } });
+  return request<SharedMemoApiRow>({ url: '/shared-memos', method: 'POST', data: { content } }).then(
+    toSharedMemo,
+  );
 }
 
 export function updateSharedMemo(
   id: string,
   payload: { content?: string; completed?: boolean },
 ): Promise<SharedMemo> {
-  return request<SharedMemo>({ url: `/shared-memos/${id}`, method: 'PATCH', data: payload });
+  return request<SharedMemoApiRow>({
+    url: `/shared-memos/${id}`,
+    method: 'PATCH',
+    // 백엔드는 completed 불리언이 아니라 status 코드를 받는다.
+    data: {
+      ...(payload.content !== undefined ? { content: payload.content } : {}),
+      ...(payload.completed !== undefined
+        ? { status: payload.completed ? 'COMPLETED' : 'ACTIVE' }
+        : {}),
+    },
+  }).then(toSharedMemo);
 }
 
 export function deleteSharedMemo(id: string): Promise<{ id: string; deleted: boolean }> {

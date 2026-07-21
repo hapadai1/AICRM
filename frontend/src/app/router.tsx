@@ -4,6 +4,7 @@ import { AdminOptionsPage } from '../features/admin/AdminOptionsPage';
 import { AdminUsersPage } from '../features/admin/AdminUsersPage';
 import { AuditLogPage } from '../features/admin/AuditLogPage';
 import { AppointmentDetailPage } from '../features/appointments/AppointmentDetailPage';
+import { AppointmentPrintPage } from '../features/appointments/AppointmentPrintPage';
 import { AppointmentsPage } from '../features/appointments/AppointmentsPage';
 import { ContractDetailPage } from '../features/contracts/ContractDetailPage';
 import { ContractFormPage } from '../features/contracts/ContractFormPage';
@@ -51,6 +52,8 @@ export const router = createBrowserRouter([
       { index: true, element: <DashboardPage /> },
       // 예약·고객
       { path: 'appointments', element: <AppointmentsPage /> },
+      // 인쇄 전용 화면 — :id보다 먼저 선언해야 한다 (개발설계서 05 G-02)
+      { path: 'appointments/print', element: <AppointmentPrintPage /> },
       { path: 'appointments/:id', element: <AppointmentDetailPage /> },
       { path: 'customers', element: <CustomersPage /> },
       { path: 'customers/:id', element: <CustomerDetailPage /> },

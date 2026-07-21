@@ -2,6 +2,7 @@ import { Type } from 'class-transformer';
 import {
   IsArray,
   IsDateString,
+  IsIn,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -9,6 +10,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { PageQueryDto } from '../../common/pagination';
+import { FITTING_AREA_CODES } from './fitting.constants';
 
 /** 품목·구성품 상태 이벤트 공통 입력 */
 export class CreateProductionEventDto {
@@ -39,6 +41,9 @@ export class ProductionItemsQueryDto extends PageQueryDto {
 
 export class FittingAdjustmentDto {
   @IsOptional() @IsUUID() componentId?: string;
+  /** 표준 확인 항목 (개발설계서 05 G-04). 미지정 시 기타. */
+  @IsOptional() @IsIn([...FITTING_AREA_CODES]) areaCode?: string;
+  /** 세부 부위 자유입력 (예: 왼쪽 소매) */
   @IsString() @IsNotEmpty() area: string;
   @IsString() @IsNotEmpty() instruction: string;
 }

@@ -13,6 +13,16 @@ class AuditQueryDto extends PageQueryDto {
   @IsOptional() @IsISO8601() to?: string;
 }
 
+/**
+ * 조회 종료 시각. `YYYY-MM-DD`(날짜만)면 그날을 포함하도록 다음 날 00:00으로 올린다.
+ * 시각까지 준 경우에는 그 값을 그대로 상한으로 쓴다.
+ */
+function endOfRange(value: string): Date {
+  const date = new Date(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) date.setDate(date.getDate() + 1);
+  return date;
+}
+
 @Controller('audit-logs')
 export class AuditController {
   constructor(private readonly prisma: PrismaService) {}
@@ -29,7 +39,8 @@ export class AuditController {
         ? {
             createdAt: {
               ...(query.from ? { gte: new Date(query.from) } : {}),
-              ...(query.to ? { lte: new Date(query.to) } : {}),
+              // `to`가 날짜만이면 그날 00:00이 되어 당일 로그가 통째로 빠진다 → 다음 날 00:00 미만으로 본다.
+              ...(query.to ? { lt: endOfRange(query.to) } : {}),
             },
           }
         : {}),
