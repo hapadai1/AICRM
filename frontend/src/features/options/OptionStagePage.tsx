@@ -26,14 +26,15 @@ function ChoiceMedia({ choice }: { choice: OptionChoiceView }) {
 
   if (choice.imageUrl && src) {
     return (
-      <div style={{ height: 240, borderRadius: 8, overflow: 'hidden' }}>
+      <div style={{ height: 240, borderRadius: 8, overflow: 'hidden', background: '#f5f5f5' }}>
         {/* 카드 전체가 '눌러 선택' 대상이므로 preview는 끄고 클릭이 카드로 전파되게 둔다. */}
+        {/* 크기(240px)에 이미지를 잘림 없이 맞춘다(contain) — 비율이 달라도 전체가 보이게. */}
         <Image
           src={src}
           alt={choice.name}
           width="100%"
           height={240}
-          style={{ objectFit: 'cover' }}
+          style={{ objectFit: 'contain' }}
           preview={false}
         />
       </div>
