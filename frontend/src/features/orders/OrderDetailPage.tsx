@@ -261,23 +261,32 @@ export function OrderDetailPage() {
             }
           >
             <Flex vertical gap={16}>
-              {/*
-                옵션 진행률·옵션 상태·채촌 연결·작업지시서 출력 이력은 /orders/{id}/items 응답에 없다.
-                값을 지어내지 않고 자리만 유지한다 (docs/dev/08 §4 — 백엔드 필드 추가 대기).
-              */}
+              {/* 옵션 진행률·채촌 연결·작업지시서 출력 (GET /orders/:id/items, docs/dev/08 §4) */}
               {!isRental && !cancelled && (
                 <Space size={24} wrap>
                   <Space>
                     <Typography.Text type="secondary">옵션 진행률</Typography.Text>
-                    <Typography.Text>{PENDING}</Typography.Text>
+                    <Typography.Text>
+                      {item.optionProgress.total > 0
+                        ? `${item.optionProgress.current}/${item.optionProgress.total} 단계`
+                        : '미시작'}
+                    </Typography.Text>
                   </Space>
                   <Space>
                     <Typography.Text type="secondary">채촌</Typography.Text>
-                    <Typography.Text>{PENDING}</Typography.Text>
+                    <Typography.Text>
+                      {item.measurement.linked
+                        ? `V${item.measurement.versionNo} ${item.measurement.completed ? '완료' : '작성중'}`
+                        : '미연결'}
+                    </Typography.Text>
                   </Space>
                   <Space>
                     <Typography.Text type="secondary">작업지시서</Typography.Text>
-                    <Typography.Text>{PENDING}</Typography.Text>
+                    <Typography.Text>
+                      {item.workOrderVersionCount > 0
+                        ? `${item.workOrderVersionCount}회 출력`
+                        : '미출력'}
+                    </Typography.Text>
                   </Space>
                 </Space>
               )}

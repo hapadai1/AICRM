@@ -375,9 +375,23 @@ export class DashboardService {
     if (rows.length === 0) return rows;
     const actions = await this.prisma.dashboardTaskAction.findMany({
       where: { taskType, entityId: { in: rows.map((r) => r.entityId) } },
-      select: { entityId: true },
+      orderBy: { actionAt: 'desc' },
+      select: { entityId: true, actionAt: true, actionByUser: { select: { displayName: true } } },
     });
-    const acked = new Set(actions.map((a) => a.entityId));
-    return rows.map((r) => ({ ...r, acknowledged: acked.has(r.entityId) }));
+    // 엔티티별 최근 처리(정렬상 첫 항목)만 남긴다.
+    const latest = new Map<string, { by: string; at: string }>();
+    for (const a of actions) {
+      if (!latest.has(a.entityId))
+        latest.set(a.entityId, { by: a.actionByUser.displayName, at: a.actionAt.toISOString() });
+    }
+    return rows.map((r) => {
+      const ack = latest.get(r.entityId);
+      return {
+        ...r,
+        acknowledged: !!ack,
+        acknowledgedBy: ack?.by ?? null,
+        acknowledgedAt: ack?.at ?? null,
+      };
+    });
   }
 }

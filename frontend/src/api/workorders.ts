@@ -133,6 +133,9 @@ interface WorkOrderPreviewApi {
   currentVersionNo: number | null;
   lastIssuedAt: string | null;
   status: string;
+  optionConfirmed?: boolean;
+  measurementCompleted?: boolean;
+  printable?: boolean;
 }
 
 /** toVersionRow() 결과 */
@@ -230,6 +233,10 @@ export interface WorkOrderPreview {
   optionStages: WorkOrderOptionStage[];
   measurement?: WorkOrderPreviewMeasurement;
   measurementCandidates: WorkOrderMeasurementCandidate[];
+  /** 정식 Excel 출력 가능 여부 (옵션 확정 + 채촌 완료) — 백엔드 판정 */
+  optionConfirmed: boolean;
+  measurementCompleted: boolean;
+  printable: boolean;
 }
 
 export interface WorkOrderVersionRow {
@@ -333,6 +340,9 @@ function toPreview(raw: WorkOrderPreviewApi): WorkOrderPreview {
       ...c,
       measurementDate: toDateOnly(c.measurementDate) ?? '',
     })),
+    optionConfirmed: raw.optionConfirmed ?? false,
+    measurementCompleted: raw.measurementCompleted ?? false,
+    printable: raw.printable ?? false,
   };
 }
 

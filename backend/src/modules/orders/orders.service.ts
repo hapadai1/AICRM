@@ -11,6 +11,23 @@ const ITEMS_INCLUDE = {
   components: { orderBy: [{ componentType: 'asc' }, { sequenceNo: 'asc' }] },
 } satisfies Prisma.OrderItemInclude;
 
+/** getItems 진행지표 집계용 include — 옵션 세션·채촌 연결·작업지시서 버전 */
+const ITEMS_PROGRESS_INCLUDE = {
+  components: { orderBy: [{ componentType: 'asc' }, { sequenceNo: 'asc' }] },
+  optionSelectionSessions: {
+    where: { isCurrent: true },
+    include: {
+      values: { select: { optionStageId: true } },
+      optionSetVersion: { select: { stages: { where: { active: true }, select: { id: true } } } },
+    },
+  },
+  measurementLinks: {
+    where: { isCurrent: true },
+    select: { measurementSessionId: true, measurementSession: { select: { versionNo: true, completedAt: true } } },
+  },
+  workOrder: { select: { versions: { select: { id: true } }, currentVersionId: true } },
+} satisfies Prisma.OrderItemInclude;
+
 /**
  * 주문 조회·구성품 관리.
  * 주문 경로에서 품목 수량을 변경하는 API는 의도적으로 제공하지 않는다(ORDER_ITEM_COUNT_LOCKED 원칙) —
@@ -48,10 +65,37 @@ export class OrdersService {
   async getItems(orderId: string) {
     const order = await this.prisma.order.findUnique({ where: { id: orderId }, select: { id: true } });
     if (!order) throw new NotFoundException('주문이 없습니다.');
-    return this.prisma.orderItem.findMany({
+    const items = await this.prisma.orderItem.findMany({
       where: { orderId },
-      include: ITEMS_INCLUDE,
+      include: ITEMS_PROGRESS_INCLUDE,
       orderBy: [{ productCategory: 'asc' }, { sequenceNo: 'asc' }],
+    });
+
+    // 진행지표를 평면 필드로 덧붙인다: 옵션 진행률·채촌 연결·작업지시서 버전 수 (docs/dev/08 §4)
+    return items.map((item) => {
+      const { optionSelectionSessions, measurementLinks, workOrder, ...rest } = item;
+      const session = optionSelectionSessions[0];
+      const totalStages = session?.optionSetVersion.stages.length ?? 0;
+      const stageIds = new Set(session?.optionSetVersion.stages.map((s) => s.id) ?? []);
+      const completedStages = session
+        ? session.values.filter((v) => stageIds.has(v.optionStageId)).length
+        : 0;
+      const link = measurementLinks[0];
+      return {
+        ...rest,
+        optionProgress: session
+          ? { status: session.status, current: completedStages, total: totalStages }
+          : { status: 'NOT_STARTED', current: 0, total: 0 },
+        measurement: link
+          ? {
+              linked: true,
+              versionNo: link.measurementSession.versionNo,
+              completed: link.measurementSession.completedAt !== null,
+            }
+          : { linked: false, versionNo: null, completed: false },
+        workOrderVersionCount: workOrder?.versions.length ?? 0,
+        workOrderIssued: !!workOrder?.currentVersionId,
+      };
     });
   }
 

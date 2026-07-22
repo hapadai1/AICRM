@@ -38,6 +38,11 @@ interface OrderItemApiRow {
   cancelledReason?: string | null;
   cancelledAt?: string | null;
   components?: OrderComponentApiRow[];
+  // GET /orders/:id/items 진행지표 (docs/dev/08 §4)
+  optionProgress?: { status: string; current: number; total: number };
+  measurement?: { linked: boolean; versionNo: number | null; completed: boolean };
+  workOrderVersionCount?: number;
+  workOrderIssued?: boolean;
 }
 
 interface OrderApiRow {
@@ -74,7 +79,17 @@ export interface OrderComponent {
   notes?: string;
 }
 
-export interface OrderItem {
+export interface OrderItemProgress {
+  /** 옵션 진행률 (current/total 단계). 세션 없으면 status=NOT_STARTED */
+  optionProgress: { status: string; current: number; total: number };
+  /** 현재 연결된 채촌 */
+  measurement: { linked: boolean; versionNo: number | null; completed: boolean };
+  /** 작업지시서 출력(버전) 횟수 */
+  workOrderVersionCount: number;
+  workOrderIssued: boolean;
+}
+
+export interface OrderItem extends OrderItemProgress {
   id: string;
   orderId: string;
   productCategory: ProductCategory;
@@ -127,6 +142,10 @@ function toOrderItem(row: OrderItemApiRow): OrderItem {
     status: row.status,
     cancelledReason: row.cancelledReason ?? undefined,
     components: (row.components ?? []).map(toComponent),
+    optionProgress: row.optionProgress ?? { status: 'NOT_STARTED', current: 0, total: 0 },
+    measurement: row.measurement ?? { linked: false, versionNo: null, completed: false },
+    workOrderVersionCount: row.workOrderVersionCount ?? 0,
+    workOrderIssued: row.workOrderIssued ?? false,
   };
 }
 

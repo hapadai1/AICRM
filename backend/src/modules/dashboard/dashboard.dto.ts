@@ -62,4 +62,7 @@ export interface DashboardTaskRow {
   reason: string;
   dueDate?: string | null;
   acknowledged: boolean;
+  /** 최근 확인 처리자 표시명·시각 (미확인이면 null) */
+  acknowledgedBy?: string | null;
+  acknowledgedAt?: string | null;
 }

@@ -230,6 +230,11 @@ export class WorkOrdersService {
       currentVersionNo: currentVersion?.versionNo ?? null,
       lastIssuedAt: currentVersion?.issuedAt.toISOString() ?? null,
       status: resolveWorkOrderStatus(session, link, currentVersion),
+      // 정식 출력 가능 판정 (docs/dev/08 §4): 옵션 확정 + 채촌 연결·완료
+      optionConfirmed: session.status === 'CONFIRMED',
+      measurementCompleted: !!measurementSession && measurementSession.completedAt != null,
+      printable:
+        session.status === 'CONFIRMED' && !!measurementSession && measurementSession.completedAt != null,
     };
   }
 

@@ -22,6 +22,8 @@ interface PaymentView {
   paymentMethod: string | null;
   status: string;
   memo: string | null;
+  cancelReason: string | null;
+  cancelledAt: string | null;
   createdBy: string;
   createdAt: Date;
 }
@@ -49,6 +51,8 @@ interface PaymentRecord {
   paymentMethod: string | null;
   status: string;
   memo: string | null;
+  cancelReason: string | null;
+  cancelledAt: Date | null;
   createdBy: string;
   createdAt: Date;
 }
@@ -190,7 +194,7 @@ export class PaymentsService {
 
     const cancelled = await this.prisma.payment.update({
       where: { id: paymentId },
-      data: { status: 'CANCELLED' },
+      data: { status: 'CANCELLED', cancelReason: dto.reason ?? null, cancelledAt: new Date() },
     });
     await this.audit.log({
       userId: actor.id,
@@ -370,6 +374,8 @@ export class PaymentsService {
       paymentMethod: payment.paymentMethod,
       status: payment.status,
       memo: payment.memo,
+      cancelReason: payment.cancelReason ?? null,
+      cancelledAt: payment.cancelledAt ? payment.cancelledAt.toISOString() : null,
       createdBy: payment.createdBy,
       createdAt: payment.createdAt,
     };

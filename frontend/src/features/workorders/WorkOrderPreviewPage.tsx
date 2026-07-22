@@ -88,13 +88,8 @@ export function WorkOrderPreviewPage() {
   const statusMeta = metaOf(WORK_ORDER_STATUS_META, preview.status);
   const measurement = preview.measurement;
 
-  /**
-   * 출력 가능 판정.
-   * 백엔드에 optionConfirmed/measurementCompleted 같은 확정 플래그가 없어(docs/dev/08 §4),
-   * 미리보기에 실제로 담겨 온 옵션·채촌 존재 여부로만 판정한다.
-   * 권위 있는 판정 플래그는 백엔드 확정 후 교체한다.
-   */
-  const printable = preview.optionStages.length > 0 && !!measurement;
+  // 출력 가능 판정 — 백엔드가 옵션 확정·채촌 완료를 종합해 내려준다 (docs/dev/08 §4).
+  const printable = preview.printable;
 
   const optionColumns: ColumnsType<WorkOrderOptionStage> = [
     { title: '순번', dataIndex: 'sequenceNo', key: 'sequenceNo', width: 64 },
@@ -189,8 +184,8 @@ export function WorkOrderPreviewPage() {
             showIcon
             message="정식 출력 조건이 충족되지 않았습니다."
             description={[
-              preview.optionStages.length === 0 ? '확정 옵션 없음' : null,
-              !measurement ? '연결된 채촌 없음' : null,
+              !preview.optionConfirmed ? '옵션 미확정' : null,
+              !preview.measurementCompleted ? '채촌 미완료' : null,
             ]
               .filter(Boolean)
               .join(' · ')}
@@ -203,6 +198,7 @@ export function WorkOrderPreviewPage() {
           <Card title="옵션 (확정 선택값)" size="small" style={{ marginBottom: 16 }}>
             <Table<WorkOrderOptionStage>
               rowKey="key"
+              scroll={{ x: 'max-content' }}
               dataSource={preview.optionStages}
               columns={optionColumns}
               pagination={false}
@@ -247,6 +243,7 @@ export function WorkOrderPreviewPage() {
             {measurement ? (
               <Table<WorkOrderMeasurementValue>
                 rowKey="key"
+                scroll={{ x: 'max-content' }}
                 dataSource={measurement.values}
                 columns={measurementColumns}
                 pagination={false}
@@ -294,6 +291,7 @@ export function WorkOrderPreviewPage() {
         {workOrderId ? (
           <Table<WorkOrderVersionRow>
             rowKey="id"
+            scroll={{ x: 'max-content' }}
             dataSource={versionsQuery.data ?? []}
             columns={versionColumns}
             pagination={false}
