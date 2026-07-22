@@ -5,4 +5,5 @@ build/
 .DS_Store
 .env
 storage/
+storage-test/
 backend/prisma/migrations/**/README.md
