@@ -40,8 +40,11 @@ interface CreateFormValues {
 }
 
 /** 단일 기준정보 타입의 표 + 추가/수정/사용여부 토글 */
+/** 백엔드 기준정보 API가 실동작하는 타입 (나머지는 enum 기반이라 편집 미지원) */
+const SUPPORTED_MASTER_TYPES: MasterType[] = ['appointment-purposes', 'payment-method'];
+
 function MasterTable({ type, title }: { type: MasterType; title: string }) {
-  const backendPending = type !== 'appointment-purposes';
+  const backendPending = !SUPPORTED_MASTER_TYPES.includes(type);
   const [editTarget, setEditTarget] = useState<MasterItem | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [editForm] = Form.useForm<EditFormValues>();
@@ -164,6 +167,7 @@ function MasterTable({ type, title }: { type: MasterType; title: string }) {
       )}
       <Table<MasterItem>
         rowKey="id"
+        scroll={{ x: 'max-content' }}
         size="small"
         loading={listQuery.isLoading}
         dataSource={listQuery.data ?? []}

@@ -233,6 +233,25 @@ async function seedAppointmentPurposes(): Promise<void> {
   console.log(`appointment_purposes: ${APPOINTMENT_PURPOSES.length}건`);
 }
 
+// 결제수단 초기값 (결제 데이터의 코드 CARD/CASH/TRANSFER와 일치)
+const PAYMENT_METHODS: Array<{ code: string; name: string }> = [
+  { code: 'CARD', name: '카드' },
+  { code: 'CASH', name: '현금' },
+  { code: 'TRANSFER', name: '계좌이체' },
+];
+
+async function seedPaymentMethods(): Promise<void> {
+  for (let i = 0; i < PAYMENT_METHODS.length; i += 1) {
+    const m = PAYMENT_METHODS[i];
+    await prisma.paymentMethod.upsert({
+      where: { code: m.code },
+      update: { name: m.name, sortOrder: i + 1, active: true },
+      create: { id: randomUUID(), code: m.code, name: m.name, sortOrder: i + 1, active: true },
+    });
+  }
+  console.log(`payment_methods: ${PAYMENT_METHODS.length}건`);
+}
+
 async function seedOptionSets(): Promise<void> {
   for (const s of OPTION_SETS) {
     await prisma.optionSet.upsert({
@@ -300,6 +319,7 @@ async function main(): Promise<void> {
   const roleIdsByCode = await seedRoles(permissionIdsByCode);
   await seedAdminUser(roleIdsByCode);
   await seedAppointmentPurposes();
+  await seedPaymentMethods();
   await seedOptionSets();
   await seedContractTypes();
   await seedJourneyStages(prisma);

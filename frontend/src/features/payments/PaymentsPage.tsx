@@ -11,6 +11,7 @@ import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { fetchMaster } from '../../api/admin';
 import { PAYMENT_TYPE_LABEL, searchPayments } from '../../api/payments';
 import type { PaymentListParams, PaymentListRow, PaymentType } from '../../api/payments';
 import { CustomerPickerModal } from '../../shared/CustomerPickerModal';
@@ -64,6 +65,15 @@ export function PaymentsPage() {
     queryFn: () => searchPayments(params),
     enabled: !contractId,
   });
+
+  // 결제수단 코드 → 표시명 (기준정보). 저장은 코드, 표시는 표시명.
+  const methodsQuery = useQuery({
+    queryKey: ['admin', 'master', 'payment-method'],
+    queryFn: () => fetchMaster('payment-method'),
+    retry: false,
+  });
+  const methodLabel = (code?: string) =>
+    !code ? '-' : ((methodsQuery.data ?? []).find((m) => m.code === code)?.name ?? code);
 
   const runSearch = () => {
     setPage(1);
@@ -133,7 +143,7 @@ export function PaymentsPage() {
         </Typography.Text>
       ),
     },
-    { title: '수단', dataIndex: 'paymentMethod', width: 90, render: (v?: string) => v ?? '-' },
+    { title: '수단', dataIndex: 'paymentMethod', width: 90, render: (v?: string) => methodLabel(v) },
     {
       title: '상태',
       dataIndex: 'status',

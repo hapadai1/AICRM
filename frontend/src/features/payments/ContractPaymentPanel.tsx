@@ -80,17 +80,22 @@ export function ContractPaymentPanel({ contractId, onBack }: Props) {
   const payments = summaryQuery.data?.payments;
   const overCollected = summaryQuery.data?.warning?.code === 'OVER_COLLECTION';
 
-  // 결제수단 기준정보는 백엔드 연동 예정 — 실패해도 화면이 깨지지 않게 기본 목록으로 대체한다.
+  // 결제수단 기준정보(payment-method). 조회 실패 시에도 화면이 깨지지 않게 기본 목록으로 대체한다.
   const methodsQuery = useQuery({
     queryKey: ['admin', 'master', 'payment-method'],
     queryFn: () => fetchMaster('payment-method'),
     retry: false,
   });
+  // 저장은 코드(CARD), 표시는 표시명(카드)으로 맞춘다 — 기존 데이터가 코드로 저장돼 있다.
   const methodOptions = methodsQuery.isError
     ? FALLBACK_PAYMENT_METHODS.map((name) => ({ value: name, label: name }))
     : (methodsQuery.data ?? [])
         .filter((m) => m.active)
-        .map((m) => ({ value: m.name, label: m.name }));
+        .map((m) => ({ value: m.code, label: m.name }));
+  const methodLabel = (code?: string) => {
+    if (!code) return '-';
+    return (methodsQuery.data ?? []).find((m) => m.code === code)?.name ?? code;
+  };
 
   /** 상세 요약과 목록·대시보드를 함께 갱신한다 */
   const invalidateAll = () => {
@@ -188,7 +193,7 @@ export function ContractPaymentPanel({ contractId, onBack }: Props) {
       ),
     },
     { title: '결제일', dataIndex: 'paymentDate', width: 110 },
-    { title: '결제수단', dataIndex: 'paymentMethod', width: 100, render: (v?: string) => v ?? '-' },
+    { title: '결제수단', dataIndex: 'paymentMethod', width: 100, render: (v?: string) => methodLabel(v) },
     // 입금자는 백엔드에서 memo에 "입금자: {이름}" 형태로 병합된다 (계약 문서 04 §4)
     { title: '메모', dataIndex: 'memo', render: (v?: string) => v ?? '-' },
     {
@@ -317,6 +322,7 @@ export function ContractPaymentPanel({ contractId, onBack }: Props) {
       >
         <Table<Payment>
           rowKey="id"
+          scroll={{ x: 'max-content' }}
           size="small"
           loading={summaryQuery.isLoading}
           dataSource={payments ?? []}

@@ -89,7 +89,7 @@ export class CustomersService {
 
     // 목록 화면 요약 필드: 계약 건수·미수 잔금·최근 방문일 (CUST-001)
     const ids = items.map((c) => (c as { id: string }).id);
-    const [contracts, visits] = ids.length
+    const [contracts, visits, orders] = ids.length
       ? await this.prisma.$transaction([
           this.prisma.contract.findMany({
             where: { customerId: { in: ids }, status: { not: 'CANCELLED' } },
@@ -102,8 +102,14 @@ export class CustomersService {
             where: { customerId: { in: ids }, status: 'VISITED' },
             select: { customerId: true, scheduledStart: true },
           }),
+          // 최근 거래 유형(CUST-001): 고객 계약의 주문 중 가장 최근 것의 거래 유형
+          this.prisma.order.findMany({
+            where: { contract: { customerId: { in: ids } } },
+            select: { transactionType: true, createdAt: true, contract: { select: { customerId: true } } },
+            orderBy: { createdAt: 'desc' },
+          }),
         ])
-      : [[], []];
+      : [[], [], []];
 
     const summaryByCustomer = new Map<string, { contractCount: number; balanceAmount: number }>();
     for (const c of contracts as { customerId: string; currentVersion: { balanceAmount: unknown } | null }[]) {
@@ -118,6 +124,12 @@ export class CustomersService {
       const prev = visitByCustomer.get(v.customerId);
       if (!prev || dateStr > prev) visitByCustomer.set(v.customerId, dateStr);
     }
+    // orders는 createdAt desc 정렬 → 고객별 첫 항목이 최근 거래 유형
+    const lastTxByCustomer = new Map<string, string>();
+    for (const o of orders as { transactionType: string; contract: { customerId: string } }[]) {
+      if (!lastTxByCustomer.has(o.contract.customerId))
+        lastTxByCustomer.set(o.contract.customerId, o.transactionType);
+    }
 
     const enriched = items.map((c) => {
       const row = c as { id: string };
@@ -127,6 +139,7 @@ export class CustomersService {
         contractCount: summary?.contractCount ?? 0,
         balanceAmount: summary?.balanceAmount ?? 0,
         lastVisitDate: visitByCustomer.get(row.id) ?? null,
+        lastTransactionType: lastTxByCustomer.get(row.id) ?? null,
       };
     });
     return new Paginated(enriched, query.page, query.size, total);

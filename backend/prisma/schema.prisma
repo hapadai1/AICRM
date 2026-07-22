@@ -210,6 +210,19 @@ model AppointmentPurpose {
   @@map("appointment_purposes")
 }
 
+/** 결제수단 기준정보 (ADMIN-001, type=payment-method). 결제 등록 시 코드/표시명 소스. */
+model PaymentMethod {
+  id        String   @id @db.Uuid
+  code      String   @unique @map("code") @db.VarChar(40)
+  name      String   @map("name") @db.VarChar(80)
+  sortOrder Int      @default(0) @map("sort_order")
+  active    Boolean  @default(true) @map("active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("payment_methods")
+}
+
 model Appointment {
   id             String    @id @db.Uuid
   customerId     String    @map("customer_id") @db.Uuid
