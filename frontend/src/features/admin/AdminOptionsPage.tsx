@@ -399,6 +399,7 @@ export function AdminOptionsPage() {
           >
             <Table<OptionSetVersionSummary>
               rowKey="id"
+              scroll={{ x: 'max-content' }}
               size="small"
               loading={setsQuery.isLoading}
               dataSource={currentSet?.versions ?? []}

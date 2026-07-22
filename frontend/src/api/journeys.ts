@@ -92,6 +92,8 @@ export interface JourneyEvent {
 export interface JourneyDetail extends Journey {
   stages: { code: string; name: string; sequenceNo: number; hasTemplate: boolean }[];
   events: JourneyEvent[];
+  /** 현재 단계가 연락 단계이고 아직 발송 전이면 실려 온다 (상시 [고객 연락] 버튼용) */
+  currentSuggestion: SuggestedNotification | null;
 }
 
 /**

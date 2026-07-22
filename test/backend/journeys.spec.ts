@@ -257,6 +257,23 @@ describe('진행 단계 (JOURNEY)', () => {
     expect(s.eventId).toBe(res.body.data.event.id);
   });
 
+  it('주문 없이 시작한 진행은 품목 자리를 기본 문구로 채운다 (자리표시자 미노출)', async () => {
+    // 주문을 연결하지 않고 진행 시작 → PRODUCT_RECEIVED로 이동
+    const created = await createJourney();
+    const res = await api(ctx)
+      .post(`/api/v1/journeys/${created.body.data.id}/stage`)
+      .set(auth(ctx))
+      .send({ toStageCode: 'PRODUCT_RECEIVED', version: 0 })
+      .expect(201);
+
+    const s = res.body.data.suggestedNotification;
+    expect(s).not.toBeNull();
+    // #{품목} 자리표시자가 그대로 남지 않고 기본 문구로 치환된다.
+    expect(s.renderedBody).not.toContain('#{');
+    expect(s.renderedBody).toContain('주문하신 상품');
+    expect(s.variables['품목']).toBe('주문하신 상품');
+  });
+
   it('발송 확인창의 처리 결과를 이력에 봉합한다', async () => {
     const created = await createJourney();
     const changed = await api(ctx)

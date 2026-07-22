@@ -1,7 +1,7 @@
 /** DASH-001 공유 메모: 목록·작성·수정·완료·삭제 */
 import { CheckCircleOutlined, DeleteOutlined, EditOutlined, UndoOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App, Button, Card, Input, List, Popconfirm, Space, Tag, Typography } from 'antd';
+import { App, Button, Card, Input, List, Popconfirm, Space, Tag, Tooltip, Typography } from 'antd';
 import dayjs from 'dayjs';
 import { useState } from 'react';
 import { ApiError } from '../../api/client';
@@ -78,29 +78,27 @@ export function SharedMemoCard() {
                 </Button>,
               ]
             : [
-                <Button
-                  key="complete"
-                  size="small"
-                  type="text"
-                  icon={memo.completed ? <UndoOutlined /> : <CheckCircleOutlined />}
-                  onClick={() =>
-                    updateMutation.mutate({ id: memo.id, payload: { completed: !memo.completed } })
-                  }
-                >
-                  {memo.completed ? '완료 취소' : '완료'}
-                </Button>,
-                <Button
-                  key="edit"
-                  size="small"
-                  type="text"
-                  icon={<EditOutlined />}
-                  onClick={() => {
-                    setEditingId(memo.id);
-                    setEditingContent(memo.content);
-                  }}
-                >
-                  수정
-                </Button>,
+                <Tooltip key="complete" title={memo.completed ? '완료 취소' : '완료'}>
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={memo.completed ? <UndoOutlined /> : <CheckCircleOutlined />}
+                    onClick={() =>
+                      updateMutation.mutate({ id: memo.id, payload: { completed: !memo.completed } })
+                    }
+                  />
+                </Tooltip>,
+                <Tooltip key="edit" title="수정">
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={<EditOutlined />}
+                    onClick={() => {
+                      setEditingId(memo.id);
+                      setEditingContent(memo.content);
+                    }}
+                  />
+                </Tooltip>,
                 <Popconfirm
                   key="delete"
                   title="메모를 삭제할까요?"
@@ -108,9 +106,9 @@ export function SharedMemoCard() {
                   cancelText="취소"
                   onConfirm={() => deleteMutation.mutate(memo.id)}
                 >
-                  <Button size="small" type="text" danger icon={<DeleteOutlined />}>
-                    삭제
-                  </Button>
+                  <Tooltip title="삭제">
+                    <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+                  </Tooltip>
                 </Popconfirm>,
               ]
         }

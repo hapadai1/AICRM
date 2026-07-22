@@ -229,6 +229,7 @@ export function AuditLogPage() {
       <Card size="small">
         <Table<AuditLogItem>
           rowKey="id"
+          scroll={{ x: 'max-content' }}
           size="small"
           loading={logsQuery.isLoading}
           dataSource={logsQuery.data?.data ?? []}

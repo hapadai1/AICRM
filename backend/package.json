@@ -10,7 +10,9 @@
     "prisma:seed": "prisma db seed",
     "seed:demo": "ts-node prisma/seed-demo.ts",
     "seed:more": "ts-node prisma/seed-more.ts",
+    "seed:journeys": "ts-node prisma/seed-journeys.ts",
     "seed:option-images": "ts-node prisma/seed-option-images.ts",
+    "seed:all": "npm run prisma:seed && npm run seed:demo && npm run seed:more && npm run seed:journeys",
     "test": "jest --config jest.config.js"
   },
   "prisma": {

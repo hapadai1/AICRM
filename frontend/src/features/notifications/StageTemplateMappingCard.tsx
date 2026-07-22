@@ -177,6 +177,7 @@ export function StageTemplateMappingCard() {
       </Typography.Paragraph>
       <Table<Row>
         rowKey="id"
+        scroll={{ x: 'max-content' }}
         size="small"
         pagination={false}
         loading={stagesQuery.isLoading || rulesQuery.isLoading}

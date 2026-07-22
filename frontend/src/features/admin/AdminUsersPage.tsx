@@ -197,6 +197,7 @@ export function AdminUsersPage() {
       >
         <Table<AdminUser>
           rowKey="id"
+          scroll={{ x: 'max-content' }}
           size="small"
           loading={usersQuery.isLoading}
           dataSource={usersQuery.data ?? []}

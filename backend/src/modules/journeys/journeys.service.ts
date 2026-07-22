@@ -227,6 +227,19 @@ export class JourneysService {
       orderBy: { changedAt: 'desc' },
       select: EVENT_SELECT,
     });
+
+    // 현재 단계가 연락 단계이고 아직 발송 전이면, 화면이 [고객 연락] 버튼을 상시 띄울 수 있게
+    // 치환된 문구를 함께 내려준다. (발송 자체는 여전히 담당자가 확인창에서 눌러야 나간다)
+    const currentStage = stages.find((s) => s.code === row.currentStageCode);
+    const enteringEvent = events.find((e) => e.toStageCode === row.currentStageCode);
+    const currentSuggestion =
+      row.status === 'ACTIVE' &&
+      currentStage?.templateId &&
+      enteringEvent &&
+      enteringEvent.notificationOutcome !== 'SENT'
+        ? await this.buildSuggestion(row, currentStage, enteringEvent.id)
+        : null;
+
     return {
       ...toJourneyView(row, stages),
       stages: stages.map((s) => ({
@@ -236,6 +249,7 @@ export class JourneysService {
         hasTemplate: s.templateId != null,
       })),
       events,
+      currentSuggestion,
     };
   }
 

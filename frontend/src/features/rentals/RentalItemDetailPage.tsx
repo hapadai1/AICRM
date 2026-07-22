@@ -252,6 +252,7 @@ export function RentalItemDetailPage() {
             {activeAllocations.length > 0 ? (
               <Table<RentalAllocation>
                 rowKey="id"
+                scroll={{ x: 'max-content' }}
                 size="small"
                 dataSource={activeAllocations}
                 columns={allocationColumns}

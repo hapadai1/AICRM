@@ -588,6 +588,7 @@ export function ContractDetailPage() {
           rowKey="id"
           size="small"
           pagination={false}
+          scroll={{ x: 'max-content' }}
           dataSource={detail?.orders ?? []}
           locale={{ emptyText: '계약 확정 시 맞춤·렌탈 주문이 생성됩니다.' }}
           columns={[

@@ -26,6 +26,15 @@ export interface NotificationSuggestion {
   triggerKey: string;
 }
 
+/**
+ * 주문에서 채우는 표준 변수의 기본값 (개발설계서 05 G-06 방안 A).
+ * 주문이 있으면 orderVariables가 실제 값으로 덮어쓴다.
+ */
+const DEFAULT_ORDER_VARIABLES: Record<string, string> = {
+  품목: '주문하신 상품',
+  반납예정일: '별도 안내',
+};
+
 export interface SuggestionContext {
   templateId: string;
   customerId: string;
@@ -54,6 +63,10 @@ export class NotificationSuggestionService {
     if (!template || !customer) return null;
 
     const variables: Record<string, string> = {
+      // 주문에서 채우지 못한 표준 변수의 기본값.
+      // 주문 없이 시작한 진행에서도 문구에 #{품목} 같은 자리표시자가 노출되지 않게 한다.
+      // (개발설계서 05 G-06 — 실제 값이 필요하면 발송 확인창에서 담당자가 수정)
+      ...DEFAULT_ORDER_VARIABLES,
       고객명: customer.name,
       ...(await this.orderVariables(ctx.orderId)),
       ...(ctx.extraVariables ?? {}),

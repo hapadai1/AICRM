@@ -348,6 +348,7 @@ export function AppointmentsPage() {
         {mode === 'list' ? (
           <Table<Appointment>
             rowKey="id"
+            scroll={{ x: 'max-content' }}
             size="middle"
             loading={isLoading}
             columns={columns}

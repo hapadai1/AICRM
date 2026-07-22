@@ -159,6 +159,7 @@ export function OptionProgressListPage() {
         ) : (
           <Table<OptionProgressItem>
             rowKey="orderItemId"
+            scroll={{ x: 'max-content' }}
             dataSource={data ?? []}
             columns={columns}
             pagination={false}

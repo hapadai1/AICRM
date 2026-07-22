@@ -19,8 +19,8 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs, { type Dayjs } from 'dayjs';
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ApiError } from '../../api/client';
 import {
   RENTAL_ITEM_STATUS_META,
@@ -59,6 +59,19 @@ export function RentalHandoverPage() {
     queryKey: ['rentals', 'allocations', 'return'],
     queryFn: () => fetchAllocations('return'),
   });
+
+  // 진행 단계 카드 등에서 특정 주문으로 걸러 들어올 수 있게 한다 (?q=ORD-...).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const keyword = searchParams.get('q') ?? '';
+  const filterAllocs = (rows: RentalAllocation[]) => {
+    const q = keyword.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter((r) =>
+      [r.customerName, r.orderNo, r.managementCode].some((v) => v?.toLowerCase().includes(q)),
+    );
+  };
+  const pickups = useMemo(() => filterAllocs(pickupsQuery.data ?? []), [pickupsQuery.data, keyword]);
+  const returns = useMemo(() => filterAllocs(returnsQuery.data ?? []), [returnsQuery.data, keyword]);
 
   // ID 변경 다이얼로그: 배정 기간 기준 가용 실물 조회
   const changeCandidatesQuery = useQuery({
@@ -228,18 +241,32 @@ export function RentalHandoverPage() {
           <Button onClick={() => navigate('/rentals/allocate')}>가용 검색·배정으로</Button>
         </Space>
 
+        <Input.Search
+          allowClear
+          style={{ maxWidth: 320, marginTop: 8 }}
+          placeholder="고객명 · 주문번호 · 실물 ID 검색"
+          defaultValue={keyword}
+          onSearch={(v) => {
+            const next = new URLSearchParams(searchParams);
+            if (v.trim()) next.set('q', v.trim());
+            else next.delete('q');
+            setSearchParams(next, { replace: true });
+          }}
+        />
+
         <Tabs
           style={{ marginTop: 8 }}
           items={[
             {
               key: 'pickup',
-              label: `오늘 픽업(출고) 예정 (${pickupsQuery.data?.length ?? 0})`,
+              label: `오늘 픽업(출고) 예정 (${pickups.length})`,
               children: (
                 <Table<RentalAllocation>
                   rowKey="id"
+                  scroll={{ x: 'max-content' }}
                   size="middle"
                   loading={pickupsQuery.isLoading}
-                  dataSource={pickupsQuery.data ?? []}
+                  dataSource={pickups}
                   columns={pickupColumns}
                   pagination={false}
                 />
@@ -247,13 +274,14 @@ export function RentalHandoverPage() {
             },
             {
               key: 'return',
-              label: `반납 대상 (대여 중 ${returnsQuery.data?.length ?? 0})`,
+              label: `반납 대상 (대여 중 ${returns.length})`,
               children: (
                 <Table<RentalAllocation>
                   rowKey="id"
+                  scroll={{ x: 'max-content' }}
                   size="middle"
                   loading={returnsQuery.isLoading}
-                  dataSource={returnsQuery.data ?? []}
+                  dataSource={returns}
                   columns={returnColumns}
                   pagination={false}
                 />

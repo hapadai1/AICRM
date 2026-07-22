@@ -143,6 +143,7 @@ export function TaskBoard({ taskCounts }: TaskBoardProps) {
           </Typography.Text>
           <Table<DashboardTask>
             rowKey="taskId"
+            scroll={{ x: 'max-content' }}
             size="small"
             style={{ marginTop: 8 }}
             loading={tasksQuery.isLoading}

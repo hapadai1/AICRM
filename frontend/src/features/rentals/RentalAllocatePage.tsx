@@ -344,6 +344,7 @@ export function RentalAllocatePage() {
         {criteria ? (
           <Table<RentalItem>
             rowKey="id"
+            scroll={{ x: 'max-content' }}
             size="middle"
             loading={availabilityQuery.isLoading}
             dataSource={availabilityQuery.data ?? []}

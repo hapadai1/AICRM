@@ -151,6 +151,7 @@ export function CustomersPage() {
 
         <Table<CustomerListItem>
           rowKey="id"
+          scroll={{ x: 'max-content' }}
           size="middle"
           loading={isLoading}
           columns={columns}

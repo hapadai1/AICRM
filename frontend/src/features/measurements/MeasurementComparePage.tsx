@@ -191,6 +191,7 @@ export function MeasurementComparePage() {
       <Card>
         <Table<MeasurementCompareRow>
           rowKey="key"
+          scroll={{ x: 'max-content' }}
           dataSource={data.rows}
           columns={columns}
           pagination={false}

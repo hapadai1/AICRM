@@ -172,7 +172,7 @@ export function CustomerDetailPage() {
       </Card>
     );
   }
-  if (isError || !data) {
+  if (isError || !data || !data.customer) {
     return (
       <Card>
         <Result
@@ -385,6 +385,8 @@ export function CustomerDetailPage() {
   const tableCommon = {
     size: 'small' as const,
     pagination: false as const,
+    // 값은 한 줄로 출력하고, 폭이 넘칠 때만 표 안에서 가로 스크롤한다.
+    scroll: { x: 'max-content' as const },
   };
 
   return (
@@ -464,7 +466,12 @@ export function CustomerDetailPage() {
       </Card>
 
       {/* 진행 단계는 "이 고객이 지금 어디까지 왔는지"라 탭보다 위에 둔다 (개발설계서 05 G-11) */}
-      <JourneyCard customerId={customer.id} customerName={customer.name} />
+      <JourneyCard
+        customerId={customer.id}
+        customerName={customer.name}
+        contracts={data.contracts}
+        orders={data.orders}
+      />
 
       <Card>
         <Tabs

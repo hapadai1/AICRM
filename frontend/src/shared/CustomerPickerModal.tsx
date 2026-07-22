@@ -107,6 +107,7 @@ export function CustomerPickerModal({
         </Space>
         <Table<CustomerListItem>
           rowKey="id"
+          scroll={{ x: 'max-content' }}
           size="small"
           loading={isFetching}
           dataSource={data?.data ?? []}

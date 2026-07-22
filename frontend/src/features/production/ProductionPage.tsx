@@ -24,6 +24,7 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import dayjs, { type Dayjs } from 'dayjs';
 import { useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { ApiError } from '../../api/client';
 import {
   COMPONENT_TYPE_LABELS,
@@ -73,6 +74,18 @@ export function ProductionPage() {
   const queryClient = useQueryClient();
 
   const itemsQuery = useQuery({ queryKey: ['production', 'items'], queryFn: fetchProductionItems });
+
+  // 진행 단계 카드 등에서 특정 주문으로 걸러 들어올 수 있게 한다 (?q=ORD-...).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const keyword = searchParams.get('q') ?? '';
+  const filteredItems = useMemo(() => {
+    const items = itemsQuery.data ?? [];
+    const q = keyword.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter((r) =>
+      [r.customerName, r.orderNo, r.displayName].some((v) => v?.toLowerCase().includes(q)),
+    );
+  }, [itemsQuery.data, keyword]);
 
   const [statusTarget, setStatusTarget] = useState<StatusChangeState | null>(null);
   const [inOutTarget, setInOutTarget] = useState<InOutState | null>(null);
@@ -277,11 +290,24 @@ export function ProductionPage() {
           showIcon
           message="구성품별 입고·출고를 처리하면 품목 상태(부분 입고·부분 출고 등)가 자동 집계됩니다. 상태 역행은 사유 입력이 필수입니다."
         />
+        <Input.Search
+          allowClear
+          style={{ maxWidth: 320 }}
+          placeholder="고객명 · 주문번호 · 품목 검색"
+          defaultValue={keyword}
+          onSearch={(v) => {
+            const next = new URLSearchParams(searchParams);
+            if (v.trim()) next.set('q', v.trim());
+            else next.delete('q');
+            setSearchParams(next, { replace: true });
+          }}
+        />
         <Table<ProductionItem>
           rowKey={(r) => r.orderItemId}
+          scroll={{ x: 'max-content' }}
           size="middle"
           loading={itemsQuery.isLoading}
-          dataSource={itemsQuery.data ?? []}
+          dataSource={filteredItems}
           columns={itemColumns}
           pagination={false}
           expandable={{
@@ -289,6 +315,7 @@ export function ProductionPage() {
             expandedRowRender: (item) => (
               <Table<ProductionComponent>
                 rowKey="id"
+                scroll={{ x: 'max-content' }}
                 size="small"
                 dataSource={item.components}
                 columns={componentColumns}
