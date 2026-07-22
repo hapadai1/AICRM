@@ -228,7 +228,7 @@ export interface ContractDetail {
   orders: ContractOrderSummary[];
   /**
    * 낙관적 잠금 값. 백엔드 응답 필드는 rowVersion 이며 요청 본문 필드명은 version 이다.
-   * 요청 본문 정합화가 끝나기 전까지 매핑하지 않는다 (docs/dev/08 §5 — 요청 측 단계).
+   * toContractDetail 에서 rowVersion 을 매핑한다 (변경/취소 확정 요청에 사용).
    */
   version?: number;
 }
@@ -311,6 +311,8 @@ function toContractDetail(row: ContractDetailApiRow): ContractDetail {
       transactionType: o.transactionType,
       status: o.status,
     })),
+    // 낙관적 잠금: 백엔드 응답 rowVersion → 요청 본문 version 으로 그대로 전달한다.
+    version: row.rowVersion,
   };
 }
 

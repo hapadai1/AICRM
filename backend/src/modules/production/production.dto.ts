@@ -37,6 +37,8 @@ export class ReleaseComponentDto {
 export class ProductionItemsQueryDto extends PageQueryDto {
   /** 품목 집계 상태 필터 (§13.4 코드) */
   @IsOptional() @IsString() status?: string;
+  /** 계약 단위 조회 — 지정 시 해당 계약의 품목만 반환 */
+  @IsOptional() @IsUUID() contractId?: string;
 }
 
 export class FittingAdjustmentDto {

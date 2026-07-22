@@ -16,6 +16,8 @@ export interface OptionProgressItem {
   orderItemId: string;
   displayName: string;
   productCategory: ProductCategory;
+  contractId: string;
+  contractNo: string;
   orderNo: string;
   customerName: string;
   fabric: string | null;
@@ -238,9 +240,12 @@ export interface OptionConfirmResult {
   version: number;
 }
 
-/** OPT-001 품목별 옵션 진행 목록 */
-export function fetchOptionProgress(): Promise<OptionProgressItem[]> {
-  return request<OptionProgressItem[]>({ url: '/order-items/option-progress' });
+/** OPT-001 품목별 옵션 진행 목록. contractId 지정 시 해당 계약 품목만 조회. */
+export function fetchOptionProgress(contractId?: string): Promise<OptionProgressItem[]> {
+  return request<OptionProgressItem[]>({
+    url: '/order-items/option-progress',
+    params: contractId ? { contractId } : undefined,
+  });
 }
 
 /**

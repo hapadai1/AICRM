@@ -232,7 +232,7 @@ export function OrderDetailPage() {
                       <Button
                         size="small"
                         icon={<ColumnHeightOutlined />}
-                        onClick={() => navigate(`/options/${item.id}`)}
+                        onClick={() => navigate(`/contracts/${order?.contractId}/options`)}
                       >
                         옵션 진행
                       </Button>

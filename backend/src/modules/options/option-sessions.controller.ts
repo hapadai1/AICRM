@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Put } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Put, Query } from '@nestjs/common';
 import { AuthUser, CurrentUser, RequirePermission } from '../../common/decorators';
 import { OptionSessionsService } from './option-sessions.service';
 import {
@@ -15,10 +15,10 @@ import {
 export class OptionSessionsController {
   constructor(private readonly service: OptionSessionsService) {}
 
-  /** 맞춤 품목별 옵션 진행 현황 (:id 라우트와 세그먼트 수가 달라 충돌 없음) */
+  /** 맞춤 품목별 옵션 진행 현황 (:id 라우트와 세그먼트 수가 달라 충돌 없음). contractId 지정 시 해당 계약으로 한정 */
   @Get('order-items/option-progress')
-  progress() {
-    return this.service.progress();
+  progress(@Query('contractId') contractId?: string) {
+    return this.service.progress(contractId);
   }
 
   /** 품목의 현재(is_current) 옵션 세션 상세 — 없으면 { session: null } */

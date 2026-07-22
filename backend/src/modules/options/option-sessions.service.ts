@@ -175,15 +175,21 @@ export class OptionSessionsService {
    * 취소 품목은 제외한다. 세션이 없는 품목은 NOT_STARTED로, totalStages는 해당
    * 카테고리의 ACTIVE 옵션 버전 단계 수를 사용한다(활성 버전이 없으면 0).
    */
-  async progress() {
+  async progress(contractId?: string) {
     const [items, optionSets] = await Promise.all([
       this.prisma.orderItem.findMany({
-        where: { status: { not: 'CANCELLED' }, order: { transactionType: 'CUSTOM' } },
+        where: {
+          status: { not: 'CANCELLED' },
+          order: { transactionType: 'CUSTOM', ...(contractId ? { contractId } : {}) },
+        },
         include: {
           order: {
             select: {
               orderNo: true,
-              contract: { select: { customer: { select: { id: true, name: true } } } },
+              contractId: true,
+              contract: {
+                select: { contractNo: true, customer: { select: { id: true, name: true } } },
+              },
             },
           },
           optionSelectionSessions: {
@@ -218,6 +224,8 @@ export class OptionSessionsService {
         orderItemId: item.id,
         displayName: item.displayName,
         productCategory: item.productCategory,
+        contractId: item.order.contractId,
+        contractNo: item.order.contract.contractNo,
         customerId: item.order.contract.customer.id,
         customerName: item.order.contract.customer.name,
         orderNo: item.order.orderNo,

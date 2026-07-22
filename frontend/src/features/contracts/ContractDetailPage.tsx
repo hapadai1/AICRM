@@ -1,4 +1,11 @@
-import { CheckOutlined, DiffOutlined, EditOutlined, StopOutlined } from '@ant-design/icons';
+import {
+  CheckOutlined,
+  DiffOutlined,
+  EditOutlined,
+  SkinOutlined,
+  StopOutlined,
+  ToolOutlined,
+} from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
@@ -329,9 +336,10 @@ export function ContractDetailPage() {
       title: '버전',
       dataIndex: 'versionNo',
       width: 90,
-      render: (v: number) => (
+      render: (v: number, record) => (
         <Space size={4}>
           <Typography.Text strong>v{v}</Typography.Text>
+          {record.versionStatus === 'DRAFT' && <Tag color="gold">작업 중</Tag>}
           {v === detail?.currentVersionNo && <Tag color="green">현재 적용</Tag>}
         </Space>
       ),
@@ -402,6 +410,20 @@ export function ContractDetailPage() {
                   계약서 이어서 작성
                 </Button>
               </Can>
+            )}
+            {canRevise && (
+              <Button
+                type="primary"
+                icon={<SkinOutlined />}
+                onClick={() => navigate(`/contracts/${id}/options`)}
+              >
+                제품 옵션선택
+              </Button>
+            )}
+            {canRevise && (
+              <Button icon={<ToolOutlined />} onClick={() => navigate(`/contracts/${id}/production`)}>
+                제작·입출고
+              </Button>
             )}
             {canRevise && !draftRevision && (
               <Can permission="CONTRACT_REVISE">

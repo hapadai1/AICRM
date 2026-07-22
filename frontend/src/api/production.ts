@@ -133,7 +133,8 @@ interface ProductionItemApiRow {
     orderNo: string;
     transactionType: string;
     completionDueDate: string | null;
-    contract: { customer: { id: string; name: string; phone: string } };
+    contractId: string;
+    contract: { contractNo: string; customer: { id: string; name: string; phone: string } };
   };
   components: ProductionComponentApiRow[];
 }
@@ -162,8 +163,11 @@ export interface ProductionItem {
   orderId: string;
   orderNo: string;
   transactionType: string;
+  contractId: string;
+  contractNo: string;
   customerId: string;
   customerName: string;
+  customerPhone: string;
   /** 백엔드 order_items.status */
   itemStatus: string;
   /** YYYY-MM-DD */
@@ -193,8 +197,11 @@ function toProductionItem(row: ProductionItemApiRow): ProductionItem {
     orderId: row.order.id,
     orderNo: row.order.orderNo,
     transactionType: row.order.transactionType,
+    contractId: row.order.contractId,
+    contractNo: row.order.contract.contractNo,
     customerId: row.order.contract.customer.id,
     customerName: row.order.contract.customer.name,
+    customerPhone: row.order.contract.customer.phone,
     itemStatus: row.status,
     completionDueDate: toDateOnly(row.order.completionDueDate),
     components: (row.components ?? []).map(toProductionComponent),
@@ -215,11 +222,27 @@ export interface ProductionEvent {
   actor: { id: string; displayName: string } | null;
 }
 
+/** 백엔드 고객 연락 제안 (NotificationSuggestionService.build 결과) */
+export interface ProductionNotificationSuggestion {
+  templateId: string;
+  templateCode: string;
+  templateName: string;
+  channel: string;
+  recipientPhone: string;
+  customerId: string;
+  orderId: string | null;
+  variables: Record<string, string>;
+  renderedBody: string;
+  triggerKey: string;
+}
+
 /** 구성품 상태 변경·입출고 응답 (이벤트 + 갱신된 구성품 + 품목 집계 상태) */
 export interface ComponentChangeResult {
   event: ProductionEvent;
   component: ProductionComponentApiRow;
   orderItemStatus: string;
+  /** 전체 입고(완성복) 시 백엔드가 함께 내려주는 고객 연락 문구. 없으면 null. */
+  suggestedNotification?: ProductionNotificationSuggestion | null;
 }
 
 /** 가봉 보정 항목 */
@@ -318,11 +341,11 @@ function toFitting(row: FittingApiRow): FittingRecord {
   };
 }
 
-/** PROD-001 목록 — GET /production/items (페이지 응답 `{ data, page }`) */
-export function fetchProductionItems(): Promise<ProductionItem[]> {
+/** PROD-001 목록 — GET /production/items (페이지 응답 `{ data, page }`). contractId 지정 시 해당 계약 품목만. */
+export function fetchProductionItems(contractId?: string): Promise<ProductionItem[]> {
   return request<ListResult<ProductionItemApiRow>>({
     url: '/production/items',
-    params: { size: 100 },
+    params: { size: 100, ...(contractId ? { contractId } : {}) },
   }).then((res) => res.data.map(toProductionItem));
 }
 

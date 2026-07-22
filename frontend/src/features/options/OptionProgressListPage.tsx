@@ -1,79 +1,79 @@
-/** OPT-001 품목별 옵션 진행 목록 */
-import { CopyOutlined, EyeOutlined, PlayCircleOutlined, RightCircleOutlined } from '@ant-design/icons';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Button, Card, Modal, Progress, Radio, Space, Spin, Table, Typography, message } from 'antd';
+/** OPT-001 계약별 제품 옵션 진행 목록 — 계약 단위로 묶어 표시, 열기 시 계약 제품옵션 화면으로 진입 */
+import { RightCircleOutlined } from '@ant-design/icons';
+import { useQuery } from '@tanstack/react-query';
+import { Alert, Button, Card, Progress, Space, Spin, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { OptionProgressItem } from '../../api/options';
-import { copyOptionSession, fetchOptionProgress } from '../../api/options';
-import { StatusBadge } from '../../shared/StatusBadge';
-import { metaOf } from '../../shared/status-meta';
-import { OPTION_STATUS_META } from './option-meta';
+import { fetchOptionProgress } from '../../api/options';
+
+interface ContractRow {
+  contractId: string;
+  contractNo: string;
+  customerName: string;
+  itemCount: number;
+  confirmedCount: number;
+  completedStages: number;
+  totalStages: number;
+}
+
+function groupByContract(items: OptionProgressItem[]): ContractRow[] {
+  const map = new Map<string, ContractRow>();
+  for (const it of items) {
+    const row = map.get(it.contractId) ?? {
+      contractId: it.contractId,
+      contractNo: it.contractNo,
+      customerName: it.customerName,
+      itemCount: 0,
+      confirmedCount: 0,
+      completedStages: 0,
+      totalStages: 0,
+    };
+    row.itemCount += 1;
+    if (it.status === 'CONFIRMED') row.confirmedCount += 1;
+    row.completedStages += it.completedStages;
+    row.totalStages += it.totalStages;
+    map.set(it.contractId, row);
+  }
+  return [...map.values()].sort((a, b) => b.contractNo.localeCompare(a.contractNo));
+}
 
 export function OptionProgressListPage() {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const [copySource, setCopySource] = useState<OptionProgressItem | null>(null);
-  const [copyTargetId, setCopyTargetId] = useState<string | null>(null);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['options', 'progress'],
-    queryFn: fetchOptionProgress,
+    queryFn: () => fetchOptionProgress(),
   });
 
-  const copyMutation = useMutation({
-    mutationFn: ({ sessionId, targetId }: { sessionId: string; targetId: string }) =>
-      copyOptionSession(sessionId, targetId),
-    onSuccess: () => {
-      message.success('동일 옵션을 적용했습니다. 대상 품목에서 개별 수정이 가능합니다.');
-      setCopySource(null);
-      setCopyTargetId(null);
-      void queryClient.invalidateQueries({ queryKey: ['options'] });
-    },
-    onError: (e: Error) => message.error(e.message),
-  });
+  const rows = groupByContract(data ?? []);
 
-  const copyTargets = (source: OptionProgressItem | null): OptionProgressItem[] =>
-    (data ?? []).filter(
-      (row) =>
-        source &&
-        row.orderItemId !== source.orderItemId &&
-        row.productCategory === source.productCategory &&
-        row.status !== 'CONFIRMED',
-    );
-
-  const columns: ColumnsType<OptionProgressItem> = [
+  const columns: ColumnsType<ContractRow> = [
     {
-      title: '품목',
-      key: 'item',
+      title: '계약',
+      key: 'contract',
       render: (_, row) => (
         <Space direction="vertical" size={0}>
-          <Typography.Text strong style={{ fontSize: 16 }}>
-            {row.displayName}
+          <Typography.Text strong style={{ fontSize: 15 }}>
+            {row.contractNo}
           </Typography.Text>
-          <Typography.Text type="secondary">
-            {row.customerName} · {row.orderNo}
-          </Typography.Text>
+          <Typography.Text type="secondary">{row.customerName}</Typography.Text>
         </Space>
       ),
     },
     {
-      title: '원단',
-      dataIndex: 'fabric',
-      key: 'fabric',
-      render: (fabric: string | null) => fabric ?? <Typography.Text type="secondary">미입력</Typography.Text>,
-    },
-    {
-      title: '진행상태',
-      dataIndex: 'status',
-      key: 'status',
-      width: 120,
-      render: (status: OptionProgressItem['status']) => (
-        <StatusBadge
-          label={metaOf(OPTION_STATUS_META, status).label}
-          color={metaOf(OPTION_STATUS_META, status).color}
-        />
+      title: '맞춤 품목',
+      key: 'items',
+      width: 160,
+      render: (_, row) => (
+        <Space>
+          <Typography.Text>{row.itemCount}건</Typography.Text>
+          {row.confirmedCount === row.itemCount ? (
+            <Tag color="green">전체 확정</Tag>
+          ) : (
+            <Tag color="blue">확정 {row.confirmedCount}/{row.itemCount}</Tag>
+          )}
+        </Space>
       ),
     },
     {
@@ -83,7 +83,7 @@ export function OptionProgressListPage() {
       render: (_, row) => (
         <Space>
           <Progress
-            percent={Math.round((row.completedStages / row.totalStages) * 100)}
+            percent={row.totalStages ? Math.round((row.completedStages / row.totalStages) * 100) : 0}
             size="small"
             style={{ width: 120 }}
             showInfo={false}
@@ -97,50 +97,28 @@ export function OptionProgressListPage() {
     {
       title: '액션',
       key: 'actions',
-      width: 320,
+      width: 140,
       render: (_, row) => (
-        <Space wrap>
-          {row.status === 'NOT_STARTED' && (
-            <Button
-              type="primary"
-              size="large"
-              icon={<PlayCircleOutlined />}
-              onClick={() => navigate(`/options/${row.orderItemId}`)}
-            >
-              선택 시작
-            </Button>
-          )}
-          {row.status === 'IN_PROGRESS' && (
-            <Button
-              type="primary"
-              size="large"
-              icon={<RightCircleOutlined />}
-              onClick={() => navigate(`/options/${row.orderItemId}`)}
-            >
-              계속
-            </Button>
-          )}
-          {(row.status === 'REVIEW' || row.status === 'CONFIRMED') && (
-            <Button
-              size="large"
-              icon={<EyeOutlined />}
-              onClick={() => navigate(`/options/${row.orderItemId}/review`)}
-            >
-              옵션 보기
-            </Button>
-          )}
-          {row.sessionId && copyTargets(row).length > 0 && (
-            <Button size="large" icon={<CopyOutlined />} onClick={() => setCopySource(row)}>
-              동일 옵션 적용
-            </Button>
-          )}
-        </Space>
+        <Button
+          type="primary"
+          icon={<RightCircleOutlined />}
+          onClick={() => navigate(`/contracts/${row.contractId}/options`)}
+        >
+          열기
+        </Button>
       ),
     },
   ];
 
   if (error) {
-    return <Alert type="error" showIcon message="옵션 진행 목록을 불러오지 못했습니다." description={(error as Error).message} />;
+    return (
+      <Alert
+        type="error"
+        showIcon
+        message="옵션 진행 목록을 불러오지 못했습니다."
+        description={(error as Error).message}
+      />
+    );
   }
 
   return (
@@ -148,69 +126,26 @@ export function OptionProgressListPage() {
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
         <div>
           <Typography.Title level={4} style={{ marginBottom: 4 }}>
-            품목별 옵션 진행
+            계약별 제품 옵션
           </Typography.Title>
           <Typography.Text type="secondary">
-            맞춤 품목의 옵션 선택 진행상태입니다. 렌탈 품목은 옵션 선택 대상이 아닙니다.
+            계약을 열어 맞춤 품목별로 원단·옵션을 선택합니다. 렌탈 품목은 옵션 대상이 아닙니다.
           </Typography.Text>
         </div>
         {isLoading ? (
           <Spin style={{ display: 'block', margin: '48px auto' }} />
         ) : (
-          <Table<OptionProgressItem>
-            rowKey="orderItemId"
+          <Table<ContractRow>
+            rowKey="contractId"
             scroll={{ x: 'max-content' }}
-            dataSource={data ?? []}
+            dataSource={rows}
             columns={columns}
             pagination={false}
             size="large"
+            locale={{ emptyText: '옵션 대상 맞춤 품목이 있는 계약이 없습니다.' }}
           />
         )}
       </Space>
-
-      <Modal
-        title={`동일 옵션 적용 — ${copySource?.displayName ?? ''}`}
-        open={!!copySource}
-        onCancel={() => {
-          setCopySource(null);
-          setCopyTargetId(null);
-        }}
-        okText="적용"
-        cancelText="취소"
-        okButtonProps={{ disabled: !copyTargetId, loading: copyMutation.isPending, size: 'large' }}
-        cancelButtonProps={{ size: 'large' }}
-        onOk={() => {
-          if (copySource?.sessionId && copyTargetId) {
-            copyMutation.mutate({ sessionId: copySource.sessionId, targetId: copyTargetId });
-          }
-        }}
-      >
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          <Typography.Text>
-            선택값을 복사할 동일 대분류 품목을 선택하세요. 적용 후 개별 수정이 가능합니다.
-          </Typography.Text>
-          <Radio.Group
-            value={copyTargetId}
-            onChange={(e) => setCopyTargetId(e.target.value as string)}
-            style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
-          >
-            {copyTargets(copySource).map((t) => (
-              <Radio key={t.orderItemId} value={t.orderItemId} style={{ minHeight: 48, alignItems: 'center' }}>
-                <Space>
-                  <Typography.Text strong>{t.displayName}</Typography.Text>
-                  <Typography.Text type="secondary">
-                    {t.customerName} · {t.orderNo}
-                  </Typography.Text>
-                  <StatusBadge
-                    label={metaOf(OPTION_STATUS_META, t.status).label}
-                    color={metaOf(OPTION_STATUS_META, t.status).color}
-                  />
-                </Space>
-              </Radio>
-            ))}
-          </Radio.Group>
-        </Space>
-      </Modal>
     </Card>
   );
 }
