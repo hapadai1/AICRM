@@ -20,6 +20,10 @@ export interface OptionProgressItem {
   contractNo: string;
   orderNo: string;
   customerName: string;
+  /** 고객 전화번호 (목록에서 고객 식별용) */
+  customerPhone: string;
+  /** 완성 예정일(납기) ISO. 없으면 null */
+  completionDueDate: string | null;
   fabric: string | null;
   status: OptionStatus;
   completedStages: number;
@@ -32,6 +36,8 @@ export interface OptionChoiceView {
   /** 백엔드 choiceCode (A/B). 미등록 코드가 와도 그대로 노출한다. */
   code: string;
   name: string;
+  /** 선택지 이미지 경로(/files/:id). 미등록이면 null → 화면은 색상 블록으로 폴백. */
+  imageUrl: string | null;
 }
 
 export interface OptionStageView {
@@ -127,6 +133,7 @@ function toStage(row: OptionStageApiRow): OptionStageView {
       choiceId: c.id,
       code: c.choiceCode,
       name: c.choiceName,
+      imageUrl: c.imageFileId ? `/files/${c.imageFileId}` : null,
     })),
     selectedChoiceId: row.selectedChoiceId ?? null,
   };

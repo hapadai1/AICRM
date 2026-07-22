@@ -1,10 +1,11 @@
 /** OPT-002 옵션 단계 선택 — 큰 A/B 카드에서 하나를 고르고 이동 시 임시저장 */
 import { CheckCircleFilled, LeftOutlined, PauseOutlined, RightOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Button, Card, Col, Input, Progress, Row, Space, Spin, Typography, message } from 'antd';
+import { Alert, Button, Card, Col, Image, Input, Progress, Row, Space, Spin, Typography, message } from 'antd';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import type { OptionSessionDetail, OptionStageView } from '../../api/options';
+import { fetchFileObjectUrl } from '../../api/client';
+import type { OptionChoiceView, OptionSessionDetail, OptionStageView } from '../../api/options';
 import {
   fetchOptionSessionByItem,
   pauseOptionSession,
@@ -12,6 +13,53 @@ import {
   startOptionSession,
 } from '../../api/options';
 import { choiceColor } from './option-meta';
+
+/** 선택지 이미지 영역 — 등록 이미지가 있으면 사진, 없으면 색상 블록으로 폴백한다. */
+function ChoiceMedia({ choice }: { choice: OptionChoiceView }) {
+  const { data: src } = useQuery({
+    queryKey: ['file-object-url', choice.imageUrl],
+    queryFn: () => fetchFileObjectUrl(choice.imageUrl!),
+    enabled: !!choice.imageUrl,
+    staleTime: Infinity,
+    gcTime: 30 * 60 * 1000,
+  });
+
+  if (choice.imageUrl && src) {
+    return (
+      <div style={{ height: 240, borderRadius: 8, overflow: 'hidden' }}>
+        {/* 카드 전체가 '눌러 선택' 대상이므로 preview는 끄고 클릭이 카드로 전파되게 둔다. */}
+        <Image
+          src={src}
+          alt={choice.name}
+          width="100%"
+          height={240}
+          style={{ objectFit: 'cover' }}
+          preview={false}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        height: 240,
+        borderRadius: 8,
+        background: choiceColor(choice.choiceId),
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      <Typography.Title
+        level={3}
+        style={{ color: '#fff', textShadow: '0 1px 4px rgba(0,0,0,0.4)', margin: 0 }}
+      >
+        {choice.name}
+      </Typography.Title>
+    </div>
+  );
+}
 
 function firstIncompleteOrder(session: OptionSessionDetail): number {
   const incomplete = session.stages.find((st) => !st.selectedChoiceId);
@@ -109,7 +157,7 @@ export function OptionStagePage() {
       <Card style={{ maxWidth: 640, margin: '0 auto' }}>
         <Space direction="vertical" size="large" style={{ width: '100%' }}>
           <div>
-            <Typography.Title level={4}>옵션 선택 시작</Typography.Title>
+            <Typography.Title level={4}>스타일 컨설팅 시작</Typography.Title>
             <Typography.Text type="secondary">
               {session?.displayName ?? '맞춤 품목'}의 원단을 먼저 입력해 주세요. 이후 단계별로 두 선택지 중
               하나를 고릅니다.
@@ -245,23 +293,7 @@ export function OptionStagePage() {
                 }}
                 styles={{ body: { padding: 16 } }}
               >
-                <div
-                  style={{
-                    height: 240,
-                    borderRadius: 8,
-                    background: choiceColor(choice.choiceId),
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  <Typography.Title
-                    level={3}
-                    style={{ color: '#fff', textShadow: '0 1px 4px rgba(0,0,0,0.4)', margin: 0 }}
-                  >
-                    {choice.name}
-                  </Typography.Title>
-                </div>
+                <ChoiceMedia choice={choice} />
                 <Space style={{ marginTop: 12, justifyContent: 'space-between', width: '100%' }}>
                   <Typography.Text strong style={{ fontSize: 18 }}>
                     {choice.code}안 · {choice.name}
