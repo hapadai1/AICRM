@@ -1,6 +1,7 @@
 import { PlusOutlined, StopOutlined, SwapOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  Alert,
   App,
   Button,
   Card,
@@ -11,9 +12,9 @@ import {
   Modal,
   Select,
   Space,
+  Steps,
   Table,
   Tag,
-  Timeline,
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -40,6 +41,7 @@ import {
   REPAIR_RECEIPT_METHODS,
   REPAIR_RELEASE_METHODS,
   type Repair,
+  type RepairEvent,
   type RepairNotificationSuggestion,
   type RepairReceiptMethod,
   type RepairReleaseMethod,
@@ -264,29 +266,6 @@ export function RepairsPage() {
     },
     { title: '접수일', dataIndex: 'requestDate', width: 110 },
     {
-      // 설계 PDF 1페이지 "수선 물품 방문" — 오가는 건이 한눈에 보이게 한다.
-      title: '접수·출고',
-      key: 'methods',
-      width: 130,
-      render: (_, r) =>
-        r.receiptMethod || r.releaseMethod ? (
-          <Space size={4} wrap>
-            {r.receiptMethod && (
-              <Tag color={r.receiptMethod === 'PICKUP' ? 'orange' : 'default'}>
-                {REPAIR_METHOD_LABELS[r.receiptMethod]}
-              </Tag>
-            )}
-            {r.releaseMethod && (
-              <Tag color={r.releaseMethod === 'DELIVERY' ? 'orange' : 'default'}>
-                {REPAIR_METHOD_LABELS[r.releaseMethod]}
-              </Tag>
-            )}
-          </Space>
-        ) : (
-          <Typography.Text type="secondary">-</Typography.Text>
-        ),
-    },
-    {
       title: '완료 예정일',
       dataIndex: 'dueDate',
       width: 130,
@@ -299,54 +278,21 @@ export function RepairsPage() {
         </Space>
       ),
     },
-    { title: '내용', dataIndex: 'description', ellipsis: true },
     {
       title: '비용',
       dataIndex: 'cost',
       width: 100,
       align: 'right',
-      render: (c?: number) => (c != null ? `${c.toLocaleString()}원` : '-'),
+      render: (c?: number) => (c ? `${c.toLocaleString()}원` : '-'),
     },
     {
       title: '상태',
       dataIndex: 'status',
       width: 120,
+      align: 'center',
       render: (s: string) => {
         const meta = repairStatusMeta(s);
         return <StatusBadge label={meta.label} color={meta.color} />;
-      },
-    },
-    {
-      title: '액션',
-      key: 'actions',
-      width: 190,
-      render: (_, r) => {
-        const next = nextRepairStatus(r.status);
-        const closed = r.status === 'CANCELLED' || r.status === 'RELEASED';
-        const pending = statusMutation.isPending && statusMutation.variables?.repair.id === r.id;
-        return (
-          <Can permission="REPAIR_EDIT">
-            <Space size="small" wrap>
-              {next && (
-                <Button
-                  size="small"
-                  type="primary"
-                  ghost
-                  icon={<SwapOutlined />}
-                  loading={pending}
-                  onClick={() => openStatusChange(r, next)}
-                >
-                  {repairStatusMeta(next).label} 처리
-                </Button>
-              )}
-              {!closed && (
-                <Button size="small" danger icon={<StopOutlined />} onClick={() => openStatusChange(r, 'CANCELLED')}>
-                  취소
-                </Button>
-              )}
-            </Space>
-          </Can>
-        );
       },
     },
   ];
@@ -395,10 +341,16 @@ export function RepairsPage() {
           </Can>
         </Space>
 
-        <Typography.Text type="secondary">
-          진행 순서: 접수 → 수선 요청 → 수선 중 → 수선 입고 → 고객 연락 → 출고 완료 (다음 단계로만 이동,
-          취소는 어느 단계에서든 가능)
-        </Typography.Text>
+        <Alert
+          type="info"
+          showIcon
+          message={
+            <Typography.Text strong>
+              진행 순서: 접수 → 수선 요청 → 수선 중 → 수선 입고 → 고객 연락 → 출고 완료
+            </Typography.Text>
+          }
+          description="다음 단계로만 이동할 수 있고, 취소는 어느 단계에서든 가능합니다. 행을 누르면 상세가 펼쳐지며 상태 변경도 그곳에서 진행합니다."
+        />
 
         <Table<Repair>
           rowKey="id"
@@ -406,7 +358,11 @@ export function RepairsPage() {
           loading={listQuery.isLoading}
           dataSource={listQuery.data?.data ?? []}
           columns={columns}
-          scroll={{ x: 1300 }}
+          scroll={{ x: 1000 }}
+          onRow={(r) => ({
+            onClick: () => setExpandedId((cur) => (cur === r.id ? null : r.id)),
+            style: { cursor: 'pointer' },
+          })}
           pagination={{
             current: page,
             pageSize: size,
@@ -420,41 +376,97 @@ export function RepairsPage() {
             },
           }}
           expandable={{
+            showExpandColumn: false,
             expandedRowKeys: expandedId ? [expandedId] : [],
-            onExpand: (expanded, r) => setExpandedId(expanded ? r.id : null),
             expandedRowRender: (r) => {
               const detail = detailQuery.data?.id === r.id ? detailQuery.data : undefined;
+              const events = detail?.events ?? r.events;
+              // 단계별 완료(전이) 이벤트를 상태 코드로 매핑 — 가장 이른 전이만 남긴다.
+              const eventByStatus = new Map<string, RepairEvent>();
+              for (const ev of events) {
+                if (!eventByStatus.has(ev.newStatus)) eventByStatus.set(ev.newStatus, ev);
+              }
+              const cancelled = r.status === 'CANCELLED';
+              const cancelEvent = eventByStatus.get('CANCELLED');
+              const currentIndex = REPAIR_STATUS_FLOW.indexOf(r.status as RepairStatus);
+
+              const stepItems = REPAIR_STATUS_FLOW.map((status) => {
+                const ev = eventByStatus.get(status);
+                return {
+                  title: repairStatusMeta(status).label,
+                  description: ev ? (
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {ev.eventDate}
+                      <br />
+                      {ev.actorName}
+                    </Typography.Text>
+                  ) : undefined,
+                };
+              });
+
+              const next = nextRepairStatus(r.status);
+              const closed = cancelled || r.status === 'RELEASED';
+              const pending =
+                statusMutation.isPending && statusMutation.variables?.repair.id === r.id;
+
               return (
-                <Space direction="vertical" style={{ width: '100%' }}>
-                  <Typography.Text>내용: {r.description}</Typography.Text>
-                  {r.notes && <Typography.Text type="secondary">비고: {r.notes}</Typography.Text>}
+                <Space direction="vertical" size="middle" style={{ width: '100%' }}>
                   {detailQuery.isLoading && !detail ? (
-                    <Typography.Text type="secondary">상태 이력을 불러오는 중…</Typography.Text>
+                    <Typography.Text type="secondary">단계 정보를 불러오는 중…</Typography.Text>
                   ) : (
-                    <Timeline
-                      style={{ marginTop: 8 }}
-                      items={[...(detail?.events ?? [])]
-                        .sort((a, b) => b.eventDate.localeCompare(a.eventDate))
-                        .map((ev) => ({
-                          key: ev.id,
-                          children: (
-                            <>
-                              <Typography.Text strong>
-                                {repairStatusMeta(ev.newStatus).label}
-                              </Typography.Text>
-                              <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
-                                {ev.eventDate} · {ev.actorName}
-                              </Typography.Text>
-                              {ev.notes && (
-                                <div>
-                                  <Typography.Text type="secondary">사유: {ev.notes}</Typography.Text>
-                                </div>
-                              )}
-                            </>
-                          ),
-                        }))}
+                    <Steps
+                      size="small"
+                      labelPlacement="vertical"
+                      current={cancelled ? -1 : currentIndex}
+                      status={cancelled ? 'error' : r.status === 'RELEASED' ? 'finish' : 'process'}
+                      items={stepItems}
                     />
                   )}
+                  {cancelled && (
+                    <Typography.Text type="danger">
+                      취소됨{cancelEvent ? ` · ${cancelEvent.eventDate}` : ''}
+                      {cancelEvent?.notes ? ` · 사유: ${cancelEvent.notes}` : ''}
+                    </Typography.Text>
+                  )}
+                  <Typography.Text>내용: {r.description}</Typography.Text>
+                  {(r.receiptMethod || r.releaseMethod) && (
+                    <Typography.Text type="secondary">
+                      접수·출고:{' '}
+                      {[
+                        r.receiptMethod && `접수 ${REPAIR_METHOD_LABELS[r.receiptMethod]}`,
+                        r.releaseMethod && `출고 ${REPAIR_METHOD_LABELS[r.releaseMethod]}`,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                      {r.pickupAddress ? ` / 수거 주소: ${r.pickupAddress}` : ''}
+                      {r.deliveryAddress ? ` / 배송 주소: ${r.deliveryAddress}` : ''}
+                    </Typography.Text>
+                  )}
+                  {r.notes && <Typography.Text type="secondary">비고: {r.notes}</Typography.Text>}
+                  <Can permission="REPAIR_EDIT">
+                    <Space wrap>
+                      {next && (
+                        <Button
+                          type="primary"
+                          ghost
+                          icon={<SwapOutlined />}
+                          loading={pending}
+                          onClick={() => openStatusChange(r, next)}
+                        >
+                          {repairStatusMeta(r.status).label} → {repairStatusMeta(next).label} 처리
+                        </Button>
+                      )}
+                      {!closed && (
+                        <Button
+                          danger
+                          icon={<StopOutlined />}
+                          onClick={() => openStatusChange(r, 'CANCELLED')}
+                        >
+                          취소
+                        </Button>
+                      )}
+                    </Space>
+                  </Can>
                 </Space>
               );
             },
