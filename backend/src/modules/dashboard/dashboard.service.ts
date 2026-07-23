@@ -205,6 +205,7 @@ export class DashboardService {
           orderId: item.orderId,
           orderNo: item.order.orderNo,
           orderItemId: item.id,
+          rentalItemId: a.rentalInventoryItemId,
           itemLabel: `${item.displayName} / ${a.rentalInventoryItem.managementCode}`,
           reason: `반납 예정일(${toDateString(a.returnDueDate)}) 경과, 미반납`,
           dueDate: toDateString(a.returnDueDate),
@@ -252,7 +253,18 @@ export class DashboardService {
         status: { notIn: ['CANCELLED'] },
         balanceDueDate: { lt: todayAsDbDate() },
       },
-      include: { customer: true, currentVersion: { select: { totalAmount: true } } },
+      include: {
+        customer: true,
+        currentVersion: { select: { totalAmount: true } },
+        // 품목은 계약구분(ContractType) 명칭으로 표기한다.
+        contractType: { select: { name: true } },
+        // 계약:주문은 1:N(거래유형별). 해당 계약의 주문번호를 모두 노출한다.
+        orders: {
+          where: { status: { not: 'CANCELLED' } },
+          orderBy: { orderNo: 'asc' },
+          select: { orderNo: true },
+        },
+      },
     });
     if (contracts.length === 0) return [];
 
@@ -270,16 +282,20 @@ export class DashboardService {
         collected: collectedBy.get(c.id) ?? 0,
       }))
       .filter((x) => x.contractAmount - x.collected > 0)
-      .map((x) =>
-        this.row('PAYMENT_DELAY', x.contract.id, x.contract.customer, {
+      .map((x) => {
+        // 계약에 속한 주문번호를 줄바꿈으로 모두 나열한다.
+        const orderNos = x.contract.orders.map((o) => o.orderNo);
+        return this.row('PAYMENT_DELAY', x.contract.id, x.contract.customer, {
           contractId: x.contract.id,
-          itemLabel: x.contract.contractNo,
+          orderNo: orderNos.join('\n') || null,
+          // 품목 자리에는 계약구분 명칭을 표기한다(없으면 계약번호로 폴백).
+          itemLabel: x.contract.contractType?.name ?? x.contract.contractNo,
           reason: `잔금 결제 예정일(${toDateString(x.contract.balanceDueDate)}) 경과, 미수 잔액 ${
             x.contractAmount - x.collected
           }원`,
           dueDate: toDateString(x.contract.balanceDueDate),
-        }),
-      );
+        });
+      });
     return this.withAcknowledged('PAYMENT_DELAY', rows);
   }
 

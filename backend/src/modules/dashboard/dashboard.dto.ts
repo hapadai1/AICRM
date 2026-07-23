@@ -66,6 +66,8 @@ export interface DashboardTaskRow {
   orderItemId?: string | null;
   itemLabel?: string | null;
   contractId?: string | null;
+  /** LATE_RETURN 전용 — 렌탈 실물 상세(/rentals/:id) 이동용 실물 id */
+  rentalItemId?: string | null;
   reason: string;
   dueDate?: string | null;
   acknowledged: boolean;

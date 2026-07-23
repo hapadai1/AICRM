@@ -110,7 +110,7 @@ export const JOURNEY_STAGES: Array<{
   {
     trackType: 'RENTAL',
     code: 'RENTAL_RETURNED',
-    name: '렌탈 납반',
+    name: '렌탈 반납',
     templateCode: 'JOURNEY_RENTAL_RETURNED',
   },
 ];

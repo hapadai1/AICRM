@@ -42,6 +42,8 @@ export interface DashboardTask {
   orderId?: string;
   orderNo?: string;
   orderItemId?: string;
+  /** LATE_RETURN 전용 — 렌탈 실물 상세 이동용 실물 id */
+  rentalItemId?: string;
   itemLabel: string;
   reason: string;
   dueDate?: string;

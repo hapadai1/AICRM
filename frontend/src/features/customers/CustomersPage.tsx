@@ -1,6 +1,6 @@
 import { PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App, Button, Card, Empty, Form, Input, Modal, Select, Space, Switch, Table, Typography } from 'antd';
+import { App, Button, Card, Empty, Form, Input, Modal, Segmented, Space, Switch, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -59,14 +59,6 @@ export function CustomersPage() {
 
   const columns: ColumnsType<CustomerListItem> = [
     { title: '고객명', dataIndex: 'name', width: 120 },
-    {
-      title: '고객 상태',
-      dataIndex: 'customerStatus',
-      width: 100,
-      render: (v: CustomerListItem['customerStatus']) => (
-        <StatusBadge label={metaOf(CUSTOMER_STATUS_META, v).label} color={metaOf(CUSTOMER_STATUS_META, v).color} />
-      ),
-    },
     { title: '전화번호', dataIndex: 'phone', width: 140 },
     {
       title: '최근 방문일',
@@ -79,6 +71,14 @@ export function CustomersPage() {
       dataIndex: 'lastTransactionType',
       width: 120,
       render: (v?: 'CUSTOM' | 'RENTAL') => (v ? TRANSACTION_TYPE_LABEL[v] : '-'),
+    },
+    {
+      title: '고객 상태',
+      dataIndex: 'customerStatus',
+      width: 100,
+      render: (v: CustomerListItem['customerStatus']) => (
+        <StatusBadge label={metaOf(CUSTOMER_STATUS_META, v).label} color={metaOf(CUSTOMER_STATUS_META, v).color} />
+      ),
     },
     {
       title: '계약 건수',
@@ -133,18 +133,16 @@ export function CustomersPage() {
             />
             <Typography.Text>미계약 포함</Typography.Text>
           </Space>
-          <Select
-            allowClear
-            placeholder="최근 거래 유형"
-            style={{ minWidth: 140 }}
-            value={transactionType}
+          <Segmented
+            value={transactionType ?? 'ALL'}
             onChange={(v) => {
-              setTransactionType(v as 'CUSTOM' | 'RENTAL' | undefined);
+              setTransactionType(v === 'ALL' ? undefined : (v as 'CUSTOM' | 'RENTAL'));
               setPage(1);
             }}
             options={[
-              { value: 'CUSTOM', label: '맞춤' },
+              { value: 'ALL', label: '전체' },
               { value: 'RENTAL', label: '렌탈' },
+              { value: 'CUSTOM', label: '맞춤' },
             ]}
           />
         </Space>
