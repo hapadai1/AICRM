@@ -39,6 +39,7 @@ import {
   type RevisionConfirmResult,
   type TransactionType,
 } from '../../api/contracts';
+import { BackButton } from '../../shared/BackButton';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { ContractLineEditor, createLine, linesTotal, type EditableLine } from './ContractLineEditor';
@@ -660,6 +661,11 @@ export function ContractDetailPage() {
           scroll={{ x: 700 }}
           rowClassName={(v) => (v.versionNo === detail?.currentVersionNo ? 'ant-table-row-selected' : '')}
         />
+      </Card>
+
+      {/* 목록·고객 상세·칸반 등 여러 경로로 들어오므로 뒤로가기로 통일 */}
+      <Card>
+        <BackButton />
       </Card>
 
       {/* 변경 초안 생성 — 사유 필수 */}

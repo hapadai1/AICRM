@@ -40,6 +40,7 @@ import {
   updatePaymentSchedule,
 } from '../../api/payments';
 import type { Payment, PaymentType } from '../../api/payments';
+import { BackButton } from '../../shared/BackButton';
 import { Can } from '../../shared/Can';
 import { krw } from './format';
 
@@ -331,6 +332,9 @@ export function ContractPaymentPanel({ contractId, onBack }: Props) {
           locale={{ emptyText: '등록된 결제가 없습니다.' }}
         />
       </Card>
+
+      {/* 목록·계약 상세 등 여러 경로로 들어오므로 하단에도 이전화면 복귀 버튼을 둔다 */}
+      <BackButton onClick={onBack} />
 
       {/* 결제 등록 모달 */}
       <Modal

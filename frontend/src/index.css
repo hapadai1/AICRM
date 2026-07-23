@@ -9,6 +9,17 @@
   white-space: nowrap;
 }
 
+/* '최근 거래 유형' 필터 아이콘을 헤더 우측 끝이 아니라 제목 글자 바로 옆(한 칸 띄움)에 배치 */
+.tx-type-filter-col .ant-table-filter-column {
+  justify-content: flex-start;
+}
+.tx-type-filter-col .ant-table-column-title {
+  flex: 0 0 auto;
+}
+.tx-type-filter-col .ant-table-filter-trigger {
+  margin-inline: 8px 0;
+}
+
 /* 선택지 사진 확대 미리보기(크게 보기)의 흰 여백
  * 목록 썸네일에는 인라인 스타일로 여백을 주지만, 확대 이미지는 antd가 body 밑
  * 별도 레이어에 그려서 그 스타일을 물려받지 못한다. rootClassName으로 이 미리보기만

@@ -41,6 +41,7 @@ import {
 } from '../../api/appointments';
 import { ApiError } from '../../api/client';
 import { findCustomerByPhone } from '../../api/customers';
+import { BackButton } from '../../shared/BackButton';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { CUSTOMER_STATUS_META } from '../customers/customer-constants';
@@ -480,6 +481,11 @@ export function AppointmentDetailPage() {
             </List.Item>
           )}
         />
+      </Card>
+
+      {/* 목록·고객 상세 등 여러 경로로 들어오므로 뒤로가기로 통일 */}
+      <Card>
+        <BackButton />
       </Card>
 
       <AppointmentFormModal open={editOpen} appointment={appointment as Appointment} onClose={() => setEditOpen(false)} />

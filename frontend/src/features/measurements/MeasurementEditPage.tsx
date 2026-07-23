@@ -3,7 +3,7 @@
  * 신규는 고객·채촌일·구분을 먼저 입력해 저장할 때 생성한다(유령 세션 방지).
  * 태블릿 가상 숫자 키패드로 치수를 입력하며, 현재 필드를 강조한다.
  */
-import { ArrowLeftOutlined, DeleteOutlined, DiffOutlined, SaveOutlined } from '@ant-design/icons';
+import { DeleteOutlined, DiffOutlined, SaveOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
@@ -40,6 +40,7 @@ import {
   reopenMeasurement,
   updateMeasurement,
 } from '../../api/measurements';
+import { BackButton } from '../../shared/BackButton';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { labelOf, metaOf } from '../../shared/status-meta';
@@ -305,6 +306,39 @@ export function MeasurementEditPage() {
     setDirty(true);
   };
 
+  // 활성 항목이 있을 때 물리 키보드(숫자 키패드 포함)로도 입력을 받는다.
+  useEffect(() => {
+    if (!activeKey || readOnly) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      // 검색창 등 실제 입력 요소에 포커스가 있으면 가로채지 않는다.
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+      if (e.key >= '0' && e.key <= '9') {
+        handleKeypadPress(e.key);
+        e.preventDefault();
+      } else if (e.key === '.' || e.key === 'Decimal') {
+        handleKeypadPress('.');
+        e.preventDefault();
+      } else if (e.key === 'Backspace' || e.key === 'Delete') {
+        handleKeypadDelete();
+        e.preventDefault();
+      } else if (e.key === 'Enter' || e.key === 'ArrowDown') {
+        moveActive(1);
+        e.preventDefault();
+      } else if (e.key === 'ArrowUp') {
+        moveActive(-1);
+        e.preventDefault();
+      } else if (e.key === 'Escape') {
+        setActiveKey(null);
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeKey, readOnly]);
+
   const confirmDelete = () => {
     if (!session) return;
     modal.confirm({
@@ -499,6 +533,7 @@ export function MeasurementEditPage() {
 
         {renderGroup('UPPER')}
         {renderGroup('LOWER')}
+        {renderGroup('SHIRT')}
         {renderGroup('SHOES')}
 
         <Card title="기타" size="small" style={{ marginBottom: 16 }}>
@@ -535,6 +570,11 @@ export function MeasurementEditPage() {
               />
             </div>
           </Space>
+        </Card>
+
+        {/* 목록·계약 상세 등 여러 경로로 들어오므로 하단에도 이전화면 복귀 버튼을 둔다 */}
+        <Card>
+          <BackButton />
         </Card>
       </Col>
 
@@ -624,10 +664,6 @@ export function MeasurementEditPage() {
                   </Space>
                 </Can>
               )}
-
-              <Button block icon={<ArrowLeftOutlined />} onClick={() => navigate('/measurements')}>
-                채촌 목록으로
-              </Button>
             </Space>
           </Card>
         </div>

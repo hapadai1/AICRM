@@ -14,8 +14,8 @@ import { toDateOnly, toNumber } from './transform';
 export type MeasurementType = 'INITIAL' | 'FITTING' | 'REMEASURE' | 'OTHER';
 /** 백엔드는 상태 코드 대신 `completed: boolean`을 보낸다. 화면 표시용 파생 코드. */
 export type MeasurementSessionStatus = 'DRAFT' | 'COMPLETED';
-/** 백엔드 body_section 코드 (UPPER/LOWER/SHOES) */
-export type MeasurementGroup = 'UPPER' | 'LOWER' | 'SHOES';
+/** 백엔드 body_section 코드 (UPPER/LOWER/SHIRT/SHOES) */
+export type MeasurementGroup = 'UPPER' | 'LOWER' | 'SHIRT' | 'SHOES';
 
 /** 채촌 구분 = 채촌을 하게 된 업무 단계 (스타일 컨설팅·가봉·수선) */
 export const MEASUREMENT_TYPE_LABELS: Record<string, string> = {
@@ -28,6 +28,7 @@ export const MEASUREMENT_TYPE_LABELS: Record<string, string> = {
 export const MEASUREMENT_GROUP_LABELS: Record<string, string> = {
   UPPER: '상의',
   LOWER: '하의',
+  SHIRT: '셔츠',
   SHOES: '구두',
 };
 
@@ -37,7 +38,7 @@ export function measurementStatusOf(completed: boolean): MeasurementSessionStatu
 }
 
 export interface MeasurementFieldDef {
-  /** 백엔드 measurement_code (NECK, BODY_LENGTH, UPPER_SIZE ...) */
+  /** 백엔드 measurement_code (JACKET_LENGTH, CHEST_UPPER, SLEEVE_LEFT ...) */
   key: string;
   label: string;
   group: MeasurementGroup;
@@ -47,23 +48,36 @@ export interface MeasurementFieldDef {
 
 /**
  * 채촌 항목 카탈로그 — 백엔드 `measurement-catalog.ts` MEASUREMENT_ITEMS와 코드·순서를 맞춘다.
- * (상의 7 / 하의 7 / 구두 1). SHOE_SIZE는 백엔드 valueType=ANY이나 화면은 문자 입력으로 다룬다.
+ * (상의 11 / 하의 8 / 구두 1). SHOE_SIZE는 백엔드 valueType=ANY이나 화면은 문자 입력으로 다룬다.
  */
 export const MEASUREMENT_FIELDS: MeasurementFieldDef[] = [
-  { key: 'NECK', label: '목둘레', group: 'UPPER', kind: 'number' },
-  { key: 'SHOULDER', label: '어깨너비', group: 'UPPER', kind: 'number' },
-  { key: 'CHEST', label: '가슴둘레', group: 'UPPER', kind: 'number' },
-  { key: 'SLEEVE', label: '소매길이', group: 'UPPER', kind: 'number' },
-  { key: 'BODY_LENGTH', label: '몸통길이', group: 'UPPER', kind: 'number' },
-  { key: 'WRIST', label: '손목둘레', group: 'UPPER', kind: 'number' },
-  { key: 'UPPER_SIZE', label: '상의 사이즈', group: 'UPPER', kind: 'text' },
-  { key: 'WAIST', label: '허리둘레', group: 'LOWER', kind: 'number' },
+  { key: 'JACKET_LENGTH', label: '상의장', group: 'UPPER', kind: 'number' },
+  { key: 'SHOULDER', label: '어깨', group: 'UPPER', kind: 'number' },
+  { key: 'FRONT_WIDTH', label: '앞품', group: 'UPPER', kind: 'number' },
+  { key: 'BACK_WIDTH', label: '뒤품', group: 'UPPER', kind: 'number' },
+  { key: 'CHEST_UPPER', label: '상동', group: 'UPPER', kind: 'number' },
+  { key: 'CHEST_MID', label: '중동', group: 'UPPER', kind: 'number' },
+  { key: 'CHEST_LOW', label: '하동', group: 'UPPER', kind: 'number' },
+  { key: 'SLEEVE_LEFT', label: '소매길이(좌)', group: 'UPPER', kind: 'number' },
+  { key: 'SLEEVE_RIGHT', label: '소매길이(우)', group: 'UPPER', kind: 'number' },
+  { key: 'SLEEVE_WIDTH', label: '소매통', group: 'UPPER', kind: 'number' },
+  { key: 'SLEEVE_OPENING', label: '소매부리', group: 'UPPER', kind: 'number' },
+  { key: 'WAIST', label: '허리', group: 'LOWER', kind: 'number' },
   { key: 'HIP', label: '엉덩이둘레', group: 'LOWER', kind: 'number' },
-  { key: 'RISE', label: '밑위길이', group: 'LOWER', kind: 'number' },
-  { key: 'PANTS_LENGTH', label: '바지길이', group: 'LOWER', kind: 'number' },
-  { key: 'THIGH', label: '허벅지둘레', group: 'LOWER', kind: 'number' },
-  { key: 'CALF', label: '종아리둘레', group: 'LOWER', kind: 'number' },
-  { key: 'LOWER_SIZE', label: '하의 사이즈', group: 'LOWER', kind: 'text' },
+  { key: 'THIGH', label: '허벅둘레', group: 'LOWER', kind: 'number' },
+  { key: 'FRONT_RISE', label: '앞밑윗길이', group: 'LOWER', kind: 'number' },
+  { key: 'BACK_RISE', label: '뒤밑윗길이', group: 'LOWER', kind: 'number' },
+  { key: 'KNEE', label: '무릎둘레', group: 'LOWER', kind: 'number' },
+  { key: 'PANTS_OPENING', label: '바지부리', group: 'LOWER', kind: 'number' },
+  { key: 'PANTS_LENGTH', label: '바지기장', group: 'LOWER', kind: 'number' },
+  { key: 'SHIRT_NECK', label: '목', group: 'SHIRT', kind: 'number' },
+  { key: 'SHIRT_SHOULDER', label: '어깨', group: 'SHIRT', kind: 'number' },
+  { key: 'SHIRT_CHEST_UPPER', label: '상동', group: 'SHIRT', kind: 'number' },
+  { key: 'SHIRT_CHEST_MID', label: '중동', group: 'SHIRT', kind: 'number' },
+  { key: 'SHIRT_SLEEVE', label: '소매', group: 'SHIRT', kind: 'number' },
+  { key: 'SHIRT_LENGTH', label: '기장', group: 'SHIRT', kind: 'number' },
+  { key: 'SHIRT_CUFF', label: '카우스', group: 'SHIRT', kind: 'number' },
+  { key: 'SHIRT_ARM', label: '팔통', group: 'SHIRT', kind: 'number' },
   { key: 'SHOE_SIZE', label: '신발 사이즈', group: 'SHOES', kind: 'text' },
 ];
 

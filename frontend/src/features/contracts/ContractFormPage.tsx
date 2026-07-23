@@ -24,6 +24,7 @@ import dayjs, { type Dayjs } from 'dayjs';
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ApiError } from '../../api/client';
+import { BackButton } from '../../shared/BackButton';
 import { CustomerPickerModal, type PickedCustomer } from '../../shared/CustomerPickerModal';
 import {
   confirmContract,
@@ -468,6 +469,11 @@ export function ContractFormPage() {
           )}
         </Card>
       </Form>
+
+      {/* 목록·계약 상세 등 여러 경로로 들어오므로 뒤로가기로 통일 */}
+      <Card>
+        <BackButton />
+      </Card>
 
       {/* 계약 확정 결과: 생성된 주문 목록 표시 후 주문 상세 이동 */}
       <Modal

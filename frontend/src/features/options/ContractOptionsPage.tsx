@@ -30,6 +30,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { fetchContract } from '../../api/contracts';
 import type { OptionProgressItem } from '../../api/options';
 import { copyOptionSession, fetchOptionProgress, startOptionSession } from '../../api/options';
+import { BackButton } from '../../shared/BackButton';
 import { PdfViewerModal } from '../../shared/PdfViewerModal';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { metaOf } from '../../shared/status-meta';
@@ -273,6 +274,9 @@ export function ContractOptionsPage() {
           )}
         </Space>
       </Card>
+
+      {/* 계약 상세 등 여러 경로로 들어오므로 뒤로가기로 통일 */}
+      <BackButton />
 
       <PdfViewerModal
         open={pdfOpen}

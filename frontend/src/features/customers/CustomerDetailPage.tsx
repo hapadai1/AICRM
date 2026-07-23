@@ -43,6 +43,7 @@ import {
 } from '../../api/customers';
 import { PAYMENT_TYPE_LABEL, type PaymentType } from '../../api/payments';
 import { useAuthStore } from '../../app/auth-store';
+import { BackButton } from '../../shared/BackButton';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { APPT_STATUS_META, SOURCE_META } from '../appointments/appointment-constants';
@@ -667,6 +668,11 @@ export function CustomerDetailPage() {
             },
           ]}
         />
+      </Card>
+
+      {/* 목록·예약 상세 등 여러 경로로 들어오므로 뒤로가기로 통일 */}
+      <Card>
+        <BackButton />
       </Card>
 
       <Modal

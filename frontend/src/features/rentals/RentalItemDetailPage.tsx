@@ -38,6 +38,7 @@ import {
   type RentalItemStatus,
 } from '../../api/rentals';
 import { createRepair } from '../../api/repairs';
+import { BackButton } from '../../shared/BackButton';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { COLOR_OPTIONS, DESIGN_OPTIONS, statusOptions } from './rental-constants';
@@ -301,6 +302,9 @@ export function RentalItemDetailPage() {
           </Card>
         </Col>
       </Row>
+
+      {/* 재고 목록·주문 상세 등 여러 경로로 들어오므로 뒤로가기로 통일 */}
+      <BackButton />
 
       {/* 상태 수동 변경 모달 */}
       <Modal
