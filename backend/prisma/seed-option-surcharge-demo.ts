@@ -52,6 +52,9 @@ async function wipePrevious() {
   await prisma.$transaction(async (tx) => {
     await tx.optionSelectionValue.deleteMany({ where: { selectionSession: { orderItemId: { in: orderItemIds } } } });
     await tx.optionSelectionSession.deleteMany({ where: { orderItemId: { in: orderItemIds } } });
+    // 다른 시드(seed:journeys 등)가 이 고객·주문에 붙였을 수 있는 여정(+이벤트)을 먼저 지운다
+    await tx.journeyEvent.deleteMany({ where: { journey: { customerId: customer.id } } });
+    await tx.customerJourney.deleteMany({ where: { customerId: customer.id } });
     await tx.orderItem.deleteMany({ where: { id: { in: orderItemIds } } });
     await tx.order.deleteMany({ where: { id: { in: orderIds } } });
     // 계약의 현재 버전 FK를 먼저 끊어야 버전을 지울 수 있다

@@ -15,7 +15,7 @@
     "seed:option-images": "ts-node prisma/seed-option-images.ts",
     "seed:suit-design": "ts-node prisma/seed-suit-design-options.ts",
     "seed:option-demo": "ts-node prisma/seed-option-surcharge-demo.ts",
-    "seed:all": "npm run prisma:seed && npm run seed:demo && npm run seed:more && npm run seed:journeys",
+    "seed:all": "npm run prisma:seed && npm run seed:demo && npm run seed:more && npm run seed:journeys && npm run seed:suit-design && npm run seed:option-demo",
     "test": "jest --config jest.config.js"
   },
   "prisma": {
