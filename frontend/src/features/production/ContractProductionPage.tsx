@@ -309,17 +309,7 @@ export function ContractProductionPage() {
             <Typography.Text type="secondary">
               {[contract?.customerPhone, contract?.contractNo].filter(Boolean).join(' · ')}
             </Typography.Text>
-            <br />
-            <Typography.Text type="secondary">
-              품목별로 작업지시서 출력 · 제작요청 · 가봉 · 구성품 입고·출고를 한 화면에서 관리합니다. 전체 입고되면
-              고객 연락 확인창이 뜹니다.
-            </Typography.Text>
           </div>
-          <Alert
-            type="info"
-            showIcon
-            message="구성품별 입고·출고를 처리하면 품목 상태(부분 입고·부분 출고 등)가 자동 집계됩니다. 상태 역행은 사유 입력이 필수입니다."
-          />
           <Table<ProductionItem>
             rowKey={(r) => r.orderItemId}
             scroll={{ x: 'max-content' }}
