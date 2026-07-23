@@ -29,17 +29,17 @@ const TASK_TYPES: DashboardTaskType[] = [
   'REPRINT_NEEDED',
 ];
 
-/** 확인사항 행 클릭 시 이동할 업무 화면 경로 */
+/** 확인사항 행 클릭 시 이동할 상세 화면 경로 (id 없으면 목록으로 폴백) */
 function taskTargetPath(task: DashboardTask): string {
   switch (task.taskType) {
     case 'PAYMENT_DELAY':
       return task.contractId ? `/payments?contractId=${task.contractId}` : '/payments';
     case 'LATE_RETURN':
-      return '/rentals';
+      return task.rentalItemId ? `/rentals/${task.rentalItemId}` : '/rentals';
     case 'UNORDERED':
     case 'REPRINT_NEEDED':
     case 'INBOUND_DELAY':
-      return '/production';
+      return task.orderId ? `/orders/${task.orderId}` : '/production';
   }
 }
 
@@ -89,9 +89,18 @@ export function TaskBoard({ taskCounts }: TaskBoardProps) {
       title: '주문번호',
       dataIndex: 'orderNo',
       width: 160,
-      render: (v: string | undefined) => v ?? '-',
+      // 결제 지연은 계약에 속한 주문이 여러 개일 수 있어 줄바꿈으로 모두 표시한다.
+      render: (v: string | undefined) => (
+        <span style={{ whiteSpace: 'pre-line' }}>{v ?? '-'}</span>
+      ),
     },
-    { title: '품목', dataIndex: 'itemLabel' },
+    {
+      title: '품목',
+      dataIndex: 'itemLabel',
+      render: (v: string | undefined) => (
+        <span style={{ whiteSpace: 'pre-line' }}>{v ?? '-'}</span>
+      ),
+    },
     { title: '사유', dataIndex: 'reason' },
     { title: '기준일', dataIndex: 'dueDate', width: 110 },
     {

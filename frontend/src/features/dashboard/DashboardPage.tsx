@@ -26,7 +26,17 @@ const PURPOSE_COLOR: Record<string, string> = {
   RENTAL_RETURN: 'magenta',
 };
 
-const TIMETABLE_HOURS = Array.from({ length: 10 }, (_, i) => 10 + i); // 10:00~19:00 시작 슬롯
+// 업무시간 10:00~20:00을 30분 단위 20슬롯으로 분할한 타임테이블.
+const DAY_START_MIN = 10 * 60; // 10:00
+const DAY_END_MIN = 20 * 60; // 20:00
+const SLOT_MIN = 30;
+const SLOT_COUNT = (DAY_END_MIN - DAY_START_MIN) / SLOT_MIN; // 20
+const SLOT_HEIGHT = 40; // 슬롯 1칸 픽셀 높이
+const TIME_GUTTER = 64; // 좌측 시간 라벨 폭(px)
+const BOX_WIDTH = 260; // 예약 박스 고정 폭(px)
+const BOX_GAP = 8; // 같은 슬롯 예약 사이 간격(px)
+// 각 슬롯의 시작 분(600, 630 … 1170)
+const TIMETABLE_SLOTS = Array.from({ length: SLOT_COUNT }, (_, i) => DAY_START_MIN + i * SLOT_MIN);
 
 const STATUS_LABEL: Record<DashboardAppointment['status'], string> = {
   RESERVED: '예약',
@@ -35,6 +45,49 @@ const STATUS_LABEL: Record<DashboardAppointment['status'], string> = {
   CANCELLED: '취소',
   NO_SHOW: '노쇼',
 };
+
+/** 하루 기준 분(600=10:00)을 HH:mm 문자열로. */
+function fmtMin(min: number): string {
+  return `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+}
+
+/** 화면에 배치된 예약 1건 — 시작 슬롯 top과 같은 슬롯 겹침 레인 정보. */
+interface LaidOutAppointment {
+  apt: DashboardAppointment;
+  top: number;
+  lane: number;
+}
+
+/**
+ * 예약들을 30분 그리드 위 절대배치 좌표로 변환한다.
+ * - 박스는 시작 슬롯 한 칸(30분)으로 균일 표시하며 종료시각만큼 늘리지 않는다.
+ * - 업무시간(10:00~20:00) 밖 예약은 표시하지 않는다.
+ * - 같은 슬롯에 여러 예약이 있으면 레인(열)을 나눠 나란히 배치한다.
+ */
+function layoutAppointments(appointments: DashboardAppointment[]): LaidOutAppointment[] {
+  const bySlot = new Map<number, DashboardAppointment[]>();
+  for (const apt of appointments) {
+    const start = dayjs(apt.startAt);
+    const startMin = start.hour() * 60 + start.minute();
+    if (startMin < DAY_START_MIN || startMin >= DAY_END_MIN) continue;
+    // 30분 슬롯 시작으로 내림 (예: 11:45 → 11:30 슬롯)
+    const slotStart =
+      Math.floor((startMin - DAY_START_MIN) / SLOT_MIN) * SLOT_MIN + DAY_START_MIN;
+    bySlot.set(slotStart, [...(bySlot.get(slotStart) ?? []), apt]);
+  }
+
+  const result: LaidOutAppointment[] = [];
+  for (const [slotStart, apts] of bySlot) {
+    apts.forEach((apt, lane) => {
+      result.push({
+        apt,
+        top: ((slotStart - DAY_START_MIN) / SLOT_MIN) * SLOT_HEIGHT,
+        lane,
+      });
+    });
+  }
+  return result;
+}
 
 export function DashboardPage() {
   const navigate = useNavigate();
@@ -64,15 +117,10 @@ export function DashboardPage() {
     return list.filter((a) => purposeFilter.includes(a.purposeCode));
   }, [summary, purposeFilter]);
 
-  const appointmentsByHour = useMemo(() => {
-    const map = new Map<number, DashboardAppointment[]>();
-    for (const apt of filteredAppointments) {
-      const hour = dayjs(apt.startAt).hour();
-      const slot = Math.min(Math.max(hour, 10), 19);
-      map.set(slot, [...(map.get(slot) ?? []), apt]);
-    }
-    return map;
-  }, [filteredAppointments]);
+  const laidOutAppointments = useMemo(
+    () => layoutAppointments(filteredAppointments),
+    [filteredAppointments],
+  );
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -102,39 +150,63 @@ export function DashboardPage() {
             ) : filteredAppointments.length === 0 ? (
               <Empty description={`${isTodaySelected ? '오늘' : '해당 날짜'} 예약이 없습니다.`} />
             ) : (
-              <div>
-                {TIMETABLE_HOURS.map((hour) => {
-                  const slotAppointments = appointmentsByHour.get(hour) ?? [];
-                  return (
-                    <Row
-                      key={hour}
-                      style={{ borderTop: '1px solid #f0f0f0', minHeight: 40, padding: '4px 0' }}
-                      align="middle"
+              <div style={{ position: 'relative', height: SLOT_COUNT * SLOT_HEIGHT }}>
+                {/* 30분 단위 눈금 + 좌측 시간 라벨 (배경) */}
+                {TIMETABLE_SLOTS.map((min, i) => (
+                  <div
+                    key={min}
+                    style={{
+                      position: 'absolute',
+                      top: i * SLOT_HEIGHT,
+                      left: 0,
+                      right: 0,
+                      height: SLOT_HEIGHT,
+                      // 정시(00분)는 실선, 반시(30분)는 연한 점선으로 구분
+                      borderTop: min % 60 === 0 ? '1px solid #f0f0f0' : '1px dashed #f5f5f5',
+                    }}
+                  >
+                    <Typography.Text
+                      type="secondary"
+                      style={{ fontSize: 12, paddingLeft: 4, lineHeight: '16px' }}
                     >
-                      <Col flex="64px">
-                        <Typography.Text type="secondary">
-                          {String(hour).padStart(2, '0')}:00
-                        </Typography.Text>
-                      </Col>
-                      <Col flex="auto">
-                        <Space wrap size={[8, 8]}>
-                          {slotAppointments.map((apt) => (
-                            <Tag
-                              key={apt.id}
-                              color={PURPOSE_COLOR[apt.purposeCode] ?? 'default'}
-                              style={{ cursor: 'pointer', padding: '2px 8px', marginInlineEnd: 0 }}
-                              onClick={() => navigate(`/appointments/${apt.id}`)}
-                            >
-                              {dayjs(apt.startAt).format('HH:mm')} {apt.customerName} ·{' '}
-                              {apt.purposeName} · {STATUS_LABEL[apt.status]}
-                              {apt.source === 'NAVER' ? ' · 네이버' : ''}
-                            </Tag>
-                          ))}
-                        </Space>
-                      </Col>
-                    </Row>
-                  );
-                })}
+                      {fmtMin(min)}
+                    </Typography.Text>
+                  </div>
+                ))}
+                {/* 예약 블록 (전경) — 시작 슬롯 한 칸 균일 크기, 같은 슬롯은 레인 분할 */}
+                {laidOutAppointments.map(({ apt, top, lane }) => (
+                  <div
+                    key={apt.id}
+                    style={{
+                      position: 'absolute',
+                      top: top + 1,
+                      height: SLOT_HEIGHT - 2,
+                      left: TIME_GUTTER + lane * (BOX_WIDTH + BOX_GAP),
+                      width: BOX_WIDTH,
+                    }}
+                  >
+                    <Tag
+                      color={PURPOSE_COLOR[apt.purposeCode] ?? 'default'}
+                      style={{
+                        margin: 0,
+                        width: '100%',
+                        height: '100%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        cursor: 'pointer',
+                        overflow: 'hidden',
+                        whiteSpace: 'nowrap',
+                        textOverflow: 'ellipsis',
+                        padding: '2px 6px',
+                        fontSize: 12,
+                      }}
+                      onClick={() => navigate(`/appointments/${apt.id}`)}
+                    >
+                      {apt.customerName} · {apt.purposeName} · {STATUS_LABEL[apt.status]}
+                      {apt.source === 'NAVER' ? ' · 네이버' : ''}
+                    </Tag>
+                  </div>
+                ))}
               </div>
             )}
           </Card>
