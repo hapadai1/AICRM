@@ -1,11 +1,16 @@
 /**
- * 정장 옵션 세트를 '디자인 상담' 자료 기준으로 새 버전(11단계·29선택지)으로 등록한다.
+ * 정장 옵션 세트를 '디자인 상담' 자료 기준 11단계·29선택지로 맞춘다.
+ *
+ * 버전을 새로 올리지 않고 **첫 버전(V1)을 제자리 갱신**한다.
+ * 버전을 올리면 이미 만들어진 선택 세션이 옛 버전을 계속 참조해 화면에 옛 단계·사진이
+ * 남고, 세션마다 어느 버전을 보는지 갈려 데이터가 어긋난다. 단계·선택지 행을 지우지 않고
+ * 내용만 바꾸면 기존 선택값의 참조가 그대로 살아 있어 그런 문제가 생기지 않는다.
  *
  * - 선택지 사진은 prisma/assets/suit-design/*.jpg (PDF에서 추출한 원본).
  *   추출은 assets/extract-suit-design-images.py가 담당하며 PDF가 바뀔 때만 다시 돌린다.
- * - 기존 ACTIVE 버전을 덮어쓰지 않고 새 DRAFT를 만들어 활성화한다.
- *   진행 중인 선택 세션은 이전 버전을 계속 참조하므로 영향받지 않는다.
- * - 실행: npm run seed:suit-design  (이미 반영돼 있으면 건너뜀, SUIT_DESIGN_FORCE=1로 강제)
+ * - V1 말고 다른 버전이 남아 있으면 그 세션들을 V1으로 옮기고 버전을 정리한다.
+ * - 실행: npm run seed:suit-design
+ *         SUIT_DESIGN_IMAGES_ONLY=1 npm run seed:suit-design  (사진만 갱신)
  */
 import { PrismaClient } from '@prisma/client';
 import { createHash, randomUUID } from 'crypto';
@@ -174,96 +179,216 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (set.activeVersionId && process.env.SUIT_DESIGN_FORCE !== '1') {
-    const active = await prisma.optionSetVersion.findUnique({
-      where: { id: set.activeVersionId },
-      select: { versionNo: true, description: true },
-    });
-    if (active?.description === MARKER) {
-      console.log(
-        `이미 V${active.versionNo}로 반영돼 있습니다. 다시 만들려면 SUIT_DESIGN_FORCE=1로 실행하세요.`,
-      );
-      return;
-    }
-  }
-
   const author = await prisma.user.findFirst({ orderBy: { createdAt: 'asc' }, select: { id: true } });
   if (!author) throw new Error('사용자가 없습니다. 기본 시드를 먼저 실행하세요.');
 
-  // 이미지 먼저 확보 — 중간에 실패해도 버전이 반쯤 만들어지지 않게 한다.
+  // 사진을 먼저 확보한다 — 중간에 실패해도 옵션이 반쯤 바뀌지 않게.
   const imageIds = new Map<string, string>();
   for (const stage of STAGES) {
     for (const [i, choice] of stage.choices.entries()) {
-      const slot = choice.imageSlot ?? CODES[i];
-      imageIds.set(`${stage.code}_${CODES[i]}`, await ensureFile(stage.code, slot));
+      imageIds.set(`${stage.code}_${CODES[i]}`, await ensureFile(stage.code, choice.imageSlot ?? CODES[i]));
     }
   }
 
-  const last = await prisma.optionSetVersion.aggregate({
+  // 기준 버전 = 이 세트의 첫 버전. 없으면 만든다.
+  let base = await prisma.optionSetVersion.findFirst({
     where: { optionSetId: set.id },
-    _max: { versionNo: true },
+    orderBy: { versionNo: 'asc' },
   });
-  const versionNo = (last._max.versionNo ?? 0) + 1;
-
-  await prisma.$transaction(async (tx) => {
-    const version = await tx.optionSetVersion.create({
+  if (!base) {
+    base = await prisma.optionSetVersion.create({
       data: {
         id: randomUUID(),
         optionSetId: set.id,
-        versionNo,
+        versionNo: 1,
         status: 'DRAFT',
         description: MARKER,
         createdBy: author.id,
       },
     });
+  }
+  const baseId = base.id;
 
-    for (const [index, stage] of STAGES.entries()) {
-      await tx.optionStage.create({
-        data: {
-          id: randomUUID(),
-          optionSetVersionId: version.id,
-          stageCode: stage.code,
-          stageName: stage.name,
-          sequenceNo: index + 1,
-          required: true,
-          active: true,
-          choices: {
-            create: stage.choices.map((choice, i) => ({
-              id: randomUUID(),
-              choiceCode: CODES[i],
-              choiceName: choice.name,
-              extraPrice: choice.extraPrice ?? 0,
-              imageFileId: imageIds.get(`${stage.code}_${CODES[i]}`)!,
-              active: true,
-            })),
-          },
-        },
+  await prisma.$transaction(async (tx) => {
+    const existing = await tx.optionStage.findMany({
+      where: { optionSetVersionId: baseId },
+      orderBy: { sequenceNo: 'asc' },
+      include: { choices: true },
+    });
+
+    // 단계코드를 한 번에 바꾸면 (버전, 코드) 유일 제약에 걸린다.
+    // 예전 6단계가 VENT인데 새 4단계도 VENT라 순서대로 갱신하면 중간에 충돌한다.
+    // 그래서 임시 코드로 비워둔 뒤 최종 코드를 넣는다.
+    for (const stage of existing) {
+      await tx.optionStage.update({
+        where: { id: stage.id },
+        data: { stageCode: `TMP_${stage.sequenceNo}_${stage.id.slice(0, 8)}` },
       });
     }
 
-    // 활성화: 기존 ACTIVE는 RETIRED로 내리고 이 버전을 세트의 활성 버전으로 건다.
-    await tx.optionSetVersion.updateMany({
-      where: { optionSetId: set.id, status: 'ACTIVE' },
-      data: { status: 'RETIRED' },
-    });
+    for (const [index, seed] of STAGES.entries()) {
+      const sequenceNo = index + 1;
+      let stage = existing.find((s) => s.sequenceNo === sequenceNo);
+
+      if (!stage) {
+        const created = await tx.optionStage.create({
+          data: {
+            id: randomUUID(),
+            optionSetVersionId: baseId,
+            stageCode: seed.code,
+            stageName: seed.name,
+            sequenceNo,
+            required: true,
+            active: true,
+          },
+        });
+        stage = { ...created, choices: [] };
+      } else {
+        await tx.optionStage.update({
+          where: { id: stage.id },
+          data: { stageCode: seed.code, stageName: seed.name, required: true, active: true },
+        });
+      }
+
+      for (const [i, choice] of seed.choices.entries()) {
+        const code = CODES[i];
+        const imageFileId = imageIds.get(`${seed.code}_${code}`)!;
+        const current = stage.choices.find((c) => c.choiceCode === code);
+        if (current) {
+          // 행을 지우지 않고 내용만 바꾼다 — 기존 선택값이 이 행을 가리키고 있다.
+          await tx.optionChoice.update({
+            where: { id: current.id },
+            data: {
+              choiceName: choice.name,
+              extraPrice: choice.extraPrice ?? 0,
+              imageFileId,
+              active: true,
+            },
+          });
+        } else {
+          await tx.optionChoice.create({
+            data: {
+              id: randomUUID(),
+              optionStageId: stage.id,
+              choiceCode: code,
+              choiceName: choice.name,
+              extraPrice: choice.extraPrice ?? 0,
+              imageFileId,
+              active: true,
+            },
+          });
+        }
+      }
+
+      // 새 구성에 없는 선택지는 지우지 않고 내린다(선택값이 참조 중일 수 있다).
+      for (const c of stage.choices) {
+        if (!CODES.slice(0, seed.choices.length).includes(c.choiceCode as (typeof CODES)[number])) {
+          await tx.optionChoice.update({ where: { id: c.id }, data: { active: false } });
+        }
+      }
+    }
+
+    // 11단계를 넘는 예전 단계도 지우지 않고 내린다.
+    for (const stage of existing) {
+      if (stage.sequenceNo > STAGES.length) {
+        await tx.optionStage.update({
+          where: { id: stage.id },
+          data: { stageCode: `RETIRED_${stage.sequenceNo}`, active: false },
+        });
+      }
+    }
+
     await tx.optionSetVersion.update({
-      where: { id: version.id },
-      data: { status: 'ACTIVE', effectiveFrom: new Date() },
+      where: { id: baseId },
+      data: { status: 'ACTIVE', description: MARKER, effectiveFrom: new Date() },
     });
-    await tx.optionSet.update({
-      where: { id: set.id },
-      data: { activeVersionId: version.id },
-    });
+    await tx.optionSet.update({ where: { id: set.id }, data: { activeVersionId: baseId } });
   });
+
+  const moved = await consolidateOtherVersions(set.id, baseId);
 
   const choiceCount = STAGES.reduce((sum, s) => sum + s.choices.length, 0);
   const priced = STAGES.flatMap((s) => s.choices).filter((c) => c.extraPrice);
-  console.log(`정장 옵션 V${versionNo} 활성화 — ${STAGES.length}단계 / ${choiceCount}선택지`);
+  console.log(`정장 옵션 V${base.versionNo} 갱신 — ${STAGES.length}단계 / ${choiceCount}선택지`);
+  if (moved.sessions > 0 || moved.versions > 0)
+    console.log(`다른 버전 정리 — 세션 ${moved.sessions}건 이전, 버전 ${moved.versions}개 삭제`);
   console.log(
     `추가금액 선택지 ${priced.length}건: ${priced
       .map((c) => `${c.name} +${c.extraPrice!.toLocaleString()}원`)
       .join(', ')}`,
   );
+}
+
+/**
+ * 기준 버전 외의 버전에 붙은 세션을 기준 버전으로 옮기고 그 버전을 지운다.
+ * 단계는 순번으로, 선택지는 코드(A/B/C)로 짝지어 선택값을 그대로 살린다.
+ * 짝이 없으면(예전 버전에만 있던 선택지) 그 선택값만 버린다.
+ */
+async function consolidateOtherVersions(
+  optionSetId: string,
+  baseId: string,
+): Promise<{ sessions: number; versions: number }> {
+  const others = await prisma.optionSetVersion.findMany({
+    where: { optionSetId, id: { not: baseId } },
+    include: { stages: { include: { choices: true } } },
+  });
+  if (others.length === 0) return { sessions: 0, versions: 0 };
+
+  const baseStages = await prisma.optionStage.findMany({
+    where: { optionSetVersionId: baseId },
+    include: { choices: true },
+  });
+  const baseBySeq = new Map(baseStages.map((s) => [s.sequenceNo, s]));
+
+  let sessions = 0;
+  for (const version of others) {
+    const stageById = new Map(version.stages.map((s) => [s.id, s]));
+    const choiceById = new Map(version.stages.flatMap((s) => s.choices).map((c) => [c.id, c]));
+
+    const list = await prisma.optionSelectionSession.findMany({
+      where: { optionSetVersionId: version.id },
+      include: { values: true },
+    });
+
+    for (const session of list) {
+      await prisma.$transaction(async (tx) => {
+        for (const value of session.values) {
+          const oldStage = stageById.get(value.optionStageId);
+          const oldChoice = choiceById.get(value.optionChoiceId);
+          const newStage = oldStage ? baseBySeq.get(oldStage.sequenceNo) : undefined;
+          const newChoice = newStage?.choices.find((c) => c.choiceCode === oldChoice?.choiceCode);
+          if (!newStage || !newChoice) {
+            await tx.optionSelectionValue.delete({ where: { id: value.id } });
+            continue;
+          }
+          await tx.optionSelectionValue.update({
+            where: { id: value.id },
+            data: {
+              optionStageId: newStage.id,
+              optionChoiceId: newChoice.id,
+              extraPriceSnapshot: newChoice.extraPrice,
+            },
+          });
+        }
+        const oldCurrent = session.currentStageId ? stageById.get(session.currentStageId) : undefined;
+        await tx.optionSelectionSession.update({
+          where: { id: session.id },
+          data: {
+            optionSetVersionId: baseId,
+            currentStageId: oldCurrent ? (baseBySeq.get(oldCurrent.sequenceNo)?.id ?? null) : null,
+          },
+        });
+      });
+      sessions += 1;
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.optionChoice.deleteMany({ where: { optionStage: { optionSetVersionId: version.id } } });
+      await tx.optionStage.deleteMany({ where: { optionSetVersionId: version.id } });
+      await tx.optionSetVersion.delete({ where: { id: version.id } });
+    });
+  }
+  return { sessions, versions: others.length };
 }
 
 main()
