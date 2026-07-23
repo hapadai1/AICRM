@@ -13,10 +13,14 @@ import {
 } from '../../api/options';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { metaOf } from '../../shared/status-meta';
-import { choiceColor, OPTION_STATUS_META } from './option-meta';
+import { choiceColor, OPTION_STATUS_META, PHOTO_MAT_PX, photoMatStyle } from './option-meta';
 
 /** 선택지 사진이 세로로 긴 원본이라 확인서 카드도 세로로 넉넉히 잡는다. */
 const MEDIA_HEIGHT = 260;
+/** 카드가 작아 흰 여백은 선택 화면보다 좁게 두른다. */
+const MAT_SCALE = 0.6;
+/** 여백(위아래)과 테두리를 뺀 실제 사진 높이 */
+const PHOTO_HEIGHT = MEDIA_HEIGHT - 2 * Math.round(PHOTO_MAT_PX * MAT_SCALE) - 2;
 
 /** 확인서 카드 이미지 영역 — 선택지에 등록 이미지가 있으면 사진, 없으면 색상 블록으로 폴백한다. */
 function StageMedia({ st }: { st: OptionReviewStage }) {
@@ -30,14 +34,14 @@ function StageMedia({ st }: { st: OptionReviewStage }) {
 
   if (st.imageUrl && src) {
     return (
-      <div style={{ height: MEDIA_HEIGHT, borderRadius: 8, overflow: 'hidden', background: '#f5f5f5' }}>
+      <div style={{ ...photoMatStyle(MAT_SCALE), height: MEDIA_HEIGHT }}>
         {/* 카드 전체가 '눌러 재선택' 대상이므로 preview는 끄고 클릭이 카드로 전파되게 둔다. */}
         <Image
           src={src}
           alt={st.choiceName ?? st.name}
           width="100%"
-          height={MEDIA_HEIGHT}
-          style={{ objectFit: 'contain' }}
+          height={PHOTO_HEIGHT}
+          style={{ objectFit: 'contain', display: 'block' }}
           preview={false}
         />
       </div>

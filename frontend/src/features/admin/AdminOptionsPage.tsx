@@ -77,14 +77,20 @@ const emptyChoice = (): EditableChoice => ({
   imageUrl: null,
 });
 
-/** 선택지 사진이 세로로 긴 원본이라 잘리지 않게 contain으로 담는다 */
+/**
+ * 선택지 사진이 세로로 긴 원본이라 잘리지 않게 contain으로 담고,
+ * 인화물처럼 보이도록 둘레에 흰 여백을 둔다(썸네일이라 좁게).
+ */
+const THUMB_MAT = 6;
 const THUMB_STYLE = {
   width: 88,
   height: 124,
+  padding: THUMB_MAT,
   borderRadius: 4,
-  border: '1px solid #f0f0f0',
-  background: '#fafafa',
+  border: '1px solid #e8e8e8',
+  background: '#ffffff',
   objectFit: 'contain' as const,
+  boxSizing: 'border-box' as const,
   flexShrink: 0,
   cursor: 'zoom-in' as const,
 };
