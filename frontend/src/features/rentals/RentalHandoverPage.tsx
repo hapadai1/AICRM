@@ -19,7 +19,7 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs, { type Dayjs } from 'dayjs';
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ApiError } from '../../api/client';
 import {
@@ -51,27 +51,29 @@ export function RentalHandoverPage() {
   const [returnForm] = Form.useForm<{ returnDate: Dayjs; availableFrom: Dayjs; nextStatus: RentalItemStatus }>();
   const [changeForm] = Form.useForm<{ newInventoryItemId: string; reason: string }>();
 
-  const pickupsQuery = useQuery({
-    queryKey: ['rentals', 'allocations', 'pickup'],
-    queryFn: () => fetchAllocations('pickup'),
-  });
-  const returnsQuery = useQuery({
-    queryKey: ['rentals', 'allocations', 'return'],
-    queryFn: () => fetchAllocations('return'),
-  });
-
   // 진행 단계 카드 등에서 특정 주문으로 걸러 들어올 수 있게 한다 (?q=ORD-...).
+  // q가 있으면 서버가 날짜 제한을 풀어 미래 픽업 예약·이미 출고된 건까지 함께 반환한다.
   const [searchParams, setSearchParams] = useSearchParams();
   const keyword = searchParams.get('q') ?? '';
-  const filterAllocs = (rows: RentalAllocation[]) => {
-    const q = keyword.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((r) =>
-      [r.customerName, r.orderNo, r.managementCode].some((v) => v?.toLowerCase().includes(q)),
-    );
-  };
-  const pickups = useMemo(() => filterAllocs(pickupsQuery.data ?? []), [pickupsQuery.data, keyword]);
-  const returns = useMemo(() => filterAllocs(returnsQuery.data ?? []), [returnsQuery.data, keyword]);
+  const q = keyword.trim();
+
+  const pickupsQuery = useQuery({
+    queryKey: ['rentals', 'allocations', 'pickup', q],
+    queryFn: () => fetchAllocations('pickup', { q }),
+  });
+  const returnsQuery = useQuery({
+    queryKey: ['rentals', 'allocations', 'return', q],
+    queryFn: () => fetchAllocations('return', { q }),
+  });
+
+  const pickups = pickupsQuery.data ?? [];
+  const returns = returnsQuery.data ?? [];
+
+  // q로 진입했을 때는 실제 매칭 행이 있는 탭을 자동 선택한다.
+  // (이미 출고된 건은 '반납 대상'에만 있고, 픽업 탭만 열려 "데이터 없음"으로 보이던 문제 해결)
+  const [tabOverride, setTabOverride] = useState<string | null>(null);
+  const autoTab = q && pickups.length === 0 && returns.length > 0 ? 'return' : 'pickup';
+  const activeTab = tabOverride ?? autoTab;
 
   // ID 변경 다이얼로그: 배정 기간 기준 가용 실물 조회
   const changeCandidatesQuery = useQuery({
@@ -234,9 +236,6 @@ export function RentalHandoverPage() {
             <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/rentals')}>
               재고 목록
             </Button>
-            <Typography.Title level={4} style={{ margin: 0 }}>
-              렌탈 출고·반납 (RENT-004)
-            </Typography.Title>
           </Space>
           <Button onClick={() => navigate('/rentals/allocate')}>가용 검색·배정으로</Button>
         </Space>
@@ -256,6 +255,8 @@ export function RentalHandoverPage() {
 
         <Tabs
           style={{ marginTop: 8 }}
+          activeKey={activeTab}
+          onChange={setTabOverride}
           items={[
             {
               key: 'pickup',

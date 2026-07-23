@@ -1,12 +1,12 @@
 /**
  * ADMIN-001 기준정보 관리
  * - 탭: 예약 목적 / 품목·구성품 / 결제수단 / 수선 구분
- * - 표시명·정렬·사용여부 편집, 시스템 코드는 삭제(사용 중지) 불가 표시
+ * - 예약 목적·결제수단: DB 마스터 테이블 → 표시명·정렬·사용여부 편집 가능
+ * - 품목·구성품·수선 구분: 코드 상수(고정) 기준정보 → 표시명만 편집(코드 추가·삭제 불가)
  */
 import { PlusOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Alert,
   App,
   Button,
   Card,
@@ -27,6 +27,13 @@ import { useState } from 'react';
 import { createMaster, fetchMaster, updateMaster } from '../../api/admin';
 import type { MasterItem, MasterType } from '../../api/admin';
 import { ApiError } from '../../api/client';
+import {
+  CODE_LABELS_QUERY_KEY,
+  updateCodeLabel,
+  useCodeLabelsQuery,
+  type CodeLabelDomain,
+  type CodeLabelItem,
+} from '../../api/code-labels';
 
 interface EditFormValues {
   name: string;
@@ -39,12 +46,11 @@ interface CreateFormValues {
   sortOrder?: number;
 }
 
-/** 단일 기준정보 타입의 표 + 추가/수정/사용여부 토글 */
-/** 백엔드 기준정보 API가 실동작하는 타입 (나머지는 enum 기반이라 편집 미지원) */
-const SUPPORTED_MASTER_TYPES: MasterType[] = ['appointment-purposes', 'payment-method'];
-
+/**
+ * DB 마스터 테이블 기반 기준정보(예약 목적·결제수단)의 표 + 추가/수정/사용여부 토글.
+ * 품목·구성품·수선 구분은 코드 상수라 편집 대상이 아니며 CodeConstantTable 로 표시한다.
+ */
 function MasterTable({ type, title }: { type: MasterType; title: string }) {
-  const backendPending = !SUPPORTED_MASTER_TYPES.includes(type);
   const [editTarget, setEditTarget] = useState<MasterItem | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [editForm] = Form.useForm<EditFormValues>();
@@ -52,11 +58,9 @@ function MasterTable({ type, title }: { type: MasterType; title: string }) {
   const queryClient = useQueryClient();
   const { message } = App.useApp();
 
-  // 백엔드 미지원 타입은 실서버에서 404가 날 수 있으므로 재시도 없이 조회하고, 실패해도 화면이 깨지지 않게 한다.
   const listQuery = useQuery({
     queryKey: ['admin', 'master', type],
     queryFn: () => fetchMaster(type),
-    retry: backendPending ? false : undefined,
   });
 
   const invalidate = () =>
@@ -149,22 +153,12 @@ function MasterTable({ type, title }: { type: MasterType; title: string }) {
         <Button
           size="small"
           icon={<PlusOutlined />}
-          disabled={backendPending && listQuery.isError}
           onClick={() => setCreateOpen(true)}
         >
           추가
         </Button>
       }
     >
-      {backendPending && (
-        <Alert
-          type="info"
-          showIcon
-          style={{ marginBottom: 12 }}
-          message="백엔드 연동 예정"
-          description="이 기준정보는 아직 백엔드 API가 제공되지 않습니다. mock 모드에서는 편집할 수 있지만 실서버에서는 조회·저장이 지원되지 않습니다."
-        />
-      )}
       <Table<MasterItem>
         rowKey="id"
         scroll={{ x: 'max-content' }}
@@ -173,11 +167,6 @@ function MasterTable({ type, title }: { type: MasterType; title: string }) {
         dataSource={listQuery.data ?? []}
         columns={columns}
         pagination={false}
-        locale={
-          listQuery.isError
-            ? { emptyText: '백엔드 연동 예정입니다. 실서버에서는 아직 조회할 수 없습니다.' }
-            : undefined
-        }
       />
 
       <Modal
@@ -251,6 +240,109 @@ function MasterTable({ type, title }: { type: MasterType; title: string }) {
   );
 }
 
+interface CodeLabelFormValues {
+  label: string;
+}
+
+/**
+ * 코드 상수로 관리되는 기준정보(품목·구성품·수선구분)의 표시명 편집 표.
+ * 코드는 코드 분기·검증(@IsIn, repairLinkKind 등)과 엮여 고정이므로 추가·삭제·코드변경은 불가하고,
+ * 코드와 무관한 "표시명"만 편집한다. 저장하면 전 화면 표시명이 함께 바뀐다.
+ */
+function CodeLabelTable({ domain, title }: { domain: CodeLabelDomain; title: string }) {
+  const [editTarget, setEditTarget] = useState<CodeLabelItem | null>(null);
+  const [form] = Form.useForm<CodeLabelFormValues>();
+  const queryClient = useQueryClient();
+  const { message } = App.useApp();
+
+  const labelsQuery = useCodeLabelsQuery();
+  const items = labelsQuery.data?.[domain] ?? [];
+
+  const updateMutation = useMutation({
+    mutationFn: ({ code, label }: { code: string; label: string }) =>
+      updateCodeLabel(domain, code, label),
+    onSuccess: () => {
+      setEditTarget(null);
+      message.success('표시명이 저장되었습니다.');
+      void queryClient.invalidateQueries({ queryKey: CODE_LABELS_QUERY_KEY });
+    },
+    onError: (e: unknown) =>
+      message.error(e instanceof ApiError ? e.message : '저장에 실패했습니다.'),
+  });
+
+  const columns: ColumnsType<CodeLabelItem> = [
+    { title: '코드', dataIndex: 'code', width: 220 },
+    { title: '표시명', dataIndex: 'label' },
+    {
+      title: '작업',
+      key: 'action',
+      width: 80,
+      render: (_, row) => (
+        <Button
+          size="small"
+          onClick={() => {
+            setEditTarget(row);
+            form.setFieldsValue({ label: row.label });
+          }}
+        >
+          수정
+        </Button>
+      ),
+    },
+  ];
+
+  return (
+    <Card
+      size="small"
+      title={title}
+      extra={
+        <Tooltip title="코드는 시스템에 고정되어 있어 표시명만 바꿀 수 있습니다.">
+          <Tag color="geekblue">표시명만 편집</Tag>
+        </Tooltip>
+      }
+    >
+      <Table<CodeLabelItem>
+        rowKey="code"
+        size="small"
+        scroll={{ x: 'max-content' }}
+        loading={labelsQuery.isLoading}
+        dataSource={items}
+        columns={columns}
+        pagination={false}
+      />
+
+      <Modal
+        title={`${title} 표시명 수정`}
+        open={!!editTarget}
+        onCancel={() => setEditTarget(null)}
+        okText="저장"
+        cancelText="취소"
+        confirmLoading={updateMutation.isPending}
+        onOk={() =>
+          void form.validateFields().then((values) => {
+            if (!editTarget) return;
+            updateMutation.mutate({ code: editTarget.code, label: values.label });
+          })
+        }
+        destroyOnClose
+      >
+        <Form<CodeLabelFormValues> form={form} layout="vertical">
+          <Form.Item label="코드">
+            <Input value={editTarget?.code} disabled />
+          </Form.Item>
+          <Form.Item
+            label="표시명"
+            name="label"
+            rules={[{ required: true, message: '표시명을 입력해 주세요.' }]}
+          >
+            <Input maxLength={100} />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </Card>
+  );
+}
+
 export function AdminMasterPage() {
   return (
     <Card
@@ -271,23 +363,23 @@ export function AdminMasterPage() {
           },
           {
             key: 'product',
-            label: '품목·구성품 (연동 예정)',
+            label: '품목·구성품',
             children: (
               <Space direction="vertical" size={16} style={{ width: '100%' }}>
-                <MasterTable type="product-category" title="품목 대분류" />
-                <MasterTable type="component-type" title="구성품" />
+                <CodeLabelTable domain="product-category" title="품목 대분류" />
+                <CodeLabelTable domain="component-type" title="구성품" />
               </Space>
             ),
           },
           {
             key: 'payment-method',
-            label: '결제수단 (연동 예정)',
+            label: '결제수단',
             children: <MasterTable type="payment-method" title="결제수단" />,
           },
           {
             key: 'repair-type',
-            label: '수선 구분 (연동 예정)',
-            children: <MasterTable type="repair-type" title="수선 구분" />,
+            label: '수선 구분',
+            children: <CodeLabelTable domain="repair-type" title="수선 구분" />,
           },
         ]}
       />

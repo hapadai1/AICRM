@@ -259,6 +259,10 @@ describe('제작 상태·부분 입출고·가봉 (ProductionModule)', () => {
       expect(found.status).toBe('PARTIALLY_RECEIVED');
       expect(found.components.length).toBe(2);
       expect(found.order.contract.customer.name).toBeTruthy();
+      // 작업지시서 통합: 제작 목록 행에 작업지시서 뷰가 함께 온다 (제작 관리 코크핏용)
+      expect(found.workOrder).toBeDefined();
+      expect(['WAITING', 'UNORDERED', 'REPRINT_NEEDED', 'CURRENT']).toContain(found.workOrder.status);
+      expect(typeof found.workOrder.canIssue).toBe('boolean');
     });
   });
 

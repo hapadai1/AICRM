@@ -7,6 +7,7 @@ import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { NotificationSuggestionService } from '../notifications/notification-suggestion.service';
+import { buildWorkOrderView, workOrderStatusSelect } from '../work-orders/work-order-status';
 import {
   AGGREGATE_ONLY_STATUSES,
   CANCELLED,
@@ -382,13 +383,17 @@ export class ProductionService {
             },
           },
           components: { select: COMPONENT_SELECT, orderBy: { sequenceNo: 'asc' } },
+          // 작업지시서 상태를 같은 행에 얹기 위한 판정 소스 (work-orders와 단일 출처 공유)
+          ...workOrderStatusSelect,
         },
         orderBy: { createdAt: 'desc' },
         skip: query.skip,
         take: query.size,
       }),
     ]);
-    return new Paginated(items, query.page, query.size, totalElements);
+    // workOrder 관계를 판정 뷰로 덮어쓴다(계산 키가 우선). 잔여 판정 배열은 소량이라 그대로 둔다.
+    const rows = items.map((item) => ({ ...item, workOrder: buildWorkOrderView(item) }));
+    return new Paginated(rows, query.page, query.size, totalElements);
   }
 
   // ---------------------------------------------------------------------------

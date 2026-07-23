@@ -48,6 +48,14 @@ function addDays(base: Date, days: number): Date {
   return d;
 }
 
+/** 'YYYY-MM-DD' → 로컬 자정 Date. 형식 불일치·미지정 시 null. */
+function parseLocalDate(value?: string): Date | null {
+  const m = value ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(value) : null;
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 @Injectable()
 export class DashboardService {
   constructor(
@@ -57,11 +65,14 @@ export class DashboardService {
 
   /**
    * 대시보드 요약 (연동정합화 계약 §10):
-   * { date, appointments(오늘 예약 평면 뷰), week(오늘±3일 [{date,count}]), taskCounts }
+   * { date, appointments(기준일 예약 평면 뷰), week(기준일±3일 [{date,count}]), taskCounts }
+   * date 파라미터로 기준일을 지정할 수 있으며 미지정 시 오늘. 예약·주간 캘린더가 기준일에 맞춰진다.
+   * (taskCounts 확인사항은 날짜와 무관한 현재 미처리 항목이므로 기준일 영향을 받지 않는다.)
    */
-  async summary() {
+  async summary(date?: string) {
     const now = new Date();
-    const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const dayStart =
+      parseLocalDate(date) ?? new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const dayEnd = addDays(dayStart, 1);
     const weekStart = addDays(dayStart, -3);
     const weekEnd = addDays(dayStart, 4);

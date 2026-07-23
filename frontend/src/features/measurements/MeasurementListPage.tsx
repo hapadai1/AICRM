@@ -267,14 +267,6 @@ export function MeasurementListPage() {
     <Card>
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
         <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
-          <div>
-            <Typography.Title level={4} style={{ marginBottom: 4 }}>
-              채촌
-            </Typography.Title>
-            <Typography.Text type="secondary">
-              고객명·전화번호와 채촌일로 검색합니다. 기록은 고객별 버전(V)으로 쌓입니다.
-            </Typography.Text>
-          </div>
           <Can permission="MEASUREMENT_EDIT">
             <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/measurements/new')}>
               신규 채촌

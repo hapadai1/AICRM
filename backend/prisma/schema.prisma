@@ -223,6 +223,23 @@ model PaymentMethod {
   @@map("payment_methods")
 }
 
+/**
+ * 코드 상수로 정의된 기준정보(품목·구성품·수선구분)의 표시명 오버라이드 (ADMIN-001).
+ * 코드 집합·기본 표시명은 코드 상수(code-labels.constants)가 원본이며,
+ * 이 테이블은 관리자가 바꾼 표시명만 저장한다(행 없으면 기본 표시명 사용).
+ * 코드 추가·삭제는 불가하며 표시명만 편집 가능하다.
+ */
+model MasterCodeLabel {
+  id        String   @id @db.Uuid
+  domain    String   @map("domain") @db.VarChar(40)
+  code      String   @map("code") @db.VarChar(40)
+  label     String   @map("label") @db.VarChar(100)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([domain, code])
+  @@map("master_code_labels")
+}
+
 model Appointment {
   id             String    @id @db.Uuid
   customerId     String    @map("customer_id") @db.Uuid

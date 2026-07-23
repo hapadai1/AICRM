@@ -102,7 +102,7 @@ export function CustomersPage() {
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
         <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
           <Typography.Title level={4} style={{ margin: 0 }}>
-            고객 목록
+            목록
           </Typography.Title>
           <Can permission="CUSTOMER_EDIT">
             <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>

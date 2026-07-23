@@ -38,6 +38,7 @@ import type {
   OptionStageInput,
 } from '../../api/admin';
 import { ApiError, fetchFileObjectUrl } from '../../api/client';
+import { PRODUCT_CATEGORY_LABEL } from '../contracts/labels';
 import { metaOf } from '../../shared/status-meta';
 
 const STATUS_META: Record<OptionSetVersionStatus, { label: string; color: string }> = {
@@ -371,11 +372,10 @@ export function AdminOptionsPage() {
             onChange={(e) => setCategory(e.target.value as typeof category)}
             optionType="button"
             buttonStyle="solid"
-            options={[
-              { value: 'SUIT', label: '정장' },
-              { value: 'SHIRT', label: '셔츠' },
-              { value: 'SHOES', label: '구두' },
-            ]}
+            options={(['SUIT', 'SHIRT', 'SHOES'] as const).map((value) => ({
+              value,
+              label: PRODUCT_CATEGORY_LABEL[value],
+            }))}
           />
         </Space>
       </Card>

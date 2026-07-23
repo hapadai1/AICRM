@@ -1,13 +1,12 @@
-/** 계약 1:1 제품 옵션 화면 — 계약의 전 맞춤 품목을 한 리스트로: 원단 입력·가격 PDF·옵션 선택·작업지시서 */
+/** 계약 1:1 스타일 컨설팅 화면 — 계약의 전 맞춤 품목을 한 리스트로: 원단 입력·옵션 선택 (보조: 가격표·동일 적용) */
 import {
   ArrowLeftOutlined,
   CopyOutlined,
   EyeOutlined,
   FilePdfOutlined,
-  FileTextOutlined,
+  MoreOutlined,
   PlayCircleOutlined,
   RightCircleOutlined,
-  SaveOutlined,
 } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -15,6 +14,7 @@ import {
   App,
   Button,
   Card,
+  Dropdown,
   Input,
   Modal,
   Progress,
@@ -121,44 +121,21 @@ export function ContractOptionsPage() {
       width: 320,
       render: (_, row) => {
         const draft = fabricDraft[row.orderItemId] ?? '';
-        const dirty = draft.trim() !== (row.fabric ?? '');
-        const saving = fabricMutation.isPending && fabricMutation.variables?.orderItemId === row.orderItemId;
+        // 별도 저장 버튼 없이 포커스 아웃/엔터 시 자동 저장 (변경분·비어있지 않을 때만)
+        const save = () => {
+          if (draft.trim() && draft.trim() !== (row.fabric ?? ''))
+            fabricMutation.mutate({ orderItemId: row.orderItemId, fabric: draft.trim() });
+        };
         return (
-          <Space.Compact style={{ width: '100%' }}>
-            <Input
-              placeholder="원단명 입력 (예: 캐노니코 네이비 트윌)"
-              value={draft}
-              onChange={(e) =>
-                setFabricDraft((prev) => ({ ...prev, [row.orderItemId]: e.target.value }))
-              }
-              onPressEnter={() => {
-                if (dirty && draft.trim())
-                  fabricMutation.mutate({ orderItemId: row.orderItemId, fabric: draft.trim() });
-              }}
-            />
-            <Button
-              icon={<SaveOutlined />}
-              disabled={!dirty || !draft.trim()}
-              loading={saving}
-              onClick={() =>
-                fabricMutation.mutate({ orderItemId: row.orderItemId, fabric: draft.trim() })
-              }
-            >
-              저장
-            </Button>
-          </Space.Compact>
+          <Input
+            placeholder="원단명 입력 (예: 캐노니코 네이비 트윌)"
+            value={draft}
+            onChange={(e) => setFabricDraft((prev) => ({ ...prev, [row.orderItemId]: e.target.value }))}
+            onBlur={save}
+            onPressEnter={save}
+          />
         );
       },
-    },
-    {
-      title: '원단 가격',
-      key: 'fabricPrice',
-      width: 130,
-      render: () => (
-        <Button icon={<FilePdfOutlined />} onClick={() => setPdfOpen(true)}>
-          가격 PDF
-        </Button>
-      ),
     },
     {
       title: '진행상태',
@@ -212,7 +189,7 @@ export function ContractOptionsPage() {
               icon={<RightCircleOutlined />}
               onClick={() => navigate(`/options/${row.orderItemId}`)}
             >
-              계속
+              옵션 선택
             </Button>
           );
         return (
@@ -223,29 +200,30 @@ export function ContractOptionsPage() {
       },
     },
     {
-      title: '작업지시서',
-      key: 'workOrder',
-      width: 130,
-      render: (_, row) => (
-        <Button
-          icon={<FileTextOutlined />}
-          disabled={row.status !== 'CONFIRMED'}
-          onClick={() => navigate(`/work-orders/${row.orderItemId}`)}
-        >
-          작업지시서
-        </Button>
-      ),
-    },
-    {
       title: '',
-      key: 'copy',
-      width: 140,
-      render: (_, row) =>
-        row.sessionId && copyTargets(row).length > 0 ? (
-          <Button icon={<CopyOutlined />} onClick={() => setCopySource(row)}>
-            동일 적용
-          </Button>
-        ) : null,
+      key: 'more',
+      width: 56,
+      render: (_, row) => {
+        const canCopy = !!row.sessionId && copyTargets(row).length > 0;
+        return (
+          <Dropdown
+            trigger={['click']}
+            menu={{
+              items: [
+                {
+                  key: 'copy',
+                  icon: <CopyOutlined />,
+                  label: '동일 옵션 적용',
+                  disabled: !canCopy,
+                  onClick: () => setCopySource(row),
+                },
+              ],
+            }}
+          >
+            <Button type="text" icon={<MoreOutlined />} />
+          </Dropdown>
+        );
+      },
     },
   ];
 
@@ -254,7 +232,7 @@ export function ContractOptionsPage() {
       <Alert
         type="error"
         showIcon
-        message="제품 옵션 목록을 불러오지 못했습니다."
+        message="스타일 컨설팅 목록을 불러오지 못했습니다."
         description={(error as Error).message}
       />
     );
@@ -262,21 +240,23 @@ export function ContractOptionsPage() {
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      <Space>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(`/contracts/${id}`)}>
           계약으로
         </Button>
-      </Space>
+        <Button icon={<FilePdfOutlined />} onClick={() => setPdfOpen(true)}>
+          원단 가격표
+        </Button>
+      </div>
 
       <Card>
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           <div>
             <Typography.Title level={4} style={{ marginBottom: 4 }}>
-              제품 옵션 — 계약 {contract?.contractNo ?? ''}
+              스타일 컨설팅 — {contract?.customerName ?? ''}
             </Typography.Title>
             <Typography.Text type="secondary">
-              {contract?.customerName ? `${contract.customerName} · ` : ''}
-              맞춤 품목별로 원단을 입력하고 옵션을 선택합니다. 렌탈 품목은 옵션 대상이 아닙니다.
+              {[contract?.customerPhone, contract?.contractNo].filter(Boolean).join(' · ')}
             </Typography.Text>
           </div>
           {isLoading ? (

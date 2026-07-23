@@ -182,6 +182,8 @@ export interface OptionReviewStage {
   required: boolean;
   choiceId: string | null;
   choiceName: string | null;
+  /** 선택지 이미지 경로(/files/:id). 미등록이면 null → 화면은 색상 블록으로 폴백. */
+  imageUrl: string | null;
 }
 
 /** OPT-003 확인서 (화면용) */
@@ -212,7 +214,12 @@ interface OptionReviewApiRow {
     stageName: string;
     sequenceNo: number;
     required: boolean;
-    selected: { choiceId: string; choiceCode: string; choiceName: string } | null;
+    selected: {
+      choiceId: string;
+      choiceCode: string;
+      choiceName: string;
+      imageFileId?: string | null;
+    } | null;
   }[];
   version: number;
 }
@@ -234,6 +241,7 @@ function toOptionReview(row: OptionReviewApiRow): OptionReviewData {
       required: s.required,
       choiceId: s.selected?.choiceId ?? null,
       choiceName: s.selected?.choiceName ?? null,
+      imageUrl: s.selected?.imageFileId ? `/files/${s.selected.imageFileId}` : null,
     })),
   };
 }

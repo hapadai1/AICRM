@@ -417,7 +417,7 @@ export function ContractDetailPage() {
                 icon={<SkinOutlined />}
                 onClick={() => navigate(`/contracts/${id}/options`)}
               >
-                제품 옵션선택
+                스타일 컨설팅
               </Button>
             )}
             {canRevise && (

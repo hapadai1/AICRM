@@ -6,7 +6,7 @@
  * - 공유 메모 (SharedMemoCard)
  */
 import { useQuery } from '@tanstack/react-query';
-import { Badge, Card, Col, Empty, Row, Select, Space, Spin, Tag, Typography } from 'antd';
+import { Badge, Button, Card, Col, Empty, Row, Select, Space, Spin, Tag, Typography } from 'antd';
 import dayjs from 'dayjs';
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -40,10 +40,13 @@ export function DashboardPage() {
   const navigate = useNavigate();
   const [purposeFilter, setPurposeFilter] = useState<string[]>([]);
   const todayStr = dayjs().format('YYYY-MM-DD');
+  // 주간 미니 캘린더에서 선택한 기준일. 좌측 일정 타임테이블·주간 캘린더가 이 날짜에 맞춰진다.
+  const [selectedDate, setSelectedDate] = useState(todayStr);
+  const isTodaySelected = selectedDate === todayStr;
 
   const summaryQuery = useQuery({
-    queryKey: ['dashboard', 'summary', todayStr],
-    queryFn: () => fetchDashboardSummary(todayStr),
+    queryKey: ['dashboard', 'summary', selectedDate],
+    queryFn: () => fetchDashboardSummary(selectedDate),
   });
   const summary = summaryQuery.data;
 
@@ -76,11 +79,12 @@ export function DashboardPage() {
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={14}>
           <Card
-            title={`오늘 일정 (${dayjs().format('YYYY-MM-DD dddd')})`}
+            title={`${isTodaySelected ? '오늘 일정' : '일정'} (${dayjs(selectedDate).format('YYYY-MM-DD dddd')})`}
             size="small"
             extra={
               <Select
                 mode="multiple"
+                size="small"
                 allowClear
                 placeholder="목적 필터"
                 style={{ minWidth: 200 }}
@@ -96,7 +100,7 @@ export function DashboardPage() {
                 <Spin />
               </div>
             ) : filteredAppointments.length === 0 ? (
-              <Empty description="오늘 예약이 없습니다." />
+              <Empty description={`${isTodaySelected ? '오늘' : '해당 날짜'} 예약이 없습니다.`} />
             ) : (
               <div>
                 {TIMETABLE_HOURS.map((hour) => {
@@ -137,20 +141,38 @@ export function DashboardPage() {
         </Col>
 
         <Col xs={24} lg={10}>
-          <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            <Card title="주간 일정" size="small">
+          <Space direction="vertical" size={16} style={{ width: '100%', display: 'flex' }}>
+            <Card
+              title="주간 일정"
+              size="small"
+              extra={
+                <Button
+                  size="small"
+                  onClick={() => setSelectedDate(todayStr)}
+                  disabled={isTodaySelected}
+                >
+                  오늘
+                </Button>
+              }
+            >
               <Row gutter={8}>
                 {(summary?.week ?? []).map((day) => {
                   const d = dayjs(day.date);
                   const isToday = day.date === todayStr;
+                  // 선택일 강조는 오늘(파란색)과 구분되도록 별도 색상(골드)으로 표기. 오늘은 항상 파란색 유지.
+                  const isSelected = day.date === selectedDate && !isToday;
                   return (
                     <Col key={day.date} flex="1 1 0">
                       <Card
                         size="small"
+                        hoverable
+                        onClick={() => setSelectedDate(day.date)}
                         style={{
                           textAlign: 'center',
-                          background: isToday ? '#e6f4ff' : undefined,
-                          borderColor: isToday ? '#1677ff' : undefined,
+                          cursor: 'pointer',
+                          background: isToday ? '#e6f4ff' : isSelected ? '#fff7e6' : undefined,
+                          borderColor: isToday ? '#1677ff' : isSelected ? '#faad14' : undefined,
+                          boxShadow: isSelected ? '0 0 0 2px rgba(250,173,20,0.2)' : undefined,
                         }}
                         styles={{ body: { padding: '8px 4px' } }}
                       >
@@ -158,7 +180,9 @@ export function DashboardPage() {
                           {d.format('dd')}
                         </Typography.Text>
                         <div>
-                          <Typography.Text strong={isToday}>{d.format('D')}</Typography.Text>
+                          <Typography.Text strong={isToday || isSelected}>
+                            {d.format('D')}
+                          </Typography.Text>
                         </div>
                         <Badge
                           count={day.count}

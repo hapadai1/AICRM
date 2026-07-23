@@ -56,6 +56,8 @@ const UNIT_SUFFIX: Record<string, string> = { CM: ' cm', MM: ' mm', SIZE: '' };
 interface WorkOrderListApiRow {
   workOrderId: string | null;
   orderItemId: string;
+  contractId: string;
+  contractNo: string;
   customerId: string;
   customerName: string;
   orderId: string;
@@ -158,6 +160,8 @@ interface WorkOrderVersionApiRow {
 export interface WorkOrderListRow {
   orderItemId: string;
   workOrderId?: string;
+  contractId: string;
+  contractNo: string;
   customerId: string;
   customerName: string;
   orderId: string;
@@ -268,6 +272,8 @@ function toListRow(row: WorkOrderListApiRow): WorkOrderListRow {
   return {
     orderItemId: row.orderItemId,
     workOrderId: row.workOrderId ?? undefined,
+    contractId: row.contractId,
+    contractNo: row.contractNo,
     customerId: row.customerId,
     customerName: row.customerName,
     orderId: row.orderId,

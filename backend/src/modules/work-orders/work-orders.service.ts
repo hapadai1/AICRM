@@ -12,6 +12,7 @@ import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { buildWorkOrderExcel } from './work-order-excel';
+import { resolveWorkOrderStatus } from './work-order-status';
 import {
   IssueWorkOrderVersionDto,
   WORK_ORDER_LIST_STATUSES,
@@ -60,24 +61,6 @@ type MeasurementSessionWithValues =
 type VersionWithFile = Prisma.WorkOrderVersionGetPayload<{
   include: { outputFile: true; issuedByUser: true };
 }>;
-
-/**
- * 미주문·재출력 필요 판정 (통합설계서 §10.4, 데이터모델 §10.5).
- * 별도 업무 테이블 없이 조회 시점에 계산한다.
- */
-function resolveWorkOrderStatus(
-  session: { confirmedAt: Date | null } | null,
-  link: { linkedAt: Date } | null,
-  currentVersion: { issuedAt: Date } | null,
-): WorkOrderListStatus | 'WAITING' {
-  if (!currentVersion) {
-    return session && link ? 'UNORDERED' : 'WAITING';
-  }
-  const changedAfterIssue = [session?.confirmedAt, link?.linkedAt].some(
-    (t) => t != null && t.getTime() > currentVersion.issuedAt.getTime(),
-  );
-  return changedAfterIssue ? 'REPRINT_NEEDED' : 'CURRENT';
-}
 
 function toDateString(date: Date): string {
   return date.toISOString().slice(0, 10);
@@ -569,6 +552,8 @@ export class WorkOrdersService {
     return {
       workOrderId: item.workOrder?.id ?? null,
       orderItemId: item.id,
+      contractId: item.order.contract.id,
+      contractNo: item.order.contract.contractNo,
       customerId: item.order.contract.customer.id,
       customerName: item.order.contract.customer.name,
       orderId: item.order.id,

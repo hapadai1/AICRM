@@ -1,4 +1,6 @@
 import { request, type ListResult } from './client';
+// 표시명은 중앙(api/code-labels) 공유 맵을 쓴다(관리자 편집 전 화면 반영). 코드 집합·분기는 여기 고정.
+import { COMPONENT_TYPE_LABELS, REPAIR_TYPE_LABELS_MAP } from './code-labels';
 
 /**
  * 수선 도메인 API (화면·API 정의서 §13.7, 통합설계서 §12.1)
@@ -16,13 +18,7 @@ export const REPAIR_TYPES: RepairType[] = [
   'GENERAL',
 ];
 
-export const REPAIR_TYPE_LABELS: Record<RepairType, string> = {
-  CUSTOM_DURING: '제작 중 수선',
-  AFTER_SALE: '사후 수선',
-  RENTAL_PRE: '렌탈 출고 전',
-  RENTAL_POST: '렌탈 반납 후',
-  GENERAL: '일반 수선',
-};
+export const REPAIR_TYPE_LABELS = REPAIR_TYPE_LABELS_MAP as Record<RepairType, string>;
 
 /** 유형별 연결 대상 (백엔드 resolveLinks 규칙) */
 export function repairLinkKind(type: RepairType): 'CUSTOM' | 'RENTAL' | 'NONE' {
@@ -158,14 +154,6 @@ export interface Repair {
   deliveryAddress?: string;
   events: RepairEvent[];
 }
-
-const COMPONENT_TYPE_LABELS: Record<string, string> = {
-  JACKET: '자켓',
-  TROUSERS: '바지',
-  VEST: '베스트',
-  SHIRT: '셔츠',
-  SHOES: '구두',
-};
 
 /** `YYYY-MM-DD` 로 자른다. 백엔드 @db.Date는 UTC 자정 ISO 문자열로 온다. */
 function toDateOnly(value?: string | null): string | undefined {

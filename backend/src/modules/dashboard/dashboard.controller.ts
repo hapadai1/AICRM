@@ -3,6 +3,7 @@ import { AuthUser, CurrentUser, RequirePermission } from '../../common/decorator
 import {
   AcknowledgeTaskDto,
   CreateSharedMemoDto,
+  SummaryQueryDto,
   TaskQueryDto,
   UpdateSharedMemoDto,
 } from './dashboard.dto';
@@ -19,8 +20,8 @@ export class DashboardController {
 
   @Get('dashboard/summary')
   @RequirePermission('DASHBOARD_VIEW')
-  summary() {
-    return this.dashboardService.summary();
+  summary(@Query() query: SummaryQueryDto) {
+    return this.dashboardService.summary(query.date);
   }
 
   @Get('dashboard/tasks')

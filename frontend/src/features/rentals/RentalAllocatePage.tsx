@@ -170,7 +170,7 @@ export function RentalAllocatePage() {
         <Radio checked={selectedItemId === r.id} onChange={() => setSelectedItemId(r.id)} />
       ),
     },
-    { title: '관리 ID', dataIndex: 'managementCode', width: 170 },
+    // 사람이 아는 정보(구분·디자인·컬러·사이즈)를 앞에, 관리 ID는 뒤에 둔다(재고 화면과 순서 일치).
     {
       title: '구분',
       dataIndex: 'componentType',
@@ -200,6 +200,12 @@ export function RentalAllocatePage() {
           <Tag color="green">요청 기간 가용</Tag>
         ),
     },
+    {
+      title: '관리 ID',
+      dataIndex: 'managementCode',
+      width: 170,
+      render: (v: string) => <Typography.Text type="secondary">{v}</Typography.Text>,
+    },
   ];
 
   return (
@@ -211,7 +217,7 @@ export function RentalAllocatePage() {
               재고 목록
             </Button>
             <Typography.Title level={4} style={{ margin: 0 }}>
-              렌탈 가용 검색·실물 배정 (RENT-003)
+              가용 검색·실물 배정
             </Typography.Title>
           </Space>
           <Button onClick={() => navigate('/rentals/handover')}>출고·반납으로</Button>

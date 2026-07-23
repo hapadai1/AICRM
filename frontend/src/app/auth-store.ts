@@ -13,6 +13,7 @@ interface AuthState {
   user: AuthUser | null;
   setAuth: (payload: { accessToken: string; refreshToken: string; user: AuthUser }) => void;
   setTokens: (payload: { accessToken: string; refreshToken: string }) => void;
+  setUser: (user: AuthUser) => void;
   clear: () => void;
 }
 
@@ -24,6 +25,7 @@ export const useAuthStore = create<AuthState>()(
       user: null,
       setAuth: ({ accessToken, refreshToken, user }) => set({ accessToken, refreshToken, user }),
       setTokens: ({ accessToken, refreshToken }) => set({ accessToken, refreshToken }),
+      setUser: (user) => set({ user }),
       clear: () => set({ accessToken: null, refreshToken: null, user: null }),
     }),
     { name: 'aicrm-auth' },

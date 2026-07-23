@@ -32,8 +32,19 @@ const { RangePicker } = DatePicker;
 
 type ViewMode = 'day' | 'week' | 'month' | 'list';
 
-/** 타임테이블 셀에 표시하는 예약 카드 */
-function AppointmentCard({ appointment, onOpen }: { appointment: Appointment; onOpen: (id: string) => void }) {
+/** 일 뷰에서 같은 시간대 예약을 가로로 나열할 때 쓰는 카드 고정폭(px). 개수와 무관하게 동일. */
+const CARD_WIDTH = 200;
+
+/** 타임테이블 셀에 표시하는 예약 카드. fixedWidth를 주면 폭 고정(가로 나열용). */
+function AppointmentCard({
+  appointment,
+  onOpen,
+  fixedWidth,
+}: {
+  appointment: Appointment;
+  onOpen: (id: string) => void;
+  fixedWidth?: number;
+}) {
   const statusMeta = metaOf(APPT_STATUS_META, appointment.status);
   const sourceMeta = metaOf(SOURCE_META, appointment.source);
   const syncMeta = metaOf(SYNC_STATUS_META, appointment.syncStatus);
@@ -48,7 +59,9 @@ function AppointmentCard({ appointment, onOpen }: { appointment: Appointment; on
         borderLeft: `3px solid ${statusMeta.hex}`,
         borderRadius: 4,
         padding: '2px 6px',
-        marginBottom: 4,
+        // 가로 나열(고정폭)일 땐 gap이 간격을 잡으므로 marginBottom을 두지 않는다.
+        marginBottom: fixedWidth ? 0 : 4,
+        width: fixedWidth,
         opacity: cancelled ? 0.55 : 1,
       }}
     >
@@ -84,6 +97,9 @@ function Timetable({
     { length: TIMETABLE_END_HOUR - TIMETABLE_START_HOUR },
     (_, i) => TIMETABLE_START_HOUR + i,
   );
+  // 일 뷰에서만 같은 시간대 예약을 고정폭 카드로 가로 나열(넘치면 다음 줄로 wrap).
+  // 주 뷰는 x축이 이미 요일이라 셀 안에서는 세로 스택을 유지한다.
+  const horizontal = days.length === 1;
   const cellStyle: CSSProperties = {
     borderTop: '1px solid #f0f0f0',
     borderLeft: '1px solid #f0f0f0',
@@ -130,9 +146,21 @@ function Timetable({
               {String(h).padStart(2, '0')}:00
             </div>
             {days.map((d) => (
-              <div key={`${d.format('YYYY-MM-DD')}-${h}`} style={cellStyle}>
+              <div
+                key={`${d.format('YYYY-MM-DD')}-${h}`}
+                style={
+                  horizontal
+                    ? { ...cellStyle, display: 'flex', flexWrap: 'wrap', gap: 4, alignContent: 'flex-start' }
+                    : cellStyle
+                }
+              >
                 {findCell(d, h).map((a) => (
-                  <AppointmentCard key={a.id} appointment={a} onOpen={onOpen} />
+                  <AppointmentCard
+                    key={a.id}
+                    appointment={a}
+                    onOpen={onOpen}
+                    fixedWidth={horizontal ? CARD_WIDTH : undefined}
+                  />
                 ))}
               </div>
             ))}
@@ -265,7 +293,7 @@ export function AppointmentsPage() {
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
         <Space wrap style={{ justifyContent: 'space-between', width: '100%' }}>
           <Typography.Title level={4} style={{ margin: 0 }}>
-            예약 캘린더·목록
+            캘린더·목록
           </Typography.Title>
           <Space wrap>
             {/* 설계 PDF 1페이지 "CRM 일정 달력 출력" */}

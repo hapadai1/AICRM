@@ -1,4 +1,4 @@
-import { IsIn, IsNotEmpty, IsOptional, IsString, IsUUID } from 'class-validator';
+import { IsIn, IsNotEmpty, IsOptional, IsString, IsUUID, Matches } from 'class-validator';
 
 export const DASHBOARD_TASK_TYPES = [
   'LATE_RETURN',
@@ -8,6 +8,13 @@ export const DASHBOARD_TASK_TYPES = [
   'REPRINT_NEEDED',
 ] as const;
 export type DashboardTaskType = (typeof DASHBOARD_TASK_TYPES)[number];
+
+export class SummaryQueryDto {
+  /** 기준 날짜(YYYY-MM-DD). 미지정 시 오늘. 예약·주간 미니 캘린더가 이 날짜 기준으로 반환된다. */
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'date는 YYYY-MM-DD 형식이어야 합니다.' })
+  date?: string;
+}
 
 export class TaskQueryDto {
   @IsOptional()

@@ -1,8 +1,9 @@
-/** 계약 1:1 제작·입출고 화면 — 계약의 전 품목을 한 화면에서: 제작요청·구성품 입출고·가봉, 전체 입고 시 고객 연락 */
+/** 계약 1:1 제작 관리 코크핏 — 계약의 전 품목을 한 화면에서: 작업지시서 출력·제작요청·구성품 입출고·가봉, 전체 입고 시 고객 연락 */
 import {
   ArrowLeftOutlined,
   DownloadOutlined,
   ExperimentOutlined,
+  FileExcelOutlined,
   SendOutlined,
   SwapOutlined,
   UploadOutlined,
@@ -21,6 +22,7 @@ import {
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -49,10 +51,15 @@ import { Can } from '../../shared/Can';
 import { NotificationConfirmModal } from '../../shared/NotificationConfirmModal';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { labelOf, metaOf } from '../../shared/status-meta';
+import { WORK_ORDER_STATUS_META } from '../workorders/wo-meta';
 import { FittingModal } from './FittingModal';
 
 function statusBadge(code: string) {
   const meta = metaOf(PRODUCTION_STATUS_META, code);
+  return <StatusBadge label={meta.label} color={meta.color} />;
+}
+function workOrderBadge(code: string) {
+  const meta = metaOf(WORK_ORDER_STATUS_META, code);
   return <StatusBadge label={meta.label} color={meta.color} />;
 }
 function statusLabel(code: string) {
@@ -70,7 +77,7 @@ interface InOutState {
 export function ContractProductionPage() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
-  const { message, modal } = App.useApp();
+  const { message } = App.useApp();
   const queryClient = useQueryClient();
 
   const { data: contract } = useQuery({
@@ -121,26 +128,16 @@ export function ContractProductionPage() {
     onError: (e) => message.error(e instanceof ApiError ? e.message : '입출고 처리에 실패했습니다.'),
   });
 
+  // 제작요청은 작업지시서 출력과 커플링하지 않는다 — 담당자가 누르면 바로 완료 처리하는 독립 버튼.
   const requestMutation = useMutation({
     mutationFn: (orderItemId: string) =>
       postItemProductionEvent(orderItemId, { toStatus: 'PRODUCTION_REQUESTED' }),
     onSuccess: () => {
-      message.success('제작 요청 상태로 변경되었습니다.');
+      message.success('제작요청 완료 처리되었습니다.');
       void invalidate();
     },
-    onError: (e) => message.error(e instanceof ApiError ? e.message : '제작 요청에 실패했습니다.'),
+    onError: (e) => message.error(e instanceof ApiError ? e.message : '제작요청 처리에 실패했습니다.'),
   });
-
-  const handleProductionRequest = (item: ProductionItem) => {
-    modal.confirm({
-      title: '제작 요청',
-      content:
-        '작업지시서를 확인한 뒤 제작 요청을 진행하시겠습니까? (작업지시서 출력 여부는 이 목록에서 확인할 수 없습니다.)',
-      okText: '진행',
-      cancelText: '취소',
-      onOk: () => requestMutation.mutate(item.orderItemId),
-    });
-  };
 
   const openStatusModal = (component: ProductionComponent) => {
     statusForm.resetFields();
@@ -213,6 +210,34 @@ export function ContractProductionPage() {
   const itemColumns: ColumnsType<ProductionItem> = [
     { title: '품목', dataIndex: 'displayName', width: 160 },
     { title: '주문', dataIndex: 'orderNo', width: 150 },
+    {
+      title: '작업지시서',
+      key: 'workOrder',
+      width: 200,
+      render: (_, r) => {
+        const wo = r.workOrder;
+        return (
+          <Space direction="vertical" size={4}>
+            <Space size={6}>
+              {workOrderBadge(wo.status)}
+              {wo.currentVersionNo ? (
+                <Typography.Text type="secondary">V{wo.currentVersionNo}</Typography.Text>
+              ) : null}
+            </Space>
+            <Tooltip title={wo.canIssue ? '' : '옵션 확정과 채촌 완료 후 출력할 수 있습니다.'}>
+              <Button
+                size="small"
+                icon={<FileExcelOutlined />}
+                disabled={!wo.canIssue}
+                onClick={() => navigate(`/work-orders/${r.orderItemId}`)}
+              >
+                {wo.currentVersionNo ? '재출력' : '출력'}
+              </Button>
+            </Tooltip>
+          </Space>
+        );
+      },
+    },
     { title: '품목 집계 상태', dataIndex: 'itemStatus', render: (s: string) => statusBadge(s), width: 150 },
     {
       title: '구성품 진행',
@@ -241,9 +266,9 @@ export function ContractProductionPage() {
               icon={<SendOutlined />}
               disabled={r.itemStatus !== 'READY_TO_ORDER' && r.itemStatus !== 'CREATED'}
               loading={requestMutation.isPending && requestMutation.variables === r.orderItemId}
-              onClick={() => handleProductionRequest(r)}
+              onClick={() => requestMutation.mutate(r.orderItemId)}
             >
-              제작 요청
+              제작요청 완료
             </Button>
           </Can>
           <Can permission="FITTING_EDIT">
@@ -279,11 +304,15 @@ export function ContractProductionPage() {
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           <div>
             <Typography.Title level={4} style={{ marginBottom: 4 }}>
-              제작·입출고 — 계약 {contract?.contractNo ?? ''}
+              제작 관리 — {contract?.customerName ?? ''}
             </Typography.Title>
             <Typography.Text type="secondary">
-              {contract?.customerName ? `${contract.customerName} · ` : ''}
-              품목별 제작 요청과 구성품 입고·출고를 관리합니다. 전체 입고되면 고객 연락 확인창이 뜹니다.
+              {[contract?.customerPhone, contract?.contractNo].filter(Boolean).join(' · ')}
+            </Typography.Text>
+            <br />
+            <Typography.Text type="secondary">
+              품목별로 작업지시서 출력 · 제작요청 · 가봉 · 구성품 입고·출고를 한 화면에서 관리합니다. 전체 입고되면
+              고객 연락 확인창이 뜹니다.
             </Typography.Text>
           </div>
           <Alert

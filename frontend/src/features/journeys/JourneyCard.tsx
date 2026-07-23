@@ -12,7 +12,6 @@ import {
   App,
   Button,
   Card,
-  Collapse,
   Empty,
   Form,
   Input,
@@ -45,6 +44,7 @@ import {
   type JourneyEvent,
   type TrackType,
 } from '../../api/journeys';
+import { useAuthStore } from '../../app/auth-store';
 import { Can } from '../../shared/Can';
 import { NotificationConfirmModal, type SendOutcome } from '../../shared/NotificationConfirmModal';
 
@@ -77,6 +77,17 @@ const SHOW_ORDER_LINK = new Set([
   'RENTAL_CHECKED_OUT',
   'RENTAL_RETURNED',
 ]);
+
+/**
+ * 맞춤(CUSTOM) 트랙에서 품목별 입출고를 병렬 표시할 단계.
+ * 진행단계는 제작 상태와 자동 연동되지 않으므로(수동 표시 레이어), 품목 status로 실제 부분 진행을 보여준다.
+ */
+const ITEM_PROGRESS_STAGE: Record<string, 'IN' | 'OUT'> = {
+  PRODUCT_RECEIVED: 'IN', // 완성복 입고
+  RELEASED: 'OUT', // 완성복 출고/완료
+};
+/** '입고완료'로 집계할 품목 상태 (부분출고·출고는 이미 전체 입고된 것). */
+const ITEM_RECEIVED_STATUSES = new Set(['RECEIVED', 'PARTIALLY_RELEASED', 'RELEASED']);
 
 interface Props {
   customerId: string;
@@ -163,6 +174,7 @@ export function JourneyCard({ customerId, customerName, contracts, orders }: Pro
   });
 
   const detail = detailQuery.data;
+  const canEdit = useAuthStore((s) => s.user?.permissions.includes('JOURNEY_EDIT') ?? false);
 
   // ---- 파생 값 -------------------------------------------------------------
   const currentSeq = detail?.currentStageSequenceNo ?? 0;
@@ -179,8 +191,6 @@ export function JourneyCard({ customerId, customerName, contracts, orders }: Pro
 
   // 단계별 완료 기록(그 단계를 떠난 최신 이벤트) — from == 단계코드
   const completionByCode = new Map<string, JourneyEvent>();
-  const codeToName = new Map<string, string>();
-  detail?.stages.forEach((s) => codeToName.set(s.code, s.name));
   detail?.events.forEach((e) => {
     if (e.fromStageCode && !completionByCode.has(e.fromStageCode)) {
       completionByCode.set(e.fromStageCode, e);
@@ -268,6 +278,46 @@ export function JourneyCard({ customerId, customerName, contracts, orders }: Pro
   const journeyLabel = (j: Journey) =>
     `${trackTypeLabel(j.trackType)}${j.orderNo ? ` · ${j.orderNo}` : ''}`;
 
+  // ---- 품목별 입출고 집계 (맞춤 전용) --------------------------------------
+  // 완성복 입고/출고는 품목별로 병렬 진행되므로, 단계 옆에 품목 단위 진척을 함께 보여준다.
+  const renderItemProgress = (mode: 'IN' | 'OUT') => {
+    const items = linkedOrder?.items ?? [];
+    if (items.length === 0) return null;
+    const isDone = (status: string) =>
+      mode === 'IN' ? ITEM_RECEIVED_STATUSES.has(status) : status === 'RELEASED';
+    const badge = (status: string): { text: string; color: string } => {
+      if (mode === 'IN') {
+        if (ITEM_RECEIVED_STATUSES.has(status)) return { text: '입고완료', color: 'green' };
+        if (status === 'PARTIALLY_RECEIVED') return { text: '부분입고', color: 'gold' };
+        return { text: '대기', color: 'default' };
+      }
+      if (status === 'RELEASED') return { text: '출고완료', color: 'green' };
+      if (status === 'PARTIALLY_RELEASED') return { text: '부분출고', color: 'gold' };
+      return { text: '대기', color: 'default' };
+    };
+    const doneCount = items.filter((i) => isDone(i.status)).length;
+    const allDone = doneCount === items.length;
+    return (
+      <Space direction="vertical" size={2} style={{ fontSize: 12 }}>
+        <Typography.Text type={allDone ? 'success' : 'secondary'} style={{ fontSize: 12 }}>
+          {mode === 'IN' ? '입고' : '출고'} {doneCount}/{items.length}
+          {allDone ? ' · 전체 완료' : ''}
+        </Typography.Text>
+        {items.map((i) => {
+          const b = badge(i.status);
+          return (
+            <Space key={i.id} size={4}>
+              <Tag color={b.color} style={{ marginInlineEnd: 0 }}>
+                {b.text}
+              </Tag>
+              <Typography.Text style={{ fontSize: 12 }}>{i.displayName}</Typography.Text>
+            </Space>
+          );
+        })}
+      </Space>
+    );
+  };
+
   // ---- 단계 노드 설명 ------------------------------------------------------
   const stageDescription = (s: { code: string; sequenceNo: number }) => {
     const isCurrent = detail?.currentStageCode === s.code;
@@ -293,17 +343,73 @@ export function JourneyCard({ customerId, customerName, contracts, orders }: Pro
     return (
       <Space direction="vertical" size={2} style={{ fontSize: 12 }}>
         {links.length > 0 && <Space size="small">{links}</Space>}
+        {detail?.trackType === 'CUSTOM' &&
+          ITEM_PROGRESS_STAGE[s.code] &&
+          renderItemProgress(ITEM_PROGRESS_STAGE[s.code])}
         {done && (
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             완료 {fmt(done.changedAt)}
             {done.actor ? ` · ${done.actor.displayName}` : ''}
           </Typography.Text>
         )}
-        {isCurrent && detail?.status === 'ACTIVE' && (
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            진행 중
+        {done && done.notificationOutcome !== 'NONE' && (
+          <Tag color={OUTCOME_META[done.notificationOutcome]?.color}>
+            연락 {OUTCOME_META[done.notificationOutcome]?.label}
+          </Tag>
+        )}
+        {done?.reason && (
+          <Typography.Text type="warning" style={{ fontSize: 12 }}>
+            {done.reason}
           </Typography.Text>
         )}
+        {isCurrent &&
+          detail?.status === 'ACTIVE' &&
+          (canEdit ? (
+            <Space
+              wrap
+              size="small"
+              style={{
+                marginTop: 4,
+                padding: 8,
+                border: '1px solid #91caff',
+                background: '#e6f4ff',
+                borderRadius: 8,
+              }}
+            >
+              {currentWorkAction && (
+                <Button
+                  size="small"
+                  icon={<ArrowRightOutlined />}
+                  onClick={() => goWork(currentWorkAction.to)}
+                >
+                  {currentWorkAction.label}
+                </Button>
+              )}
+              {detail.currentSuggestion && (
+                <Button size="small" icon={<PhoneOutlined />} onClick={() => setContactOpen(true)}>
+                  고객 연락
+                </Button>
+              )}
+              <Button
+                size="small"
+                type="primary"
+                icon={<CheckOutlined />}
+                loading={stageMutation.isPending || closeMutation.isPending}
+                onClick={handleCompleteStage}
+              >
+                {nextStage ? `이 단계 완료 → ${nextStage.name}` : '진행 완료'}
+              </Button>
+              {currentSeq > 1 && (
+                <Button size="small" icon={<RollbackOutlined />} onClick={handleRollback}>
+                  되돌리기
+                </Button>
+              )}
+            </Space>
+          ) : (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              진행 중
+            </Typography.Text>
+          ))}
         {isGap && <Tag color="warning">완료 기록 없음 (건너뜀)</Tag>}
       </Space>
     );
@@ -381,96 +487,6 @@ export function JourneyCard({ customerId, customerName, contracts, orders }: Pro
               description: stageDescription(s),
             }))}
           />
-
-          {/* 현재 단계 액션 패널 — 상태 변경을 여기서 바로 */}
-          {detail.status === 'ACTIVE' && (
-            <div
-              style={{
-                border: '1px solid #91caff',
-                background: '#e6f4ff',
-                borderRadius: 8,
-                padding: 12,
-              }}
-            >
-              <Space direction="vertical" size="small" style={{ width: '100%' }}>
-                <Typography.Text strong>현재 · {detail.currentStageName}</Typography.Text>
-                <Can permission="JOURNEY_EDIT">
-                  <Space wrap>
-                    {currentWorkAction && (
-                      <Button
-                        icon={<ArrowRightOutlined />}
-                        onClick={() => goWork(currentWorkAction.to)}
-                      >
-                        {currentWorkAction.label}
-                      </Button>
-                    )}
-                    {detail.currentSuggestion && (
-                      <Button icon={<PhoneOutlined />} onClick={() => setContactOpen(true)}>
-                        고객 연락
-                      </Button>
-                    )}
-                    <Button
-                      type="primary"
-                      icon={<CheckOutlined />}
-                      loading={stageMutation.isPending || closeMutation.isPending}
-                      onClick={handleCompleteStage}
-                    >
-                      {nextStage ? `이 단계 완료 → ${nextStage.name}` : '진행 완료'}
-                    </Button>
-                    {currentSeq > 1 && (
-                      <Button icon={<RollbackOutlined />} onClick={handleRollback}>
-                        되돌리기
-                      </Button>
-                    )}
-                  </Space>
-                </Can>
-              </Space>
-            </div>
-          )}
-
-          {detail.events.length > 0 && (
-            <Collapse
-              ghost
-              size="small"
-              items={[
-                {
-                  key: 'log',
-                  label: `단계 변경 기록 (${detail.events.length})`,
-                  children: (
-                    <div>
-                      {detail.events.map((e) => (
-                        <div key={e.id} style={{ fontSize: 12, marginBottom: 6 }}>
-                          <Typography.Text type="secondary">{fmt(e.changedAt)}</Typography.Text>{' '}
-                          {e.fromStageCode && (
-                            <Typography.Text type="secondary">
-                              {codeToName.get(e.fromStageCode) ?? e.fromStageCode} →{' '}
-                            </Typography.Text>
-                          )}
-                          <Typography.Text strong>
-                            {codeToName.get(e.toStageCode) ?? e.toStageCode}
-                          </Typography.Text>
-                          {e.actor && (
-                            <Typography.Text type="secondary"> · {e.actor.displayName}</Typography.Text>
-                          )}
-                          {e.notificationOutcome !== 'NONE' && (
-                            <Tag
-                              style={{ marginLeft: 6 }}
-                              color={OUTCOME_META[e.notificationOutcome]?.color}
-                            >
-                              연락 {OUTCOME_META[e.notificationOutcome]?.label}
-                            </Tag>
-                          )}
-                          {e.reason && (
-                            <Typography.Text type="warning"> · {e.reason}</Typography.Text>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  ),
-                },
-              ]}
-            />
-          )}
         </Space>
       )}
 

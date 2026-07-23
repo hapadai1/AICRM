@@ -129,6 +129,12 @@ export class AllocationListQueryDto {
   @IsIn(['pickup', 'return']) view: string;
   /** 기준일 (기본: 오늘) */
   @IsOptional() @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) date?: string;
+  /**
+   * 특정 건 검색어(주문번호·고객명·실물 관리코드).
+   * 진행단계 카드 등에서 한 건을 처리하러 들어올 때 사용한다.
+   * 지정하면 pickup 뷰의 "오늘 이하" 날짜 제한을 풀어, 픽업일이 미래인 예약도 함께 반환한다.
+   */
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(100) q?: string;
 }
 
 /** 배정 대상 렌탈 구성품 목록 (RENT-003 화면 뷰) */

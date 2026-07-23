@@ -1,5 +1,5 @@
-import { Body, Controller, HttpCode, Post } from '@nestjs/common';
-import { Public } from '../../common/decorators';
+import { Body, Controller, Get, HttpCode, Post } from '@nestjs/common';
+import { AuthUser, CurrentUser, Public } from '../../common/decorators';
 import { AuthService } from './auth.service';
 import { LoginDto, RefreshDto } from './auth.dto';
 
@@ -12,6 +12,16 @@ export class AuthController {
   @HttpCode(200)
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto.loginId.trim(), dto.password);
+  }
+
+  /**
+   * 현재 로그인 사용자와 최신 권한을 반환한다.
+   * 권한은 JwtStrategy가 매 요청마다 DB에서 다시 읽으므로, 프론트가 진입 시 이 값으로
+   * 재동기화하면 로그인 이후 역할·권한이 바뀌어도 재로그인 없이 UI에 반영된다.
+   */
+  @Get('me')
+  me(@CurrentUser() user: AuthUser) {
+    return user;
   }
 
   @Public()

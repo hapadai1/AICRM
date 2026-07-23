@@ -1,4 +1,4 @@
-import { createBrowserRouter } from 'react-router-dom';
+import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { AdminMasterPage } from '../features/admin/AdminMasterPage';
 import { AdminOptionsPage } from '../features/admin/AdminOptionsPage';
 import { AdminUsersPage } from '../features/admin/AdminUsersPage';
@@ -31,7 +31,6 @@ import { RentalHandoverPage } from '../features/rentals/RentalHandoverPage';
 import { RentalInventoryPage } from '../features/rentals/RentalInventoryPage';
 import { RentalItemDetailPage } from '../features/rentals/RentalItemDetailPage';
 import { RepairsPage } from '../features/repairs/RepairsPage';
-import { WorkOrderListPage } from '../features/workorders/WorkOrderListPage';
 import { WorkOrderPreviewPage } from '../features/workorders/WorkOrderPreviewPage';
 import { PlaceholderPage } from '../pages/PlaceholderPage';
 import { AppLayout } from './AppLayout';
@@ -77,7 +76,8 @@ export const router = createBrowserRouter([
       { path: 'options', element: <OptionProgressListPage /> },
       { path: 'options/:orderItemId', element: <OptionStagePage /> },
       { path: 'options/:orderItemId/review', element: <OptionReviewPage /> },
-      { path: 'work-orders', element: <WorkOrderListPage /> },
+      // 작업지시서 목록은 제작 관리로 통합됨 — 구 링크는 리다이렉트. 미리보기/출력 화면은 유지.
+      { path: 'work-orders', element: <Navigate to="/production" replace /> },
       { path: 'work-orders/:orderItemId', element: <WorkOrderPreviewPage /> },
       // 제작·렌탈·수선
       { path: 'production', element: <ProductionPage /> },

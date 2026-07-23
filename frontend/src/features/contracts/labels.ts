@@ -1,3 +1,4 @@
+import { COMPONENT_TYPE_LABELS, PRODUCT_CATEGORY_LABELS } from '../../api/code-labels';
 import type { ProductCategory, TransactionType } from '../../api/contracts';
 import { formatKrw as formatKrwShared } from '../../api/transform';
 import { metaOf as metaOfShared, type StatusMeta } from '../../shared/status-meta';
@@ -16,19 +17,10 @@ export const TRANSACTION_TYPE_TAG_COLOR: Record<TransactionType, string> = {
   RENTAL: 'purple',
 };
 
-export const PRODUCT_CATEGORY_LABEL: Record<ProductCategory, string> = {
-  SUIT: '정장',
-  SHIRT: '셔츠',
-  SHOES: '구두',
-};
-
-export const COMPONENT_TYPE_LABEL: Record<string, string> = {
-  JACKET: '상의(자켓)',
-  TROUSERS: '하의(바지)',
-  VEST: '베스트',
-  SHIRT: '셔츠',
-  SHOES: '구두',
-};
+// 품목·구성품 표시명은 중앙(api/code-labels)의 공유 맵을 그대로 쓴다.
+// 관리자 표시명 편집이 하이드레이션을 통해 전 화면에 반영되도록 같은 객체 참조를 재노출한다.
+export const PRODUCT_CATEGORY_LABEL = PRODUCT_CATEGORY_LABELS as Record<ProductCategory, string>;
+export const COMPONENT_TYPE_LABEL = COMPONENT_TYPE_LABELS;
 
 /**
  * 계약 상태 라벨. COMPLETED 는 DB에 실제로 존재하므로 라벨 맵에는 반드시 남긴다.

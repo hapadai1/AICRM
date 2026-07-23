@@ -1,4 +1,5 @@
 import { request, type ListResult } from './client';
+import { COMPONENT_TYPE_LABELS } from './code-labels';
 
 /**
  * 렌탈 실물 품목 구분 (연동정합화 계약 §5 — 백엔드 RENTAL_COMPONENT_TYPES와 동일).
@@ -6,13 +7,8 @@ import { request, type ListResult } from './client';
  */
 export type RentalComponentType = 'JACKET' | 'TROUSERS' | 'VEST' | 'SHIRT' | 'SHOES';
 
-export const RENTAL_COMPONENT_TYPE_LABELS: Record<RentalComponentType, string> = {
-  JACKET: '자켓(상의)',
-  TROUSERS: '팬츠(하의)',
-  VEST: '베스트',
-  SHIRT: '셔츠',
-  SHOES: '구두',
-};
+// 구성품 표시명은 중앙(api/code-labels) 공유 맵을 재노출한다(관리자 편집 전 화면 반영).
+export const RENTAL_COMPONENT_TYPE_LABELS = COMPONENT_TYPE_LABELS as Record<RentalComponentType, string>;
 
 /** 관리코드 접두어 (자동 생성·표시용) */
 export const RENTAL_CODE_PREFIX: Record<RentalComponentType, string> = {
@@ -422,10 +418,17 @@ export function returnAllocation(
   });
 }
 
-/** RENT-004 출고·반납 대상 목록 — GET /rental-allocations?view=pickup|return&date= (계약 §5) */
-export function fetchAllocations(view: 'pickup' | 'return', date?: string): Promise<RentalAllocation[]> {
+/**
+ * RENT-004 출고·반납 대상 목록 — GET /rental-allocations?view=pickup|return&date=&q= (계약 §5)
+ * q(주문번호·고객명·실물코드)를 넘기면 pickup 뷰의 날짜 제한이 풀려 미래 픽업 예약도 함께 조회된다.
+ */
+export function fetchAllocations(
+  view: 'pickup' | 'return',
+  opts?: { date?: string; q?: string },
+): Promise<RentalAllocation[]> {
   const params: Record<string, string> = { view };
-  if (date) params.date = date;
+  if (opts?.date) params.date = opts.date;
+  if (opts?.q?.trim()) params.q = opts.q.trim();
   return request<RentalAllocation[]>({ url: '/rental-allocations', params });
 }
 

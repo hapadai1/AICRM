@@ -207,6 +207,8 @@ export function OptionStagePage() {
   }
 
   const isLast = currentOrder >= session.totalStages;
+  // 확정 세션은 열람 전용 — 저장·중단이 서버에서 거부되므로 편집 UI를 막고 이동만 허용한다.
+  const isConfirmed = session.status === 'CONFIRMED';
   const dirty = choiceId !== null && choiceId !== stage.selectedChoiceId;
 
   const saveIfNeeded = async (): Promise<void> => {
@@ -216,6 +218,12 @@ export function OptionStagePage() {
   };
 
   const handleNext = async () => {
+    // 확정 세션: 저장 없이 이동만 (마지막 단계에서는 확인서로 복귀)
+    if (isConfirmed) {
+      if (isLast) navigate(`/options/${orderItemId}/review`);
+      else setCurrentOrder(currentOrder + 1);
+      return;
+    }
     if (!choiceId) return;
     try {
       // 이동 시 임시저장 (§7.3: 각 이동 시 임시저장)
@@ -231,6 +239,10 @@ export function OptionStagePage() {
   };
 
   const handlePrev = async () => {
+    if (isConfirmed) {
+      setCurrentOrder(Math.max(1, currentOrder - 1));
+      return;
+    }
     try {
       await saveIfNeeded();
       setCurrentOrder(Math.max(1, currentOrder - 1));
@@ -239,6 +251,7 @@ export function OptionStagePage() {
     }
   };
 
+  // 확정 세션에는 중단(임시저장)이 없다 — 헤더 버튼은 확인서 복귀로 동작한다.
   const handlePause = async () => {
     try {
       await saveIfNeeded();
@@ -264,9 +277,20 @@ export function OptionStagePage() {
                 원단: {session.fabric ?? '미입력'} · 옵션 세트 V{session.optionSetVersionNo}
               </Typography.Text>
             </div>
-            <Button size="large" style={{ height: 48 }} icon={<PauseOutlined />} onClick={handlePause}>
-              중단
-            </Button>
+            {isConfirmed ? (
+              <Button
+                size="large"
+                style={{ height: 48 }}
+                icon={<LeftOutlined />}
+                onClick={() => navigate(`/options/${orderItemId}/review`)}
+              >
+                확인서로
+              </Button>
+            ) : (
+              <Button size="large" style={{ height: 48 }} icon={<PauseOutlined />} onClick={handlePause}>
+                중단
+              </Button>
+            )}
           </Space>
           <Progress
             percent={Math.round((session.completedStages / session.totalStages) * 100)}
@@ -285,12 +309,13 @@ export function OptionStagePage() {
           return (
             <Col xs={24} sm={12} key={choice.choiceId}>
               <Card
-                hoverable
-                onClick={() => setChoiceId(choice.choiceId)}
+                hoverable={!isConfirmed}
+                onClick={isConfirmed ? undefined : () => setChoiceId(choice.choiceId)}
                 style={{
                   border: selected ? '4px solid #1677ff' : '1px solid #d9d9d9',
                   borderRadius: 12,
                   marginBottom: 16,
+                  cursor: isConfirmed ? 'default' : 'pointer',
                 }}
                 styles={{ body: { padding: 16 } }}
               >
@@ -311,7 +336,7 @@ export function OptionStagePage() {
         <Space style={{ width: '100%', justifyContent: 'space-between' }}>
           <Button
             size="large"
-            style={{ height: 56, minWidth: 140, fontSize: 18 }}
+            style={{ height: 56, minWidth: 180, fontSize: 18 }}
             icon={<LeftOutlined />}
             disabled={currentOrder <= 1 || saveMutation.isPending}
             onClick={handlePrev}
@@ -321,8 +346,8 @@ export function OptionStagePage() {
           <Button
             type="primary"
             size="large"
-            style={{ height: 56, minWidth: 200, fontSize: 18 }}
-            disabled={!choiceId}
+            style={{ height: 56, minWidth: 180, fontSize: 18 }}
+            disabled={!isConfirmed && !choiceId}
             loading={saveMutation.isPending}
             onClick={handleNext}
           >

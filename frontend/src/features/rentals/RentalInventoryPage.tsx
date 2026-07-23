@@ -110,12 +110,7 @@ export function RentalInventoryPage() {
   const quantity = Form.useWatch('quantity', registerForm) ?? 1;
 
   const columns: ColumnsType<RentalItem> = [
-    {
-      title: '관리코드',
-      dataIndex: 'managementCode',
-      render: (code: string, r) => <Link to={`/rentals/${r.id}`}>{code}</Link>,
-      width: 170,
-    },
+    // 사람이 아는 정보(구분·디자인·컬러·사이즈)를 앞에, 관리코드는 참고용으로 뒤에 둔다.
     {
       title: '구분',
       dataIndex: 'componentType',
@@ -150,6 +145,16 @@ export function RentalInventoryPage() {
         ),
     },
     {
+      title: '관리코드',
+      dataIndex: 'managementCode',
+      render: (code: string, r) => (
+        <Link to={`/rentals/${r.id}`}>
+          <Typography.Text type="secondary">{code}</Typography.Text>
+        </Link>
+      ),
+      width: 170,
+    },
+    {
       title: '액션',
       key: 'actions',
       width: 110,
@@ -181,9 +186,6 @@ export function RentalInventoryPage() {
     <Card>
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
         <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
-          <Typography.Title level={4} style={{ margin: 0 }}>
-            렌탈 실물 재고 (RENT-001)
-          </Typography.Title>
           <Space wrap>
             <Can permission="RENTAL_ALLOCATE">
               <Button icon={<SwapOutlined />} onClick={() => navigate('/rentals/allocate')}>

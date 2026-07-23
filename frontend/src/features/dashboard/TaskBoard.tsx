@@ -1,7 +1,7 @@
 /** DASH-001 확인사항 카드 5종 + 목록 패널 */
 import { CheckOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App, Button, Card, Col, Row, Table, Tag, Typography } from 'antd';
+import { App, Badge, Button, Card, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -53,11 +53,15 @@ export function TaskBoard({ taskCounts }: TaskBoardProps) {
   const queryClient = useQueryClient();
   const { message } = App.useApp();
 
+  // 전체 목록을 한 번만 불러오고 필터(카드 버튼)는 클라이언트에서 즉시 적용한다.
   const tasksQuery = useQuery({
-    queryKey: ['dashboard', 'tasks', selectedType],
-    queryFn: () => fetchDashboardTasks(selectedType ?? undefined),
-    enabled: selectedType !== null,
+    queryKey: ['dashboard', 'tasks', 'all'],
+    queryFn: () => fetchDashboardTasks(),
   });
+
+  const total = TASK_TYPES.reduce((sum, t) => sum + (taskCounts?.[t] ?? 0), 0);
+  const tasks = tasksQuery.data ?? [];
+  const filteredTasks = selectedType ? tasks.filter((t) => t.taskType === selectedType) : tasks;
 
   const acknowledgeMutation = useMutation({
     mutationFn: acknowledgeDashboardTask,
@@ -71,6 +75,15 @@ export function TaskBoard({ taskCounts }: TaskBoardProps) {
   });
 
   const columns: ColumnsType<DashboardTask> = [
+    {
+      title: '유형',
+      dataIndex: 'taskType',
+      width: 110,
+      render: (t: DashboardTaskType) => {
+        const m = metaOf(TASK_META, t);
+        return <Tag color={m.color}>{m.label}</Tag>;
+      },
+    },
     { title: '고객명', dataIndex: 'customerName', width: 100 },
     {
       title: '주문번호',
@@ -108,56 +121,67 @@ export function TaskBoard({ taskCounts }: TaskBoardProps) {
 
   return (
     <Card title="확인사항" size="small">
-      <Row gutter={[12, 12]}>
+      {/* 카드 항목을 검색 버튼처럼 축소한 필터 — '전체' 포함, 기본값은 전체(목록 처음부터 노출) */}
+      <Space wrap size={8}>
+        <Button
+          size="small"
+          onClick={() => setSelectedType(null)}
+          style={{
+            borderColor: selectedType === null ? '#1677ff' : undefined,
+            color: selectedType === null ? '#1677ff' : undefined,
+            fontWeight: selectedType === null ? 600 : undefined,
+          }}
+        >
+          전체 <Badge count={total} showZero color="#1677ff" />
+        </Button>
         {TASK_TYPES.map((type) => {
           const meta = metaOf(TASK_META, type);
           const count = taskCounts?.[type] ?? 0;
           const selected = selectedType === type;
           return (
-            <Col key={type} xs={12} md={8} lg={4} flex="auto">
-              <Card
-                size="small"
-                hoverable
-                onClick={() => setSelectedType(selected ? null : type)}
-                style={{
-                  textAlign: 'center',
-                  borderColor: selected ? meta.color : undefined,
-                  borderWidth: selected ? 2 : 1,
-                }}
-              >
-                <Typography.Text type="secondary">{meta.label}</Typography.Text>
-                <Typography.Title level={3} style={{ margin: '4px 0 0', color: meta.color }}>
-                  {count}
-                </Typography.Title>
-              </Card>
-            </Col>
+            <Button
+              key={type}
+              size="small"
+              onClick={() => setSelectedType(type)}
+              style={{
+                borderColor: selected ? meta.color : undefined,
+                color: selected ? meta.color : undefined,
+                fontWeight: selected ? 600 : undefined,
+              }}
+            >
+              {meta.label} <Badge count={count} showZero color={meta.color} />
+            </Button>
           );
         })}
-      </Row>
+      </Space>
 
-      {selectedType && (
-        <div style={{ marginTop: 16 }}>
-          <Typography.Text strong>
-            <Tag color={metaOf(TASK_META, selectedType).color}>{metaOf(TASK_META, selectedType).label}</Tag>
-            목록 — 행을 클릭하면 해당 업무 화면으로 이동합니다.
-          </Typography.Text>
-          <Table<DashboardTask>
-            rowKey="taskId"
-            scroll={{ x: 'max-content' }}
-            size="small"
-            style={{ marginTop: 8 }}
-            loading={tasksQuery.isLoading}
-            dataSource={tasksQuery.data ?? []}
-            columns={columns}
-            pagination={false}
-            locale={{ emptyText: '해당 확인사항이 없습니다.' }}
-            onRow={(task) => ({
-              onClick: () => navigate(taskTargetPath(task)),
-              style: { cursor: 'pointer' },
-            })}
-          />
-        </div>
-      )}
+      <div style={{ marginTop: 16 }}>
+        <Typography.Text strong>
+          {selectedType ? (
+            <Tag color={metaOf(TASK_META, selectedType).color}>
+              {metaOf(TASK_META, selectedType).label}
+            </Tag>
+          ) : (
+            <Tag>전체</Tag>
+          )}
+          목록 — 행을 클릭하면 해당 업무 화면으로 이동합니다.
+        </Typography.Text>
+        <Table<DashboardTask>
+          rowKey="taskId"
+          scroll={{ x: 'max-content' }}
+          size="small"
+          style={{ marginTop: 8 }}
+          loading={tasksQuery.isLoading}
+          dataSource={filteredTasks}
+          columns={columns}
+          pagination={false}
+          locale={{ emptyText: '확인사항이 없습니다.' }}
+          onRow={(task) => ({
+            onClick: () => navigate(taskTargetPath(task)),
+            style: { cursor: 'pointer' },
+          })}
+        />
+      </div>
     </Card>
   );
 }

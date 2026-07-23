@@ -359,7 +359,7 @@ export function RepairsPage() {
         <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
           <Space wrap>
             <Typography.Title level={4} style={{ margin: 0 }}>
-              수선 접수·진행 (REPAIR-001)
+              접수·진행
             </Typography.Title>
             <Select
               showSearch

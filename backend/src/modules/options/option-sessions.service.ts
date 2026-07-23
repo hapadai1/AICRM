@@ -187,8 +187,12 @@ export class OptionSessionsService {
             select: {
               orderNo: true,
               contractId: true,
+              completionDueDate: true,
               contract: {
-                select: { contractNo: true, customer: { select: { id: true, name: true } } },
+                select: {
+                  contractNo: true,
+                  customer: { select: { id: true, name: true, phone: true } },
+                },
               },
             },
           },
@@ -228,7 +232,9 @@ export class OptionSessionsService {
         contractNo: item.order.contract.contractNo,
         customerId: item.order.contract.customer.id,
         customerName: item.order.contract.customer.name,
+        customerPhone: item.order.contract.customer.phone,
         orderNo: item.order.orderNo,
+        completionDueDate: item.order.completionDueDate?.toISOString() ?? null,
         fabric: session?.fabricName ?? null,
         status: session?.status ?? 'NOT_STARTED',
         completedStages: session

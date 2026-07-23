@@ -8,7 +8,8 @@ import type { ListResult } from './client';
 
 /**
  * 기준정보 slug — 예약 목적은 'appointment-purposes'(복수)로 통일 (계약 문서 04 §11).
- * product-category/component-type/payment-method/repair-type 은 백엔드 연동 예정(mock 전용).
+ * appointment-purposes/payment-method 만 DB 마스터 테이블로 편집 가능하다.
+ * product-category/component-type/repair-type 은 코드 상수로 정의돼 있어 읽기 전용이다.
  */
 export type MasterType =
   | 'appointment-purposes'

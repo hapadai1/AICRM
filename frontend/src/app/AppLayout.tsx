@@ -18,6 +18,7 @@ import type { MenuProps } from 'antd';
 type MenuItem = NonNullable<MenuProps['items']>[number];
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
+import { useHydrateCodeLabels } from '../api/code-labels';
 import { useAuthStore } from './auth-store';
 
 const { Sider, Header, Content } = Layout;
@@ -32,39 +33,34 @@ export function AppLayout() {
     token: { colorBgContainer },
   } = theme.useToken();
 
+  // 코드 상수 기준정보(품목·구성품·수선구분) 표시명을 받아 공유 맵에 반영한다.
+  useHydrateCodeLabels();
+
   const permissions = user?.permissions ?? [];
   const canSeeAdmin =
     permissions.includes('USER_ADMIN') || permissions.includes('ADMIN_MASTER_EDIT');
 
   const menuItems: MenuItem[] = [
     { key: '/', icon: <DashboardOutlined />, label: '대시보드' },
+    { key: '/journeys', icon: <SwapOutlined />, label: '진행 현황' },
     { key: '/appointments', icon: <CalendarOutlined />, label: '예약' },
     { key: '/customers', icon: <TeamOutlined />, label: '고객' },
+    { key: '/contracts', icon: <FileTextOutlined />, label: '계약 관리' },
+    { key: '/options', icon: <SkinOutlined />, label: '스타일 컨설팅' },
+    { key: '/production', icon: <ScissorOutlined />, label: '제작 관리' },
     { key: '/measurements', icon: <ColumnHeightOutlined />, label: '채촌' },
-    { key: '/journeys', icon: <SwapOutlined />, label: '진행 현황' },
-    { key: '/contracts', icon: <FileTextOutlined />, label: '계약·주문' },
-    {
-      key: 'g-custom',
-      icon: <ScissorOutlined />,
-      label: '맞춤 제작',
-      children: [
-        { key: '/options', label: '옵션 선택' },
-        { key: '/work-orders', label: '작업지시서' },
-        { key: '/production', label: '제작·입출고' },
-      ],
-    },
+    { key: '/repairs', icon: <ToolOutlined />, label: '수선' },
+    { key: '/payments', icon: <FileTextOutlined />, label: '결제' },
     {
       key: 'g-rental',
       icon: <SwapOutlined />,
-      label: '렌탈',
+      label: '렌탈 관리',
       children: [
         { key: '/rentals', label: '실물 재고' },
         { key: '/rentals/allocate', label: '가용 검색·배정' },
         { key: '/rentals/handover', label: '출고·반납' },
       ],
     },
-    { key: '/repairs', icon: <ToolOutlined />, label: '수선' },
-    { key: '/payments', icon: <FileTextOutlined />, label: '결제' },
     { key: '/notifications', icon: <CalendarOutlined />, label: '고객 연락' },
     ...(canSeeAdmin
       ? [
@@ -88,10 +84,32 @@ export function AppLayout() {
     const anyItem = item as { key?: unknown; children?: { key?: unknown }[] };
     return anyItem.children ? anyItem.children.map((c) => String(c.key ?? '')) : [String(anyItem.key ?? '')];
   });
+  // 계약 하위 흐름 경로(자체 메뉴 없음)를 실제 소속 메뉴로 보정한다.
+  // 예: /contracts/:id/options 는 계약 URL이지만 "스타일 컨설팅" 메뉴 흐름이다.
+  const pathToMenu: { test: RegExp; key: string }[] = [
+    { test: /^\/contracts\/[^/]+\/options/, key: '/options' },
+    { test: /^\/contracts\/[^/]+\/production/, key: '/production' },
+    { test: /^\/orders\//, key: '/contracts' },
+  ];
+  const overrideKey = pathToMenu.find((o) => o.test.test(location.pathname))?.key;
   const selectedKey =
+    overrideKey ??
     leafKeys
       .filter((key) => key !== '/' && key !== '' && location.pathname.startsWith(key))
-      .sort((a, b) => b.length - a.length)[0] ?? '/';
+      .sort((a, b) => b.length - a.length)[0] ??
+    '/';
+
+  // 헤더 왼쪽에 표시할 현재 페이지(메뉴) 이름. 하위 메뉴는 그 자식 라벨을 쓴다.
+  const titleByKey = new Map<string, string>();
+  for (const item of menuItems) {
+    const anyItem = item as { key?: unknown; label?: unknown; children?: { key?: unknown; label?: unknown }[] };
+    if (anyItem.children) {
+      for (const child of anyItem.children) titleByKey.set(String(child.key ?? ''), String(child.label ?? ''));
+    } else {
+      titleByKey.set(String(anyItem.key ?? ''), String(anyItem.label ?? ''));
+    }
+  }
+  const pageTitle = titleByKey.get(selectedKey) ?? '';
 
   const handleLogout = async () => {
     try {
@@ -135,10 +153,13 @@ export function AppLayout() {
             background: colorBgContainer,
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'flex-end',
+            justifyContent: 'space-between',
             paddingInline: 24,
           }}
         >
+          <Typography.Title level={4} style={{ margin: 0 }}>
+            {pageTitle}
+          </Typography.Title>
           <Space size="middle">
             <Space size="small">
               <Avatar size="small" icon={<UserOutlined />} />

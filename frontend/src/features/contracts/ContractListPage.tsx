@@ -202,27 +202,7 @@ export function ContractListPage() {
     sortField === field ? (sortDirection === 'asc' ? ('ascend' as const) : ('descend' as const)) : null;
 
   const columns: ColumnsType<ContractListItem> = [
-    {
-      title: '계약번호',
-      dataIndex: 'contractNo',
-      width: 165,
-      render: (v: string, row) => (
-        <Space size={4}>
-          <Typography.Text strong>{v}</Typography.Text>
-          <Tooltip title="이 계약의 결제 관리로 이동">
-            <Button
-              size="small"
-              type="text"
-              icon={<CreditCardOutlined />}
-              onClick={(e) => {
-                e.stopPropagation();
-                navigate(`/payments?contractId=${row.id}`);
-              }}
-            />
-          </Tooltip>
-        </Space>
-      ),
-    },
+    // 진입점은 사람이 아는 정보(고객·계약일). 계약번호는 참고용으로 맨 뒤에 둔다.
     {
       title: '고객',
       dataIndex: 'customerName',
@@ -236,6 +216,14 @@ export function ContractListPage() {
         </Space>
       ),
     },
+    {
+      title: '계약일',
+      dataIndex: 'contractedAt',
+      width: 110,
+      sorter: true,
+      sortOrder: orderOf('contractedAt'),
+      render: (v?: string) => v ?? '-',
+    },
     { title: '계약 구분', dataIndex: 'contractTypeName', width: 150 },
     {
       title: '상태',
@@ -245,14 +233,6 @@ export function ContractListPage() {
         const meta = metaOf(CONTRACT_STATUS_META, v);
         return <StatusBadge label={meta.label} color={meta.color} />;
       },
-    },
-    {
-      title: '계약일',
-      dataIndex: 'contractedAt',
-      width: 110,
-      sorter: true,
-      sortOrder: orderOf('contractedAt'),
-      render: (v?: string) => v ?? '-',
     },
     {
       title: '계약금액',
@@ -306,6 +286,27 @@ export function ContractListPage() {
       sortOrder: orderOf('completionDueDate'),
       render: (v?: string) => v ?? '-',
     },
+    {
+      title: '계약번호',
+      dataIndex: 'contractNo',
+      width: 165,
+      render: (v: string, row) => (
+        <Space size={4}>
+          <Typography.Text type="secondary">{v}</Typography.Text>
+          <Tooltip title="이 계약의 결제 관리로 이동">
+            <Button
+              size="small"
+              type="text"
+              icon={<CreditCardOutlined />}
+              onClick={(e) => {
+                e.stopPropagation();
+                navigate(`/payments?contractId=${row.id}`);
+              }}
+            />
+          </Tooltip>
+        </Space>
+      ),
+    },
   ];
 
   const totals = data?.totals;
@@ -315,7 +316,7 @@ export function ContractListPage() {
       <Card size="small">
         <Flex justify="space-between" align="center" wrap gap={12} style={{ marginBottom: 16 }}>
           <Typography.Title level={4} style={{ margin: 0 }}>
-            계약 목록
+            목록
           </Typography.Title>
           <Space wrap>
             <Can permission="CONTRACT_TYPE_EDIT">

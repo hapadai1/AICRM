@@ -28,6 +28,7 @@ import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import type { Appointment, Consultation } from '../../api/appointments';
 import { ApiError } from '../../api/client';
+import { COMPONENT_TYPE_LABELS } from '../../api/code-labels';
 import {
   deactivateCustomer,
   fetchCustomer,
@@ -87,13 +88,8 @@ const OPTION_STATUS_META: Record<string, { label: string; color: string }> = {
   CONFIRMED: { label: '확정', color: 'green' },
 };
 
-const COMPONENT_TYPE_LABEL: Record<string, string> = {
-  JACKET: '상의',
-  TROUSERS: '하의',
-  VEST: '베스트',
-  SHIRT: '셔츠',
-  SHOES: '구두',
-};
+// 구성품 표시명은 중앙(api/code-labels) 공유 맵을 쓴다(관리자 편집 전 화면 반영).
+const COMPONENT_TYPE_LABEL = COMPONENT_TYPE_LABELS;
 
 const PAYMENT_METHOD_LABEL: Record<string, string> = {
   CARD: '카드',

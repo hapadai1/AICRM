@@ -1,4 +1,4 @@
-import { CheckOutlined, SaveOutlined } from '@ant-design/icons';
+import { CheckOutlined, SaveOutlined, UserOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
@@ -24,6 +24,7 @@ import dayjs, { type Dayjs } from 'dayjs';
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ApiError } from '../../api/client';
+import { CustomerPickerModal, type PickedCustomer } from '../../shared/CustomerPickerModal';
 import {
   confirmContract,
   createContractDraft,
@@ -59,7 +60,7 @@ export function ContractFormPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { message, modal } = App.useApp();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const customerIdParam = searchParams.get('customerId') ?? undefined;
   const appointmentId = searchParams.get('appointmentId') ?? undefined;
   const contractIdParam = searchParams.get('contractId') ?? undefined;
@@ -69,6 +70,21 @@ export function ContractFormPage() {
   const [draftId, setDraftId] = useState<string | undefined>(contractIdParam);
   const [dirty, setDirty] = useState(false);
   const [confirmResult, setConfirmResult] = useState<ContractConfirmResult | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  // 고객 없이 진입(계약 관리 → 계약서 작성)하면 곧바로 고객 선택 팝업을 띄운다.
+  const noCustomer = !customerIdParam && !contractIdParam;
+  useEffect(() => {
+    if (noCustomer) setPickerOpen(true);
+  }, [noCustomer]);
+
+  const handlePickCustomer = (picked: PickedCustomer) => {
+    // URL 쿼리에 customerId를 실어 새로고침·뒤로가기에도 연결이 유지되게 한다.
+    const next = new URLSearchParams(searchParams);
+    next.set('customerId', picked.id);
+    setSearchParams(next, { replace: true });
+    setPickerOpen(false);
+  };
 
   const { data: types } = useQuery({
     queryKey: ['contract-types', { includeInactive: false }],
@@ -83,7 +99,9 @@ export function ContractFormPage() {
 
   const customerId = customerIdParam ?? draft?.customerId;
   const { data: customer } = useQuery({
-    queryKey: ['customers', customerId],
+    // 고객 상세(fetchcustomer)는 같은 ['customers', id] 키에 aggregate 전체를 캐싱한다.
+    // 여기서 같은 키를 쓰면 그 캐시(평면 name 없음)를 읽어 "조회 중..."에서 멈춘다 → 전용 키로 분리한다.
+    queryKey: ['customer-summary', customerId],
     queryFn: () => fetchCustomerSummary(customerId!),
     enabled: !!customerId,
   });
@@ -329,10 +347,15 @@ export function ContractFormPage() {
           </Descriptions>
         ) : (
           <Alert
-            type="error"
+            type="info"
             showIcon
-            message="고객이 연결되지 않았습니다"
-            description="계약서는 예약 상세 또는 고객 상세의 '신규 계약'에서 고객을 연결해 작성합니다."
+            message="고객을 먼저 선택해 주세요"
+            description="계약서는 고객을 연결해 작성합니다. 아래 버튼으로 고객을 검색해 선택하세요."
+            action={
+              <Button type="primary" icon={<UserOutlined />} onClick={() => setPickerOpen(true)}>
+                고객 선택
+              </Button>
+            }
           />
         )}
       </Card>
@@ -486,6 +509,13 @@ export function ContractFormPage() {
           />
         </Flex>
       </Modal>
+
+      <CustomerPickerModal
+        open={pickerOpen}
+        onCancel={() => setPickerOpen(false)}
+        onSelect={handlePickCustomer}
+        title="고객 선택 — 계약서 작성"
+      />
     </Flex>
   );
 }

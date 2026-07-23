@@ -78,10 +78,34 @@ export class RentalAllocationsService {
    */
   async list(query: AllocationListQueryDto) {
     const date = parseDateOnly(query.date ?? toDateOnlyString(new Date()));
-    const where: Prisma.RentalAllocationWhereInput =
-      query.view === 'pickup'
-        ? { status: { in: ['RESERVED', 'PREPARING'] }, pickupDate: { lte: date } }
-        : { status: 'CHECKED_OUT' };
+    const q = query.q?.trim();
+
+    // 특정 건(주문번호·고객명·실물코드)으로 들어오면 날짜 무관하게 매칭 배정을 반환한다.
+    // (진행단계 카드에서 "이 주문을 처리하러 왔다"는 의도 — 오늘의 일일운영 목록이 아님)
+    const keywordFilter: Prisma.RentalAllocationWhereInput | undefined = q
+      ? {
+          OR: [
+            { orderItemComponent: { orderItem: { order: { orderNo: { contains: q, mode: 'insensitive' } } } } },
+            {
+              orderItemComponent: {
+                orderItem: { order: { contract: { customer: { name: { contains: q, mode: 'insensitive' } } } } },
+              },
+            },
+            { rentalInventoryItem: { managementCode: { contains: q, mode: 'insensitive' } } },
+          ],
+        }
+      : undefined;
+
+    const pickupWhere: Prisma.RentalAllocationWhereInput = {
+      status: { in: ['RESERVED', 'PREPARING'] },
+      // q가 있으면 미래 픽업일도 포함(제한 해제), 없으면 기존 "오늘 이하" 일일운영 뷰 유지.
+      ...(q ? {} : { pickupDate: { lte: date } }),
+    };
+
+    const where: Prisma.RentalAllocationWhereInput = {
+      ...(query.view === 'pickup' ? pickupWhere : { status: 'CHECKED_OUT' }),
+      ...(keywordFilter ? { AND: [keywordFilter] } : {}),
+    };
 
     const rows = await this.prisma.rentalAllocation.findMany({
       where,

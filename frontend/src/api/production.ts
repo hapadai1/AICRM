@@ -1,5 +1,7 @@
 import { api, request, type ListResult } from './client';
 import { labelOf } from '../shared/status-meta';
+// 구성품 표시명은 중앙(api/code-labels) 공유 맵을 재노출한다(관리자 편집 전 화면 반영).
+import { COMPONENT_TYPE_LABELS } from './code-labels';
 import { toDateOnly, toDateTime } from './transform';
 
 /**
@@ -97,13 +99,7 @@ export const PRODUCTION_STATUS_META: Record<string, { label: string; color: stri
   CANCELLED: { label: '취소', color: 'red' },
 };
 
-export const COMPONENT_TYPE_LABELS: Record<string, string> = {
-  JACKET: '상의(자켓)',
-  TROUSERS: '하의(팬츠)',
-  VEST: '베스트',
-  SHIRT: '셔츠',
-  SHOES: '구두',
-};
+export { COMPONENT_TYPE_LABELS };
 
 // --- 백엔드 원본 행 ---------------------------------------------------------
 
@@ -137,6 +133,13 @@ interface ProductionItemApiRow {
     contract: { contractNo: string; customer: { id: string; name: string; phone: string } };
   };
   components: ProductionComponentApiRow[];
+  workOrder: {
+    workOrderId: string | null;
+    status: string;
+    currentVersionNo: number | null;
+    lastIssuedAt: string | null;
+    canIssue: boolean;
+  };
 }
 
 /** 화면용 구성품 행 — 날짜를 표시 형식으로 정규화한다. */
@@ -153,6 +156,18 @@ export interface ProductionComponent {
   actualOutboundAt?: string;
   notes?: string;
   active: boolean;
+}
+
+/** 작업지시서 뷰 (제작 품목 행에 얹혀 오는 출력 게이트 상태) */
+export interface ProductionWorkOrderView {
+  workOrderId?: string;
+  /** WAITING | UNORDERED | REPRINT_NEEDED | CURRENT */
+  status: string;
+  currentVersionNo?: number;
+  /** YYYY-MM-DD HH:mm */
+  lastIssuedAt?: string;
+  /** 출력 가능 여부 (준비 미완이면 false) */
+  canIssue: boolean;
 }
 
 /** 화면용 제작 품목 행 — 중첩 관계를 평면화한다. */
@@ -173,6 +188,8 @@ export interface ProductionItem {
   /** YYYY-MM-DD */
   completionDueDate?: string;
   components: ProductionComponent[];
+  /** 작업지시서 출력 게이트 상태 (통합: 제작 관리 코크핏에서 한 행에 표시) */
+  workOrder: ProductionWorkOrderView;
 }
 
 function toProductionComponent(row: ProductionComponentApiRow): ProductionComponent {
@@ -205,6 +222,13 @@ function toProductionItem(row: ProductionItemApiRow): ProductionItem {
     itemStatus: row.status,
     completionDueDate: toDateOnly(row.order.completionDueDate),
     components: (row.components ?? []).map(toProductionComponent),
+    workOrder: {
+      workOrderId: row.workOrder.workOrderId ?? undefined,
+      status: row.workOrder.status,
+      currentVersionNo: row.workOrder.currentVersionNo ?? undefined,
+      lastIssuedAt: toDateTime(row.workOrder.lastIssuedAt),
+      canIssue: row.workOrder.canIssue,
+    },
   };
 }
 
