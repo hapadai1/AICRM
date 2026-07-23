@@ -50,7 +50,6 @@ export const MEASUREMENT_CODE_LABELS: Record<string, string> = {
   KNEE: '무릎둘레',
   PANTS_OPENING: '바지부리',
   PANTS_LENGTH: '바지기장',
-  SHOE_SIZE: '신발 사이즈',
 };
 
 const UNIT_SUFFIX: Record<string, string> = { CM: ' cm', MM: ' mm', SIZE: '' };

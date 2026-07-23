@@ -308,7 +308,6 @@ function measurementRows(v: {
     ['KNEE', 'LOWER', v.calf + 2, null, 'CM', 260],
     ['PANTS_OPENING', 'LOWER', Math.round(v.calf * 0.5 * 10) / 10, null, 'CM', 270],
     ['PANTS_LENGTH', 'LOWER', v.pantsLength, null, 'CM', 280],
-    ['SHOE_SIZE', 'SHOES', v.shoeSize, null, 'MM', 310],
   ];
 }
 

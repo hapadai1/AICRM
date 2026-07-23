@@ -45,7 +45,10 @@ export const MEASUREMENT_ITEMS: MeasurementItemDef[] = [
   { code: 'SHIRT_CUFF', label: '카우스', bodySection: 'SHIRT', valueType: 'NUMERIC', sortOrder: 360 },
   { code: 'SHIRT_ARM', label: '팔통', bodySection: 'SHIRT', valueType: 'NUMERIC', sortOrder: 370 },
   // 구두
-  { code: 'SHOE_SIZE', label: '신발 사이즈', bodySection: 'SHOES', valueType: 'ANY', sortOrder: 410 },
+  { code: 'SHOE_LENGTH', label: '발길이', bodySection: 'SHOES', valueType: 'NUMERIC', sortOrder: 400 },
+  { code: 'SHOE_WIDTH', label: '발볼', bodySection: 'SHOES', valueType: 'NUMERIC', sortOrder: 401 },
+  { code: 'SHOE_INSTEP', label: '발등', bodySection: 'SHOES', valueType: 'NUMERIC', sortOrder: 402 },
+  { code: 'SHOE_HEEL_HEIGHT', label: '굽높이', bodySection: 'SHOES', valueType: 'NUMERIC', sortOrder: 403 },
 ];
 
 export const MEASUREMENT_ITEM_MAP: ReadonlyMap<string, MeasurementItemDef> = new Map(

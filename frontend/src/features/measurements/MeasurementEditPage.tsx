@@ -247,22 +247,6 @@ export function MeasurementEditPage() {
     onError: (e) => message.error(e instanceof ApiError ? e.message : '삭제에 실패했습니다.'),
   });
 
-  if (!isNew && (sessionQuery.isLoading || !form || !session)) {
-    if (sessionQuery.error) {
-      return (
-        <Alert
-          type="error"
-          showIcon
-          message="채촌 기록을 불러오지 못했습니다."
-          description={sessionQuery.error instanceof ApiError ? sessionQuery.error.message : undefined}
-          action={<Button onClick={() => navigate('/measurements')}>채촌 목록으로</Button>}
-        />
-      );
-    }
-    return <Spin style={{ display: 'block', margin: '80px auto' }} size="large" />;
-  }
-  if (!form) return <Spin style={{ display: 'block', margin: '80px auto' }} size="large" />;
-
   // 작업지시서 출력에 쓰인 채촌은 읽기 전용 (설계서 09 §2.1)
   const readOnly = session?.locked ?? false;
   const fieldOrder = MEASUREMENT_FIELDS.map((f) => f.key);
@@ -339,6 +323,23 @@ export function MeasurementEditPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeKey, readOnly]);
 
+  // 훅 호출을 모두 마친 뒤에 로딩/빈 폼 가드를 둔다 (조건부 return이 훅 순서를 깨지 않도록).
+  if (!isNew && (sessionQuery.isLoading || !form || !session)) {
+    if (sessionQuery.error) {
+      return (
+        <Alert
+          type="error"
+          showIcon
+          message="채촌 기록을 불러오지 못했습니다."
+          description={sessionQuery.error instanceof ApiError ? sessionQuery.error.message : undefined}
+          action={<Button onClick={() => navigate('/measurements')}>채촌 목록으로</Button>}
+        />
+      );
+    }
+    return <Spin style={{ display: 'block', margin: '80px auto' }} size="large" />;
+  }
+  if (!form) return <Spin style={{ display: 'block', margin: '80px auto' }} size="large" />;
+
   const confirmDelete = () => {
     if (!session) return;
     modal.confirm({
@@ -358,8 +359,8 @@ export function MeasurementEditPage() {
       border: active ? '2px solid #1677ff' : '1px solid #d9d9d9',
       background: readOnly ? '#fafafa' : active ? '#e6f4ff' : '#fff',
       borderRadius: 8,
-      padding: '8px 12px',
-      minHeight: 56,
+      padding: '4px 10px',
+      minHeight: 40,
       cursor: readOnly ? 'default' : 'pointer',
       display: 'flex',
       flexDirection: 'column',
@@ -369,25 +370,25 @@ export function MeasurementEditPage() {
     const textInput = def.kind === 'text' && !readOnly;
     return (
       <div key={def.key} style={style} onClick={() => !readOnly && !textInput && setActiveKey(def.key)}>
-        <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           {def.label}
         </Typography.Text>
         {textInput ? (
           <Input
             variant="borderless"
-            style={{ fontSize: 18, padding: 0 }}
+            style={{ fontSize: 17, padding: 0 }}
             value={value}
             placeholder="입력"
             onFocus={() => setActiveKey(null)}
             onChange={(e) => patch({ values: { ...form.values, [def.key]: e.target.value } })}
           />
         ) : value ? (
-          <Typography.Text strong style={{ fontSize: 20 }}>
+          <Typography.Text strong style={{ fontSize: 17 }}>
             {value}
             {def.kind === 'number' ? ' cm' : ''}
           </Typography.Text>
         ) : (
-          <Typography.Text style={{ fontSize: 18, color: '#bfbfbf' }}>입력</Typography.Text>
+          <Typography.Text style={{ fontSize: 16, color: '#bfbfbf' }}>입력</Typography.Text>
         )}
       </div>
     );
@@ -395,7 +396,7 @@ export function MeasurementEditPage() {
 
   const renderGroup = (group: MeasurementFieldDef['group']) => (
     <Card key={group} title={MEASUREMENT_GROUP_LABELS[group]} size="small" style={{ marginBottom: 16 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 8 }}>
         {MEASUREMENT_FIELDS.filter((f) => f.group === group).map(renderField)}
       </div>
     </Card>

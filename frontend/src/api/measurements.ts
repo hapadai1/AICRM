@@ -48,7 +48,7 @@ export interface MeasurementFieldDef {
 
 /**
  * 채촌 항목 카탈로그 — 백엔드 `measurement-catalog.ts` MEASUREMENT_ITEMS와 코드·순서를 맞춘다.
- * (상의 11 / 하의 8 / 구두 1). SHOE_SIZE는 백엔드 valueType=ANY이나 화면은 문자 입력으로 다룬다.
+ * (상의 11 / 하의 8 / 셔츠 8 / 구두 4).
  */
 export const MEASUREMENT_FIELDS: MeasurementFieldDef[] = [
   { key: 'JACKET_LENGTH', label: '상의장', group: 'UPPER', kind: 'number' },
@@ -78,7 +78,10 @@ export const MEASUREMENT_FIELDS: MeasurementFieldDef[] = [
   { key: 'SHIRT_LENGTH', label: '기장', group: 'SHIRT', kind: 'number' },
   { key: 'SHIRT_CUFF', label: '카우스', group: 'SHIRT', kind: 'number' },
   { key: 'SHIRT_ARM', label: '팔통', group: 'SHIRT', kind: 'number' },
-  { key: 'SHOE_SIZE', label: '신발 사이즈', group: 'SHOES', kind: 'text' },
+  { key: 'SHOE_LENGTH', label: '발길이', group: 'SHOES', kind: 'number' },
+  { key: 'SHOE_WIDTH', label: '발볼', group: 'SHOES', kind: 'number' },
+  { key: 'SHOE_INSTEP', label: '발등', group: 'SHOES', kind: 'number' },
+  { key: 'SHOE_HEEL_HEIGHT', label: '굽높이', group: 'SHOES', kind: 'number' },
 ];
 
 const MEASUREMENT_FIELD_MAP = new Map(MEASUREMENT_FIELDS.map((f) => [f.key, f]));
