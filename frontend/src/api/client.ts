@@ -5,12 +5,20 @@ import { useAuthStore } from '../app/auth-store';
 export class ApiError extends Error {
   code: string;
   fieldErrors?: Record<string, string>;
+  /** 오류 envelope의 부가 정보 (예: CUSTOMER_PHONE_DUPLICATE의 existingCustomer) */
+  details?: Record<string, unknown>;
 
-  constructor(code: string, message: string, fieldErrors?: Record<string, string>) {
+  constructor(
+    code: string,
+    message: string,
+    fieldErrors?: Record<string, string>,
+    details?: Record<string, unknown>,
+  ) {
     super(message);
     this.name = 'ApiError';
     this.code = code;
     this.fieldErrors = fieldErrors;
+    this.details = details;
   }
 }
 
@@ -31,6 +39,7 @@ interface ErrorEnvelope {
     code?: string;
     message?: string;
     fieldErrors?: Record<string, string>;
+    details?: Record<string, unknown>;
   };
 }
 
@@ -120,6 +129,7 @@ api.interceptors.response.use(
           envelope.code ?? 'UNKNOWN_ERROR',
           envelope.message ?? '알 수 없는 오류가 발생했습니다.',
           envelope.fieldErrors,
+          envelope.details,
         ),
       );
     }

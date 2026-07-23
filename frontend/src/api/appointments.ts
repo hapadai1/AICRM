@@ -93,8 +93,10 @@ export interface Paged<T> {
 }
 
 export interface AppointmentListParams {
-  from: string; // YYYY-MM-DD
-  to: string; // YYYY-MM-DD
+  /** 고객명 / 전화번호 검색어 */
+  q?: string;
+  from?: string; // YYYY-MM-DD
+  to?: string; // YYYY-MM-DD
   purposeCodes?: string[];
   statuses?: AppointmentStatus[];
   source?: AppointmentSource;
@@ -129,6 +131,7 @@ export function fetchAppointments(params: AppointmentListParams): Promise<Paged<
     url: '/appointments',
     method: 'GET',
     params: {
+      q: params.q || undefined,
       from: params.from,
       to: params.to,
       purposeCodes: params.purposeCodes?.length ? params.purposeCodes.join(',') : undefined,

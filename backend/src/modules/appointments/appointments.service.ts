@@ -88,6 +88,16 @@ export class AppointmentsService {
     if (query.source) where.source = query.source;
     if (query.customerId) where.customerId = query.customerId;
 
+    const keyword = query.q?.trim();
+    if (keyword) {
+      // 고객명 부분일치 또는 전화번호 부분일치. 자릿수 검증 없이 숫자만 뽑아 비교한다
+      // (검색어는 "010-12"처럼 불완전할 수 있어 normalizePhone을 쓰지 않는다).
+      const digits = keyword.replace(/\D/g, '');
+      const or: Prisma.CustomerWhereInput[] = [{ name: { contains: keyword, mode: 'insensitive' } }];
+      if (digits) or.push({ phoneNormalized: { contains: digits } });
+      where.customer = { OR: or };
+    }
+
     const [items, total] = await this.prisma.$transaction([
       this.prisma.appointment.findMany({
         where,

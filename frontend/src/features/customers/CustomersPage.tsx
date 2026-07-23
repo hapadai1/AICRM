@@ -1,4 +1,4 @@
-import { PlusOutlined, SearchOutlined } from '@ant-design/icons';
+import { CalendarOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import { Button, Card, Empty, Input, Segmented, Space, Switch, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -8,6 +8,7 @@ import { fetchCustomers, type CustomerListItem } from '../../api/customers';
 import { useAuthStore } from '../../app/auth-store';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
+import { AppointmentCustomerModal } from './AppointmentCustomerModal';
 import { CustomerRegisterModal } from './CustomerRegisterModal';
 import { CUSTOMER_STATUS_META, TRANSACTION_TYPE_LABEL, formatAmount } from './customer-constants';
 import { metaOf } from '../../shared/status-meta';
@@ -24,6 +25,7 @@ export function CustomersPage() {
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(30);
   const [createOpen, setCreateOpen] = useState(false);
+  const [fromAppointmentOpen, setFromAppointmentOpen] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ['customers', { q, includeProspect, transactionType: transactionType ?? '', page, size }],
@@ -83,9 +85,19 @@ export function CustomersPage() {
             목록
           </Typography.Title>
           <Can permission="CUSTOMER_EDIT">
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-              고객 등록
-            </Button>
+            <Space>
+              {/* 대부분의 고객은 예약을 거쳐 들어오므로 예약 경로를 주 버튼으로 둔다 */}
+              <Button
+                type="primary"
+                icon={<CalendarOutlined />}
+                onClick={() => setFromAppointmentOpen(true)}
+              >
+                예약 고객 등록
+              </Button>
+              <Button icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+                고객 등록
+              </Button>
+            </Space>
           </Can>
         </Space>
 
@@ -156,6 +168,12 @@ export function CustomersPage() {
           }}
         />
       </Space>
+
+      <AppointmentCustomerModal
+        open={fromAppointmentOpen}
+        onClose={() => setFromAppointmentOpen(false)}
+        onGoDetail={(id) => navigate(`/customers/${id}`)}
+      />
 
       <CustomerRegisterModal
         open={createOpen}

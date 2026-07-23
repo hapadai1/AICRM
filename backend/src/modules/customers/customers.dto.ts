@@ -3,6 +3,7 @@ import {
   IsBoolean,
   IsEmail,
   IsIn,
+  IsISO8601,
   IsInt,
   IsNotEmpty,
   IsOptional,
@@ -39,6 +40,8 @@ export class CreateCustomerDto {
   @IsOptional() @IsString() notes?: string;
   /** 미지정 시 PROSPECT (DB 기본값). 계약 전환은 계약 확정 트랜잭션에서 수행 */
   @IsOptional() @IsIn(['PROSPECT', 'CONTRACTED']) customerStatus?: string;
+  /** 최초 예약일. 예약으로 생긴 고객은 자동 기록되므로 수동 등록에서도 입력할 수 있게 둔다 */
+  @IsOptional() @IsISO8601() firstReservedAt?: string;
 }
 
 export class UpdateCustomerDto {

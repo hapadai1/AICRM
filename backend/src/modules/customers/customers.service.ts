@@ -160,6 +160,7 @@ export class CustomersService {
         notes: dto.notes,
         customerStatus,
         ...(customerStatus === 'CONTRACTED' ? { contractedAt: new Date() } : {}),
+        ...(dto.firstReservedAt ? { firstReservedAt: new Date(dto.firstReservedAt) } : {}),
       },
       select: CUSTOMER_SELECT,
     });

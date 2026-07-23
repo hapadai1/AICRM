@@ -132,6 +132,8 @@ export interface CustomerSaveBody {
   phone: string;
   email?: string;
   notes?: string;
+  /** 최초 예약일 (ISO-8601). 생성 시에만 사용 */
+  firstReservedAt?: string;
   version?: number;
 }
 
