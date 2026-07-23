@@ -172,8 +172,9 @@ export function OptionStagePage() {
             onChange={(e) => setFabricInput(e.target.value)}
           />
           <Space>
-            <Button size="large" style={{ height: 56, minWidth: 120 }} onClick={() => navigate('/options')}>
-              목록으로
+            {/* 이 화면에는 목록 말고 계약·품목 상세에서도 들어온다. 온 곳으로 되돌린다. */}
+            <Button size="large" style={{ height: 56, minWidth: 120 }} onClick={() => navigate(-1)}>
+              이전화면
             </Button>
             <Button
               type="primary"
