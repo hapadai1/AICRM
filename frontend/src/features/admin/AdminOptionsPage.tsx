@@ -125,7 +125,15 @@ function ChoiceImage({ path, alt }: { path: string | null; alt: string }) {
     gcTime: 30 * 60 * 1000,
   });
   if (!path || !data) return <ImagePlaceholder />;
-  return <Image src={data} alt={alt} style={THUMB_STYLE} preview={{ mask: '크게 보기' }} />;
+  return (
+    <Image
+      src={data}
+      alt={alt}
+      style={THUMB_STYLE}
+      // rootClassName으로 확대 미리보기에도 같은 흰 여백을 준다 (index.css)
+      preview={{ mask: '크게 보기', rootClassName: 'option-choice-preview' }}
+    />
+  );
 }
 
 export function AdminOptionsPage() {
