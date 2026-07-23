@@ -238,8 +238,8 @@ export function OptionReviewPage() {
         message="옵션 확인서를 불러오지 못했습니다."
         description={((sessionQuery.error ?? reviewQuery.error) as Error | null)?.message}
         action={
-          <Button size="large" onClick={() => navigate('/options')}>
-            목록으로
+          <Button size="large" onClick={() => navigate(-1)}>
+            이전화면
           </Button>
         }
       />
@@ -344,8 +344,9 @@ export function OptionReviewPage() {
 
       <Card>
         <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-          <Button size="large" style={{ height: 56, minWidth: 140, fontSize: 18 }} onClick={() => navigate('/options')}>
-            목록으로
+          {/* 목록 말고 계약·품목 상세에서도 들어오므로 온 곳으로 되돌린다. */}
+          <Button size="large" style={{ height: 56, minWidth: 140, fontSize: 18 }} onClick={() => navigate(-1)}>
+            이전화면
           </Button>
           {!isConfirmed && (
             <Tooltip title={review.missingCount > 0 ? '모든 단계를 선택해야 확정할 수 있습니다.' : ''}>
