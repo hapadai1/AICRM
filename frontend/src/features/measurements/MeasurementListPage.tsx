@@ -1,228 +1,136 @@
 /**
- * MEAS-001 채촌 목록 — 고객·날짜로 검색하는 독립 화면 (설계서 09 §4.1).
- * 고객을 고르지 않아도 전체 채촌이 최신 채촌일 순으로 보인다.
+ * MEAS-001 채촌 대상 목록 (설계서 09 §4.1) — 계약 단위.
+ * 기준은 채촌 기록이 아니라 스타일 컨설팅 대상(맞춤 계약 품목)이라, 아직 채촌하지 않은 계약도 모두 보인다.
+ * 행을 고르면 중간 목록 없이 그 계약의 채촌 기록(신체 치수) 화면으로 바로 들어간다.
  */
-import { CopyOutlined, DeleteOutlined, DiffOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  App,
-  Button,
-  Card,
-  DatePicker,
-  Empty,
-  Input,
-  Select,
-  Space,
-  Table,
-  Tag,
-  Tooltip,
-  Typography,
-} from 'antd';
+import { PlusOutlined } from '@ant-design/icons';
+import { useQuery } from '@tanstack/react-query';
+import { Button, Card, Empty, Input, Segmented, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import type { Dayjs } from 'dayjs';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ApiError } from '../../api/client';
-import {
-  MEASUREMENT_TYPE_LABELS,
-  cloneMeasurement,
-  deleteMeasurement,
-  fetchMeasurementList,
-  type MeasurementListParams,
-  type MeasurementSessionStatus,
-  type MeasurementSummary,
-  type MeasurementType,
-} from '../../api/measurements';
+import { fetchMeasurementTargets, type MeasurementTargetRow } from '../../api/measurements';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
-import { labelOf, metaOf } from '../../shared/status-meta';
-import { MEASUREMENT_STATUS_META, MEASUREMENT_TYPE_META } from './meas-meta';
+import { metaOf } from '../../shared/status-meta';
+import { PRODUCT_CATEGORY_LABEL } from '../contracts/labels';
+import { MEASUREMENT_TYPE_META } from './meas-meta';
 
-const TYPE_OPTIONS = Object.entries(MEASUREMENT_TYPE_LABELS).map(([value, label]) => ({ value, label }));
-const STATUS_OPTIONS = [
-  { value: 'DRAFT', label: '작성중' },
-  { value: 'COMPLETED', label: '완료' },
-];
-
-/** 검색 폼 입력값 (적용 전) */
-interface FilterState {
-  q: string;
-  range: [Dayjs, Dayjs] | null;
-  type?: MeasurementType;
-  status?: MeasurementSessionStatus;
+/** 품목 구성 요약 — "정장 2 · 셔츠 1" */
+function itemComposition(counts: MeasurementTargetRow['categoryCounts']): string {
+  return (Object.keys(counts) as (keyof MeasurementTargetRow['categoryCounts'])[])
+    .map((c) => `${PRODUCT_CATEGORY_LABEL[c] ?? c} ${counts[c]}`)
+    .join(' · ');
 }
 
-const EMPTY_FILTER: FilterState = { q: '', range: null, type: undefined, status: undefined };
+/** 이 계약의 채촌 상태 — 고객의 과거 이력이 아니라 계약에 연결된 채촌만 본다. */
+function measurementStateOf(row: MeasurementTargetRow): { label: string; color: string } {
+  if (row.measurementCount === 0) return { label: '미채촌', color: 'red' };
+  if (row.measurementCompletedCount > 0) return { label: '완료', color: 'green' };
+  return { label: '작성중', color: 'gold' };
+}
+
+type StateFilter = 'ALL' | 'NONE' | 'DONE';
 
 export function MeasurementListPage() {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const { message, modal } = App.useApp();
+  // 고객 상세·주문 화면에서 ?customerId= 로 넘어오면 그 고객의 계약만 추린다.
   const [searchParams, setSearchParams] = useSearchParams();
-  const customerId = searchParams.get('customerId') ?? undefined;
+  const customerId = searchParams.get('customerId');
+  const [keyword, setKeyword] = useState('');
+  const [filter, setFilter] = useState<StateFilter>('ALL');
 
-  const [form, setForm] = useState<FilterState>(EMPTY_FILTER);
-  const [applied, setApplied] = useState<FilterState>(EMPTY_FILTER);
-  const [page, setPage] = useState(1);
-  const [size, setSize] = useState(30);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-
-  const params: MeasurementListParams = {
-    q: applied.q || undefined,
-    customerId,
-    dateFrom: applied.range?.[0]?.format('YYYY-MM-DD'),
-    dateTo: applied.range?.[1]?.format('YYYY-MM-DD'),
-    type: applied.type,
-    status: applied.status,
-    page,
-    size,
-  };
-
-  const listQuery = useQuery({
-    queryKey: ['measurements', 'list', params],
-    queryFn: () => fetchMeasurementList(params),
+  const query = useQuery({
+    queryKey: ['measurements', 'targets'],
+    queryFn: fetchMeasurementTargets,
   });
 
-  const rows = listQuery.data?.items ?? [];
-  const selectedRows = rows.filter((r) => selectedIds.includes(r.id));
-  // 비교는 같은 고객의 두 기록만 (설계서 09 §4.1)
-  const sameCustomer =
-    selectedRows.length === 2 && selectedRows[0]!.customerId === selectedRows[1]!.customerId;
+  const rows = useMemo(() => {
+    let list = query.data ?? [];
+    if (customerId) list = list.filter((r) => r.customerId === customerId);
+    const q = keyword.trim().toLowerCase();
+    if (q) {
+      list = list.filter((r) =>
+        [r.customerName, r.customerPhone, r.contractNo].some((v) => v?.toLowerCase().includes(q)),
+      );
+    }
+    if (filter === 'NONE') list = list.filter((r) => r.measurementCompletedCount === 0);
+    if (filter === 'DONE') list = list.filter((r) => r.measurementCompletedCount > 0);
+    return list;
+  }, [query.data, customerId, keyword, filter]);
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['measurements'] });
-
-  const cloneMutation = useMutation({
-    mutationFn: (id: string) => cloneMeasurement(id),
-    onSuccess: (created) => {
-      message.success(`V${created.versionNo}로 복사했습니다. 값을 수정한 뒤 완료해 주세요.`);
-      void invalidate();
-      navigate(`/measurements/${created.id}`);
-    },
-    onError: (e) => message.error(e instanceof ApiError ? e.message : '복사에 실패했습니다.'),
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => deleteMeasurement(id),
-    onSuccess: () => {
-      message.success('채촌 기록을 삭제했습니다.');
-      setSelectedIds([]);
-      void invalidate();
-    },
-    onError: (e) => message.error(e instanceof ApiError ? e.message : '삭제에 실패했습니다.'),
-  });
-
-  const confirmDelete = (row: MeasurementSummary) => {
-    modal.confirm({
-      title: '이 채촌 기록을 삭제할까요?',
-      okText: '삭제',
-      okButtonProps: { danger: true },
-      cancelText: '취소',
-      content: (
-        <Space direction="vertical" size={4}>
-          <Typography.Text>
-            {row.customerName} · {row.measurementDate} · V{row.versionNo} (
-            {labelOf(MEASUREMENT_TYPE_LABELS, row.measurementType)})
-          </Typography.Text>
-          {row.linkedOrderItems.length > 0 && (
-            <Typography.Text type="warning">
-              사용 중인 품목 {row.linkedOrderItems.map((i) => i.displayName).join(', ')} 의 연결이 함께
-              해제됩니다.
-            </Typography.Text>
-          )}
-          <Typography.Text type="secondary">삭제한 기록은 복구할 수 없습니다.</Typography.Text>
-        </Space>
-      ),
-      onOk: () => deleteMutation.mutateAsync(row.id),
-    });
-  };
-
-  const handleSearch = () => {
-    setApplied(form);
-    setPage(1);
-    setSelectedIds([]);
-  };
-
-  const handleReset = () => {
-    setForm(EMPTY_FILTER);
-    setApplied(EMPTY_FILTER);
-    setPage(1);
-    setSelectedIds([]);
-    setSearchParams({});
-  };
-
-  const handleCompare = () => {
-    if (!sameCustomer) return;
-    const [a, b] = [...selectedRows].sort(
-      (x, y) => x.measurementDate.localeCompare(y.measurementDate) || x.versionNo - y.versionNo,
-    );
-    navigate(`/measurements/compare?left=${a!.id}&right=${b!.id}`);
-  };
-
-  const columns: ColumnsType<MeasurementSummary> = [
+  const columns: ColumnsType<MeasurementTargetRow> = [
     {
       title: '고객',
       key: 'customer',
-      width: 180,
+      width: 160,
       render: (_, row) => (
         <Space direction="vertical" size={0}>
-          <Typography.Text strong>{row.customerName || '-'}</Typography.Text>
+          <Typography.Text strong>{row.customerName}</Typography.Text>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {row.customerPhone}
+            {row.customerPhone || '-'}
           </Typography.Text>
         </Space>
       ),
     },
+    { title: '계약번호', dataIndex: 'contractNo', width: 130 },
     {
-      title: '채촌일',
-      dataIndex: 'measurementDate',
-      width: 120,
-      render: (v: string, row) => (
-        <Space direction="vertical" size={0}>
-          <Typography.Text strong>{v}</Typography.Text>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            V{row.versionNo}
-          </Typography.Text>
-        </Space>
-      ),
+      title: '품목 구성',
+      key: 'composition',
+      width: 140,
+      render: (_, row) => itemComposition(row.categoryCounts) || '-',
     },
     {
-      title: '구분',
-      dataIndex: 'measurementType',
-      width: 100,
-      render: (v: string) => {
-        const meta = metaOf(MEASUREMENT_TYPE_META, v);
-        return <StatusBadge label={meta.label} color={meta.color} />;
-      },
+      title: '완성 예정일',
+      dataIndex: 'dueDate',
+      width: 110,
+      render: (v: string | null) => v ?? <Typography.Text type="secondary">미정</Typography.Text>,
     },
     {
-      title: '상태',
-      dataIndex: 'status',
-      width: 100,
-      render: (v: string, row) => {
-        const meta = metaOf(MEASUREMENT_STATUS_META, v);
-        return (
-          <Space size={4}>
-            <StatusBadge label={meta.label} color={meta.color} />
-            {row.locked && (
-              <Tooltip title="작업지시서 출력에 사용되어 수정·삭제할 수 없습니다.">
-                <Tag color="gold">잠금</Tag>
-              </Tooltip>
-            )}
-          </Space>
-        );
-      },
-    },
-    { title: '담당자', dataIndex: 'staffName', width: 110 },
-    { title: '항목 수', dataIndex: 'valueCount', width: 80, align: 'right' },
-    {
-      title: '사용 품목',
-      key: 'linked',
+      title: '스타일 컨설팅',
+      key: 'consulting',
+      width: 140,
       render: (_, row) =>
-        row.linkedOrderItems.length ? (
-          <Space wrap size={4}>
-            {row.linkedOrderItems.map((it) => (
-              <Tag key={it.id}>{it.displayName}</Tag>
-            ))}
+        row.consultingComplete ? (
+          <Tag color="green">전체 완료</Tag>
+        ) : (
+          <Space size={4}>
+            <Tag color="orange">미완료</Tag>
+            <Typography.Text type="secondary">
+              {row.consultingConfirmedCount}/{row.itemCount}
+            </Typography.Text>
+          </Space>
+        ),
+    },
+    {
+      title: '채촌 상태',
+      key: 'measurement',
+      width: 120,
+      render: (_, row) => {
+        const state = measurementStateOf(row);
+        return <StatusBadge label={state.label} color={state.color} />;
+      },
+    },
+    {
+      title: '최근 채촌',
+      key: 'lastMeasurement',
+      width: 190,
+      render: (_, row) =>
+        row.lastMeasurementDate ? (
+          <Space direction="vertical" size={0}>
+            <Space size={4}>
+              <Typography.Text strong>{row.lastMeasurementDate}</Typography.Text>
+              <Typography.Text type="secondary">V{row.lastVersionNo}</Typography.Text>
+            </Space>
+            <Space size={4}>
+              <StatusBadge
+                label={metaOf(MEASUREMENT_TYPE_META, row.lastMeasurementType ?? '').label}
+                color={metaOf(MEASUREMENT_TYPE_META, row.lastMeasurementType ?? '').color}
+              />
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {row.measurementCount}건
+              </Typography.Text>
+            </Space>
           </Space>
         ) : (
           <Typography.Text type="secondary">-</Typography.Text>
@@ -231,32 +139,27 @@ export function MeasurementListPage() {
     {
       title: '액션',
       key: 'actions',
-      width: 210,
+      width: 190,
       render: (_, row) => (
-        <Space size={4}>
-          <Button size="small" icon={<EditOutlined />} onClick={() => navigate(`/measurements/${row.id}`)}>
-            {row.locked ? '보기' : '수정'}
+        <Space size={4} onClick={(e) => e.stopPropagation()}>
+          <Button
+            size="small"
+            disabled={!row.lastSessionId}
+            onClick={() => navigate(`/measurements/${row.lastSessionId}`)}
+          >
+            기록 보기
           </Button>
           <Can permission="MEASUREMENT_EDIT">
             <Button
               size="small"
-              icon={<CopyOutlined />}
-              loading={cloneMutation.isPending && cloneMutation.variables === row.id}
-              onClick={() => cloneMutation.mutate(row.id)}
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() =>
+                navigate(`/measurements/new?customerId=${row.customerId}&orderId=${row.orderId}`)
+              }
             >
-              복사
+              채촌
             </Button>
-          </Can>
-          <Can permission="MEASUREMENT_EDIT">
-            <Tooltip title={row.locked ? '작업지시서 출력에 사용된 채촌은 삭제할 수 없습니다.' : ''}>
-              <Button
-                size="small"
-                danger
-                icon={<DeleteOutlined />}
-                disabled={row.locked}
-                onClick={() => confirmDelete(row)}
-              />
-            </Tooltip>
           </Can>
         </Space>
       ),
@@ -267,104 +170,55 @@ export function MeasurementListPage() {
     <Card>
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
         <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
+          <Space wrap>
+            <Input.Search
+              allowClear
+              style={{ width: 280 }}
+              placeholder="고객명 · 전화번호 · 계약번호"
+              onSearch={setKeyword}
+              onChange={(e) => {
+                if (!e.target.value) setKeyword('');
+              }}
+            />
+            <Segmented
+              value={filter}
+              onChange={(v) => setFilter(v as StateFilter)}
+              options={[
+                { label: '전체', value: 'ALL' },
+                { label: '채촌 미완료', value: 'NONE' },
+                { label: '채촌 완료', value: 'DONE' },
+              ]}
+            />
+            {customerId && (
+              <Tag closable color="blue" onClose={() => setSearchParams({})}>
+                고객 지정 조회 중{rows[0]?.customerName ? `: ${rows[0].customerName}` : ''}
+              </Tag>
+            )}
+            <Typography.Text type="secondary">총 {rows.length}건</Typography.Text>
+          </Space>
           <Can permission="MEASUREMENT_EDIT">
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/measurements/new')}>
+            <Button icon={<PlusOutlined />} onClick={() => navigate('/measurements/new')}>
               신규 채촌
             </Button>
           </Can>
         </Space>
 
-        {customerId && (
-          <Space>
-            <Tag closable color="blue" onClose={() => setSearchParams({})}>
-              고객 지정 조회 중{rows[0]?.customerName ? `: ${rows[0].customerName}` : ''}
-            </Tag>
-          </Space>
-        )}
-
-        <Space wrap>
-          <Input.Search
-            allowClear
-            style={{ width: 260 }}
-            placeholder="고객명 또는 전화번호"
-            value={form.q}
-            onChange={(e) => setForm((f) => ({ ...f, q: e.target.value }))}
-            onSearch={handleSearch}
-          />
-          <DatePicker.RangePicker
-            value={form.range}
-            placeholder={['채촌일 시작', '종료']}
-            onChange={(v) => setForm((f) => ({ ...f, range: (v as [Dayjs, Dayjs] | null) ?? null }))}
-          />
-          <Select
-            allowClear
-            style={{ width: 130 }}
-            placeholder="구분"
-            value={form.type}
-            options={TYPE_OPTIONS}
-            onChange={(v) => setForm((f) => ({ ...f, type: v as MeasurementType | undefined }))}
-          />
-          <Select
-            allowClear
-            style={{ width: 130 }}
-            placeholder="상태"
-            value={form.status}
-            options={STATUS_OPTIONS}
-            onChange={(v) => setForm((f) => ({ ...f, status: v as MeasurementSessionStatus | undefined }))}
-          />
-          <Button type="primary" onClick={handleSearch}>
-            검색
-          </Button>
-          <Button onClick={handleReset}>초기화</Button>
-        </Space>
-
-        <Space wrap>
-          <Tooltip
-            title={
-              selectedIds.length !== 2
-                ? '비교할 기록 2건을 선택해 주세요.'
-                : !sameCustomer
-                  ? '같은 고객의 기록만 비교할 수 있습니다.'
-                  : ''
-            }
-          >
-            <Button icon={<DiffOutlined />} disabled={!sameCustomer} onClick={handleCompare}>
-              선택한 기록 비교 ({selectedIds.length}/2)
-            </Button>
-          </Tooltip>
-          {listQuery.data && (
-            <Typography.Text type="secondary">총 {listQuery.data.total}건</Typography.Text>
-          )}
-        </Space>
-
-        <Table<MeasurementSummary>
-          rowKey="id"
+        <Table<MeasurementTargetRow>
+          rowKey="contractId"
           size="small"
-          loading={listQuery.isLoading}
+          loading={query.isLoading}
           dataSource={rows}
           columns={columns}
-          scroll={{ x: 1100 }}
+          pagination={false}
+          scroll={{ x: 1180 }}
+          onRow={(row) => ({
+            onClick: () => {
+              if (row.lastSessionId) navigate(`/measurements/${row.lastSessionId}`);
+            },
+            style: { cursor: row.lastSessionId ? 'pointer' : 'default' },
+          })}
           locale={{
-            emptyText: <Empty description="조건에 맞는 채촌 기록이 없습니다." />,
-          }}
-          rowSelection={{
-            type: 'checkbox',
-            selectedRowKeys: selectedIds,
-            onChange: (keys) => {
-              const next = keys.map(String);
-              // 비교는 2건까지만 유지한다 (가장 최근 선택 2건)
-              setSelectedIds(next.length > 2 ? next.slice(next.length - 2) : next);
-            },
-          }}
-          pagination={{
-            current: listQuery.data?.page ?? page,
-            pageSize: size,
-            total: listQuery.data?.total ?? 0,
-            showSizeChanger: true,
-            onChange: (p, s) => {
-              setPage(p);
-              setSize(s);
-            },
+            emptyText: <Empty description="스타일 컨설팅 대상 맞춤 품목이 있는 계약이 없습니다." />,
           }}
         />
       </Space>

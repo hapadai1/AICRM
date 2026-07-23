@@ -21,8 +21,8 @@ export const WORK_ORDER_VERSION_STATUS_META: Record<string, StatusMeta> = {
 
 /** 채촌 유형 (measurement_sessions.measurement_type) */
 export const MEASUREMENT_TYPE_META: Record<string, StatusMeta> = {
-  INITIAL: { label: '최초', color: 'blue' },
+  INITIAL: { label: '스타일 컨설팅', color: 'blue' },
   FITTING: { label: '가봉', color: 'gold' },
-  REMEASURE: { label: '재채촌', color: 'purple' },
+  REMEASURE: { label: '수선', color: 'purple' },
   OTHER: { label: '기타', color: 'default' },
 };

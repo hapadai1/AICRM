@@ -47,8 +47,9 @@ export function AppLayout() {
     { key: '/customers', icon: <TeamOutlined />, label: '고객' },
     { key: '/contracts', icon: <FileTextOutlined />, label: '계약 관리' },
     { key: '/options', icon: <SkinOutlined />, label: '스타일 컨설팅' },
-    { key: '/production', icon: <ScissorOutlined />, label: '제작 관리' },
+    // 채촌은 스타일 컨설팅 다음 단계 — 업무 순서대로 바로 아래에 둔다.
     { key: '/measurements', icon: <ColumnHeightOutlined />, label: '채촌' },
+    { key: '/production', icon: <ScissorOutlined />, label: '제작 관리' },
     { key: '/repairs', icon: <ToolOutlined />, label: '수선' },
     { key: '/payments', icon: <FileTextOutlined />, label: '결제' },
     {
