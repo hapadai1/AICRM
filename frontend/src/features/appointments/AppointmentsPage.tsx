@@ -66,7 +66,7 @@ function AppointmentCard({
       }}
     >
       <div style={{ fontSize: 12, fontWeight: 600, textDecoration: cancelled ? 'line-through' : undefined }}>
-        {dayjs(appointment.startAt).format('HH:mm')} {appointment.customerName}
+        {appointment.customerName}
       </div>
       <div style={{ fontSize: 11, lineHeight: '18px' }}>
         <Tag color={sourceMeta.color} style={{ fontSize: 10, lineHeight: '14px', marginInlineEnd: 4, paddingInline: 4 }}>
@@ -93,10 +93,12 @@ function Timetable({
   appointments: Appointment[];
   onOpen: (id: string) => void;
 }) {
-  const hours = Array.from(
-    { length: TIMETABLE_END_HOUR - TIMETABLE_START_HOUR },
-    (_, i) => TIMETABLE_START_HOUR + i,
-  );
+  // 30분 단위 슬롯. 시(hour)와 분(0/30)으로 구성.
+  const slots: { hour: number; minute: number }[] = [];
+  for (let h = TIMETABLE_START_HOUR; h < TIMETABLE_END_HOUR; h++) {
+    slots.push({ hour: h, minute: 0 });
+    slots.push({ hour: h, minute: 30 });
+  }
   // 일 뷰에서만 같은 시간대 예약을 고정폭 카드로 가로 나열(넘치면 다음 줄로 wrap).
   // 주 뷰는 x축이 이미 요일이라 셀 안에서는 세로 스택을 유지한다.
   const horizontal = days.length === 1;
@@ -106,10 +108,14 @@ function Timetable({
     padding: 4,
     minHeight: 44,
   };
-  const findCell = (day: Dayjs, hour: number) =>
+  const findCell = (day: Dayjs, hour: number, minute: number) =>
     appointments.filter((a) => {
       const s = dayjs(a.startAt);
-      return s.isSame(day, 'day') && s.hour() === hour;
+      return (
+        s.isSame(day, 'day') &&
+        s.hour() === hour &&
+        (minute === 0 ? s.minute() < 30 : s.minute() >= 30)
+      );
     });
   // 표시 구간(10~20시) 밖의 예약도 유실 없이 보여준다.
   const outOfRange = appointments.filter((a) => {
@@ -140,21 +146,21 @@ function Timetable({
             </div>
           );
         })}
-        {hours.map((h) => (
-          <div key={h} style={{ display: 'contents' }}>
+        {slots.map(({ hour: h, minute: m }) => (
+          <div key={`${h}-${m}`} style={{ display: 'contents' }}>
             <div style={{ ...cellStyle, fontSize: 12, color: '#888', textAlign: 'right', paddingRight: 6 }}>
-              {String(h).padStart(2, '0')}:00
+              {String(h).padStart(2, '0')}:{m === 0 ? '00' : '30'}
             </div>
             {days.map((d) => (
               <div
-                key={`${d.format('YYYY-MM-DD')}-${h}`}
+                key={`${d.format('YYYY-MM-DD')}-${h}-${m}`}
                 style={
                   horizontal
                     ? { ...cellStyle, display: 'flex', flexWrap: 'wrap', gap: 4, alignContent: 'flex-start' }
                     : cellStyle
                 }
               >
-                {findCell(d, h).map((a) => (
+                {findCell(d, h, m).map((a) => (
                   <AppointmentCard
                     key={a.id}
                     appointment={a}
