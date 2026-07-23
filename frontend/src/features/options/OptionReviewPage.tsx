@@ -4,11 +4,19 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Card, Col, Image, Modal, Row, Space, Spin, Tag, Tooltip, Typography, message } from 'antd';
 import { useNavigate, useParams } from 'react-router-dom';
 import { fetchFileObjectUrl } from '../../api/client';
-import type { OptionReviewStage } from '../../api/options';
-import { confirmOptionSession, fetchOptionReview, fetchOptionSessionByItem } from '../../api/options';
+import type { OptionReviewStage, OptionSurcharge } from '../../api/options';
+import {
+  applyOptionSurcharge,
+  confirmOptionSession,
+  fetchOptionReview,
+  fetchOptionSessionByItem,
+} from '../../api/options';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { metaOf } from '../../shared/status-meta';
 import { choiceColor, OPTION_STATUS_META } from './option-meta';
+
+/** 선택지 사진이 세로로 긴 원본이라 확인서 카드도 세로로 넉넉히 잡는다. */
+const MEDIA_HEIGHT = 260;
 
 /** 확인서 카드 이미지 영역 — 선택지에 등록 이미지가 있으면 사진, 없으면 색상 블록으로 폴백한다. */
 function StageMedia({ st }: { st: OptionReviewStage }) {
@@ -22,9 +30,16 @@ function StageMedia({ st }: { st: OptionReviewStage }) {
 
   if (st.imageUrl && src) {
     return (
-      <div style={{ height: 110, borderRadius: 8, overflow: 'hidden', background: '#f5f5f5' }}>
+      <div style={{ height: MEDIA_HEIGHT, borderRadius: 8, overflow: 'hidden', background: '#f5f5f5' }}>
         {/* 카드 전체가 '눌러 재선택' 대상이므로 preview는 끄고 클릭이 카드로 전파되게 둔다. */}
-        <Image src={src} alt={st.choiceName ?? st.name} width="100%" height={110} style={{ objectFit: 'contain' }} preview={false} />
+        <Image
+          src={src}
+          alt={st.choiceName ?? st.name}
+          width="100%"
+          height={MEDIA_HEIGHT}
+          style={{ objectFit: 'contain' }}
+          preview={false}
+        />
       </div>
     );
   }
@@ -32,7 +47,7 @@ function StageMedia({ st }: { st: OptionReviewStage }) {
   return (
     <div
       style={{
-        height: 110,
+        height: MEDIA_HEIGHT,
         borderRadius: 8,
         background: st.choiceId ? choiceColor(st.choiceId) : '#f5f5f5',
         display: 'flex',
@@ -48,6 +63,85 @@ function StageMedia({ st }: { st: OptionReviewStage }) {
         <Tag color="red">미선택</Tag>
       )}
     </div>
+  );
+}
+
+const won = (v: number) => `${v.toLocaleString()}원`;
+
+/**
+ * 옵션 추가금액과 계약금액 차액 안내.
+ * 금액은 여기서 자동으로 바뀌지 않는다 — '계약금액에 반영'을 눌러야 반영된다.
+ */
+function SurchargePanel({
+  surcharge,
+  onApply,
+  applying,
+}: {
+  surcharge: OptionSurcharge;
+  onApply: () => void;
+  applying: boolean;
+}) {
+  const { total, applied, pending, contract } = surcharge;
+  if (total === 0 && applied === 0) return null;
+
+  return (
+    <Card size="small" title="옵션 추가금액">
+      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+        <Space size="large" wrap>
+          <Typography.Text>
+            선택 옵션 추가금액 합계{' '}
+            <Typography.Text strong style={{ fontSize: 18 }}>
+              {won(total)}
+            </Typography.Text>
+          </Typography.Text>
+          {applied > 0 && (
+            <Typography.Text type="secondary">계약금액 반영분 {won(applied)}</Typography.Text>
+          )}
+        </Space>
+
+        {contract && pending !== 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            message={
+              <span>
+                현재 계약금액 {won(contract.totalAmount)} 대비{' '}
+                <Typography.Text strong style={{ color: '#cf1322' }}>
+                  {pending > 0 ? '+' : ''}
+                  {won(pending)}
+                </Typography.Text>{' '}
+                차이가 납니다.
+              </span>
+            }
+            description={
+              <Typography.Text type="secondary">
+                반영하면 계약금액 {won(contract.afterTotalAmount)} · 잔금{' '}
+                {won(contract.afterBalanceAmount)}이 됩니다. 계약 버전은 올라가지 않습니다.
+              </Typography.Text>
+            }
+            action={
+              surcharge.appliable ? (
+                <Button type="primary" loading={applying} onClick={onApply}>
+                  계약금액에 반영
+                </Button>
+              ) : (
+                <Tooltip title="옵션을 확정한 뒤 반영할 수 있습니다.">
+                  <Button disabled>계약금액에 반영</Button>
+                </Tooltip>
+              )
+            }
+          />
+        )}
+
+        {contract && pending === 0 && total > 0 && (
+          <Alert
+            type="success"
+            showIcon
+            message={`추가금액 ${won(total)}이 계약금액에 반영되어 있습니다. (현재 계약금액 ${won(contract.totalAmount)})`}
+          />
+        )}
+      </Space>
+    </Card>
   );
 }
 
@@ -76,14 +170,47 @@ export function OptionReviewPage() {
 
   const confirmMutation = useMutation({
     mutationFn: () => confirmOptionSession(sessionId ?? '', review?.version ?? 0),
-    onSuccess: () => {
+    onSuccess: (result) => {
       message.success('옵션이 확정되었습니다. 작업지시서 출력이 가능합니다.');
       void queryClient.invalidateQueries({ queryKey: ['options'] });
       void queryClient.invalidateQueries({ queryKey: ['workorders'] });
+      // 반영할 추가금액이 남아 있으면 목록으로 나가지 않고 이 화면에서 안내한다.
+      if (result.surcharge?.pending) return;
       navigate('/options');
     },
     onError: (e: Error) => message.error(e.message),
   });
+
+  const applyMutation = useMutation({
+    mutationFn: () => applyOptionSurcharge(sessionId ?? ''),
+    onSuccess: (result) => {
+      message.success(`계약금액에 반영되었습니다. 계약금액 ${won(result.contract?.totalAmount ?? 0)}`);
+      void queryClient.invalidateQueries({ queryKey: ['options'] });
+      void queryClient.invalidateQueries({ queryKey: ['contracts'] });
+      void queryClient.invalidateQueries({ queryKey: ['payments'] });
+      void queryClient.invalidateQueries({ queryKey: ['customers'] });
+    },
+    onError: (e: Error) => message.error(e.message),
+  });
+
+  const openApplyDialog = (surcharge: OptionSurcharge) => {
+    const c = surcharge.contract;
+    modal.confirm({
+      title: '계약금액에 반영',
+      icon: <ExclamationCircleOutlined />,
+      content: c
+        ? `옵션 추가금액 ${won(surcharge.pending)}을 계약 ${c.contractNo}에 반영합니다. ` +
+          `계약금액 ${won(c.totalAmount)} → ${won(c.afterTotalAmount)}, ` +
+          `잔금 ${won(c.balanceAmount)} → ${won(c.afterBalanceAmount)}. ` +
+          '변경계약(새 버전)은 만들지 않고 현재 버전 금액을 수정합니다. 적용할까요?'
+        : '적용할까요?',
+      okText: '적용',
+      cancelText: '취소',
+      okButtonProps: { size: 'large' },
+      cancelButtonProps: { size: 'large' },
+      onOk: () => applyMutation.mutateAsync(),
+    });
+  };
 
   if (sessionQuery.isLoading || reviewQuery.isLoading) {
     return <Spin style={{ display: 'block', margin: '80px auto' }} size="large" />;
@@ -156,6 +283,11 @@ export function OptionReviewPage() {
               {st.name}
             </Typography.Text>
             <Typography.Text>{st.choiceName ?? '선택 필요'}</Typography.Text>
+            {st.extraPrice > 0 && (
+              <Typography.Text strong style={{ color: '#cf1322' }}>
+                +{won(st.extraPrice)}
+              </Typography.Text>
+            )}
           </Space>
         </Card>
       </Col>
@@ -201,6 +333,12 @@ export function OptionReviewPage() {
           />
         )}
       </Card>
+
+      <SurchargePanel
+        surcharge={review.surcharge}
+        applying={applyMutation.isPending}
+        onApply={() => openApplyDialog(review.surcharge)}
+      />
 
       <Row gutter={16}>{review.stages.map(renderStageCard)}</Row>
 

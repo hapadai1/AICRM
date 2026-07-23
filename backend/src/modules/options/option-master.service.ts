@@ -26,8 +26,14 @@ const CHOICE_SELECT = {
   choiceName: true,
   factoryLabel: true,
   imageFileId: true,
+  extraPrice: true,
   active: true,
 } as const;
+
+/** 한 단계에 허용하는 선택지 코드. 앞에서부터 개수만큼 쓴다(2개면 A·B, 3개면 A·B·C). */
+export const CHOICE_CODES = ['A', 'B', 'C'] as const;
+const MIN_CHOICES = 2;
+const MAX_CHOICES = CHOICE_CODES.length;
 
 const STAGE_INCLUDE = {
   choices: { select: CHOICE_SELECT, orderBy: { choiceCode: 'asc' } },
@@ -140,6 +146,7 @@ export class OptionMasterService {
                   choiceName: c.choiceName,
                   factoryLabel: c.factoryLabel,
                   imageFileId: c.imageFileId,
+                  extraPrice: c.extraPrice,
                   active: c.active,
                 })),
               },
@@ -180,6 +187,7 @@ export class OptionMasterService {
             choiceCode: c.choiceCode,
             choiceName: c.choiceName,
             factoryLabel: c.factoryLabel ?? null,
+            extraPrice: c.extraPrice ?? 0,
             active: c.active ?? true,
             imageFile: c.imageFileId
               ? { connect: { id: c.imageFileId } }
@@ -231,15 +239,13 @@ export class OptionMasterService {
     if (version.stages.length === 0)
       throw new BusinessException('OPTION_SET_INVALID', '활성 단계가 없는 버전은 활성화할 수 없습니다.');
     const invalid = version.stages.filter(
-      (s) =>
-        s.choices.length !== 2 ||
-        [...s.choices.map((c) => c.choiceCode)].sort().join(',') !== 'A,B',
+      (s) => !isValidChoiceSet(s.choices.map((c) => c.choiceCode)),
     );
     if (invalid.length > 0)
       throw new BusinessException(
         'OPTION_SET_INVALID',
-        '모든 활성 단계에는 A/B 선택지가 정확히 2개 있어야 합니다.',
-        invalid.map((s) => ({ field: s.stageCode, reason: 'CHOICES_NOT_A_B' })),
+        `모든 활성 단계에는 선택지가 ${MIN_CHOICES}~${MAX_CHOICES}개 있어야 하며 코드는 A부터 순서대로여야 합니다.`,
+        invalid.map((s) => ({ field: s.stageCode, reason: 'INVALID_CHOICE_SET' })),
       );
 
     const previousActive = await this.prisma.optionSetVersion.findMany({
@@ -321,6 +327,7 @@ export class OptionMasterService {
         choiceName: string;
         factoryLabel: string | null;
         imageFileId: string;
+        extraPrice: Prisma.Decimal;
         active: boolean;
       }>;
     }>;
@@ -339,12 +346,13 @@ export class OptionMasterService {
         sequenceNo: s.sequenceNo,
         required: s.required,
         active: s.active,
-        choices: s.choices,
+        // Decimal은 JSON에서 문자열이 되므로 화면이 바로 쓰도록 숫자로 낮춘다.
+        choices: s.choices.map((c) => ({ ...c, extraPrice: Number(c.extraPrice) })),
       })),
     };
   }
 
-  /** 단계 코드·순서 중복, 활성 단계 A/B 2개 규칙 검증 (위반 시 OPTION_SET_INVALID) */
+  /** 단계 코드·순서 중복, 활성 단계 선택지 2~3개(A부터 순서대로) 규칙 검증 (위반 시 OPTION_SET_INVALID) */
   private validateStageStructure(dto: SaveOptionStagesDto): void {
     const errors: FieldError[] = [];
     const codes = new Set<string>();
@@ -361,19 +369,15 @@ export class OptionMasterService {
       if (new Set(choiceCodes).size !== choiceCodes.length)
         errors.push({ field: `stages[${i}].choices`, reason: 'DUPLICATE_CHOICE_CODE' });
       if (stage.active !== false) {
-        const activeCodes = stage.choices
-          .filter((c) => c.active !== false)
-          .map((c) => c.choiceCode)
-          .sort()
-          .join(',');
-        if (stage.choices.length !== 2 || activeCodes !== 'A,B')
-          errors.push({ field: `stages[${i}].choices`, reason: 'CHOICES_NOT_A_B' });
+        const activeCodes = stage.choices.filter((c) => c.active !== false).map((c) => c.choiceCode);
+        if (stage.choices.length !== activeCodes.length || !isValidChoiceSet(activeCodes))
+          errors.push({ field: `stages[${i}].choices`, reason: 'INVALID_CHOICE_SET' });
       }
     });
     if (errors.length > 0)
       throw new BusinessException(
         'OPTION_SET_INVALID',
-        '각 활성 단계에는 A와 B 선택지가 정확히 2개 있어야 합니다.',
+        `각 활성 단계에는 선택지가 ${MIN_CHOICES}~${MAX_CHOICES}개 있어야 하며 코드는 A부터 순서대로여야 합니다.`,
         errors,
       );
   }
@@ -421,6 +425,12 @@ export class OptionMasterService {
   }
 }
 
+/** 선택지 코드 집합이 A부터 빈칸 없이 2~3개인지 (A,B / A,B,C 만 통과) */
+function isValidChoiceSet(codes: string[]): boolean {
+  if (codes.length < MIN_CHOICES || codes.length > MAX_CHOICES) return false;
+  return [...codes].sort().join(',') === CHOICE_CODES.slice(0, codes.length).join(',');
+}
+
 interface SourceStage {
   stageCode: string;
   stageName: string;
@@ -432,6 +442,7 @@ interface SourceStage {
     choiceName: string;
     factoryLabel: string | null;
     imageFileId: string;
+    extraPrice: Prisma.Decimal;
     active: boolean;
   }>;
 }

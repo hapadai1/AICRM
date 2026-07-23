@@ -555,6 +555,10 @@ model OptionChoice {
   choiceName    String   @map("choice_name") @db.VarChar(100)
   factoryLabel  String?  @map("factory_label") @db.VarChar(100)
   imageFileId   String   @map("image_file_id") @db.Uuid
+  /**
+   * 이 선택지를 고를 때 계약금액에 더해지는 추가금액(원). 기본 선택지는 0.
+   */
+  extraPrice    Decimal  @default(0) @map("extra_price") @db.Decimal(12, 2)
   active        Boolean  @default(true) @map("active")
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
@@ -578,6 +582,12 @@ model OptionSelectionSession {
   lastSavedAt        DateTime? @map("last_saved_at") @db.Timestamptz(6)
   reviewedAt         DateTime? @map("reviewed_at") @db.Timestamptz(6)
   confirmedAt        DateTime? @map("confirmed_at") @db.Timestamptz(6)
+  /**
+   * 이 세션의 옵션 추가금액 중 계약금액에 이미 반영한 누계.
+   * 재확정 시 (현재 합계 - 이 값)만 차액으로 더한다. 계약 버전은 올리지 않는다.
+   */
+  surchargeApplied   Decimal   @default(0) @map("surcharge_applied") @db.Decimal(12, 2)
+  surchargeAppliedAt DateTime? @map("surcharge_applied_at") @db.Timestamptz(6)
   isCurrent          Boolean   @default(true) @map("is_current")
   rowVersion         Int       @default(0) @map("row_version")
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -599,6 +609,11 @@ model OptionSelectionValue {
   selectionSessionId String   @map("selection_session_id") @db.Uuid
   optionStageId      String   @map("option_stage_id") @db.Uuid
   optionChoiceId     String   @map("option_choice_id") @db.Uuid
+  /**
+   * 선택 시점의 option_choices.extra_price 복사본.
+   * 마스터 단가가 뒤에 바뀌어도 이미 선택된 건의 금액은 흔들리지 않는다.
+   */
+  extraPriceSnapshot Decimal  @default(0) @map("extra_price_snapshot") @db.Decimal(12, 2)
   selectedBy         String   @map("selected_by") @db.Uuid
   selectedAt         DateTime @default(now()) @map("selected_at") @db.Timestamptz(6)
 

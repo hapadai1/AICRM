@@ -73,6 +73,19 @@ export class OptionSessionsController {
     return this.service.confirm(id, dto, actor);
   }
 
+  /** 옵션 추가금액과 계약금액 차액 조회 */
+  @Get('option-sessions/:id/surcharge')
+  surcharge(@Param('id') id: string) {
+    return this.service.surcharge(id);
+  }
+
+  /** 미반영 차액을 계약 현재 버전 금액에 반영 (계약 버전은 올리지 않는다) */
+  @Post('option-sessions/:id/surcharge/apply')
+  @HttpCode(HttpStatus.OK)
+  applySurcharge(@Param('id') id: string, @CurrentUser() actor: AuthUser) {
+    return this.service.applySurcharge(id, actor);
+  }
+
   @Post('option-sessions/:id/copy')
   copy(@Param('id') id: string, @Body() dto: CopySessionDto, @CurrentUser() actor: AuthUser) {
     return this.service.copy(id, dto, actor);

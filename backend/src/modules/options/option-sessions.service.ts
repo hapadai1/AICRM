@@ -22,7 +22,14 @@ const SESSION_INCLUDE = {
       order: {
         select: {
           orderNo: true,
-          contract: { select: { customer: { select: { id: true, name: true } } } },
+          contract: {
+            select: {
+              id: true,
+              contractNo: true,
+              currentVersionId: true,
+              customer: { select: { id: true, name: true } },
+            },
+          },
         },
       },
     },
@@ -44,6 +51,7 @@ const SESSION_INCLUDE = {
               choiceName: true,
               factoryLabel: true,
               imageFileId: true,
+              extraPrice: true,
               active: true,
             },
           },
@@ -151,6 +159,10 @@ export class OptionSessionsService {
           startedAt: values.length > 0 ? now : null,
           lastSavedAt: values.length > 0 ? now : null,
           reviewedAt: complete ? now : null,
+          // 계약금액 반영 누계는 이어받는다. 새 세션에서 0으로 시작하면
+          // 이미 반영한 추가금액을 다시 더하게 된다.
+          surchargeApplied: current.surchargeApplied,
+          surchargeAppliedAt: current.surchargeAppliedAt,
           isCurrent: true,
         },
       });
@@ -161,6 +173,7 @@ export class OptionSessionsService {
             selectionSessionId: session.id,
             optionStageId: v.optionStageId,
             optionChoiceId: v.optionChoiceId,
+            extraPriceSnapshot: v.extraPriceSnapshot,
             selectedBy: actor.id,
           })),
         });
@@ -305,9 +318,13 @@ export class OptionSessionsService {
         stageName: s.stageName,
         sequenceNo: s.sequenceNo,
         required: s.required,
-        choices: s.choices.filter((c) => c.active),
+        choices: s.choices
+          .filter((c) => c.active)
+          .map((c) => ({ ...c, extraPrice: Number(c.extraPrice) })),
         selectedChoiceId: valueByStage.get(s.id)?.optionChoiceId ?? null,
       })),
+      surchargeTotal: this.surchargeTotal(session),
+      surchargeApplied: Number(session.surchargeApplied),
     };
   }
 
@@ -373,9 +390,15 @@ export class OptionSessionsService {
           selectionSessionId: sessionId,
           optionStageId: stageId,
           optionChoiceId: choice.id,
+          extraPriceSnapshot: choice.extraPrice,
           selectedBy: actor.id,
         },
-        update: { optionChoiceId: choice.id, selectedBy: actor.id, selectedAt: now },
+        update: {
+          optionChoiceId: choice.id,
+          extraPriceSnapshot: choice.extraPrice,
+          selectedBy: actor.id,
+          selectedAt: now,
+        },
       });
       return tx.optionSelectionSession.update({
         where: { id: sessionId },
@@ -453,6 +476,8 @@ export class OptionSessionsService {
               choiceName: choice.choiceName,
               factoryLabel: choice.factoryLabel,
               imageFileId: choice.imageFileId,
+              // 마스터 단가가 아니라 선택 시점 스냅샷을 보여준다.
+              extraPrice: Number(value!.extraPriceSnapshot),
             }
           : null,
       };
@@ -476,8 +501,81 @@ export class OptionSessionsService {
         required: m.required,
       })),
       stages: items,
+      surcharge: await this.surchargeState(session),
       version: session.rowVersion,
     };
+  }
+
+  /**
+   * GET /option-sessions/:id/surcharge — 옵션 추가금액과 계약금액 차액
+   * 계약 버전은 올리지 않는다. 반영은 apply에서 현재 버전 금액을 제자리 수정한다.
+   */
+  async surcharge(sessionId: string) {
+    return this.surchargeState(await this.load(sessionId));
+  }
+
+  /**
+   * POST /option-sessions/:id/surcharge/apply — 미반영 차액을 계약 현재 버전 금액에 더한다.
+   * - 확정(CONFIRMED) 세션만 반영할 수 있다(선택 중 금액이 흔들리지 않게).
+   * - 변경계약(새 버전)이 아니라 현재 버전의 total/balance를 제자리 수정하고 감사로그를 남긴다.
+   * - 재확정 시에는 (현재 합계 - 반영 누계)인 차액만 더하므로 여러 번 눌러도 중복되지 않는다.
+   */
+  async applySurcharge(sessionId: string, actor: AuthUser) {
+    const session = await this.load(sessionId);
+    if (session.status !== 'CONFIRMED')
+      throw new BusinessException(
+        'INVALID_STATUS_TRANSITION',
+        '확정된 옵션 선택만 계약금액에 반영할 수 있습니다.',
+        undefined,
+        { status: session.status },
+      );
+
+    const state = await this.surchargeState(session);
+    if (!state.contract)
+      throw new BusinessException('VALIDATION_ERROR', '계약의 현재 버전이 없어 반영할 수 없습니다.');
+    if (state.pending === 0)
+      throw new BusinessException('VALIDATION_ERROR', '반영할 차액이 없습니다.', undefined, {
+        surchargeTotal: state.total,
+        surchargeApplied: state.applied,
+      });
+
+    const versionId = session.orderItem.order.contract.currentVersionId!;
+    const { pending } = state;
+    const before = state.contract;
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.contractVersion.update({
+        where: { id: versionId },
+        data: {
+          totalAmount: { increment: pending },
+          balanceAmount: { increment: pending },
+        },
+      });
+      await tx.optionSelectionSession.update({
+        where: { id: sessionId },
+        data: { surchargeApplied: state.total, surchargeAppliedAt: new Date() },
+      });
+      await this.audit.log(
+        {
+          userId: actor.id,
+          action: 'UPDATE',
+          entityType: 'CONTRACT_VERSION',
+          entityId: versionId,
+          before: { totalAmount: before.totalAmount, balanceAmount: before.balanceAmount },
+          after: {
+            totalAmount: before.totalAmount + pending,
+            balanceAmount: before.balanceAmount + pending,
+            optionSurcharge: pending,
+            optionSessionId: sessionId,
+            orderItemId: session.orderItemId,
+          },
+          reason: `옵션 추가금액 반영 (${session.orderItem.displayName})`,
+        },
+        tx,
+      );
+    });
+
+    return this.surcharge(sessionId);
   }
 
   /** POST /option-sessions/:id/confirm — 서버 재검증 후 CONFIRMED (화면·API 정의서 §14.3) */
@@ -558,6 +656,8 @@ export class OptionSessionsService {
       status: updated.status,
       confirmedAt: updated.confirmedAt,
       optionSummary: summary.map((s) => ({ stageName: s.stageName, choiceName: s.choiceName })),
+      // 확정 직후 계약금액 차액을 안내하기 위한 값. 반영은 별도 확인(apply)을 거친다.
+      surcharge: await this.surcharge(sessionId),
       version: updated.rowVersion,
     };
   }
@@ -622,6 +722,7 @@ export class OptionSessionsService {
             selectionSessionId: session.id,
             optionStageId: v.optionStageId,
             optionChoiceId: v.optionChoiceId,
+            extraPriceSnapshot: v.extraPriceSnapshot,
             selectedBy: actor.id,
           })),
         });
@@ -644,6 +745,58 @@ export class OptionSessionsService {
 
   private activeStages(session: SessionWithDetail) {
     return session.optionSetVersion.stages.filter((s) => s.active);
+  }
+
+  /** 선택값 스냅샷 기준 옵션 추가금액 합계 (활성 단계에 남아 있는 선택만 센다) */
+  private surchargeTotal(session: SessionWithDetail): number {
+    const activeStageIds = new Set(this.activeStages(session).map((s) => s.id));
+    return session.values
+      .filter((v) => activeStageIds.has(v.optionStageId))
+      .reduce((sum, v) => sum + Number(v.extraPriceSnapshot), 0);
+  }
+
+  /** 옵션 추가금액 합계와 계약 현재 버전 금액을 견줘 미반영 차액을 계산한다. */
+  private async surchargeState(session: SessionWithDetail) {
+    const total = this.surchargeTotal(session);
+    const applied = Number(session.surchargeApplied);
+    const pending = total - applied;
+    const { contract } = session.orderItem.order;
+
+    const version = contract.currentVersionId
+      ? await this.prisma.contractVersion.findUnique({
+          where: { id: contract.currentVersionId },
+          select: { versionNo: true, totalAmount: true, depositAmount: true, balanceAmount: true },
+        })
+      : null;
+
+    return {
+      sessionId: session.id,
+      orderItemId: session.orderItemId,
+      displayName: session.orderItem.displayName,
+      status: session.status,
+      /** 이 품목 옵션의 추가금액 합계 */
+      total,
+      /** 그중 계약금액에 이미 반영한 금액 */
+      applied,
+      /** 아직 반영하지 않은 차액 (이 금액만 반영된다) */
+      pending,
+      appliedAt: session.surchargeAppliedAt,
+      /** 확정 세션만 반영할 수 있다 */
+      appliable: session.status === 'CONFIRMED' && pending !== 0 && !!version,
+      contract: version
+        ? {
+            contractId: contract.id,
+            contractNo: contract.contractNo,
+            versionNo: version.versionNo,
+            totalAmount: Number(version.totalAmount),
+            depositAmount: Number(version.depositAmount),
+            balanceAmount: Number(version.balanceAmount),
+            /** 반영했을 때의 금액 (미리보기) */
+            afterTotalAmount: Number(version.totalAmount) + pending,
+            afterBalanceAmount: Number(version.balanceAmount) + pending,
+          }
+        : null,
+    };
   }
 
   private ensureEditable(session: SessionWithDetail): void {

@@ -56,11 +56,19 @@ export function retireMaster(type: MasterType, id: string): Promise<MasterItem> 
 
 export type OptionSetVersionStatus = 'DRAFT' | 'ACTIVE' | 'RETIRED';
 
+/** 한 단계에 2~3개, A부터 순서대로 쓴다 */
+export type ChoiceSlot = 'A' | 'B' | 'C';
+export const CHOICE_SLOTS: ChoiceSlot[] = ['A', 'B', 'C'];
+export const MIN_CHOICES = 2;
+export const MAX_CHOICES = CHOICE_SLOTS.length;
+
 export interface OptionChoice {
   id: string;
-  slot: 'A' | 'B';
+  slot: ChoiceSlot;
   name: string;
   factoryName?: string;
+  /** 이 선택지를 고를 때 계약금액에 더해지는 추가금액(원) */
+  extraPrice: number;
   /** 저장 시 기존 이미지를 유지하기 위해 함께 보낸다 */
   imageFileId?: string;
   imageUrl: string | null;
@@ -103,7 +111,13 @@ export interface OptionStageInput {
   name: string;
   sortOrder: number;
   required: boolean;
-  choices: { slot: 'A' | 'B'; name: string; factoryName?: string; imageFileId?: string }[];
+  choices: {
+    slot: ChoiceSlot;
+    name: string;
+    factoryName?: string;
+    extraPrice?: number;
+    imageFileId?: string;
+  }[];
 }
 
 // 백엔드는 stageCode/stageName/sequenceNo/choiceCode/choiceName/factoryLabel/imageFileId 로 응답한다.
@@ -111,9 +125,10 @@ export interface OptionStageInput {
 
 interface ApiOptionChoice {
   id: string;
-  choiceCode: 'A' | 'B';
+  choiceCode: ChoiceSlot;
   choiceName: string;
   factoryLabel?: string | null;
+  extraPrice?: number | null;
   imageFileId?: string | null;
   active: boolean;
 }
@@ -155,6 +170,7 @@ function toChoice(c: ApiOptionChoice): OptionChoice {
     slot: c.choiceCode,
     name: c.choiceName,
     factoryName: c.factoryLabel ?? undefined,
+    extraPrice: Number(c.extraPrice ?? 0),
     imageFileId: c.imageFileId ?? undefined,
     imageUrl: c.imageFileId ? `/files/${c.imageFileId}` : null,
   };
@@ -277,6 +293,7 @@ export async function saveOptionStages(
             choiceCode: c.slot,
             choiceName: c.name,
             factoryLabel: c.factoryName,
+            extraPrice: c.extraPrice ?? 0,
             imageFileId: c.imageFileId,
           })),
         })),
