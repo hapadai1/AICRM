@@ -3,7 +3,7 @@
  * 신규는 고객·채촌일·구분을 먼저 입력해 저장할 때 생성한다(유령 세션 방지).
  * 태블릿 가상 숫자 키패드로 치수를 입력하며, 현재 필드를 강조한다.
  */
-import { ArrowLeftOutlined, DeleteOutlined, DiffOutlined, SaveOutlined } from '@ant-design/icons';
+import { DeleteOutlined, DiffOutlined, SaveOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
@@ -40,6 +40,7 @@ import {
   reopenMeasurement,
   updateMeasurement,
 } from '../../api/measurements';
+import { BackButton } from '../../shared/BackButton';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { labelOf, metaOf } from '../../shared/status-meta';
@@ -537,6 +538,11 @@ export function MeasurementEditPage() {
             </div>
           </Space>
         </Card>
+
+        {/* 목록·계약 상세 등 여러 경로로 들어오므로 하단에도 이전화면 복귀 버튼을 둔다 */}
+        <Card>
+          <BackButton />
+        </Card>
       </Col>
 
       <Col xs={24} lg={9} xl={8}>
@@ -625,11 +631,6 @@ export function MeasurementEditPage() {
                   </Space>
                 </Can>
               )}
-
-              {/* 목록·계약 상세 등 여러 경로로 들어오므로 뒤로가기로 통일 */}
-              <Button block icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>
-                이전화면
-              </Button>
             </Space>
           </Card>
         </div>
