@@ -306,6 +306,39 @@ export function MeasurementEditPage() {
     setDirty(true);
   };
 
+  // 활성 항목이 있을 때 물리 키보드(숫자 키패드 포함)로도 입력을 받는다.
+  useEffect(() => {
+    if (!activeKey || readOnly) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      // 검색창 등 실제 입력 요소에 포커스가 있으면 가로채지 않는다.
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+      if (e.key >= '0' && e.key <= '9') {
+        handleKeypadPress(e.key);
+        e.preventDefault();
+      } else if (e.key === '.' || e.key === 'Decimal') {
+        handleKeypadPress('.');
+        e.preventDefault();
+      } else if (e.key === 'Backspace' || e.key === 'Delete') {
+        handleKeypadDelete();
+        e.preventDefault();
+      } else if (e.key === 'Enter' || e.key === 'ArrowDown') {
+        moveActive(1);
+        e.preventDefault();
+      } else if (e.key === 'ArrowUp') {
+        moveActive(-1);
+        e.preventDefault();
+      } else if (e.key === 'Escape') {
+        setActiveKey(null);
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeKey, readOnly]);
+
   const confirmDelete = () => {
     if (!session) return;
     modal.confirm({
