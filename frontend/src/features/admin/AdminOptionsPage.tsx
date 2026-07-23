@@ -11,13 +11,11 @@ import {
   Button,
   Card,
   Checkbox,
-  Col,
   Empty,
   Image,
   Input,
   InputNumber,
   Radio,
-  Row,
   Space,
   Table,
   Tag,
@@ -488,131 +486,126 @@ export function AdminOptionsPage() {
         </Space>
       </Card>
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} lg={9}>
-          <Card
+      {/* 선택지가 3개까지 늘어 단계 표가 넓다. 좌우로 나누면 표가 눌리므로 위아래로 쌓는다. */}
+      <Card
+        size="small"
+        title={`버전 목록${currentSet ? ` — ${currentSet.name}` : ''}`}
+        extra={
+          <Button
             size="small"
-            title={`버전 목록${currentSet ? ` — ${currentSet.name}` : ''}`}
-            extra={
-              <Button
-                size="small"
-                icon={<PlusOutlined />}
-                loading={createVersionMutation.isPending}
-                disabled={!currentSet}
-                onClick={() => createVersionMutation.mutate()}
-              >
-                새 버전 (선택 버전 복사)
-              </Button>
-            }
+            icon={<PlusOutlined />}
+            loading={createVersionMutation.isPending}
+            disabled={!currentSet}
+            onClick={() => createVersionMutation.mutate()}
           >
-            <Table<OptionSetVersionSummary>
-              rowKey="id"
-              scroll={{ x: 'max-content' }}
-              size="small"
-              loading={setsQuery.isLoading}
-              dataSource={currentSet?.versions ?? []}
-              columns={versionColumns}
-              pagination={false}
-              rowClassName={(v) => (v.id === selectedVersionId ? 'ant-table-row-selected' : '')}
-              onRow={(v) => ({
-                onClick: () => setSelectedVersionId(v.id),
-                style: { cursor: 'pointer' },
-              })}
-            />
-          </Card>
-        </Col>
+            새 버전 (선택 버전 복사)
+          </Button>
+        }
+      >
+        <Table<OptionSetVersionSummary>
+          rowKey="id"
+          scroll={{ x: 'max-content' }}
+          size="small"
+          loading={setsQuery.isLoading}
+          dataSource={currentSet?.versions ?? []}
+          columns={versionColumns}
+          pagination={false}
+          rowClassName={(v) => (v.id === selectedVersionId ? 'ant-table-row-selected' : '')}
+          onRow={(v) => ({
+            onClick: () => setSelectedVersionId(v.id),
+            style: { cursor: 'pointer' },
+          })}
+        />
+      </Card>
 
-        <Col xs={24} lg={15}>
-          {!version ? (
-            <Card>
-              <Empty description="버전을 선택해 주세요." />
-            </Card>
-          ) : (
-            <Card
-              size="small"
-              title={
-                <Space>
-                  단계 구성 — V{version.versionNo}
-                  <Tag color={metaOf(STATUS_META, version.status).color}>
-                    {metaOf(STATUS_META, version.status).label}
-                  </Tag>
-                </Space>
-              }
-              extra={
-                isDraft ? (
-                  <Space>
-                    <Button
-                      size="small"
-                      icon={<PlusOutlined />}
-                      onClick={() => {
-                        localKeySeq += 1;
-                        setDraftStages((prev) => [
-                          ...prev,
-                          {
-                            key: `local-${localKeySeq}`,
-                            name: '',
-                            sortOrder: prev.length + 1,
-                            required: true,
-                            choices: [emptyChoice(), emptyChoice()],
-                          },
-                        ]);
-                        setDirty(true);
-                      }}
-                    >
-                      단계 추가
-                    </Button>
-                    <Button
-                      size="small"
-                      type="primary"
-                      icon={<SaveOutlined />}
-                      loading={saveMutation.isPending}
-                      disabled={!dirty}
-                      onClick={() => saveMutation.mutate()}
-                    >
-                      저장
-                    </Button>
-                    <Button
-                      size="small"
-                      icon={<ThunderboltOutlined />}
-                      loading={activateMutation.isPending}
-                      onClick={handleActivate}
-                    >
-                      활성화
-                    </Button>
-                  </Space>
-                ) : undefined
-              }
-            >
-              {!isDraft && (
-                <Alert
-                  type="info"
-                  showIcon
-                  style={{ marginBottom: 12 }}
-                  message="사용중·종료 버전은 직접 수정할 수 없습니다. 변경이 필요하면 새 버전을 생성해 주세요."
-                />
-              )}
-              {isDraft && dirty && (
-                <Alert
-                  type="warning"
-                  showIcon
-                  style={{ marginBottom: 12 }}
-                  message="저장되지 않은 변경이 있습니다."
-                />
-              )}
-              <Table<EditableStage>
-                rowKey="key"
-                size="small"
-                loading={versionQuery.isLoading}
-                dataSource={[...draftStages].sort((a, b) => a.sortOrder - b.sortOrder)}
-                columns={stageColumns}
-                pagination={false}
-                scroll={{ x: 1240 }}
-                locale={{ emptyText: '단계가 없습니다. 단계를 추가해 주세요.' }}
-              />
-            </Card>
+      {!version ? (
+        <Card>
+          <Empty description="버전을 선택해 주세요." />
+        </Card>
+      ) : (
+        <Card
+          size="small"
+          title={
+            <Space>
+              단계 구성 — V{version.versionNo}
+              <Tag color={metaOf(STATUS_META, version.status).color}>
+                {metaOf(STATUS_META, version.status).label}
+              </Tag>
+            </Space>
+          }
+          extra={
+            isDraft ? (
+              <Space>
+                <Button
+                  size="small"
+                  icon={<PlusOutlined />}
+                  onClick={() => {
+                    localKeySeq += 1;
+                    setDraftStages((prev) => [
+                      ...prev,
+                      {
+                        key: `local-${localKeySeq}`,
+                        name: '',
+                        sortOrder: prev.length + 1,
+                        required: true,
+                        choices: [emptyChoice(), emptyChoice()],
+                      },
+                    ]);
+                    setDirty(true);
+                  }}
+                >
+                  단계 추가
+                </Button>
+                <Button
+                  size="small"
+                  type="primary"
+                  icon={<SaveOutlined />}
+                  loading={saveMutation.isPending}
+                  disabled={!dirty}
+                  onClick={() => saveMutation.mutate()}
+                >
+                  저장
+                </Button>
+                <Button
+                  size="small"
+                  icon={<ThunderboltOutlined />}
+                  loading={activateMutation.isPending}
+                  onClick={handleActivate}
+                >
+                  활성화
+                </Button>
+              </Space>
+            ) : undefined
+          }
+        >
+          {!isDraft && (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="사용중·종료 버전은 직접 수정할 수 없습니다. 변경이 필요하면 새 버전을 생성해 주세요."
+            />
           )}
-        </Col>
-      </Row>
+          {isDraft && dirty && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="저장되지 않은 변경이 있습니다."
+            />
+          )}
+          <Table<EditableStage>
+            rowKey="key"
+            size="small"
+            loading={versionQuery.isLoading}
+            dataSource={[...draftStages].sort((a, b) => a.sortOrder - b.sortOrder)}
+            columns={stageColumns}
+            pagination={false}
+            scroll={{ x: 1240 }}
+            locale={{ emptyText: '단계가 없습니다. 단계를 추가해 주세요.' }}
+          />
+        </Card>
+      )}
     </Space>
   );
 }
