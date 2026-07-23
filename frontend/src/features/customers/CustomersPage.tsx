@@ -1,6 +1,6 @@
-import { PlusOutlined, SearchOutlined } from '@ant-design/icons';
+import { FilterOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App, Button, Card, Empty, Form, Input, Modal, Segmented, Space, Switch, Table, Typography } from 'antd';
+import { App, Button, Card, Empty, Form, Input, Modal, Radio, Space, Switch, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -69,7 +69,30 @@ export function CustomersPage() {
     {
       title: '최근 거래 유형',
       dataIndex: 'lastTransactionType',
-      width: 120,
+      width: 140,
+      // 필터 버튼을 제목 글자 바로 옆에 배치 (index.css의 tx-type-filter-col) — 서버(transactionType)로 필터링
+      className: 'tx-type-filter-col',
+      filteredValue: transactionType ? [transactionType] : null,
+      filterIcon: (filtered) => <FilterOutlined style={{ color: filtered ? '#1677ff' : undefined }} />,
+      filterDropdown: ({ confirm }) => (
+        <div style={{ padding: 8 }}>
+          <Radio.Group
+            value={transactionType ?? 'ALL'}
+            onChange={(e) => {
+              const v = e.target.value as 'ALL' | 'CUSTOM' | 'RENTAL';
+              setTransactionType(v === 'ALL' ? undefined : v);
+              setPage(1);
+              confirm({ closeDropdown: true });
+            }}
+          >
+            <Space direction="vertical">
+              <Radio value="ALL">전체</Radio>
+              <Radio value="RENTAL">렌탈</Radio>
+              <Radio value="CUSTOM">맞춤</Radio>
+            </Space>
+          </Radio.Group>
+        </div>
+      ),
       render: (v?: 'CUSTOM' | 'RENTAL') => (v ? TRANSACTION_TYPE_LABEL[v] : '-'),
     },
     {
@@ -133,18 +156,6 @@ export function CustomersPage() {
             />
             <Typography.Text>미계약 포함</Typography.Text>
           </Space>
-          <Segmented
-            value={transactionType ?? 'ALL'}
-            onChange={(v) => {
-              setTransactionType(v === 'ALL' ? undefined : (v as 'CUSTOM' | 'RENTAL'));
-              setPage(1);
-            }}
-            options={[
-              { value: 'ALL', label: '전체' },
-              { value: 'RENTAL', label: '렌탈' },
-              { value: 'CUSTOM', label: '맞춤' },
-            ]}
-          />
         </Space>
 
         <Table<CustomerListItem>

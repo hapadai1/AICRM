@@ -55,10 +55,18 @@ export class CustomersService {
       where.customerStatus = statuses.length > 1 ? { in: statuses } : query.status;
     }
     if (query.transactionType) {
-      // 해당 거래방식 주문 보유 고객만 (연동정합화 계약 §2)
-      where.contracts = {
-        some: { orders: { some: { transactionType: query.transactionType } } },
-      };
+      // 최근 거래 유형(가장 최근 주문의 거래방식)이 일치하는 고객만 — 목록 컬럼 표시값과 동일 기준.
+      // 고객별 "최신 주문 1건"은 Prisma where로 표현 불가하여 raw SQL로 고객 ID를 선별한다.
+      const latest = await this.prisma.$queryRaw<{ customer_id: string }[]>`
+        SELECT customer_id FROM (
+          SELECT DISTINCT ON (c.customer_id) c.customer_id, o.transaction_type AS tx
+          FROM orders o
+          JOIN contracts c ON c.id = o.contract_id
+          ORDER BY c.customer_id, o.created_at DESC, o.id DESC
+        ) latest
+        WHERE latest.tx = ${query.transactionType}
+      `;
+      where.id = { in: latest.map((r) => r.customer_id) };
     }
 
     const q = query.q?.trim();
@@ -106,7 +114,7 @@ export class CustomersService {
           this.prisma.order.findMany({
             where: { contract: { customerId: { in: ids } } },
             select: { transactionType: true, createdAt: true, contract: { select: { customerId: true } } },
-            orderBy: { createdAt: 'desc' },
+            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
           }),
         ])
       : [[], [], []];

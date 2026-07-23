@@ -8,3 +8,14 @@
 .ant-table-cell {
   white-space: nowrap;
 }
+
+/* '최근 거래 유형' 필터 아이콘을 헤더 우측 끝이 아니라 제목 글자 바로 옆(한 칸 띄움)에 배치 */
+.tx-type-filter-col .ant-table-filter-column {
+  justify-content: flex-start;
+}
+.tx-type-filter-col .ant-table-column-title {
+  flex: 0 0 auto;
+}
+.tx-type-filter-col .ant-table-filter-trigger {
+  margin-inline: 8px 0;
+}
