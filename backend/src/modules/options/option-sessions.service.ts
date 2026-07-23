@@ -131,12 +131,23 @@ export class OptionSessionsService {
     }
 
     // 확정 세션 재편집: 확정 세션을 복사한 신규 선택 버전 (설계서 §8.5 CONFIRMED → 편집 재개)
+    //
+    // 새 선택 라운드는 현재 ACTIVE 옵션 버전으로 진행한다. 확정본은 그대로 남으니
+    // 이전 버전을 붙들고 있을 이유가 없고, 그러면 마스터를 새로 활성화해도 재선택
+    // 화면에 옛 단계·사진이 계속 나온다.
+    // 단, 옵션 버전이 바뀌면 단계 구성이 달라 선택값을 옮길 수 없으므로 복사하지 않는다.
+    const set = await this.prisma.optionSet.findUnique({
+      where: { productCategory: item.productCategory },
+    });
+    const targetVersionId = set?.activeVersionId ?? current.optionSetVersionId;
+    const versionChanged = targetVersionId !== current.optionSetVersionId;
+
     const created = await this.prisma.$transaction(async (tx) => {
-      const values = await tx.optionSelectionValue.findMany({
-        where: { selectionSessionId: current.id },
-      });
+      const values = versionChanged
+        ? []
+        : await tx.optionSelectionValue.findMany({ where: { selectionSessionId: current.id } });
       const stages = await tx.optionStage.findMany({
-        where: { optionSetVersionId: current.optionSetVersionId, active: true },
+        where: { optionSetVersionId: targetVersionId, active: true },
         orderBy: { sequenceNo: 'asc' },
       });
       const selectedStageIds = new Set(values.map((v) => v.optionStageId));
@@ -151,7 +162,7 @@ export class OptionSessionsService {
         data: {
           id: randomUUID(),
           orderItemId,
-          optionSetVersionId: current.optionSetVersionId,
+          optionSetVersionId: targetVersionId,
           selectionVersionNo: (sessions[0]?.selectionVersionNo ?? 0) + 1,
           status: values.length === 0 ? 'NOT_STARTED' : complete ? 'REVIEW' : 'IN_PROGRESS',
           currentStageId: stages.find((s) => !selectedStageIds.has(s.id))?.id ?? null,

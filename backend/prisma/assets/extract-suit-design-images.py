@@ -27,6 +27,11 @@ WORK = OUT / ".work"
 MAX_LONG_EDGE = 900
 JPEG_QUALITY = 88
 
+# 사진 둘레에 구워 넣는 흰 여백(긴 변 대비 비율).
+# CSS로만 주면 인쇄물·작업지시서 등 이미지 파일을 그대로 쓰는 곳에서는 사라지므로
+# 파일 자체에 넣는다. 인화물의 매트처럼 보이도록 A4 출력 기준 5mm 남짓을 잡았다.
+MARGIN_RATIO = 0.06
+
 # 로고(357x357)·상단 검은 띠(2921x38)를 걸러내는 최소 크기
 MIN_W, MIN_H = 250, 400
 
@@ -83,6 +88,13 @@ def save(im: Image.Image, stage: str, code: str) -> None:
     scale = MAX_LONG_EDGE / max(w, h)
     if scale < 1:
         im = im.resize((round(w * scale), round(h * scale)), Image.LANCZOS)
+
+    # 흰 여백을 사방에 같은 두께로 두른다.
+    pad = round(max(im.size) * MARGIN_RATIO)
+    matted = Image.new("RGB", (im.width + pad * 2, im.height + pad * 2), "white")
+    matted.paste(im, (pad, pad))
+    im = matted
+
     target = OUT / f"{stage}_{code}.jpg"
     im.save(target, "JPEG", quality=JPEG_QUALITY, optimize=True)
     print(f"  {target.name}  {im.width}x{im.height}")

@@ -160,6 +160,20 @@ async function main(): Promise<void> {
   const set = await prisma.optionSet.findUnique({ where: { productCategory: 'SUIT' } });
   if (!set) throw new Error('정장 옵션 세트가 없습니다. 기본 시드를 먼저 실행하세요.');
 
+  // 사진만 갱신: 자산을 다시 뽑았을 때 버전을 새로 만들지 않고 파일 내용만 바꾼다.
+  // files 레코드를 originalName으로 재사용하므로 이미 연결된 선택지가 그대로 새 사진을 가리킨다.
+  if (process.env.SUIT_DESIGN_IMAGES_ONLY === '1') {
+    let n = 0;
+    for (const stage of STAGES) {
+      for (const [i, choice] of stage.choices.entries()) {
+        await ensureFile(stage.code, choice.imageSlot ?? CODES[i]);
+        n += 1;
+      }
+    }
+    console.log(`선택지 사진 ${n}건을 갱신했습니다. (버전은 그대로)`);
+    return;
+  }
+
   if (set.activeVersionId && process.env.SUIT_DESIGN_FORCE !== '1') {
     const active = await prisma.optionSetVersion.findUnique({
       where: { id: set.activeVersionId },

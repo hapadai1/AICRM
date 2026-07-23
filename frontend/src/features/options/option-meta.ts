@@ -13,19 +13,18 @@ export const OPTION_STATUS_META: Record<string, StatusMeta> = {
 };
 
 /**
- * 선택지 사진 둘레의 흰 여백(액자 매트).
- * 사진이 카드 끝까지 꽉 차면 인화물처럼 보이지 않아, 인쇄 기준 5mm 남짓을 띄운다.
- * 96dpi 기준 5mm ≈ 19px이며, 작은 썸네일은 아래 배율로 줄여 쓴다.
+ * 선택지 사진을 담는 틀.
+ *
+ * 흰 여백은 이미지 파일 자체에 구워져 있다(assets/extract-suit-design-images.py의
+ * MARGIN_RATIO). 인쇄물이나 작업지시서처럼 파일을 그대로 쓰는 곳에서도 여백이
+ * 따라가야 하기 때문이다. 그래서 여기서는 여백을 더 주지 않고 테두리만 두른다.
  */
-export const PHOTO_MAT_PX = 19;
-
-/** 사진 둘레에 흰 여백을 두르는 공통 스타일. scale로 썸네일 크기에 맞춰 줄인다. */
-export function photoMatStyle(scale = 1): CSSProperties {
+export function photoFrameStyle(): CSSProperties {
   return {
     background: '#ffffff',
-    padding: Math.round(PHOTO_MAT_PX * scale),
     borderRadius: 8,
     border: '1px solid #e8e8e8',
+    overflow: 'hidden',
     boxSizing: 'border-box',
   };
 }
