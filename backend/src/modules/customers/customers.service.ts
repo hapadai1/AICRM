@@ -493,10 +493,12 @@ export class CustomersService {
   /** 전화번호 중복 조회 (APPT-002/CONT-002). 없으면 data:null */
   async findByPhone(phone: string) {
     const phoneNormalized = normalizePhone(phone);
-    return this.prisma.customer.findUnique({
+    const customer = await this.prisma.customer.findUnique({
       where: { phoneNormalized },
       select: CUSTOMER_SELECT,
     });
+    // 호출부(고객 등록 모달)가 낙관적 잠금에 쓰도록 detail과 동일하게 version으로 노출한다
+    return customer ? { ...customer, version: customer.rowVersion } : null;
   }
 
   /** 물리 삭제 대신 비활성 처리 (설계서 19 — 계약 고객 물리 삭제 금지). */
