@@ -14,8 +14,8 @@ import { toDateOnly, toNumber } from './transform';
 export type MeasurementType = 'INITIAL' | 'FITTING' | 'REMEASURE' | 'OTHER';
 /** 백엔드는 상태 코드 대신 `completed: boolean`을 보낸다. 화면 표시용 파생 코드. */
 export type MeasurementSessionStatus = 'DRAFT' | 'COMPLETED';
-/** 백엔드 body_section 코드 (UPPER/LOWER/SHOES) */
-export type MeasurementGroup = 'UPPER' | 'LOWER' | 'SHOES';
+/** 백엔드 body_section 코드 (UPPER/LOWER/SHIRT/SHOES) */
+export type MeasurementGroup = 'UPPER' | 'LOWER' | 'SHIRT' | 'SHOES';
 
 /** 채촌 구분 = 채촌을 하게 된 업무 단계 (스타일 컨설팅·가봉·수선) */
 export const MEASUREMENT_TYPE_LABELS: Record<string, string> = {
@@ -28,6 +28,7 @@ export const MEASUREMENT_TYPE_LABELS: Record<string, string> = {
 export const MEASUREMENT_GROUP_LABELS: Record<string, string> = {
   UPPER: '상의',
   LOWER: '하의',
+  SHIRT: '셔츠',
   SHOES: '구두',
 };
 
@@ -69,6 +70,14 @@ export const MEASUREMENT_FIELDS: MeasurementFieldDef[] = [
   { key: 'KNEE', label: '무릎둘레', group: 'LOWER', kind: 'number' },
   { key: 'PANTS_OPENING', label: '바지부리', group: 'LOWER', kind: 'number' },
   { key: 'PANTS_LENGTH', label: '바지기장', group: 'LOWER', kind: 'number' },
+  { key: 'SHIRT_NECK', label: '목', group: 'SHIRT', kind: 'number' },
+  { key: 'SHIRT_SHOULDER', label: '어깨', group: 'SHIRT', kind: 'number' },
+  { key: 'SHIRT_CHEST_UPPER', label: '상동', group: 'SHIRT', kind: 'number' },
+  { key: 'SHIRT_CHEST_MID', label: '중동', group: 'SHIRT', kind: 'number' },
+  { key: 'SHIRT_SLEEVE', label: '소매', group: 'SHIRT', kind: 'number' },
+  { key: 'SHIRT_LENGTH', label: '기장', group: 'SHIRT', kind: 'number' },
+  { key: 'SHIRT_CUFF', label: '카우스', group: 'SHIRT', kind: 'number' },
+  { key: 'SHIRT_ARM', label: '팔통', group: 'SHIRT', kind: 'number' },
   { key: 'SHOE_SIZE', label: '신발 사이즈', group: 'SHOES', kind: 'text' },
 ];
 

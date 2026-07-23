@@ -32,6 +32,7 @@ import {
   type OrderComponent,
   type OrderItem,
 } from '../../api/orders';
+import { BackButton } from '../../shared/BackButton';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { labelOf } from '../../shared/status-meta';
@@ -314,6 +315,11 @@ export function OrderDetailPage() {
       })}
 
       {/* 상태 타임라인 카드는 제거했다 — 백엔드에 주문 상태 이력 API가 없다 (docs/dev/08 §4). */}
+
+      {/* 계약 상세·렌탈 배정 등 여러 경로로 들어오므로 뒤로가기로 통일 */}
+      <Card>
+        <BackButton />
+      </Card>
 
       {/* 구성품 추가 (베스트 등) */}
       <Modal

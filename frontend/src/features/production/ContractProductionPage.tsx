@@ -47,6 +47,7 @@ import {
   type ProductionItem,
   type ProductionNotificationSuggestion,
 } from '../../api/production';
+import { BackButton } from '../../shared/BackButton';
 import { Can } from '../../shared/Can';
 import { NotificationConfirmModal } from '../../shared/NotificationConfirmModal';
 import { StatusBadge } from '../../shared/StatusBadge';
@@ -344,6 +345,9 @@ export function ContractProductionPage() {
           />
         </Space>
       </Card>
+
+      {/* 계약 상세 등 여러 경로로 들어오므로 뒤로가기로 통일 */}
+      <BackButton />
 
       {/* 구성품 상태 변경 모달 */}
       <Modal

@@ -15,6 +15,7 @@ import {
   fetchWorkOrderVersions,
   issueWorkOrderVersion,
 } from '../../api/workorders';
+import { BackButton } from '../../shared/BackButton';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { metaOf } from '../../shared/status-meta';
 import { MEASUREMENT_TYPE_META, WORK_ORDER_STATUS_META } from './wo-meta';
@@ -269,9 +270,7 @@ export function WorkOrderPreviewPage() {
             />
           </div>
           <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-            <Button size="large" style={{ height: 56, minWidth: 140, fontSize: 18 }} onClick={() => navigate('/work-orders')}>
-              목록으로
-            </Button>
+            <BackButton />
             <Button
               type="primary"
               size="large"

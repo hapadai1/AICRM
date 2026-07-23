@@ -499,6 +499,7 @@ export function MeasurementEditPage() {
 
         {renderGroup('UPPER')}
         {renderGroup('LOWER')}
+        {renderGroup('SHIRT')}
         {renderGroup('SHOES')}
 
         <Card title="기타" size="small" style={{ marginBottom: 16 }}>
@@ -625,8 +626,9 @@ export function MeasurementEditPage() {
                 </Can>
               )}
 
-              <Button block icon={<ArrowLeftOutlined />} onClick={() => navigate('/measurements')}>
-                채촌 목록으로
+              {/* 목록·계약 상세 등 여러 경로로 들어오므로 뒤로가기로 통일 */}
+              <Button block icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>
+                이전화면
               </Button>
             </Space>
           </Card>

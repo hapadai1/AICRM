@@ -12,6 +12,7 @@ import {
   fetchMeasurements,
 } from '../../api/measurements';
 import { MEASUREMENT_TYPE_META } from './meas-meta';
+import { BackButton } from '../../shared/BackButton';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { labelOf, metaOf } from '../../shared/status-meta';
 
@@ -220,9 +221,8 @@ export function MeasurementComparePage() {
         </Col>
       </Row>
 
-      <Button size="large" style={{ height: 48, alignSelf: 'flex-start' }} onClick={() => navigate(`/measurements?customerId=${data.customerId}`)}>
-        채촌 목록으로
-      </Button>
+      {/* 채촌 편집 등 여러 경로로 들어오므로 뒤로가기로 통일 */}
+      <BackButton style={{ height: 48, alignSelf: 'flex-start' }} />
     </Space>
   );
 }
