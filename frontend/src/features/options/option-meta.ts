@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react';
 import type { StatusMeta } from '../../shared/status-meta';
 
 /**
@@ -10,6 +11,23 @@ export const OPTION_STATUS_META: Record<string, StatusMeta> = {
   REVIEW: { label: '확인대기', color: 'orange' },
   CONFIRMED: { label: '확정', color: 'green' },
 };
+
+/**
+ * 선택지 사진을 담는 틀.
+ *
+ * 흰 여백은 이미지 파일 자체에 구워져 있다(assets/extract-suit-design-images.py의
+ * MARGIN_RATIO). 인쇄물이나 작업지시서처럼 파일을 그대로 쓰는 곳에서도 여백이
+ * 따라가야 하기 때문이다. 그래서 여기서는 여백을 더 주지 않고 테두리만 두른다.
+ */
+export function photoFrameStyle(): CSSProperties {
+  return {
+    background: '#ffffff',
+    borderRadius: 8,
+    border: '1px solid #e8e8e8',
+    overflow: 'hidden',
+    boxSizing: 'border-box',
+  };
+}
 
 /**
  * 선택지 이미지 대체용 placeholder 색상.

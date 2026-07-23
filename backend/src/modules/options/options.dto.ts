@@ -31,11 +31,14 @@ export class CreateOptionSetVersionDto {
 }
 
 export class OptionChoiceInputDto {
-  @IsIn(['A', 'B']) choiceCode: string;
+  /** 한 단계에 2~3개, A부터 순서대로 사용한다. */
+  @IsIn(['A', 'B', 'C']) choiceCode: string;
   @IsString() @IsNotEmpty() @MaxLength(100) choiceName: string;
   @IsOptional() @IsString() @MaxLength(100) factoryLabel?: string;
   /** 미지정 시 placeholder 파일을 생성해 연결한다 (files FK 필수). */
   @IsOptional() @IsUUID() imageFileId?: string;
+  /** 이 선택지를 고를 때 계약금액에 더해지는 추가금액(원). 기본 0. */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) extraPrice?: number;
   @IsOptional() @IsBoolean() active?: boolean;
 }
 

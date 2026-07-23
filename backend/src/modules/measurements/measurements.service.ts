@@ -30,9 +30,22 @@ const SESSION_INCLUDE = {
   createdByUser: { select: { id: true, displayName: true } },
   customer: { select: { id: true, name: true, phone: true } },
   values: { orderBy: [{ sortOrder: 'asc' }, { measurementCode: 'asc' }] },
+  // 화면 머리말에 계약번호를 보여 주기 위해 주문·계약까지 함께 읽는다.
+  relatedOrder: {
+    select: { id: true, orderNo: true, contractId: true, contract: { select: { contractNo: true } } },
+  },
   orderItemLinks: {
     where: { isCurrent: true },
-    select: { orderItem: { select: { id: true, displayName: true, productCategory: true } } },
+    select: {
+      orderItem: {
+        select: {
+          id: true,
+          displayName: true,
+          productCategory: true,
+          order: { select: { contractId: true, contract: { select: { contractNo: true } } } },
+        },
+      },
+    },
   },
   _count: { select: { workOrderVersions: true } },
 } satisfies Prisma.MeasurementSessionInclude;
@@ -128,6 +141,147 @@ export class MeasurementsService {
       createdAt: s.createdAt,
     }));
     return new Paginated(items, query.page, query.size, total);
+  }
+
+  /**
+   * MEAS-001 채촌 대상 목록 — 계약 단위.
+   * 기준은 "채촌 기록"이 아니라 "스타일 컨설팅 대상(맞춤 계약의 미취소 품목)"이라,
+   * 아직 채촌하지 않은 계약도 모두 나온다.
+   *
+   * - 스타일 컨설팅 상태: 계약 품목의 옵션 세션이 전부 CONFIRMED면 전체 완료.
+   * - 채촌 상태: 고객의 과거 이력이 아니라 **이 계약에 연결된** 채촌만 본다.
+   *   연결 판단은 세션의 relatedOrder(계약의 주문) 또는 현재 사용 품목(orderItemLinks) 기준이다.
+   */
+  async targets() {
+    const items = await this.prisma.orderItem.findMany({
+      where: { status: { not: 'CANCELLED' }, order: { transactionType: 'CUSTOM' } },
+      select: {
+        productCategory: true,
+        order: {
+          select: {
+            id: true,
+            contractId: true,
+            completionDueDate: true,
+            contract: {
+              select: { contractNo: true, customer: { select: { id: true, name: true, phone: true } } },
+            },
+          },
+        },
+        optionSelectionSessions: { where: { isCurrent: true }, select: { status: true } },
+      },
+      orderBy: [{ createdAt: 'asc' }, { sequenceNo: 'asc' }],
+    });
+
+    interface Row {
+      contractId: string;
+      contractNo: string;
+      /** 신규 채촌을 이 계약에 연결하기 위한 대표 주문 */
+      orderId: string;
+      customerId: string;
+      customerName: string;
+      customerPhone: string;
+      /** 카테고리별 품목 수 (품목 구성 요약용) */
+      categoryCounts: Record<string, number>;
+      itemCount: number;
+      /** 옵션 세션이 CONFIRMED인 품목 수 */
+      consultingConfirmedCount: number;
+      /** 스타일 컨설팅 전체 완료 여부 */
+      consultingComplete: boolean;
+      /** 계약 내 가장 이른 납기 (YYYY-MM-DD). 없으면 null */
+      dueDate: string | null;
+      /** 이 계약에 연결된 채촌 건수 */
+      measurementCount: number;
+      /** 그중 완료 처리된 건수 */
+      measurementCompletedCount: number;
+      lastSessionId: string | null;
+      lastMeasurementDate: string | null;
+      lastVersionNo: number | null;
+      lastMeasurementType: string | null;
+      lastCompleted: boolean | null;
+    }
+
+    const rows = new Map<string, Row>();
+    for (const item of items) {
+      const order = item.order;
+      const customer = order.contract.customer;
+      const row = rows.get(order.contractId) ?? {
+        contractId: order.contractId,
+        contractNo: order.contract.contractNo,
+        orderId: order.id,
+        customerId: customer.id,
+        customerName: customer.name,
+        customerPhone: customer.phone,
+        categoryCounts: {},
+        itemCount: 0,
+        consultingConfirmedCount: 0,
+        consultingComplete: false,
+        dueDate: null,
+        measurementCount: 0,
+        measurementCompletedCount: 0,
+        lastSessionId: null,
+        lastMeasurementDate: null,
+        lastVersionNo: null,
+        lastMeasurementType: null,
+        lastCompleted: null,
+      };
+      row.itemCount += 1;
+      row.categoryCounts[item.productCategory] = (row.categoryCounts[item.productCategory] ?? 0) + 1;
+      if (item.optionSelectionSessions[0]?.status === 'CONFIRMED') row.consultingConfirmedCount += 1;
+      const due = order.completionDueDate ? toDateString(order.completionDueDate) : null;
+      if (due && (!row.dueDate || due < row.dueDate)) row.dueDate = due;
+      rows.set(order.contractId, row);
+    }
+    for (const row of rows.values()) {
+      row.consultingComplete = row.itemCount > 0 && row.consultingConfirmedCount === row.itemCount;
+    }
+
+    const customerIds = [...new Set([...rows.values()].map((r) => r.customerId))];
+    if (customerIds.length > 0) {
+      const sessions = await this.prisma.measurementSession.findMany({
+        where: { customerId: { in: customerIds } },
+        orderBy: [{ measurementDate: 'desc' }, { versionNo: 'desc' }],
+        select: {
+          id: true,
+          measurementDate: true,
+          versionNo: true,
+          measurementType: true,
+          completedAt: true,
+          relatedOrder: { select: { contractId: true } },
+          orderItemLinks: {
+            where: { isCurrent: true },
+            select: { orderItem: { select: { order: { select: { contractId: true } } } } },
+          },
+        },
+      });
+      // 정렬이 최신 순이라 계약별로 처음 만나는 세션이 최근 채촌이다.
+      for (const s of sessions) {
+        const contractIds = new Set<string>();
+        if (s.relatedOrder) contractIds.add(s.relatedOrder.contractId);
+        for (const link of s.orderItemLinks) contractIds.add(link.orderItem.order.contractId);
+        for (const contractId of contractIds) {
+          const row = rows.get(contractId);
+          if (!row) continue;
+          row.measurementCount += 1;
+          if (s.completedAt !== null) row.measurementCompletedCount += 1;
+          if (row.lastSessionId === null) {
+            row.lastSessionId = s.id;
+            row.lastMeasurementDate = toDateString(s.measurementDate);
+            row.lastVersionNo = s.versionNo;
+            row.lastMeasurementType = s.measurementType;
+            row.lastCompleted = s.completedAt !== null;
+          }
+        }
+      }
+    }
+
+    // 채촌이 아직 없는 계약을 위로, 그 다음은 최근 채촌일 오름차순(오래된 것부터).
+    return [...rows.values()].sort((a, b) => {
+      if (!a.lastMeasurementDate && !b.lastMeasurementDate)
+        return b.contractNo.localeCompare(a.contractNo);
+      if (!a.lastMeasurementDate) return -1;
+      if (!b.lastMeasurementDate) return 1;
+      return a.lastMeasurementDate.localeCompare(b.lastMeasurementDate);
+    });
   }
 
   /** MEAS-001 채촌 이력: 버전 목록(최신 순) + 현재 연결 품목 */
@@ -663,13 +817,24 @@ export class MeasurementsService {
   }
 
   private toDetail(session: SessionWithValues) {
+    // 계약은 연결 주문(relatedOrder)이 우선, 없으면 사용 품목이 속한 계약에서 가져온다.
+    const linkedOrder = session.orderItemLinks[0]?.orderItem.order;
+    const contractId = session.relatedOrder?.contractId ?? linkedOrder?.contractId ?? null;
+    const contractNo =
+      session.relatedOrder?.contract.contractNo ?? linkedOrder?.contract.contractNo ?? null;
     return {
       id: session.id,
       customerId: session.customerId,
       customerName: session.customer.name,
       customerPhone: session.customer.phone,
       staffName: session.createdByUser.displayName,
-      linkedOrderItems: session.orderItemLinks.map((l) => l.orderItem),
+      contractId,
+      contractNo,
+      linkedOrderItems: session.orderItemLinks.map((l) => ({
+        id: l.orderItem.id,
+        displayName: l.orderItem.displayName,
+        productCategory: l.orderItem.productCategory,
+      })),
       workOrderVersionCount: session._count.workOrderVersions,
       locked: session._count.workOrderVersions > 0,
       relatedOrderId: session.relatedOrderId,

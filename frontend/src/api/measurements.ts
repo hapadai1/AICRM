@@ -17,10 +17,11 @@ export type MeasurementSessionStatus = 'DRAFT' | 'COMPLETED';
 /** 백엔드 body_section 코드 (UPPER/LOWER/SHOES) */
 export type MeasurementGroup = 'UPPER' | 'LOWER' | 'SHOES';
 
+/** 채촌 구분 = 채촌을 하게 된 업무 단계 (스타일 컨설팅·가봉·수선) */
 export const MEASUREMENT_TYPE_LABELS: Record<string, string> = {
-  INITIAL: '최초',
+  INITIAL: '스타일 컨설팅',
   FITTING: '가봉',
-  REMEASURE: '재채촌',
+  REMEASURE: '수선',
   OTHER: '기타',
 };
 
@@ -138,6 +139,8 @@ interface MeasurementSessionApiRow {
   staffName?: string;
   locked?: boolean;
   workOrderVersionCount?: number;
+  contractId?: string | null;
+  contractNo?: string | null;
   linkedOrderItems?: { id: string; displayName: string; productCategory?: string }[];
   relatedOrderId?: string | null;
   versionNo: number;
@@ -189,6 +192,9 @@ export interface MeasurementSession {
   customerId: string;
   customerName: string;
   customerPhone: string;
+  /** 이 채촌이 속한 계약 (연결 주문 또는 사용 품목에서 유도). 없으면 null */
+  contractId: string | null;
+  contractNo: string | null;
   versionNo: number;
   measurementDate: string;
   measurementType: string;
@@ -240,6 +246,8 @@ function toSession(row: MeasurementSessionApiRow): MeasurementSession {
     customerId: row.customerId,
     customerName: row.customerName ?? '',
     customerPhone: row.customerPhone ?? '',
+    contractId: row.contractId ?? null,
+    contractNo: row.contractNo ?? null,
     versionNo: row.versionNo,
     measurementDate: toDateOnly(row.measurementDate) ?? '',
     measurementType: row.measurementType,
@@ -374,6 +382,38 @@ export async function searchCustomers(q: string): Promise<CustomerOption[]> {
   return res.data;
 }
 
+/**
+ * MEAS-001 채촌 대상 행 (계약 단위).
+ * 기준은 "채촌 기록"이 아니라 "스타일 컨설팅(맞춤 계약 품목)" — 아직 채촌하지 않은 계약도 나온다.
+ * 채촌 관련 수치는 고객의 과거 이력이 아니라 **이 계약에 연결된** 채촌만 센다.
+ */
+export interface MeasurementTargetRow {
+  contractId: string;
+  contractNo: string;
+  /** 신규 채촌을 이 계약에 연결할 때 쓰는 대표 주문 */
+  orderId: string;
+  customerId: string;
+  customerName: string;
+  customerPhone: string;
+  categoryCounts: Partial<Record<'SUIT' | 'SHIRT' | 'SHOES', number>>;
+  itemCount: number;
+  consultingConfirmedCount: number;
+  consultingComplete: boolean;
+  dueDate: string | null;
+  measurementCount: number;
+  measurementCompletedCount: number;
+  lastSessionId: string | null;
+  lastMeasurementDate: string | null;
+  lastVersionNo: number | null;
+  lastMeasurementType: MeasurementType | null;
+  lastCompleted: boolean | null;
+}
+
+/** 채촌 대상 목록 (페이지 없는 단순 배열) */
+export function fetchMeasurementTargets(): Promise<MeasurementTargetRow[]> {
+  return request<MeasurementTargetRow[]>({ url: '/measurements/targets' }).then((rows) => rows ?? []);
+}
+
 /** MEAS-001 전역 채촌 검색 (설계서 09 §3.1) */
 export interface MeasurementListParams {
   q?: string;
@@ -427,6 +467,8 @@ export function createMeasurement(body: {
   customerId: string;
   measurementDate: string;
   measurementType: MeasurementType;
+  /** 이 채촌을 특정 계약(주문)에 연결한다 — 계약별 채촌 상태 판단 근거 */
+  relatedOrderId?: string | null;
   fitPreference?: string | null;
   bodyNotes?: string | null;
   notes?: string | null;
@@ -438,6 +480,7 @@ export function createMeasurement(body: {
       customerId: body.customerId,
       measurementDate: body.measurementDate,
       measurementType: body.measurementType,
+      ...(body.relatedOrderId ? { relatedOrderId: body.relatedOrderId } : {}),
       ...(body.fitPreference ? { fitPreference: body.fitPreference } : {}),
       ...(body.bodyNotes ? { bodyNotes: body.bodyNotes } : {}),
       ...(body.notes ? { notes: body.notes } : {}),

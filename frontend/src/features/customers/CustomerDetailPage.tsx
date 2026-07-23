@@ -98,9 +98,9 @@ const PAYMENT_METHOD_LABEL: Record<string, string> = {
 };
 
 const MEASUREMENT_TYPE_LABEL: Record<string, string> = {
-  INITIAL: '최초',
+  INITIAL: '스타일 컨설팅',
   FITTING: '가봉',
-  REMEASURE: '재채촌',
+  REMEASURE: '수선',
 };
 
 function statusLabel(code: string): string {

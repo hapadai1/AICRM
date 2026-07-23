@@ -12,7 +12,7 @@ import {
   saveOptionStage,
   startOptionSession,
 } from '../../api/options';
-import { choiceColor } from './option-meta';
+import { choiceColor, photoFrameStyle } from './option-meta';
 
 /** 선택지 이미지 영역 — 등록 이미지가 있으면 사진, 없으면 색상 블록으로 폴백한다. */
 function ChoiceMedia({ choice }: { choice: OptionChoiceView }) {
@@ -26,15 +26,15 @@ function ChoiceMedia({ choice }: { choice: OptionChoiceView }) {
 
   if (choice.imageUrl && src) {
     return (
-      <div style={{ height: 240, borderRadius: 8, overflow: 'hidden', background: '#f5f5f5' }}>
+      <div style={photoFrameStyle()}>
         {/* 카드 전체가 '눌러 선택' 대상이므로 preview는 끄고 클릭이 카드로 전파되게 둔다. */}
-        {/* 크기(240px)에 이미지를 잘림 없이 맞춘다(contain) — 비율이 달라도 전체가 보이게. */}
+        {/* 높이를 고정하지 않고 원본 비율 그대로 키운다. 세로로 긴 사진이 화면을 넘기지
+            않도록 뷰포트 기준 상한만 둔다. */}
         <Image
           src={src}
           alt={choice.name}
           width="100%"
-          height={240}
-          style={{ objectFit: 'contain' }}
+          style={{ height: 'auto', maxHeight: '62vh', objectFit: 'contain', display: 'block' }}
           preview={false}
         />
       </div>
@@ -44,7 +44,7 @@ function ChoiceMedia({ choice }: { choice: OptionChoiceView }) {
   return (
     <div
       style={{
-        height: 240,
+        height: 360,
         borderRadius: 8,
         background: choiceColor(choice.choiceId),
         display: 'flex',
@@ -172,8 +172,9 @@ export function OptionStagePage() {
             onChange={(e) => setFabricInput(e.target.value)}
           />
           <Space>
-            <Button size="large" style={{ height: 56, minWidth: 120 }} onClick={() => navigate('/options')}>
-              목록으로
+            {/* 이 화면에는 목록 말고 계약·품목 상세에서도 들어온다. 온 곳으로 되돌린다. */}
+            <Button size="large" style={{ height: 56, minWidth: 120 }} onClick={() => navigate(-1)}>
+              이전화면
             </Button>
             <Button
               type="primary"
@@ -299,15 +300,19 @@ export function OptionStagePage() {
           <Typography.Title level={3} style={{ margin: 0 }}>
             {currentOrder}단계 / {session.totalStages}단계 — {stage.name}
           </Typography.Title>
-          <Typography.Text type="secondary">두 선택지 중 하나를 눌러 선택하세요.</Typography.Text>
+          <Typography.Text type="secondary">
+            {stage.choices.length}개 선택지 중 하나를 눌러 선택하세요.
+          </Typography.Text>
         </Space>
       </Card>
 
       <Row gutter={16}>
         {stage.choices.map((choice) => {
           const selected = choiceId === choice.choiceId;
+          // 선택지 수에 맞춰 한 줄에 나란히 놓는다 (2개면 절반씩, 3개면 3등분).
+          const span = stage.choices.length >= 3 ? 8 : 12;
           return (
-            <Col xs={24} sm={12} key={choice.choiceId}>
+            <Col xs={24} sm={12} md={span} key={choice.choiceId}>
               <Card
                 hoverable={!isConfirmed}
                 onClick={isConfirmed ? undefined : () => setChoiceId(choice.choiceId)}
@@ -321,9 +326,16 @@ export function OptionStagePage() {
               >
                 <ChoiceMedia choice={choice} />
                 <Space style={{ marginTop: 12, justifyContent: 'space-between', width: '100%' }}>
-                  <Typography.Text strong style={{ fontSize: 18 }}>
-                    {choice.code}안 · {choice.name}
-                  </Typography.Text>
+                  <Space direction="vertical" size={2}>
+                    <Typography.Text strong style={{ fontSize: 18 }}>
+                      {choice.code}안 · {choice.name}
+                    </Typography.Text>
+                    {choice.extraPrice > 0 && (
+                      <Typography.Text strong style={{ color: '#cf1322', fontSize: 16 }}>
+                        (+{choice.extraPrice.toLocaleString()}원)
+                      </Typography.Text>
+                    )}
+                  </Space>
                   {selected && <CheckCircleFilled style={{ color: '#1677ff', fontSize: 28 }} />}
                 </Space>
               </Card>

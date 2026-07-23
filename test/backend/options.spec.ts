@@ -135,7 +135,7 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
     versionV1 = res.body.data.id;
   });
 
-  it('단계의 선택지가 A/B 2개가 아니면 OPTION_SET_INVALID를 반환한다', async () => {
+  it('단계의 선택지가 2개 미만이면 OPTION_SET_INVALID를 반환한다', async () => {
     const res = await api(ctx)
       .put(`/api/v1/option-set-versions/${versionV1}/stages`)
       .set(auth(ctx))
@@ -146,6 +146,27 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
             stageName: '라펠',
             sequenceNo: 1,
             choices: [{ choiceCode: 'A', choiceName: '피크드' }],
+          },
+        ],
+      })
+      .expect(422);
+    expect(res.body.error.code).toBe('OPTION_SET_INVALID');
+  });
+
+  it('선택지 코드가 A부터 이어지지 않으면 OPTION_SET_INVALID를 반환한다', async () => {
+    const res = await api(ctx)
+      .put(`/api/v1/option-set-versions/${versionV1}/stages`)
+      .set(auth(ctx))
+      .send({
+        stages: [
+          {
+            stageCode: 'LAPEL',
+            stageName: '라펠',
+            sequenceNo: 1,
+            choices: [
+              { choiceCode: 'A', choiceName: '노치드' },
+              { choiceCode: 'C', choiceName: '숄카라' },
+            ],
           },
         ],
       })
@@ -173,6 +194,40 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
       where: { storageKey: { startsWith: 'placeholders/options/' } },
     });
     expect(files).toBe(6);
+  });
+
+  it('선택지 3개(A/B/C)와 추가금액을 저장할 수 있다', async () => {
+    const res = await api(ctx)
+      .put(`/api/v1/option-set-versions/${versionV1}/stages`)
+      .set(auth(ctx))
+      .send({
+        stages: [
+          {
+            stageCode: 'LAPEL',
+            stageName: '라펠 디자인',
+            sequenceNo: 1,
+            choices: [
+              { choiceCode: 'A', choiceName: '노치드' },
+              { choiceCode: 'B', choiceName: '피크드' },
+              { choiceCode: 'C', choiceName: '숄카라', extraPrice: 33000 },
+            ],
+          },
+        ],
+      })
+      .expect(200);
+    const [stage] = res.body.data.stages;
+    expect(stage.choices).toHaveLength(3);
+    const byCode = Object.fromEntries(
+      stage.choices.map((c: { choiceCode: string; extraPrice: number }) => [c.choiceCode, c.extraPrice]),
+    );
+    expect(byCode).toEqual({ A: 0, B: 0, C: 33000 });
+
+    // 뒤 테스트가 기대하는 3단계 구성으로 되돌린다.
+    await api(ctx)
+      .put(`/api/v1/option-set-versions/${versionV1}/stages`)
+      .set(auth(ctx))
+      .send(stagesPayload)
+      .expect(200);
   });
 
   it('활성화하면 ACTIVE가 되고 option_sets.active_version_id가 갱신된다', async () => {

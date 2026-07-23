@@ -3,7 +3,7 @@
  * 신규는 고객·채촌일·구분을 먼저 입력해 저장할 때 생성한다(유령 세션 방지).
  * 태블릿 가상 숫자 키패드로 치수를 입력하며, 현재 필드를 강조한다.
  */
-import { ArrowLeftOutlined, DeleteOutlined, SaveOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, DeleteOutlined, DiffOutlined, SaveOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
@@ -31,10 +31,12 @@ import type { MeasurementFieldDef, MeasurementType, MeasurementValues } from '..
 import {
   MEASUREMENT_FIELDS,
   MEASUREMENT_GROUP_LABELS,
+  MEASUREMENT_TYPE_LABELS,
   completeMeasurement,
   createMeasurement,
   deleteMeasurement,
   fetchMeasurement,
+  fetchMeasurements,
   reopenMeasurement,
   updateMeasurement,
 } from '../../api/measurements';
@@ -54,10 +56,11 @@ interface FormState {
   notes: string;
 }
 
+/** 채촌 구분 = 채촌을 하게 된 업무 단계 */
 const TYPE_OPTIONS: { label: string; value: MeasurementType }[] = [
-  { label: '최초', value: 'INITIAL' },
+  { label: '스타일 컨설팅', value: 'INITIAL' },
   { label: '가봉', value: 'FITTING' },
-  { label: '재채촌', value: 'REMEASURE' },
+  { label: '수선', value: 'REMEASURE' },
   { label: '기타', value: 'OTHER' },
 ];
 
@@ -102,6 +105,8 @@ export function MeasurementEditPage() {
   const isNew = id === undefined || id === 'new';
 
   const [customerId, setCustomerId] = useState(searchParams.get('customerId') ?? '');
+  // 계약 목록에서 넘어오면 그 계약의 주문에 채촌을 연결한다 (계약별 채촌 상태 판단 근거).
+  const relatedOrderId = searchParams.get('orderId');
   const [customerKeyword, setCustomerKeyword] = useState('');
   const [form, setForm] = useState<FormState | null>(isNew ? emptyForm() : null);
   const [activeKey, setActiveKey] = useState<string | null>(null);
@@ -118,6 +123,13 @@ export function MeasurementEditPage() {
     queryKey: ['customers', 'search', customerKeyword],
     queryFn: () => fetchCustomers({ q: customerKeyword || undefined, includeProspect: true, size: 20 }),
     enabled: isNew,
+  });
+
+  // 같은 고객의 다른 버전으로 바로 갈아탈 수 있게 버전 목록을 함께 읽는다 (별도 목록 화면 없이).
+  const versionsQuery = useQuery({
+    queryKey: ['measurements', 'versions', session?.customerId],
+    queryFn: () => fetchMeasurements(session?.customerId as string),
+    enabled: !isNew && !!session?.customerId,
   });
 
   // 세션 로드 시 폼 초기화 (백엔드 값은 항목 코드 맵으로 변환되어 온다)
@@ -161,6 +173,7 @@ export function MeasurementEditPage() {
         customerId,
         measurementDate: form.measurementDate,
         measurementType: form.measurementType,
+        relatedOrderId,
       });
       // 값은 생성 직후 저장한다 — 생성 API는 값이 빈 항목을 거부한다.
       return updateMeasurement(created.id, {
@@ -355,61 +368,27 @@ export function MeasurementEditPage() {
   );
 
   const statusMeta = metaOf(MEASUREMENT_STATUS_META, session?.status);
+  // 버전 목록은 최신 순으로 온다 — 현재 버전 바로 다음 항목이 직전 버전이다.
+  const versions = versionsQuery.data ?? [];
+  const currentIndex = versions.findIndex((v) => v.id === session?.id);
+  const previousVersion = currentIndex >= 0 ? versions[currentIndex + 1] : undefined;
 
   return (
     <Row gutter={16}>
       <Col xs={24} lg={15} xl={16}>
         <Card style={{ marginBottom: 16 }}>
           <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-            <Space align="start" style={{ width: '100%', justifyContent: 'space-between' }}>
-              <div>
-                <Typography.Title level={4} style={{ margin: 0 }}>
-                  {isNew ? '신규 채촌' : `채촌 입력 — ${session?.customerName} (V${session?.versionNo})`}
-                </Typography.Title>
-                <Typography.Text type="secondary">
-                  단위: cm (소수 허용) · 값이 없는 항목은 비워 둡니다.
-                </Typography.Text>
-              </div>
-              {!isNew && <StatusBadge label={statusMeta.label} color={statusMeta.color} />}
-            </Space>
-
-            {readOnly && (
-              <Alert
-                type="warning"
-                showIcon
-                message="작업지시서 출력에 사용된 채촌입니다."
-                description="값을 바꾸면 이미 나간 지시서와 어긋나므로 수정·삭제가 잠겨 있습니다. 목록에서 복사해 새 버전을 만들어 주세요."
-              />
-            )}
-            {!readOnly && session?.completed && (
-              <Alert
-                type="info"
-                showIcon
-                message="완료된 채촌입니다."
-                description="값을 고치려면 완료를 해제한 뒤 저장하세요."
-                action={
-                  <Can permission="MEASUREMENT_EDIT">
-                    <Button
-                      size="small"
-                      loading={reopenMutation.isPending}
-                      onClick={() => reopenMutation.mutate()}
-                    >
-                      완료 해제
-                    </Button>
-                  </Can>
-                }
-              />
-            )}
-
-            <Space wrap size="middle" align="start">
+            {/* 머리말 — 고객·계약·버전/상태 한 줄. 아래 입력 필드와 겹치는 정보는 배지로 반복하지 않는다. */}
+            <Space align="center" wrap style={{ width: '100%', justifyContent: 'space-between' }}>
               {isNew ? (
-                <Space direction="vertical" size={4}>
-                  <Typography.Text type="secondary">고객 *</Typography.Text>
+                <Space wrap align="center" size="small">
+                  <Typography.Title level={4} style={{ margin: 0 }}>
+                    신규 채촌
+                  </Typography.Title>
                   <Select
                     showSearch
-                    size="large"
                     style={{ minWidth: 280 }}
-                    placeholder="고객 검색 (이름 또는 전화번호)"
+                    placeholder="고객 검색 (이름 또는 전화번호) *"
                     value={customerId || undefined}
                     filterOption={false}
                     onSearch={setCustomerKeyword}
@@ -422,14 +401,29 @@ export function MeasurementEditPage() {
                   />
                 </Space>
               ) : (
-                <Space direction="vertical" size={4}>
-                  <Typography.Text type="secondary">고객</Typography.Text>
-                  <Space>
-                    <Tag color="blue">{session?.customerName}</Tag>
-                    <Typography.Text type="secondary">{session?.customerPhone}</Typography.Text>
-                  </Space>
+                <Space wrap align="center" size="small">
+                  <Typography.Title level={4} style={{ margin: 0 }}>
+                    {session?.customerName}
+                  </Typography.Title>
+                  <Typography.Text type="secondary">{session?.customerPhone}</Typography.Text>
+                  <Tag>{session?.contractNo ?? '계약 미연결'}</Tag>
+                  {session?.linkedOrderItems.map((it) => (
+                    <Tag key={it.id} color="geekblue">
+                      {it.displayName}
+                    </Tag>
+                  ))}
                 </Space>
               )}
+              {!isNew && (
+                <Space size={4}>
+                  <Tag color="blue">V{session?.versionNo}</Tag>
+                  <StatusBadge label={statusMeta.label} color={statusMeta.color} />
+                </Space>
+              )}
+            </Space>
+
+            {/* 입력 필드 한 줄 — 채촌일·구분, 그리고 다른 버전으로 갈아타기 */}
+            <Space wrap size="middle" align="end">
               <Space direction="vertical" size={4}>
                 <Typography.Text type="secondary">채촌일 *</Typography.Text>
                 <DatePicker
@@ -450,16 +444,56 @@ export function MeasurementEditPage() {
                   onChange={(v) => patch({ measurementType: v as MeasurementType })}
                 />
               </Space>
+              {!isNew && versions.length > 1 && (
+                <Space direction="vertical" size={4}>
+                  <Typography.Text type="secondary">버전</Typography.Text>
+                  <Select
+                    size="large"
+                    style={{ minWidth: 300 }}
+                    value={session?.id}
+                    onChange={(v) => navigate(`/measurements/${v}`)}
+                    options={versions.map((v) => ({
+                      value: v.id,
+                      label: `V${v.versionNo} · ${v.measurementDate} · ${labelOf(
+                        MEASUREMENT_TYPE_LABELS,
+                        v.measurementType,
+                      )} · ${v.completed ? '완료' : '작성중'}`,
+                    }))}
+                  />
+                </Space>
+              )}
             </Space>
 
-            {!isNew && session && session.linkedOrderItems.length > 0 && (
-              <Space wrap size={4}>
-                <Typography.Text type="secondary">사용 품목:</Typography.Text>
-                {session.linkedOrderItems.map((it) => (
-                  <Tag key={it.id}>{it.displayName}</Tag>
-                ))}
-              </Space>
+            {readOnly && (
+              <Alert
+                type="warning"
+                showIcon
+                message="작업지시서 출력에 사용된 채촌입니다."
+                description="값을 바꾸면 이미 나간 지시서와 어긋나므로 수정·삭제가 잠겨 있습니다. 목록에서 복사해 새 버전을 만들어 주세요."
+              />
             )}
+            {!readOnly && session?.completed && (
+              <Alert
+                type="info"
+                showIcon
+                message="완료된 채촌입니다. 값을 고치려면 완료를 해제한 뒤 저장하세요."
+                action={
+                  <Can permission="MEASUREMENT_EDIT">
+                    <Button
+                      size="small"
+                      loading={reopenMutation.isPending}
+                      onClick={() => reopenMutation.mutate()}
+                    >
+                      완료 해제
+                    </Button>
+                  </Can>
+                }
+              />
+            )}
+
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              단위: cm (소수 허용) · 값이 없는 항목은 비워 둡니다.
+            </Typography.Text>
           </Space>
         </Card>
 
@@ -535,57 +569,63 @@ export function MeasurementEditPage() {
                   </Button>
                 </Can>
               ) : (
+                /* 주요 동작(저장·완료)은 위 한 줄, 보조 동작(비교·삭제)은 아래 한 줄로 묶는다. */
                 <Can permission="MEASUREMENT_EDIT">
-                  <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-                    <Button
-                      size="large"
-                      block
-                      style={{ height: 56, fontSize: 18 }}
-                      icon={<SaveOutlined />}
-                      disabled={readOnly || session?.completed}
-                      loading={saveMutation.isPending && !completeMutation.isPending}
-                      onClick={() =>
-                        saveMutation.mutate(undefined, {
-                          onSuccess: () => message.success('저장되었습니다.'),
-                        })
-                      }
-                    >
-                      저장
-                    </Button>
-                    <Button
-                      type="primary"
-                      size="large"
-                      block
-                      style={{ height: 56, fontSize: 18 }}
-                      disabled={readOnly || session?.completed}
-                      loading={completeMutation.isPending}
-                      onClick={() => completeMutation.mutate()}
-                    >
-                      완료
-                    </Button>
-                    <Button
-                      danger
-                      size="large"
-                      block
-                      icon={<DeleteOutlined />}
-                      disabled={readOnly}
-                      loading={deleteMutation.isPending}
-                      onClick={confirmDelete}
-                    >
-                      삭제
-                    </Button>
+                  <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <Button
+                        size="large"
+                        style={{ flex: 1, height: 56, fontSize: 18 }}
+                        icon={<SaveOutlined />}
+                        disabled={readOnly || session?.completed}
+                        loading={saveMutation.isPending && !completeMutation.isPending}
+                        onClick={() =>
+                          saveMutation.mutate(undefined, {
+                            onSuccess: () => message.success('저장되었습니다.'),
+                          })
+                        }
+                      >
+                        저장
+                      </Button>
+                      <Button
+                        type="primary"
+                        size="large"
+                        style={{ flex: 1, height: 56, fontSize: 18 }}
+                        disabled={readOnly || session?.completed}
+                        loading={completeMutation.isPending}
+                        onClick={() => completeMutation.mutate()}
+                      >
+                        완료
+                      </Button>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      {previousVersion && (
+                        <Button
+                          style={{ flex: 1 }}
+                          icon={<DiffOutlined />}
+                          onClick={() =>
+                            navigate(`/measurements/compare?left=${previousVersion.id}&right=${session?.id}`)
+                          }
+                        >
+                          이전 버전과 비교
+                        </Button>
+                      )}
+                      <Button
+                        danger
+                        style={{ flex: 1 }}
+                        icon={<DeleteOutlined />}
+                        disabled={readOnly}
+                        loading={deleteMutation.isPending}
+                        onClick={confirmDelete}
+                      >
+                        삭제
+                      </Button>
+                    </div>
                   </Space>
                 </Can>
               )}
 
-              <Button
-                size="large"
-                block
-                icon={<ArrowLeftOutlined />}
-                onClick={() =>
-                  navigate(session ? `/measurements?customerId=${session.customerId}` : '/measurements')
-                }
-              >
+              <Button block icon={<ArrowLeftOutlined />} onClick={() => navigate('/measurements')}>
                 채촌 목록으로
               </Button>
             </Space>

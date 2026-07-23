@@ -11,13 +11,11 @@ import {
   Button,
   Card,
   Checkbox,
-  Col,
   Empty,
   Image,
   Input,
   InputNumber,
   Radio,
-  Row,
   Space,
   Table,
   Tag,
@@ -32,6 +30,7 @@ import {
   fetchOptionSets,
   saveOptionStages,
 } from '../../api/admin';
+import { CHOICE_SLOTS, MAX_CHOICES, MIN_CHOICES } from '../../api/admin';
 import type {
   OptionSetVersionStatus,
   OptionSetVersionSummary,
@@ -47,6 +46,15 @@ const STATUS_META: Record<OptionSetVersionStatus, { label: string; color: string
   RETIRED: { label: '종료', color: 'default' },
 };
 
+interface EditableChoice {
+  name: string;
+  factoryName: string;
+  /** 계약금액에 더해지는 추가금액(원) */
+  extraPrice: number;
+  imageUrl: string | null;
+  imageFileId?: string;
+}
+
 interface EditableStage {
   key: string;
   id?: string;
@@ -54,24 +62,33 @@ interface EditableStage {
   name: string;
   sortOrder: number;
   required: boolean;
-  aName: string;
-  aFactory: string;
-  aImageUrl: string | null;
-  aImageFileId?: string;
-  bName: string;
-  bFactory: string;
-  bImageUrl: string | null;
-  bImageFileId?: string;
+  /** 2~3개, 화면 순서가 곧 A/B/C 슬롯이다 */
+  choices: EditableChoice[];
 }
 
 let localKeySeq = 0;
 
+const emptyChoice = (): EditableChoice => ({
+  name: '',
+  factoryName: '',
+  extraPrice: 0,
+  imageUrl: null,
+});
+
+/**
+ * 선택지 사진이 세로로 긴 원본이라 잘리지 않게 contain으로 담고,
+ * 인화물처럼 보이도록 둘레에 흰 여백을 둔다(썸네일이라 좁게).
+ */
+const THUMB_MAT = 6;
 const THUMB_STYLE = {
-  width: 72,
-  height: 51,
+  width: 88,
+  height: 124,
+  padding: THUMB_MAT,
   borderRadius: 4,
-  border: '1px solid #f0f0f0',
-  objectFit: 'cover' as const,
+  border: '1px solid #e8e8e8',
+  background: '#ffffff',
+  objectFit: 'contain' as const,
+  boxSizing: 'border-box' as const,
   flexShrink: 0,
   cursor: 'zoom-in' as const,
 };
@@ -106,7 +123,15 @@ function ChoiceImage({ path, alt }: { path: string | null; alt: string }) {
     gcTime: 30 * 60 * 1000,
   });
   if (!path || !data) return <ImagePlaceholder />;
-  return <Image src={data} alt={alt} style={THUMB_STYLE} preview={{ mask: '크게 보기' }} />;
+  return (
+    <Image
+      src={data}
+      alt={alt}
+      style={THUMB_STYLE}
+      // rootClassName으로 확대 미리보기에도 같은 흰 여백을 준다 (index.css)
+      preview={{ mask: '크게 보기', rootClassName: 'option-choice-preview' }}
+    />
+  );
 }
 
 export function AdminOptionsPage() {
@@ -157,14 +182,15 @@ export function AdminOptionsPage() {
         name: s.name,
         sortOrder: s.sortOrder,
         required: s.required,
-        aName: s.choices.find((c) => c.slot === 'A')?.name ?? '',
-        aFactory: s.choices.find((c) => c.slot === 'A')?.factoryName ?? '',
-        aImageUrl: s.choices.find((c) => c.slot === 'A')?.imageUrl ?? null,
-        aImageFileId: s.choices.find((c) => c.slot === 'A')?.imageFileId,
-        bName: s.choices.find((c) => c.slot === 'B')?.name ?? '',
-        bFactory: s.choices.find((c) => c.slot === 'B')?.factoryName ?? '',
-        bImageUrl: s.choices.find((c) => c.slot === 'B')?.imageUrl ?? null,
-        bImageFileId: s.choices.find((c) => c.slot === 'B')?.imageFileId,
+        choices: CHOICE_SLOTS.map((slot) => s.choices.find((c) => c.slot === slot))
+          .filter((c): c is NonNullable<typeof c> => !!c)
+          .map((c) => ({
+            name: c.name,
+            factoryName: c.factoryName ?? '',
+            extraPrice: c.extraPrice,
+            imageUrl: c.imageUrl,
+            imageFileId: c.imageFileId,
+          })),
       })),
     );
     setDirty(false);
@@ -195,10 +221,13 @@ export function AdminOptionsPage() {
         name: s.name,
         sortOrder: s.sortOrder || idx + 1,
         required: s.required,
-        choices: [
-          { slot: 'A', name: s.aName, factoryName: s.aFactory || undefined, imageFileId: s.aImageFileId },
-          { slot: 'B', name: s.bName, factoryName: s.bFactory || undefined, imageFileId: s.bImageFileId },
-        ],
+        choices: s.choices.map((c, i) => ({
+          slot: CHOICE_SLOTS[i],
+          name: c.name,
+          factoryName: c.factoryName || undefined,
+          extraPrice: c.extraPrice,
+          imageFileId: c.imageFileId,
+        })),
       }));
       return saveOptionStages(selectedVersionId!, stages);
     },
@@ -252,38 +281,108 @@ export function AdminOptionsPage() {
     { title: '활성화일', dataIndex: 'activatedAt', width: 110, render: (v?: string) => v ?? '-' },
   ];
 
-  const choiceCell = (
-    stage: EditableStage,
-    slot: 'A' | 'B',
-  ) => {
-    const nameKey = slot === 'A' ? 'aName' : 'bName';
-    const factoryKey = slot === 'A' ? 'aFactory' : 'bFactory';
-    const imageUrl = slot === 'A' ? stage.aImageUrl : stage.bImageUrl;
+  const patchChoice = (stageKey: string, index: number, patch: Partial<EditableChoice>) => {
+    setDraftStages((prev) =>
+      prev.map((s) =>
+        s.key === stageKey
+          ? { ...s, choices: s.choices.map((c, i) => (i === index ? { ...c, ...patch } : c)) }
+          : s,
+      ),
+    );
+    setDirty(true);
+  };
+
+  const choiceCell = (stage: EditableStage, index: number) => {
+    const choice = stage.choices[index];
+    const slot = CHOICE_SLOTS[index];
+
+    // 3번째 칸은 선택지가 2개인 단계에서 비어 있다 — 초안이면 추가 버튼을 놓는다.
+    if (!choice) {
+      if (!isDraft || index !== stage.choices.length || stage.choices.length >= MAX_CHOICES)
+        return <Typography.Text type="secondary">-</Typography.Text>;
+      return (
+        <Button
+          size="small"
+          type="dashed"
+          icon={<PlusOutlined />}
+          onClick={() => {
+            setDraftStages((prev) =>
+              prev.map((s) =>
+                s.key === stage.key ? { ...s, choices: [...s.choices, emptyChoice()] } : s,
+              ),
+            );
+            setDirty(true);
+          }}
+        >
+          선택지 추가
+        </Button>
+      );
+    }
+
+    const removable = isDraft && stage.choices.length > MIN_CHOICES && index === stage.choices.length - 1;
     return (
       <Space align="start">
-        <ChoiceImage path={imageUrl} alt={`${stage.name} ${slot === 'A' ? '#1' : '#2'} ${stage[nameKey]}`} />
-        <Space direction="vertical" size={4} style={{ width: 160 }}>
+        <ChoiceImage path={choice.imageUrl} alt={`${stage.name} ${slot} ${choice.name}`} />
+        <Space direction="vertical" size={4} style={{ width: 168 }}>
           {isDraft ? (
             <>
               <Input
                 size="small"
                 placeholder={`선택지 ${slot} 명칭`}
-                value={stage[nameKey]}
-                onChange={(e) => patchStage(stage.key, { [nameKey]: e.target.value })}
+                value={choice.name}
+                onChange={(e) => patchChoice(stage.key, index, { name: e.target.value })}
               />
               <Input
                 size="small"
                 placeholder="공장 전달명"
-                value={stage[factoryKey]}
-                onChange={(e) => patchStage(stage.key, { [factoryKey]: e.target.value })}
+                value={choice.factoryName}
+                onChange={(e) => patchChoice(stage.key, index, { factoryName: e.target.value })}
               />
+              <InputNumber
+                size="small"
+                min={0}
+                step={1000}
+                style={{ width: '100%' }}
+                prefix="+"
+                addonAfter="원"
+                placeholder="추가금액"
+                value={choice.extraPrice}
+                formatter={(v) => `${v ?? 0}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+                parser={(v) => Number((v ?? '').replace(/,/g, ''))}
+                onChange={(v) => patchChoice(stage.key, index, { extraPrice: v ?? 0 })}
+              />
+              {removable && (
+                <Button
+                  size="small"
+                  type="text"
+                  danger
+                  icon={<DeleteOutlined />}
+                  onClick={() => {
+                    setDraftStages((prev) =>
+                      prev.map((s) =>
+                        s.key === stage.key
+                          ? { ...s, choices: s.choices.filter((_, i) => i !== index) }
+                          : s,
+                      ),
+                    );
+                    setDirty(true);
+                  }}
+                >
+                  선택지 삭제
+                </Button>
+              )}
             </>
           ) : (
             <>
-              <Typography.Text>{stage[nameKey] || '-'}</Typography.Text>
+              <Typography.Text>{choice.name || '-'}</Typography.Text>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {stage[factoryKey] || '-'}
+                {choice.factoryName || '-'}
               </Typography.Text>
+              {choice.extraPrice > 0 && (
+                <Tag color="red" style={{ marginInlineEnd: 0 }}>
+                  +{choice.extraPrice.toLocaleString()}원
+                </Tag>
+              )}
             </>
           )}
         </Space>
@@ -337,8 +436,15 @@ export function AdminOptionsPage() {
         />
       ),
     },
-    { title: '선택지 #1 (A)', key: 'a', render: (_, s) => choiceCell(s, 'A') },
-    { title: '선택지 #2 (B)', key: 'b', render: (_, s) => choiceCell(s, 'B') },
+    ...CHOICE_SLOTS.map(
+      (slot, index) =>
+        ({
+          title: `선택지 #${index + 1} (${slot})`,
+          key: slot,
+          width: 280,
+          render: (_: unknown, s: EditableStage) => choiceCell(s, index),
+        }) as ColumnsType<EditableStage>[number],
+    ),
     ...(isDraft
       ? [
           {
@@ -380,136 +486,126 @@ export function AdminOptionsPage() {
         </Space>
       </Card>
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} lg={9}>
-          <Card
+      {/* 선택지가 3개까지 늘어 단계 표가 넓다. 좌우로 나누면 표가 눌리므로 위아래로 쌓는다. */}
+      <Card
+        size="small"
+        title={`버전 목록${currentSet ? ` — ${currentSet.name}` : ''}`}
+        extra={
+          <Button
             size="small"
-            title={`버전 목록${currentSet ? ` — ${currentSet.name}` : ''}`}
-            extra={
-              <Button
-                size="small"
-                icon={<PlusOutlined />}
-                loading={createVersionMutation.isPending}
-                disabled={!currentSet}
-                onClick={() => createVersionMutation.mutate()}
-              >
-                새 버전 (선택 버전 복사)
-              </Button>
-            }
+            icon={<PlusOutlined />}
+            loading={createVersionMutation.isPending}
+            disabled={!currentSet}
+            onClick={() => createVersionMutation.mutate()}
           >
-            <Table<OptionSetVersionSummary>
-              rowKey="id"
-              scroll={{ x: 'max-content' }}
-              size="small"
-              loading={setsQuery.isLoading}
-              dataSource={currentSet?.versions ?? []}
-              columns={versionColumns}
-              pagination={false}
-              rowClassName={(v) => (v.id === selectedVersionId ? 'ant-table-row-selected' : '')}
-              onRow={(v) => ({
-                onClick: () => setSelectedVersionId(v.id),
-                style: { cursor: 'pointer' },
-              })}
-            />
-          </Card>
-        </Col>
+            새 버전 (선택 버전 복사)
+          </Button>
+        }
+      >
+        <Table<OptionSetVersionSummary>
+          rowKey="id"
+          scroll={{ x: 'max-content' }}
+          size="small"
+          loading={setsQuery.isLoading}
+          dataSource={currentSet?.versions ?? []}
+          columns={versionColumns}
+          pagination={false}
+          rowClassName={(v) => (v.id === selectedVersionId ? 'ant-table-row-selected' : '')}
+          onRow={(v) => ({
+            onClick: () => setSelectedVersionId(v.id),
+            style: { cursor: 'pointer' },
+          })}
+        />
+      </Card>
 
-        <Col xs={24} lg={15}>
-          {!version ? (
-            <Card>
-              <Empty description="버전을 선택해 주세요." />
-            </Card>
-          ) : (
-            <Card
-              size="small"
-              title={
-                <Space>
-                  단계 구성 — V{version.versionNo}
-                  <Tag color={metaOf(STATUS_META, version.status).color}>
-                    {metaOf(STATUS_META, version.status).label}
-                  </Tag>
-                </Space>
-              }
-              extra={
-                isDraft ? (
-                  <Space>
-                    <Button
-                      size="small"
-                      icon={<PlusOutlined />}
-                      onClick={() => {
-                        localKeySeq += 1;
-                        setDraftStages((prev) => [
-                          ...prev,
-                          {
-                            key: `local-${localKeySeq}`,
-                            name: '',
-                            sortOrder: prev.length + 1,
-                            required: true,
-                            aName: '',
-                            aFactory: '',
-                            aImageUrl: null,
-                            bName: '',
-                            bFactory: '',
-                            bImageUrl: null,
-                          },
-                        ]);
-                        setDirty(true);
-                      }}
-                    >
-                      단계 추가
-                    </Button>
-                    <Button
-                      size="small"
-                      type="primary"
-                      icon={<SaveOutlined />}
-                      loading={saveMutation.isPending}
-                      disabled={!dirty}
-                      onClick={() => saveMutation.mutate()}
-                    >
-                      저장
-                    </Button>
-                    <Button
-                      size="small"
-                      icon={<ThunderboltOutlined />}
-                      loading={activateMutation.isPending}
-                      onClick={handleActivate}
-                    >
-                      활성화
-                    </Button>
-                  </Space>
-                ) : undefined
-              }
-            >
-              {!isDraft && (
-                <Alert
-                  type="info"
-                  showIcon
-                  style={{ marginBottom: 12 }}
-                  message="사용중·종료 버전은 직접 수정할 수 없습니다. 변경이 필요하면 새 버전을 생성해 주세요."
-                />
-              )}
-              {isDraft && dirty && (
-                <Alert
-                  type="warning"
-                  showIcon
-                  style={{ marginBottom: 12 }}
-                  message="저장되지 않은 변경이 있습니다."
-                />
-              )}
-              <Table<EditableStage>
-                rowKey="key"
-                size="small"
-                loading={versionQuery.isLoading}
-                dataSource={[...draftStages].sort((a, b) => a.sortOrder - b.sortOrder)}
-                columns={stageColumns}
-                pagination={false}
-                scroll={{ x: 800 }}
-                locale={{ emptyText: '단계가 없습니다. 단계를 추가해 주세요.' }}
-              />
-            </Card>
+      {!version ? (
+        <Card>
+          <Empty description="버전을 선택해 주세요." />
+        </Card>
+      ) : (
+        <Card
+          size="small"
+          title={
+            <Space>
+              단계 구성 — V{version.versionNo}
+              <Tag color={metaOf(STATUS_META, version.status).color}>
+                {metaOf(STATUS_META, version.status).label}
+              </Tag>
+            </Space>
+          }
+          extra={
+            isDraft ? (
+              <Space>
+                <Button
+                  size="small"
+                  icon={<PlusOutlined />}
+                  onClick={() => {
+                    localKeySeq += 1;
+                    setDraftStages((prev) => [
+                      ...prev,
+                      {
+                        key: `local-${localKeySeq}`,
+                        name: '',
+                        sortOrder: prev.length + 1,
+                        required: true,
+                        choices: [emptyChoice(), emptyChoice()],
+                      },
+                    ]);
+                    setDirty(true);
+                  }}
+                >
+                  단계 추가
+                </Button>
+                <Button
+                  size="small"
+                  type="primary"
+                  icon={<SaveOutlined />}
+                  loading={saveMutation.isPending}
+                  disabled={!dirty}
+                  onClick={() => saveMutation.mutate()}
+                >
+                  저장
+                </Button>
+                <Button
+                  size="small"
+                  icon={<ThunderboltOutlined />}
+                  loading={activateMutation.isPending}
+                  onClick={handleActivate}
+                >
+                  활성화
+                </Button>
+              </Space>
+            ) : undefined
+          }
+        >
+          {!isDraft && (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="사용중·종료 버전은 직접 수정할 수 없습니다. 변경이 필요하면 새 버전을 생성해 주세요."
+            />
           )}
-        </Col>
-      </Row>
+          {isDraft && dirty && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="저장되지 않은 변경이 있습니다."
+            />
+          )}
+          <Table<EditableStage>
+            rowKey="key"
+            size="small"
+            loading={versionQuery.isLoading}
+            dataSource={[...draftStages].sort((a, b) => a.sortOrder - b.sortOrder)}
+            columns={stageColumns}
+            pagination={false}
+            scroll={{ x: 1240 }}
+            locale={{ emptyText: '단계가 없습니다. 단계를 추가해 주세요.' }}
+          />
+        </Card>
+      )}
     </Space>
   );
 }

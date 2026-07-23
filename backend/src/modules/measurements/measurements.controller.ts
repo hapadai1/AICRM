@@ -22,6 +22,13 @@ export class MeasurementsController {
     return this.measurementsService.search(query);
   }
 
+  /** MEAS-001 채촌 대상 목록(계약 단위) — 스타일 컨설팅 대상이면 채촌 전이어도 나온다 (:id 라우트보다 먼저) */
+  @Get('measurements/targets')
+  @RequirePermission('MEASUREMENT_VIEW')
+  targets() {
+    return this.measurementsService.targets();
+  }
+
   /** MEAS-002 채촌 생성 (고객을 본문으로 지정) */
   @Post('measurements')
   @RequirePermission('MEASUREMENT_EDIT')

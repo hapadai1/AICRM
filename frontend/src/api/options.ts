@@ -33,11 +33,42 @@ export interface OptionProgressItem {
 
 export interface OptionChoiceView {
   choiceId: string;
-  /** 백엔드 choiceCode (A/B). 미등록 코드가 와도 그대로 노출한다. */
+  /** 백엔드 choiceCode (A/B/C). 미등록 코드가 와도 그대로 노출한다. */
   code: string;
   name: string;
+  /** 이 선택지를 고를 때 계약금액에 더해지는 추가금액(원). 없으면 0. */
+  extraPrice: number;
   /** 선택지 이미지 경로(/files/:id). 미등록이면 null → 화면은 색상 블록으로 폴백. */
   imageUrl: string | null;
+}
+
+/**
+ * 옵션 추가금액과 계약금액 차액.
+ * 계약 버전은 올리지 않고 현재 버전 금액을 제자리 수정한다(백엔드 applySurcharge).
+ */
+export interface OptionSurcharge {
+  sessionId: string;
+  displayName: string;
+  status: OptionSessionStatus;
+  /** 이 품목 옵션의 추가금액 합계 */
+  total: number;
+  /** 그중 계약금액에 이미 반영한 금액 */
+  applied: number;
+  /** 아직 반영하지 않은 차액 */
+  pending: number;
+  appliedAt: string | null;
+  /** 확정 세션이고 차액이 남아 있을 때만 반영할 수 있다 */
+  appliable: boolean;
+  contract: {
+    contractId: string;
+    contractNo: string;
+    versionNo: number;
+    totalAmount: number;
+    depositAmount: number;
+    balanceAmount: number;
+    afterTotalAmount: number;
+    afterBalanceAmount: number;
+  } | null;
 }
 
 export interface OptionStageView {
@@ -86,6 +117,7 @@ interface OptionChoiceApiRow {
   choiceCode: string;
   choiceName: string;
   factoryLabel: string | null;
+  extraPrice?: number | null;
   imageFileId: string | null;
   active: boolean;
 }
@@ -133,6 +165,7 @@ function toStage(row: OptionStageApiRow): OptionStageView {
       choiceId: c.id,
       code: c.choiceCode,
       name: c.choiceName,
+      extraPrice: Number(c.extraPrice ?? 0),
       imageUrl: c.imageFileId ? `/files/${c.imageFileId}` : null,
     })),
     selectedChoiceId: row.selectedChoiceId ?? null,
@@ -182,6 +215,8 @@ export interface OptionReviewStage {
   required: boolean;
   choiceId: string | null;
   choiceName: string | null;
+  /** 선택 시점 스냅샷 기준 추가금액(원) */
+  extraPrice: number;
   /** 선택지 이미지 경로(/files/:id). 미등록이면 null → 화면은 색상 블록으로 폴백. */
   imageUrl: string | null;
 }
@@ -198,6 +233,7 @@ export interface OptionReviewData {
   missingCount: number;
   version: number;
   stages: OptionReviewStage[];
+  surcharge: OptionSurcharge;
 }
 
 interface OptionReviewApiRow {
@@ -218,9 +254,11 @@ interface OptionReviewApiRow {
       choiceId: string;
       choiceCode: string;
       choiceName: string;
+      extraPrice?: number | null;
       imageFileId?: string | null;
     } | null;
   }[];
+  surcharge: OptionSurcharge;
   version: number;
 }
 
@@ -241,8 +279,10 @@ function toOptionReview(row: OptionReviewApiRow): OptionReviewData {
       required: s.required,
       choiceId: s.selected?.choiceId ?? null,
       choiceName: s.selected?.choiceName ?? null,
+      extraPrice: Number(s.selected?.extraPrice ?? 0),
       imageUrl: s.selected?.imageFileId ? `/files/${s.selected.imageFileId}` : null,
     })),
+    surcharge: row.surcharge,
   };
 }
 
@@ -252,6 +292,7 @@ export interface OptionConfirmResult {
   status: 'CONFIRMED';
   confirmedAt: string;
   optionSummary: { stageName: string; choiceName: string }[];
+  surcharge: OptionSurcharge;
   version: number;
 }
 
@@ -333,6 +374,22 @@ export function confirmOptionSession(
     url: `/option-sessions/${sessionId}/confirm`,
     method: 'POST',
     data: { version },
+  });
+}
+
+/** 옵션 추가금액과 계약금액 차액 조회 */
+export function fetchOptionSurcharge(sessionId: string): Promise<OptionSurcharge> {
+  return request<OptionSurcharge>({ url: `/option-sessions/${sessionId}/surcharge` });
+}
+
+/**
+ * 미반영 차액을 계약 현재 버전 금액에 반영한다.
+ * 변경계약(새 버전)을 만들지 않고 금액만 고치며, 감사로그가 남는다.
+ */
+export function applyOptionSurcharge(sessionId: string): Promise<OptionSurcharge> {
+  return request<OptionSurcharge>({
+    url: `/option-sessions/${sessionId}/surcharge/apply`,
+    method: 'POST',
   });
 }
 

@@ -19,3 +19,15 @@
 .tx-type-filter-col .ant-table-filter-trigger {
   margin-inline: 8px 0;
 }
+
+/* 선택지 사진 확대 미리보기(크게 보기)의 흰 여백
+ * 목록 썸네일에는 인라인 스타일로 여백을 주지만, 확대 이미지는 antd가 body 밑
+ * 별도 레이어에 그려서 그 스타일을 물려받지 못한다. rootClassName으로 이 미리보기만
+ * 골라 동일한 여백을 준다(option-meta.ts PHOTO_MAT_PX와 같은 값).
+ */
+.option-choice-preview .ant-image-preview-img {
+  background: #ffffff;
+  padding: 19px;
+  border-radius: 8px;
+  box-sizing: border-box;
+}

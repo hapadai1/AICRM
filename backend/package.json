@@ -13,6 +13,7 @@
     "seed:journeys": "ts-node prisma/seed-journeys.ts",
     "seed:journey-spread": "ts-node prisma/seed-journey-spread.ts",
     "seed:option-images": "ts-node prisma/seed-option-images.ts",
+    "seed:suit-design": "ts-node prisma/seed-suit-design-options.ts",
     "seed:all": "npm run prisma:seed && npm run seed:demo && npm run seed:more && npm run seed:journeys",
     "test": "jest --config jest.config.js"
   },
