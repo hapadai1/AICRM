@@ -1,6 +1,7 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsEmail,
   IsIn,
   IsISO8601,
@@ -29,6 +30,11 @@ export const APPOINTMENT_SOURCES = ['NAVER', 'CRM'] as const;
 export class AppointmentListQueryDto extends PageQueryDto {
   /** 고객명 / 전화번호 검색어 (예약에서 고객 등록 흐름) */
   @IsOptional() @IsString() q?: string;
+  /** false면 아직 고객으로 등록되지 않은 예약만 조회 ([예약 고객 등록] 대상 목록) */
+  @IsOptional()
+  @Transform(({ value }) => (value === undefined ? undefined : value === true || value === 'true'))
+  @IsBoolean()
+  customerRegistered?: boolean;
   /** 기간 시작 (YYYY-MM-DD 또는 ISO-8601) */
   @IsOptional() @IsISO8601() from?: string;
   /** 기간 종료 (YYYY-MM-DD는 해당 일 전체 포함) */

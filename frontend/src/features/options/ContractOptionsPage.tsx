@@ -28,13 +28,13 @@ import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { fetchContract } from '../../api/contracts';
-import type { OptionProgressItem } from '../../api/options';
+import type { OptionProgressItem, ProductCategory } from '../../api/options';
 import { copyOptionSession, fetchOptionProgress, startOptionSession } from '../../api/options';
 import { BackButton } from '../../shared/BackButton';
 import { PdfViewerModal } from '../../shared/PdfViewerModal';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { metaOf } from '../../shared/status-meta';
-import { OPTION_STATUS_META } from './option-meta';
+import { fabricFieldLabel, fabricFieldPlaceholder, OPTION_STATUS_META } from './option-meta';
 
 /** 원단 가격표(플레이스홀더). 실제 문서 URL로 교체 가능. */
 const FABRIC_PRICE_PDF = '/sample-fabric-price.pdf';
@@ -73,10 +73,16 @@ export function ContractOptionsPage() {
   const [copyTargetId, setCopyTargetId] = useState<string | null>(null);
 
   const fabricMutation = useMutation({
-    mutationFn: ({ orderItemId, fabric }: { orderItemId: string; fabric: string }) =>
-      startOptionSession(orderItemId, fabric),
-    onSuccess: () => {
-      message.success('원단을 저장했습니다.');
+    mutationFn: ({
+      orderItemId,
+      fabric,
+    }: {
+      orderItemId: string;
+      fabric: string;
+      productCategory: ProductCategory;
+    }) => startOptionSession(orderItemId, fabric),
+    onSuccess: (_res, vars) => {
+      message.success(`${fabricFieldLabel(vars.productCategory)}을(를) 저장했습니다.`);
       void queryClient.invalidateQueries({ queryKey: ['options'] });
     },
     onError: (e: Error) => message.error(e.message),
@@ -117,7 +123,8 @@ export function ContractOptionsPage() {
       ),
     },
     {
-      title: '원단',
+      // 정장·셔츠는 원단명, 구두는 컬러를 받는다 — 같은 컬럼이라 머리글은 둘 다 적는다.
+      title: '원단/컬러',
       key: 'fabric',
       width: 320,
       render: (_, row) => {
@@ -125,11 +132,15 @@ export function ContractOptionsPage() {
         // 별도 저장 버튼 없이 포커스 아웃/엔터 시 자동 저장 (변경분·비어있지 않을 때만)
         const save = () => {
           if (draft.trim() && draft.trim() !== (row.fabric ?? ''))
-            fabricMutation.mutate({ orderItemId: row.orderItemId, fabric: draft.trim() });
+            fabricMutation.mutate({
+              orderItemId: row.orderItemId,
+              fabric: draft.trim(),
+              productCategory: row.productCategory,
+            });
         };
         return (
           <Input
-            placeholder="원단명 입력 (예: 캐노니코 네이비 트윌)"
+            placeholder={fabricFieldPlaceholder(row.productCategory)}
             value={draft}
             onChange={(e) => setFabricDraft((prev) => ({ ...prev, [row.orderItemId]: e.target.value }))}
             onBlur={save}

@@ -90,6 +90,61 @@ export class FilesService {
     return view;
   }
 
+  /**
+   * 버퍼 직접 저장 (multer 우회). 서명 dataURL 등 JSON body로 들어오는 바이너리를
+   * 계약 서비스가 내부 호출한다. upload()와 검증·저장·감사 로직을 공유한다. (설계서 03 §2.3)
+   */
+  async saveBuffer(
+    input: { buffer: Buffer; mimeType: string; originalName: string },
+    actor: AuthUser,
+  ): Promise<FileView> {
+    const ext = extname(input.originalName).slice(1).toLowerCase();
+    if (!ALLOWED_EXTENSIONS.includes(ext))
+      throw new BusinessException(
+        'FILE_TYPE_NOT_ALLOWED',
+        `허용되지 않은 파일 형식입니다. (허용: ${ALLOWED_EXTENSIONS.join(', ')})`,
+        [{ field: 'file', reason: 'FILE_TYPE_NOT_ALLOWED' }],
+      );
+
+    const id = randomUUID();
+    const now = new Date();
+    const yyyymm = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const storageKey = `${yyyymm}/${id}.${ext}`;
+    const absolutePath = join(this.storageRoot, storageKey);
+    mkdirSync(dirname(absolutePath), { recursive: true });
+    writeFileSync(absolutePath, input.buffer);
+
+    const checksum = createHash('sha256').update(input.buffer).digest('hex');
+    const record = await this.prisma.file.create({
+      data: {
+        id,
+        storageKey,
+        originalName: input.originalName,
+        mimeType: input.mimeType,
+        sizeBytes: BigInt(input.buffer.length),
+        checksumSha256: checksum,
+      },
+    });
+    const view = this.toView(record);
+    await this.audit.log({
+      userId: actor.id,
+      action: 'CREATE',
+      entityType: 'FILE',
+      entityId: id,
+      after: view,
+    });
+    return view;
+  }
+
+  /** storageKey로 원본 바이트를 읽는다 (엑셀 서명 이미지 앵커용). */
+  async readBuffer(fileId: string): Promise<Buffer> {
+    const record = await this.prisma.file.findUnique({ where: { id: fileId } });
+    if (!record) throw new NotFoundException('파일이 없습니다.');
+    const absolutePath = join(this.storageRoot, record.storageKey);
+    if (!existsSync(absolutePath)) throw new NotFoundException('파일 원본이 저장소에 없습니다.');
+    return fsp.readFile(absolutePath);
+  }
+
   /** 스트리밍 다운로드 (인증 필요, 권한은 연결 엔티티에서 상속). */
   async download(id: string, res: Response): Promise<void> {
     const record = await this.prisma.file.findUnique({ where: { id } });
@@ -116,12 +171,22 @@ export class FilesService {
     const record = await this.prisma.file.findUnique({
       where: { id },
       include: {
-        _count: { select: { entityFiles: true, optionChoices: true, workOrderVersionOutputs: true } },
+        _count: {
+          select: {
+            entityFiles: true,
+            optionChoices: true,
+            workOrderVersionOutputs: true,
+            contractVersionSignatures: true,
+          },
+        },
       },
     });
     if (!record) throw new NotFoundException('파일이 없습니다.');
     const referenced =
-      record._count.entityFiles + record._count.optionChoices + record._count.workOrderVersionOutputs;
+      record._count.entityFiles +
+      record._count.optionChoices +
+      record._count.workOrderVersionOutputs +
+      record._count.contractVersionSignatures;
     if (referenced > 0)
       throw new BusinessException('VALIDATION_ERROR', '참조 중인 파일은 삭제할 수 없습니다.', undefined, {
         entityFiles: record._count.entityFiles,

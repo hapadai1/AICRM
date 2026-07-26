@@ -37,12 +37,9 @@ import {
   type CustomerContractRow,
   type CustomerMeasurementRow,
   type CustomerOrderRow,
-  type CustomerPaymentRow,
   type CustomerRepairRow,
   type CustomerSaveBody,
 } from '../../api/customers';
-import { PAYMENT_TYPE_LABEL, type PaymentType } from '../../api/payments';
-import { useAuthStore } from '../../app/auth-store';
 import { BackButton } from '../../shared/BackButton';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
@@ -92,12 +89,6 @@ const OPTION_STATUS_META: Record<string, { label: string; color: string }> = {
 // 구성품 표시명은 중앙(api/code-labels) 공유 맵을 쓴다(관리자 편집 전 화면 반영).
 const COMPONENT_TYPE_LABEL = COMPONENT_TYPE_LABELS;
 
-const PAYMENT_METHOD_LABEL: Record<string, string> = {
-  CARD: '카드',
-  TRANSFER: '계좌이체',
-  CASH: '현금',
-};
-
 const MEASUREMENT_TYPE_LABEL: Record<string, string> = {
   INITIAL: '스타일 컨설팅',
   FITTING: '가봉',
@@ -123,7 +114,6 @@ export function CustomerDetailPage() {
   const navigate = useNavigate();
   const { message } = App.useApp();
   const queryClient = useQueryClient();
-  const canViewPayment = useAuthStore((s) => s.user?.permissions.includes('PAYMENT_VIEW') ?? false);
 
   const [editOpen, setEditOpen] = useState(false);
   const [editForm] = Form.useForm<CustomerSaveBody>();
@@ -184,7 +174,7 @@ export function CustomerDetailPage() {
 
   const { customer, summary } = data;
   const statusMeta = metaOf(CUSTOMER_STATUS_META, customer.customerStatus);
-  const money = (v: number) => (canViewPayment ? formatAmount(v) : '***');
+  const money = (v: number) => formatAmount(v);
 
   const appointmentColumns: ColumnsType<Appointment> = [
     {
@@ -359,26 +349,6 @@ export function CustomerDetailPage() {
     },
   ];
 
-  const paymentColumns: ColumnsType<CustomerPaymentRow> = [
-    { title: '결제일', dataIndex: 'paidAt', width: 120 },
-    { title: '계약번호', dataIndex: 'contractNo', width: 150 },
-    {
-      title: '결제 유형',
-      dataIndex: 'type',
-      width: 100,
-      render: (v: string) => (
-        <Tag color={v === 'REFUND' ? 'red' : 'blue'}>{PAYMENT_TYPE_LABEL[v as PaymentType] ?? v}</Tag>
-      ),
-    },
-    {
-      title: '결제수단',
-      dataIndex: 'method',
-      width: 100,
-      render: (v?: string) => (v ? (PAYMENT_METHOD_LABEL[v] ?? v) : '-'),
-    },
-    { title: '금액', dataIndex: 'amount', align: 'right', width: 140, render: money },
-  ];
-
   const tableCommon = {
     size: 'small' as const,
     pagination: false as const,
@@ -452,12 +422,6 @@ export function CustomerDetailPage() {
           </Col>
           <Col xs={12} md={6}>
             <Statistic title="매출(계약 합계)" value={money(summary.totalAmount)} />
-          </Col>
-          <Col xs={12} md={6}>
-            <Statistic title="수금" value={money(summary.paidAmount)} />
-          </Col>
-          <Col xs={12} md={6}>
-            <Statistic title="잔금" value={money(summary.balanceAmount)} />
           </Col>
         </Row>
       </Card>
@@ -645,25 +609,6 @@ export function CustomerDetailPage() {
                     locale={{ emptyText: <Empty description="수선 이력이 없습니다." /> }}
                   />
                 </>
-              ),
-            },
-            {
-              key: 'payments',
-              label: `결제·연락 (${data.payments.length})`,
-              children: (
-                <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-                  <Typography.Text strong>수기 결제 이력</Typography.Text>
-                  <Table<CustomerPaymentRow>
-                    {...tableCommon}
-                    rowKey="id"
-                    columns={paymentColumns}
-                    dataSource={data.payments}
-                    locale={{ emptyText: <Empty description="결제 이력이 없습니다." /> }}
-                  />
-                  <Typography.Text type="secondary">
-                    메시지 발송 이력은 알림 화면(Phase 5) 구현 후 제공됩니다.
-                  </Typography.Text>
-                </Space>
               ),
             },
           ]}

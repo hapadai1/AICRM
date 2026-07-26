@@ -93,12 +93,9 @@ function Timetable({
   appointments: Appointment[];
   onOpen: (id: string) => void;
 }) {
-  // 30분 단위 슬롯. 시(hour)와 분(0/30)으로 구성.
-  const slots: { hour: number; minute: number }[] = [];
-  for (let h = TIMETABLE_START_HOUR; h < TIMETABLE_END_HOUR; h++) {
-    slots.push({ hour: h, minute: 0 });
-    slots.push({ hour: h, minute: 30 });
-  }
+  // 1시간 단위 슬롯 (A1: 예약 시간단위 1시간). 기존 30분 예약이 남아 있어도 시(hour) 셀에 흡수된다.
+  const hours: number[] = [];
+  for (let h = TIMETABLE_START_HOUR; h < TIMETABLE_END_HOUR; h++) hours.push(h);
   // 일 뷰에서만 같은 시간대 예약을 고정폭 카드로 가로 나열(넘치면 다음 줄로 wrap).
   // 주 뷰는 x축이 이미 요일이라 셀 안에서는 세로 스택을 유지한다.
   const horizontal = days.length === 1;
@@ -108,14 +105,11 @@ function Timetable({
     padding: 4,
     minHeight: 44,
   };
-  const findCell = (day: Dayjs, hour: number, minute: number) =>
+  // 시(hour) 단위 매칭 — 분(minute) 분기 없이 해당 시간대 예약을 모두 담는다.
+  const findCell = (day: Dayjs, hour: number) =>
     appointments.filter((a) => {
       const s = dayjs(a.startAt);
-      return (
-        s.isSame(day, 'day') &&
-        s.hour() === hour &&
-        (minute === 0 ? s.minute() < 30 : s.minute() >= 30)
-      );
+      return s.isSame(day, 'day') && s.hour() === hour;
     });
   // 표시 구간(10~20시) 밖의 예약도 유실 없이 보여준다.
   const outOfRange = appointments.filter((a) => {
@@ -146,21 +140,21 @@ function Timetable({
             </div>
           );
         })}
-        {slots.map(({ hour: h, minute: m }) => (
-          <div key={`${h}-${m}`} style={{ display: 'contents' }}>
+        {hours.map((h) => (
+          <div key={h} style={{ display: 'contents' }}>
             <div style={{ ...cellStyle, fontSize: 12, color: '#888', textAlign: 'right', paddingRight: 6 }}>
-              {String(h).padStart(2, '0')}:{m === 0 ? '00' : '30'}
+              {String(h).padStart(2, '0')}:00
             </div>
             {days.map((d) => (
               <div
-                key={`${d.format('YYYY-MM-DD')}-${h}-${m}`}
+                key={`${d.format('YYYY-MM-DD')}-${h}`}
                 style={
                   horizontal
                     ? { ...cellStyle, display: 'flex', flexWrap: 'wrap', gap: 4, alignContent: 'flex-start' }
                     : cellStyle
                 }
               >
-                {findCell(d, h, m).map((a) => (
+                {findCell(d, h).map((a) => (
                   <AppointmentCard
                     key={a.id}
                     appointment={a}

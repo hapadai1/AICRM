@@ -5,6 +5,7 @@ import {
   ConfirmSessionDto,
   CopySessionDto,
   PauseSessionDto,
+  SaveComponentAttrDto,
   SaveStageSelectionDto,
   StartOptionSessionDto,
 } from './options.dto';
@@ -60,6 +61,17 @@ export class OptionSessionsController {
   @HttpCode(HttpStatus.OK)
   pause(@Param('id') id: string, @Body() dto: PauseSessionDto) {
     return this.service.pause(id, dto);
+  }
+
+  /** 부위별 원단·컬러·패턴·비고 upsert (설계서 04 §2) */
+  @Put('option-sessions/:id/component-attrs/:group')
+  saveComponentAttr(
+    @Param('id') id: string,
+    @Param('group') group: string,
+    @Body() dto: SaveComponentAttrDto,
+    @CurrentUser() actor: AuthUser,
+  ) {
+    return this.service.saveComponentAttr(id, group, dto, actor);
   }
 
   @Get('option-sessions/:id/review')

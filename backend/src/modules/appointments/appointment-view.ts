@@ -9,7 +9,13 @@ import { usageTypeName } from './consultations.constants';
 export type AppointmentSyncStatus = 'NORMAL' | 'LOCAL_EDITED' | 'NAVER_CHANGED' | 'CONFLICT';
 
 export type AppointmentWithRefs = Appointment & {
-  customer?: { id: string; name: string; phone: string; customerStatus: string } | null;
+  customer?: {
+    id: string;
+    name: string;
+    phone: string;
+    customerStatus: string;
+    registeredAt?: Date | null;
+  } | null;
   purpose?: { code: string; name: string } | null;
 };
 
@@ -37,6 +43,8 @@ export function toAppointmentView(appt: AppointmentWithRefs) {
     customerName: appt.customer?.name ?? null,
     phone: appt.customer?.phone ?? null,
     customerStatus: appt.customer?.customerStatus ?? null,
+    /** 고객으로 정식 등록되었는지 ([예약 고객 등록] 대상 판별) */
+    customerRegistered: appt.customer ? appt.customer.registeredAt != null : null,
     purposeCode: appt.purpose?.code ?? null,
     purposeName: appt.purpose?.name ?? null,
     source: appt.source,

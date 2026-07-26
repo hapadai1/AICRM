@@ -137,6 +137,8 @@ interface ProductionItemApiRow {
     workOrderId: string | null;
     status: string;
     currentVersionNo: number | null;
+    currentVersionId: string | null;
+    currentFileName: string | null;
     lastIssuedAt: string | null;
     canIssue: boolean;
   };
@@ -164,6 +166,10 @@ export interface ProductionWorkOrderView {
   /** WAITING | UNORDERED | REPRINT_NEEDED | CURRENT */
   status: string;
   currentVersionNo?: number;
+  /** 최신 출력본 버전 id — 목록에서 바로 내려받을 때 쓴다 */
+  currentVersionId?: string;
+  /** 최신 출력본 파일명 */
+  currentFileName?: string;
   /** YYYY-MM-DD HH:mm */
   lastIssuedAt?: string;
   /** 출력 가능 여부 (준비 미완이면 false) */
@@ -226,6 +232,8 @@ function toProductionItem(row: ProductionItemApiRow): ProductionItem {
       workOrderId: row.workOrder.workOrderId ?? undefined,
       status: row.workOrder.status,
       currentVersionNo: row.workOrder.currentVersionNo ?? undefined,
+      currentVersionId: row.workOrder.currentVersionId ?? undefined,
+      currentFileName: row.workOrder.currentFileName ?? undefined,
       lastIssuedAt: toDateTime(row.workOrder.lastIssuedAt),
       canIssue: row.workOrder.canIssue,
     },

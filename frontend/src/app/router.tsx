@@ -23,7 +23,6 @@ import { OptionProgressListPage } from '../features/options/OptionProgressListPa
 import { OptionReviewPage } from '../features/options/OptionReviewPage';
 import { OptionStagePage } from '../features/options/OptionStagePage';
 import { OrderDetailPage } from '../features/orders/OrderDetailPage';
-import { PaymentsPage } from '../features/payments/PaymentsPage';
 import { ContractProductionPage } from '../features/production/ContractProductionPage';
 import { ProductionPage } from '../features/production/ProductionPage';
 import { RentalAllocatePage } from '../features/rentals/RentalAllocatePage';
@@ -86,8 +85,7 @@ export const router = createBrowserRouter([
       { path: 'rentals/handover', element: <RentalHandoverPage /> },
       { path: 'rentals/:id', element: <RentalItemDetailPage /> },
       { path: 'repairs', element: <RepairsPage /> },
-      // 결제·연락
-      { path: 'payments', element: <PaymentsPage /> },
+      // 연락
       { path: 'notifications', element: <NotificationsPage /> },
       // 관리자
       { path: 'admin/master', element: <AdminMasterPage /> },

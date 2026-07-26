@@ -29,6 +29,8 @@ export interface CustomerBase {
   phone: string;
   email?: string;
   customerStatus: CustomerStatus;
+  /** 정식 고객으로 등록된 시각. 없으면 예약만 있는 미등록 고객 */
+  registeredAt?: string | null;
   firstReservedAt?: string;
   contractedAt?: string;
   notes?: string;
@@ -39,8 +41,6 @@ export interface CustomerBase {
 export interface CustomerSummary {
   contractCount: number;
   totalAmount: number;
-  paidAmount: number;
-  balanceAmount: number;
 }
 
 export interface CustomerContractRow {
@@ -103,15 +103,6 @@ export interface CustomerRepairRow {
   status: string;
 }
 
-export interface CustomerPaymentRow {
-  id: string;
-  contractNo: string;
-  type: string;
-  amount: number;
-  paidAt: string;
-  method?: string | null;
-}
-
 /** GET /customers/:id 단일 aggregate 응답 (문서 03 §5.2) */
 export interface CustomerAggregate {
   customer: CustomerBase;
@@ -124,7 +115,6 @@ export interface CustomerAggregate {
   components: CustomerComponentRow[];
   rentals: CustomerComponentRow[];
   repairs: CustomerRepairRow[];
-  payments: CustomerPaymentRow[];
 }
 
 export interface CustomerSaveBody {
@@ -161,6 +151,14 @@ export function createCustomer(body: CustomerSaveBody): Promise<CustomerBase> {
 
 export function updateCustomer(id: string, body: CustomerSaveBody): Promise<CustomerBase> {
   return request({ url: `/customers/${id}`, method: 'PATCH', data: body });
+}
+
+/** 예약으로 생긴 미등록 고객을 정식 고객으로 등록 (CUST-001 [예약 고객 등록]) */
+export function registerCustomer(
+  id: string,
+  body: { name: string; email?: string; notes?: string; version: number },
+): Promise<CustomerBase> {
+  return request({ url: `/customers/${id}/register`, method: 'POST', data: body });
 }
 
 export function deactivateCustomer(id: string, reason: string): Promise<CustomerBase> {

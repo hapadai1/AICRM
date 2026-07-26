@@ -1,5 +1,20 @@
 import type { CSSProperties } from 'react';
+import type { ProductCategory } from '../../api/options';
 import type { StatusMeta } from '../../shared/status-meta';
+
+/**
+ * 옵션 세션의 fabric 필드는 품목마다 뜻이 다르다.
+ * 정장·셔츠는 원단명, 구두는 컬러를 텍스트로 받는다 (같은 컬럼을 재사용한다).
+ */
+export function fabricFieldLabel(category: ProductCategory | undefined | null): string {
+  return category === 'SHOES' ? '컬러' : '원단';
+}
+
+export function fabricFieldPlaceholder(category: ProductCategory | undefined | null): string {
+  return category === 'SHOES'
+    ? '컬러 입력 (예: 블랙 / 다크브라운)'
+    : '원단명 입력 (예: 캐노니코 네이비 트윌)';
+}
 
 /**
  * 옵션 진행상태 배지 메타 (텍스트+색상 병기 — 색상 단독 금지).

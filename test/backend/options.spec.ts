@@ -558,6 +558,169 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
     expect(row4.sessionId).toBe(res.body.data.sessionId);
   });
 
+  // -------------------------------------------------------------------------
+  // 4) 부위별 원단·컬러·패턴 (v2 D3 / 설계서 04 §2)
+  // -------------------------------------------------------------------------
+
+  it('부위별 component-attrs를 upsert하고 detail/review의 components[]에 반영된다', async () => {
+    // orderItem4의 현재(NOT_STARTED) 세션 사용
+    const cur = await api(ctx)
+      .get(`/api/v1/order-items/${orderItem4}/option-session`)
+      .set(auth(ctx))
+      .expect(200);
+    const sid = cur.body.data.session.sessionId as string;
+    let version = cur.body.data.session.version as number;
+
+    // 세션 상세는 카테고리(SUIT)의 부위 슬롯을 빈 값으로 내려준다
+    const detail0 = await api(ctx).get(`/api/v1/option-sessions/${sid}`).set(auth(ctx)).expect(200);
+    expect(detail0.body.data.components.map((c: { componentGroup: string }) => c.componentGroup)).toEqual([
+      'JACKET',
+      'TROUSERS',
+      'VEST',
+    ]);
+
+    const saved = await api(ctx)
+      .put(`/api/v1/option-sessions/${sid}/component-attrs/JACKET`)
+      .set(auth(ctx))
+      .send({ fabricName: '수퍼130', colorName: '네이비', patternName: '솔리드', notes: '슬림', version })
+      .expect(200);
+    expect(saved.body.data.component).toMatchObject({
+      componentGroup: 'JACKET',
+      fabricName: '수퍼130',
+      colorName: '네이비',
+      patternName: '솔리드',
+    });
+    version = saved.body.data.version;
+
+    // 잘못된 부위는 거부
+    await api(ctx)
+      .put(`/api/v1/option-sessions/${sid}/component-attrs/HAT`)
+      .set(auth(ctx))
+      .send({ fabricName: 'x', version })
+      .expect(400);
+
+    // 오래된 버전은 VERSION_CONFLICT
+    const conflict = await api(ctx)
+      .put(`/api/v1/option-sessions/${sid}/component-attrs/TROUSERS`)
+      .set(auth(ctx))
+      .send({ fabricName: '동일원단', version: version - 1 })
+      .expect(409);
+    expect(conflict.body.error.code).toBe('VERSION_CONFLICT');
+
+    // review의 components[]에도 반영
+    const review = await api(ctx)
+      .get(`/api/v1/option-sessions/${sid}/review`)
+      .set(auth(ctx))
+      .expect(200);
+    const jacket = review.body.data.components.find(
+      (c: { componentGroup: string }) => c.componentGroup === 'JACKET',
+    );
+    expect(jacket).toMatchObject({ fabricName: '수퍼130', colorName: '네이비' });
+  });
+
+  it('세션 start body의 componentAttrs 배열로 부위별 값을 저장한다', async () => {
+    const base = await ctx.prisma.orderItem.findUniqueOrThrow({ where: { id: orderItem1 } });
+    const item5 = randomUUID();
+    await ctx.prisma.orderItem.create({
+      data: {
+        id: item5,
+        orderId: base.orderId,
+        sourceContractLineId: base.sourceContractLineId,
+        productCategory: 'SUIT',
+        sequenceNo: 5,
+        displayName: '정장 #5',
+      },
+    });
+    const res = await api(ctx)
+      .post(`/api/v1/order-items/${item5}/option-sessions`)
+      .set(auth(ctx))
+      .send({
+        fabric: '기본원단',
+        componentAttrs: [
+          { componentGroup: 'JACKET', fabricName: '자켓원단', colorName: '차콜' },
+          { componentGroup: 'TROUSERS', fabricName: '바지원단' },
+        ],
+      })
+      .expect(201);
+    const byGroup = Object.fromEntries(
+      res.body.data.components.map((c: { componentGroup: string; fabricName: string | null }) => [
+        c.componentGroup,
+        c.fabricName,
+      ]),
+    );
+    expect(byGroup).toMatchObject({ JACKET: '자켓원단', TROUSERS: '바지원단', VEST: null });
+  });
+
+  it('copy 시 부위별 component-attrs도 함께 복사된다', async () => {
+    // orderItem4 세션(자켓 원단 저장됨)을 orderItem2로 복사
+    const cur = await api(ctx)
+      .get(`/api/v1/order-items/${orderItem4}/option-session`)
+      .set(auth(ctx))
+      .expect(200);
+    const sourceSid = cur.body.data.session.sessionId as string;
+    const copied = await api(ctx)
+      .post(`/api/v1/option-sessions/${sourceSid}/copy`)
+      .set(auth(ctx))
+      .send({ targetOrderItemId: orderItem2 })
+      .expect(201);
+    const jacket = copied.body.data.components.find(
+      (c: { componentGroup: string }) => c.componentGroup === 'JACKET',
+    );
+    expect(jacket.fabricName).toBe('수퍼130');
+  });
+
+  it('옵션세트 단계에 componentGroup을 저장하고 조회 응답에 포함된다', async () => {
+    // V2(ACTIVE) 복사로 새 DRAFT 생성 → 부위 그룹 지정 저장
+    const created = await api(ctx)
+      .post(`/api/v1/option-sets/${optionSetId}/versions`)
+      .set(auth(ctx))
+      .send({ copyFromVersionId: versionV2, description: '부위그룹 V3' })
+      .expect(201);
+    const v3 = created.body.data.id as string;
+    const saved = await api(ctx)
+      .put(`/api/v1/option-set-versions/${v3}/stages`)
+      .set(auth(ctx))
+      .send({
+        stages: [
+          {
+            stageCode: 'JACKET_BUTTON',
+            stageName: '단추',
+            sequenceNo: 1,
+            componentGroup: 'JACKET',
+            choices: [
+              { choiceCode: 'A', choiceName: '2버튼' },
+              { choiceCode: 'B', choiceName: '3버튼' },
+            ],
+          },
+          {
+            stageCode: 'TROUSER_PLEAT',
+            stageName: '주름',
+            sequenceNo: 2,
+            componentGroup: 'TROUSERS',
+            choices: [
+              { choiceCode: 'A', choiceName: '노턱' },
+              { choiceCode: 'B', choiceName: '원턱' },
+            ],
+          },
+        ],
+      })
+      .expect(200);
+    const byCode = Object.fromEntries(
+      saved.body.data.stages.map((s: { stageCode: string; componentGroup: string | null }) => [
+        s.stageCode,
+        s.componentGroup,
+      ]),
+    );
+    expect(byCode).toEqual({ JACKET_BUTTON: 'JACKET', TROUSER_PLEAT: 'TROUSERS' });
+
+    // 버전 상세 조회에도 componentGroup 포함
+    const detail = await api(ctx).get(`/api/v1/option-set-versions/${v3}`).set(auth(ctx)).expect(200);
+    expect(
+      detail.body.data.stages.find((s: { stageCode: string }) => s.stageCode === 'JACKET_BUTTON')
+        .componentGroup,
+    ).toBe('JACKET');
+  });
+
   it('일반 직원 권한(OPTION_SELECT 없음이 아닌 마스터 권한 없음)으로 마스터 API는 403이다', async () => {
     // STAFF 역할 사용자 생성: OPTION_SELECT는 있으나 OPTION_MASTER_EDIT 없음
     // (users는 truncate 대상이 아니므로 재실행 안전하게 고유 loginId를 사용한다)

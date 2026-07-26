@@ -101,10 +101,6 @@ interface ContractListApiRow {
   customer: { id: string; name: string; phone: string };
   contractType?: { code: string; name: string } | null;
   currentVersion?: ContractListVersionApiRow | null;
-  /** 실수납액(환불 차감·취소 제외) — 개편계획 06 §3.2. 백엔드가 평면 필드로 내려준다 */
-  paidAmount?: string | number | null;
-  unpaidAmount?: string | number | null;
-  lastPaymentDate?: string | null;
 }
 
 interface ContractOrderApiRow {
@@ -160,12 +156,6 @@ export interface ContractListItem {
   status: ContractStatus;
   currentVersionNo?: number;
   totalAmount?: number;
-  /** 실수납액 = 완료 결제 합계 − 환불 (개편계획 06) */
-  paidAmount: number;
-  /** 미수금 = 계약금액 − 실수납액. 음수면 과납 */
-  unpaidAmount: number;
-  /** 최근 결제일 (`YYYY-MM-DD`), 없으면 null */
-  lastPaymentDate: string | null;
   /** 계약일 (`YYYY-MM-DD`) */
   contractedAt?: string;
   completionDueDate?: string;
@@ -175,8 +165,6 @@ export interface ContractListItem {
 export interface ContractListTotals {
   count: number;
   totalAmount: number;
-  paidAmount: number;
-  unpaidAmount: number;
 }
 
 export type ContractListResult = ListResult<ContractListItem> & { totals?: ContractListTotals };
@@ -274,9 +262,6 @@ function toContractListItem(row: ContractListApiRow): ContractListItem {
     status: row.status,
     currentVersionNo: row.currentVersion?.versionNo,
     totalAmount: toNumber(row.currentVersion?.totalAmount),
-    paidAmount: toNumber(row.paidAmount) ?? 0,
-    unpaidAmount: toNumber(row.unpaidAmount) ?? 0,
-    lastPaymentDate: toDateOnly(row.lastPaymentDate) ?? null,
     contractedAt: toDateOnly(row.contractedAt),
     completionDueDate: toDateOnly(row.currentVersion?.completionDueDate),
   };
@@ -370,12 +355,10 @@ export interface ContractSearchParams {
   status?: ContractStatus;
   customerId?: string;
   /** 기간 필터 기준 (기본 계약일) */
-  dateField?: 'contractedAt' | 'paymentDate' | 'completionDueDate';
+  dateField?: 'contractedAt' | 'completionDueDate';
   dateFrom?: string;
   dateTo?: string;
   contractTypeId?: string;
-  /** 미수금이 남은 계약만 */
-  unpaidOnly?: boolean;
   /** `필드,방향` 예) `contractedAt,desc` */
   sort?: string;
   page?: number;
@@ -414,8 +397,7 @@ export function retireContractType(id: string) {
 export function fetchContracts(params: ContractSearchParams): Promise<ContractListResult> {
   return request<ContractListResult & { data: ContractListApiRow[] }>({
     url: '/contracts',
-    // false는 서버에서 문자열 'false'로 굳어지므로 아예 보내지 않는다.
-    params: { ...params, unpaidOnly: params.unpaidOnly ? true : undefined },
+    params,
   }).then((res) => ({
     ...res,
     data: res.data.map(toContractListItem),

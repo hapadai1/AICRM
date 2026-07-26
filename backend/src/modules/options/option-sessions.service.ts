@@ -5,10 +5,13 @@ import { BusinessException } from '../../common/business.exception';
 import { AuthUser } from '../../common/decorators';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { compareChoiceCodes } from './choice-codes';
+import { componentGroupsFor } from './option-component-groups';
 import {
   ConfirmSessionDto,
   CopySessionDto,
   PauseSessionDto,
+  SaveComponentAttrDto,
   SaveStageSelectionDto,
   StartOptionSessionDto,
 } from './options.dto';
@@ -60,6 +63,7 @@ const SESSION_INCLUDE = {
     },
   },
   values: true,
+  componentAttrs: true,
 } satisfies Prisma.OptionSelectionSessionInclude;
 
 type SessionWithDetail = Prisma.OptionSelectionSessionGetPayload<{
@@ -97,6 +101,8 @@ export class OptionSessionsService {
           data: { fabricName: dto.fabric, rowVersion: { increment: 1 } },
         });
       }
+      if (dto.componentAttrs?.length)
+        await this.upsertComponentAttrs(this.prisma, current.id, dto.componentAttrs);
       return this.detail(current.id);
     }
 
@@ -127,6 +133,8 @@ export class OptionSessionsService {
           },
         });
       });
+      if (dto.componentAttrs?.length)
+        await this.upsertComponentAttrs(this.prisma, created.id, dto.componentAttrs);
       return this.detail(created.id);
     }
 
@@ -189,8 +197,27 @@ export class OptionSessionsService {
           })),
         });
       }
+      // 부위별 원단·컬러·패턴도 새 선택 라운드로 이어받는다.
+      const attrs = await tx.optionSelectionComponentAttr.findMany({
+        where: { selectionSessionId: current.id },
+      });
+      if (attrs.length > 0) {
+        await tx.optionSelectionComponentAttr.createMany({
+          data: attrs.map((a) => ({
+            id: randomUUID(),
+            selectionSessionId: session.id,
+            componentGroup: a.componentGroup,
+            fabricName: a.fabricName,
+            colorName: a.colorName,
+            patternName: a.patternName,
+            notes: a.notes,
+          })),
+        });
+      }
       return session;
     });
+    if (dto.componentAttrs?.length)
+      await this.upsertComponentAttrs(this.prisma, created.id, dto.componentAttrs);
     return this.detail(created.id);
   }
 
@@ -334,6 +361,7 @@ export class OptionSessionsService {
           .map((c) => ({ ...c, extraPrice: Number(c.extraPrice) })),
         selectedChoiceId: valueByStage.get(s.id)?.optionChoiceId ?? null,
       })),
+      components: this.buildComponents(session),
       surchargeTotal: this.surchargeTotal(session),
       surchargeApplied: Number(session.surchargeApplied),
     };
@@ -512,6 +540,7 @@ export class OptionSessionsService {
         required: m.required,
       })),
       stages: items,
+      components: this.buildComponents(session),
       surcharge: await this.surchargeState(session),
       version: session.rowVersion,
     };
@@ -655,6 +684,7 @@ export class OptionSessionsService {
             selectionVersionNo: session.selectionVersionNo,
             orderItemId: session.orderItemId,
             optionSummary: summary,
+            componentAttrs: this.buildComponents(session),
           },
         },
         tx,
@@ -738,12 +768,134 @@ export class OptionSessionsService {
           })),
         });
       }
+      // 부위별 원단·컬러·패턴도 함께 복사한다.
+      if (source.componentAttrs.length > 0) {
+        await tx.optionSelectionComponentAttr.createMany({
+          data: source.componentAttrs.map((a) => ({
+            id: randomUUID(),
+            selectionSessionId: session.id,
+            componentGroup: a.componentGroup,
+            fabricName: a.fabricName,
+            colorName: a.colorName,
+            patternName: a.patternName,
+            notes: a.notes,
+          })),
+        });
+      }
       return session;
     });
     return this.detail(created.id);
   }
 
+  /**
+   * PUT /option-sessions/:id/component-attrs/:group — 부위별 원단·컬러·패턴·비고 upsert.
+   * ensureEditable(CONFIRMED 불가) + 낙관적 잠금(rowVersion) 재사용. 세션 lastSavedAt·rowVersion 증가.
+   */
+  async saveComponentAttr(
+    sessionId: string,
+    group: string,
+    dto: SaveComponentAttrDto,
+    _actor: AuthUser,
+  ) {
+    const session = await this.load(sessionId);
+    this.ensureEditable(session);
+    this.ensureVersion(session, dto.version);
+
+    const validGroups = componentGroupsFor(session.orderItem.productCategory);
+    if (!validGroups.includes(group))
+      throw new BusinessException(
+        'VALIDATION_ERROR',
+        '이 품목에 해당하지 않는 부위입니다.',
+        [{ field: 'group', reason: 'INVALID_COMPONENT_GROUP' }],
+        { productCategory: session.orderItem.productCategory, validGroups },
+      );
+
+    const attrData = {
+      fabricName: dto.fabricName ?? null,
+      colorName: dto.colorName ?? null,
+      patternName: dto.patternName ?? null,
+      notes: dto.notes ?? null,
+    };
+    const now = new Date();
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.optionSelectionComponentAttr.upsert({
+        where: {
+          selectionSessionId_componentGroup: {
+            selectionSessionId: sessionId,
+            componentGroup: group,
+          },
+        },
+        create: { id: randomUUID(), selectionSessionId: sessionId, componentGroup: group, ...attrData },
+        update: attrData,
+      });
+      return tx.optionSelectionSession.update({
+        where: { id: sessionId },
+        data: { lastSavedAt: now, rowVersion: { increment: 1 } },
+      });
+    });
+    const detail = await this.detail(sessionId);
+    return {
+      sessionId,
+      componentGroup: group,
+      component: detail.components.find((c) => c.componentGroup === group) ?? null,
+      version: updated.rowVersion,
+    };
+  }
+
   // -------------------------------------------------------------------------
+
+  /** 부위 슬롯(카테고리별) + 저장값을 병합한 components[] (설계서 04 §2.3) */
+  private buildComponents(session: SessionWithDetail) {
+    const groups = componentGroupsFor(session.orderItem.productCategory);
+    const byGroup = new Map(session.componentAttrs.map((a) => [a.componentGroup, a]));
+    return groups.map((group) => {
+      const attr = byGroup.get(group);
+      return {
+        componentGroup: group,
+        fabricName: attr?.fabricName ?? null,
+        colorName: attr?.colorName ?? null,
+        patternName: attr?.patternName ?? null,
+        notes: attr?.notes ?? null,
+      };
+    });
+  }
+
+  /** 부위별 attr 배열 upsert (start body의 componentAttrs 처리) */
+  private async upsertComponentAttrs(
+    client: Pick<PrismaService, 'optionSelectionComponentAttr'>,
+    sessionId: string,
+    attrs: Array<{
+      componentGroup: string;
+      fabricName?: string;
+      colorName?: string;
+      patternName?: string;
+      notes?: string;
+    }>,
+  ): Promise<void> {
+    for (const a of attrs) {
+      const data = {
+        fabricName: a.fabricName ?? null,
+        colorName: a.colorName ?? null,
+        patternName: a.patternName ?? null,
+        notes: a.notes ?? null,
+      };
+      await client.optionSelectionComponentAttr.upsert({
+        where: {
+          selectionSessionId_componentGroup: {
+            selectionSessionId: sessionId,
+            componentGroup: a.componentGroup,
+          },
+        },
+        create: {
+          id: randomUUID(),
+          selectionSessionId: sessionId,
+          componentGroup: a.componentGroup,
+          ...data,
+        },
+        update: data,
+      });
+    }
+  }
 
   private async load(sessionId: string): Promise<SessionWithDetail> {
     const session = await this.prisma.optionSelectionSession.findUnique({
@@ -755,7 +907,13 @@ export class OptionSessionsService {
   }
 
   private activeStages(session: SessionWithDetail) {
-    return session.optionSetVersion.stages.filter((s) => s.active);
+    return session.optionSetVersion.stages
+      .filter((s) => s.active)
+      // DB의 사전순 정렬은 두 자리 코드에서 어긋난다(AA가 B보다 앞). 코드 순서로 되돌린다.
+      .map((s) => ({
+        ...s,
+        choices: [...s.choices].sort((a, b) => compareChoiceCodes(a.choiceCode, b.choiceCode)),
+      }));
   }
 
   /** 선택값 스냅샷 기준 옵션 추가금액 합계 (활성 단계에 남아 있는 선택만 센다) */

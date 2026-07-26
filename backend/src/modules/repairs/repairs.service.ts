@@ -45,7 +45,6 @@ const REPAIR_SUMMARY_SELECT = {
   dueDate: true,
   status: true,
   description: true,
-  cost: true,
   notes: true,
   receiptMethod: true,
   releaseMethod: true,
@@ -220,7 +219,6 @@ export class RepairsService {
           dueDate: toDate(dto.dueDate),
           status: 'RECEIVED',
           description: dto.description,
-          cost: dto.cost,
           notes: dto.notes,
           ...this.methodData(dto),
           statusEvents: {
@@ -271,7 +269,6 @@ export class RepairsService {
       data: {
         ...(dto.dueDate !== undefined ? { dueDate: toDate(dto.dueDate) } : {}),
         ...(dto.description !== undefined ? { description: dto.description } : {}),
-        ...(dto.cost !== undefined ? { cost: dto.cost } : {}),
         ...(dto.notes !== undefined ? { notes: dto.notes } : {}),
         ...this.methodData(dto),
       },

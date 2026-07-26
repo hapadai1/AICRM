@@ -1,5 +1,19 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Put,
+  Query,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthUser, CurrentUser, RequirePermission } from '../../common/decorators';
+import { UploadedMulterFile } from '../files/files.service';
 import {
   CloneMeasurementSessionDto,
   CompareMeasurementsQueryDto,
@@ -110,6 +124,36 @@ export class MeasurementsController {
     @CurrentUser() actor: AuthUser,
   ) {
     return this.measurementsService.clone(id, dto, actor);
+  }
+
+  /** 채촌 이미지 목록 (설계서 05 §4.2) */
+  @Get('measurements/:id/images')
+  @RequirePermission('MEASUREMENT_VIEW')
+  listImages(@Param('id') id: string) {
+    return this.measurementsService.listImages(id);
+  }
+
+  /** 채촌 이미지 업로드 (multipart: file). files 모듈로 업로드 후 세션에 연결한다. */
+  @Post('measurements/:id/images')
+  @RequirePermission('MEASUREMENT_EDIT')
+  @UseInterceptors(FileInterceptor('file'))
+  addImage(
+    @Param('id') id: string,
+    @UploadedFile() file: UploadedMulterFile | undefined,
+    @CurrentUser() actor: AuthUser,
+  ) {
+    return this.measurementsService.addImage(id, file, actor);
+  }
+
+  /** 채촌 이미지 삭제 (연결 해제 + 참조 없으면 파일 정리) */
+  @Delete('measurements/:id/images/:fileId')
+  @RequirePermission('MEASUREMENT_EDIT')
+  removeImage(
+    @Param('id') id: string,
+    @Param('fileId') fileId: string,
+    @CurrentUser() actor: AuthUser,
+  ) {
+    return this.measurementsService.removeImage(id, fileId, actor);
   }
 
   /** MEAS-001/003 품목 사용 채촌 버전 지정 */

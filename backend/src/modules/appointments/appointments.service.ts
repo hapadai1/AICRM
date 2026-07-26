@@ -35,7 +35,9 @@ const ALLOWED_TRANSITIONS: Record<string, string[]> = {
 };
 
 const APPOINTMENT_INCLUDE = {
-  customer: { select: { id: true, name: true, phone: true, customerStatus: true } },
+  customer: {
+    select: { id: true, name: true, phone: true, customerStatus: true, registeredAt: true },
+  },
   purpose: { select: { id: true, code: true, name: true } },
 } as const;
 
@@ -88,6 +90,11 @@ export class AppointmentsService {
     if (query.source) where.source = query.source;
     if (query.customerId) where.customerId = query.customerId;
 
+    const customerWhere: Prisma.CustomerWhereInput = {};
+    if (query.customerRegistered !== undefined) {
+      customerWhere.registeredAt = query.customerRegistered ? { not: null } : null;
+    }
+
     const keyword = query.q?.trim();
     if (keyword) {
       // 고객명 부분일치 또는 전화번호 부분일치. 자릿수 검증 없이 숫자만 뽑아 비교한다
@@ -95,8 +102,9 @@ export class AppointmentsService {
       const digits = keyword.replace(/\D/g, '');
       const or: Prisma.CustomerWhereInput[] = [{ name: { contains: keyword, mode: 'insensitive' } }];
       if (digits) or.push({ phoneNormalized: { contains: digits } });
-      where.customer = { OR: or };
+      customerWhere.OR = or;
     }
+    if (Object.keys(customerWhere).length > 0) where.customer = customerWhere;
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.appointment.findMany({

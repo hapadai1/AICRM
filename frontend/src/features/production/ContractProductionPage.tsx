@@ -3,6 +3,7 @@ import {
   ArrowLeftOutlined,
   DownloadOutlined,
   ExperimentOutlined,
+  EyeOutlined,
   FileExcelOutlined,
   SendOutlined,
   SwapOutlined,
@@ -47,11 +48,13 @@ import {
   type ProductionItem,
   type ProductionNotificationSuggestion,
 } from '../../api/production';
+import { downloadWorkOrderVersionFile } from '../../api/workorders';
 import { BackButton } from '../../shared/BackButton';
 import { Can } from '../../shared/Can';
 import { NotificationConfirmModal } from '../../shared/NotificationConfirmModal';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { labelOf, metaOf } from '../../shared/status-meta';
+import { WorkOrderFormPreviewModal } from '../workorders/WorkOrderFormPreviewModal';
 import { WORK_ORDER_STATUS_META } from '../workorders/wo-meta';
 import { FittingModal } from './FittingModal';
 
@@ -97,11 +100,21 @@ export function ContractProductionPage() {
   const [inOutTarget, setInOutTarget] = useState<InOutState | null>(null);
   const [fittingTarget, setFittingTarget] = useState<ProductionItem | null>(null);
   const [suggestion, setSuggestion] = useState<ProductionNotificationSuggestion | null>(null);
+  /** 양식 미리보기 대상 품목 (출력 전 확인 — 버전이 생기지 않는다) */
+  const [formPreviewItemId, setFormPreviewItemId] = useState<string | null>(null);
 
   const [statusForm] = Form.useForm<{ toStatus: ComponentStatus; reason?: string }>();
   const [inOutForm] = Form.useForm<{ date: Dayjs }>();
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['production'] });
+
+  /** 최신 작업지시서 Excel 내려받기 — 저장된 파일을 그대로 주므로 새 버전이 생기지 않는다. */
+  const downloadMutation = useMutation({
+    mutationFn: (v: { versionId: string; fileName: string }) =>
+      downloadWorkOrderVersionFile(v.versionId, v.fileName),
+    onError: (e) =>
+      message.error(e instanceof ApiError ? e.message : '작업지시서 파일을 내려받지 못했습니다.'),
+  });
 
   const statusMutation = useMutation({
     mutationFn: (v: { componentId: string; toStatus: ComponentStatus; reason?: string }) =>
@@ -225,16 +238,50 @@ export function ContractProductionPage() {
                 <Typography.Text type="secondary">V{wo.currentVersionNo}</Typography.Text>
               ) : null}
             </Space>
-            <Tooltip title={wo.canIssue ? '' : '옵션 확정과 채촌 완료 후 출력할 수 있습니다.'}>
-              <Button
-                size="small"
-                icon={<FileExcelOutlined />}
-                disabled={!wo.canIssue}
-                onClick={() => navigate(`/work-orders/${r.orderItemId}`)}
-              >
-                {wo.currentVersionNo ? '재출력' : '출력'}
-              </Button>
-            </Tooltip>
+            <Space size={6}>
+              <Tooltip title={wo.canIssue ? '' : '옵션 확정과 채촌 완료 후 출력할 수 있습니다.'}>
+                <Button
+                  size="small"
+                  icon={<FileExcelOutlined />}
+                  disabled={!wo.canIssue}
+                  onClick={() => navigate(`/work-orders/${r.orderItemId}`)}
+                >
+                  {wo.currentVersionNo ? '재출력' : '출력'}
+                </Button>
+              </Tooltip>
+              {/* 출력 전 양식 확인 — 버전·파일이 생기지 않는다. */}
+              <Tooltip title={wo.canIssue ? '작업지시서 양식 미리보기' : '옵션 확정과 채촌 완료 후 볼 수 있습니다.'}>
+                <Button
+                  size="small"
+                  icon={<EyeOutlined />}
+                  disabled={!wo.canIssue}
+                  onClick={() => setFormPreviewItemId(r.orderItemId)}
+                >
+                  보기
+                </Button>
+              </Tooltip>
+              {/* 최신 출력본은 미리보기 화면을 거치지 않고 여기서 바로 받는다(버전 안 늘어남). */}
+              {wo.currentVersionId && wo.currentFileName && (
+                <Tooltip title={`최신 출력본 V${wo.currentVersionNo} 내려받기`}>
+                  <Button
+                    size="small"
+                    icon={<DownloadOutlined />}
+                    loading={
+                      downloadMutation.isPending &&
+                      downloadMutation.variables?.versionId === wo.currentVersionId
+                    }
+                    onClick={() =>
+                      downloadMutation.mutate({
+                        versionId: wo.currentVersionId as string,
+                        fileName: wo.currentFileName as string,
+                      })
+                    }
+                  >
+                    Excel
+                  </Button>
+                </Tooltip>
+              )}
+            </Space>
           </Space>
         );
       },
@@ -421,6 +468,12 @@ export function ContractProductionPage() {
       {fittingTarget && (
         <FittingModal item={fittingTarget} open onClose={() => setFittingTarget(null)} />
       )}
+
+      <WorkOrderFormPreviewModal
+        open={formPreviewItemId != null}
+        onClose={() => setFormPreviewItemId(null)}
+        orderItemId={formPreviewItemId ?? undefined}
+      />
 
       <NotificationConfirmModal
         open={suggestion != null}

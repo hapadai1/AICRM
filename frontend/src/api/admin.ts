@@ -56,9 +56,14 @@ export function retireMaster(type: MasterType, id: string): Promise<MasterItem> 
 
 export type OptionSetVersionStatus = 'DRAFT' | 'ACTIVE' | 'RETIRED';
 
-/** 한 단계에 2~3개, A부터 순서대로 쓴다 */
-export type ChoiceSlot = 'A' | 'B' | 'C';
-export const CHOICE_SLOTS: ChoiceSlot[] = ['A', 'B', 'C'];
+/**
+ * 한 단계에 2~40개, A부터 순서대로 쓴다.
+ * 구두는 부위별 단계 없이 완성 스타일 29종을 한 단계에 펼치므로 A~Z 다음 AA~AN까지 쓴다.
+ * (백엔드 src/modules/options/choice-codes.ts와 같은 목록을 유지한다)
+ */
+export type ChoiceSlot = string;
+const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+export const CHOICE_SLOTS: ChoiceSlot[] = [...LETTERS, ...LETTERS.slice(0, 14).map((c) => `A${c}`)];
 export const MIN_CHOICES = 2;
 export const MAX_CHOICES = CHOICE_SLOTS.length;
 
@@ -417,7 +422,6 @@ const PERMISSION_GROUP_LABELS: Record<string, string> = {
   PRODUCTION: '제작',
   RENTAL: '렌탈',
   REPAIR: '수선',
-  PAYMENT: '결제',
   NOTIFICATION: '알림',
   DASHBOARD: '대시보드',
   ADMIN: '기준정보',

@@ -16,6 +16,7 @@ import {
   toDateOnlyString,
 } from './rentals.constants';
 import {
+  AvailabilityCalendarQueryDto,
   AvailabilityQueryDto,
   CreateInventoryDto,
   CreateStatusEventDto,
@@ -551,6 +552,104 @@ export class RentalInventoryService {
       include: ITEM_WITH_SKU,
       orderBy: { managementCode: 'asc' },
     });
+  }
+
+  /**
+   * 렌탈예약 달력 (설계서 06 §4.4) — [from, to] 기간의 **일자별 가용 실물**을 집계한다.
+   * 후보 = 배정 가능 상태 AND active AND available_from <= 해당일 (단일창 availability 필터 재사용).
+   * 점유 = ACTIVE 배정(RESERVED/PREPARING/CHECKED_OUT)이 해당일을 포함(pickup <= D <= availabilityEnd).
+   * 조회 전용 뷰이며 정합성(이중예약)은 DB EXCLUDE 제약이 최종 보장한다.
+   */
+  async availabilityCalendar(query: AvailabilityCalendarQueryDto) {
+    const from = parseDateOnly(query.from);
+    const to = parseDateOnly(query.to);
+    if (to < from)
+      throw new BusinessException('VALIDATION_ERROR', '종료일은 시작일 이후여야 합니다.', [
+        { field: 'to', reason: 'BEFORE_FROM' },
+      ]);
+    const dayMs = 24 * 60 * 60 * 1000;
+    const dayCount = Math.round((to.getTime() - from.getTime()) / dayMs) + 1;
+    if (dayCount > 366)
+      throw new BusinessException('VALIDATION_ERROR', '조회 기간은 최대 366일까지 가능합니다.', [
+        { field: 'to', reason: 'RANGE_TOO_LARGE' },
+      ]);
+
+    const skuFilter: Prisma.RentalSkuWhereInput = {
+      ...(query.componentType ? { componentType: query.componentType } : {}),
+      ...(query.design ? { design: { contains: query.design, mode: 'insensitive' } } : {}),
+      ...(query.color ? { color: { contains: query.color, mode: 'insensitive' } } : {}),
+      ...(query.size ? { size: query.size } : {}),
+      ...(query.sku ? { description: { contains: query.sku, mode: 'insensitive' } } : {}),
+    };
+    const where: Prisma.RentalInventoryItemWhereInput = {
+      active: true,
+      status: { in: ASSIGNABLE_ITEM_STATUSES },
+      ...(Object.keys(skuFilter).length ? { rentalSku: skuFilter } : {}),
+      ...(query.q
+        ? {
+            OR: [
+              { managementCode: { contains: query.q, mode: 'insensitive' } },
+              { rentalSku: { design: { contains: query.q, mode: 'insensitive' } } },
+              { rentalSku: { color: { contains: query.q, mode: 'insensitive' } } },
+            ],
+          }
+        : {}),
+    };
+
+    const items = await this.prisma.rentalInventoryItem.findMany({
+      where,
+      select: {
+        id: true,
+        managementCode: true,
+        availableFrom: true,
+        rentalSku: { select: { componentType: true, design: true, color: true, size: true } },
+        // 기간과 겹치는 활성 배정만 로드해 일자별 점유 판정에 사용한다.
+        allocations: {
+          where: {
+            status: { in: ACTIVE_ALLOCATION_STATUSES },
+            pickupDate: { lte: to },
+            availabilityEndDate: { gte: from },
+          },
+          select: { pickupDate: true, availabilityEndDate: true },
+        },
+      },
+      orderBy: { managementCode: 'asc' },
+    });
+
+    const calendar: Array<{
+      date: string;
+      availableCount: number;
+      items: Array<{
+        id: string;
+        managementCode: string;
+        componentType: string;
+        design: string;
+        color: string;
+        size: string;
+      }>;
+    }> = [];
+    for (let t = from.getTime(); t <= to.getTime(); t += dayMs) {
+      const availableItems = items.filter((item) => {
+        if (item.availableFrom && item.availableFrom.getTime() > t) return false;
+        const occupied = item.allocations.some(
+          (a) => a.pickupDate.getTime() <= t && a.availabilityEndDate.getTime() >= t,
+        );
+        return !occupied;
+      });
+      calendar.push({
+        date: toDateOnlyString(new Date(t)),
+        availableCount: availableItems.length,
+        items: availableItems.map((i) => ({
+          id: i.id,
+          managementCode: i.managementCode,
+          componentType: i.rentalSku.componentType,
+          design: i.rentalSku.design,
+          color: i.rentalSku.color,
+          size: i.rentalSku.size,
+        })),
+      });
+    }
+    return calendar;
   }
 
   // ---------------------------------------------------------------------------

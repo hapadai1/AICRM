@@ -22,7 +22,15 @@ export const workOrderStatusSelect = Prisma.validator<Prisma.OrderItemSelect>()(
   workOrder: {
     select: {
       id: true,
-      currentVersion: { select: { versionNo: true, issuedAt: true } },
+      // 파일명까지 뽑는 이유: 목록에서 미리보기 화면을 거치지 않고 최신 Excel을 바로 내려받는다.
+      currentVersion: {
+        select: {
+          id: true,
+          versionNo: true,
+          issuedAt: true,
+          outputFile: { select: { originalName: true } },
+        },
+      },
     },
   },
 });
@@ -54,6 +62,10 @@ export interface WorkOrderView {
   workOrderId: string | null;
   status: WorkOrderListStatus | 'WAITING';
   currentVersionNo: number | null;
+  /** 최신 출력본 버전 id — 목록에서 바로 내려받을 때 쓴다 */
+  currentVersionId: string | null;
+  /** 최신 출력본 파일명 */
+  currentFileName: string | null;
   /** ISO. 화면에서 표시 형식으로 정규화 */
   lastIssuedAt: string | null;
   /** 출력 가능 여부 (준비 미완이면 false) */
@@ -70,6 +82,8 @@ export function buildWorkOrderView(item: OrderItemWithWorkOrderStatus): WorkOrde
     workOrderId: item.workOrder?.id ?? null,
     status,
     currentVersionNo: currentVersion?.versionNo ?? null,
+    currentVersionId: currentVersion?.id ?? null,
+    currentFileName: currentVersion?.outputFile?.originalName ?? null,
     lastIssuedAt: currentVersion?.issuedAt.toISOString() ?? null,
     canIssue: status !== 'WAITING',
   };

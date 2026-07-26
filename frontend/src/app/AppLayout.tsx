@@ -51,7 +51,6 @@ export function AppLayout() {
     { key: '/measurements', icon: <ColumnHeightOutlined />, label: '채촌' },
     { key: '/production', icon: <ScissorOutlined />, label: '제작 관리' },
     { key: '/repairs', icon: <ToolOutlined />, label: '수선' },
-    { key: '/payments', icon: <FileTextOutlined />, label: '결제' },
     {
       key: 'g-rental',
       icon: <SwapOutlined />,

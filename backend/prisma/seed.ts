@@ -28,6 +28,7 @@ const PERMISSIONS: Array<{ code: string; name: string; description: string }> = 
   { code: 'CONTRACT_CREATE', name: '계약 작성', description: '신규 계약 초안 작성' },
   { code: 'CONTRACT_EDIT', name: '계약 편집', description: '계약 초안 수정' },
   { code: 'CONTRACT_CONFIRM', name: '계약 확정', description: '계약 버전 확정' },
+  { code: 'CONTRACT_SIGN', name: '계약 서명', description: '계약 버전 전자서명 저장·제거' },
   { code: 'CONTRACT_REVISE', name: '계약 변경', description: '변경계약 버전 작성·확정' },
   { code: 'CONTRACT_CANCEL', name: '계약 취소', description: '계약 취소 처리' },
   { code: 'ORDER_VIEW', name: '주문 조회', description: '주문·품목·구성품 조회' },
@@ -50,8 +51,6 @@ const PERMISSIONS: Array<{ code: string; name: string; description: string }> = 
   { code: 'RENTAL_STATUS_EDIT', name: '렌탈 상태 편집', description: '렌탈 실물 상태·대여 가능일 변경' },
   { code: 'REPAIR_VIEW', name: '수선 조회', description: '수선 요청·이력 조회' },
   { code: 'REPAIR_EDIT', name: '수선 편집', description: '수선 접수·상태·비용 처리' },
-  { code: 'PAYMENT_VIEW', name: '결제 조회', description: '결제 내역 조회' },
-  { code: 'PAYMENT_EDIT', name: '결제 편집', description: '결제 등록·수정·취소' },
   { code: 'NOTIFICATION_VIEW', name: '알림 조회', description: '알림 템플릿·발송 이력 조회' },
   { code: 'NOTIFICATION_SEND', name: '알림 발송', description: '알림톡/SMS 발송·규칙 관리' },
   { code: 'USER_ADMIN', name: '사용자 관리', description: '사용자 계정 등록·잠금·비활성화' },
@@ -144,10 +143,27 @@ const CONTRACT_TYPES: Array<{
     lines: [{ transactionType: 'CUSTOM', productCategory: 'SUIT', defaultQuantity: 1, sortOrder: 1 }],
   },
   {
+    code: 'SHOES_CUSTOM',
+    name: '구두 맞춤',
+    description: '구두 맞춤 제작 계약',
+    sortOrder: 2,
+    lines: [{ transactionType: 'CUSTOM', productCategory: 'SHOES', defaultQuantity: 1, sortOrder: 1 }],
+  },
+  {
+    code: 'SUIT_SHOES_CUSTOM',
+    name: '정장·구두 맞춤',
+    description: '정장과 구두를 함께 맞추는 계약',
+    sortOrder: 3,
+    lines: [
+      { transactionType: 'CUSTOM', productCategory: 'SUIT', defaultQuantity: 1, sortOrder: 1 },
+      { transactionType: 'CUSTOM', productCategory: 'SHOES', defaultQuantity: 1, sortOrder: 2 },
+    ],
+  },
+  {
     code: 'WEDDING_PACKAGE_RENTAL',
     name: '웨딩패키지 렌탈',
     description: '웨딩 정장·구두 렌탈 패키지 계약',
-    sortOrder: 2,
+    sortOrder: 4,
     lines: [
       { transactionType: 'RENTAL', productCategory: 'SUIT', defaultQuantity: 1, sortOrder: 1 },
       { transactionType: 'RENTAL', productCategory: 'SHOES', defaultQuantity: 1, sortOrder: 2 },
@@ -252,6 +268,55 @@ async function seedPaymentMethods(): Promise<void> {
   console.log(`payment_methods: ${PAYMENT_METHODS.length}건`);
 }
 
+// 렌탈 컬러 12색 (v2 D3 / 설계서 04 §5.2)
+const RENTAL_COLORS: Array<{ code: string; name: string }> = [
+  { code: 'BLACK', name: '블랙' },
+  { code: 'CHARCOAL', name: '차콜그레이' },
+  { code: 'GREY', name: '그레이' },
+  { code: 'NAVY', name: '네이비' },
+  { code: 'BLUE', name: '블루' },
+  { code: 'SKY', name: '스카이블루' },
+  { code: 'WHITE', name: '화이트' },
+  { code: 'IVORY', name: '아이보리' },
+  { code: 'BEIGE', name: '베이지' },
+  { code: 'BROWN', name: '브라운' },
+  { code: 'BURGUNDY', name: '버건디' },
+  { code: 'GREEN', name: '그린' },
+];
+
+// 렌탈 사이즈 (v2 D3 / 설계서 04 §5.2·M3)
+const RENTAL_SIZES: Array<{ code: string; name: string }> = [
+  { code: 'S', name: 'S' },
+  { code: 'M', name: 'M' },
+  { code: 'L', name: 'L' },
+  { code: 'XL', name: 'XL' },
+  { code: 'XXL', name: 'XXL' },
+];
+
+async function seedRentalColors(): Promise<void> {
+  for (let i = 0; i < RENTAL_COLORS.length; i += 1) {
+    const c = RENTAL_COLORS[i];
+    await prisma.rentalColor.upsert({
+      where: { code: c.code },
+      update: { name: c.name, sortOrder: i + 1, active: true },
+      create: { id: randomUUID(), code: c.code, name: c.name, sortOrder: i + 1, active: true },
+    });
+  }
+  console.log(`rental_colors: ${RENTAL_COLORS.length}건`);
+}
+
+async function seedRentalSizes(): Promise<void> {
+  for (let i = 0; i < RENTAL_SIZES.length; i += 1) {
+    const s = RENTAL_SIZES[i];
+    await prisma.rentalSize.upsert({
+      where: { code: s.code },
+      update: { name: s.name, sortOrder: i + 1, active: true },
+      create: { id: randomUUID(), code: s.code, name: s.name, sortOrder: i + 1, active: true },
+    });
+  }
+  console.log(`rental_sizes: ${RENTAL_SIZES.length}건`);
+}
+
 async function seedOptionSets(): Promise<void> {
   for (const s of OPTION_SETS) {
     await prisma.optionSet.upsert({
@@ -320,6 +385,8 @@ async function main(): Promise<void> {
   await seedAdminUser(roleIdsByCode);
   await seedAppointmentPurposes();
   await seedPaymentMethods();
+  await seedRentalColors();
+  await seedRentalSizes();
   await seedOptionSets();
   await seedContractTypes();
   await seedJourneyStages(prisma);

@@ -42,6 +42,26 @@ export class WorkOrdersController {
     return this.workOrdersService.preview(orderItemId, measurementSessionId || undefined);
   }
 
+  /**
+   * WO-002 양식 미리보기 (HTML) — 출력 전 실제 양식 모습 확인.
+   * 버전·파일을 만들지 않으므로 몇 번을 봐도 이력이 늘지 않는다.
+   */
+  @Get('order-items/:id/work-order/form-preview')
+  @RequirePermission('WORK_ORDER_VIEW')
+  formPreview(
+    @Param('id') orderItemId: string,
+    @Query('measurementSessionId') measurementSessionId?: string,
+  ) {
+    return this.workOrdersService.formPreview(orderItemId, measurementSessionId || undefined);
+  }
+
+  /** WO-002 저장된 출력본 양식 미리보기 (출력 이력 보기) */
+  @Get('work-order-versions/:id/form-preview')
+  @RequirePermission('WORK_ORDER_VIEW')
+  versionFormPreview(@Param('id') versionId: string) {
+    return this.workOrdersService.versionFormPreview(versionId);
+  }
+
   /** WO-002 Excel 출력·버전 생성 (Idempotency-Key 지원) */
   @Post('order-items/:id/work-order-versions')
   @RequirePermission('WORK_ORDER_ISSUE')

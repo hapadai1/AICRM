@@ -1148,7 +1148,7 @@ async function main(): Promise<void> {
       // -----------------------------------------------------------------------
       const repair = async (args: {
         customerId: string; repairType: string; requestDate: Date; dueDate?: Date; status: string;
-        description: string; cost?: number; orderId?: string; orderItemId?: string;
+        description: string; orderId?: string; orderItemId?: string;
         rentalInventoryItemId?: string; notes?: string;
         events: Array<{ previousStatus?: string; newStatus: string; eventDate: Date }>;
       }): Promise<void> => {
@@ -1165,7 +1165,6 @@ async function main(): Promise<void> {
             dueDate: args.dueDate ?? null,
             status: args.status,
             description: args.description,
-            cost: args.cost ?? null,
             notes: args.notes ?? null,
           },
         });
@@ -1181,7 +1180,7 @@ async function main(): Promise<void> {
       // 맞춤 사후 수선: 정우성 정장 #1 바지 기장
       await repair({
         customerId: 정우성, repairType: 'AFTER_SALE', requestDate: dateOnly(-7), dueDate: dateOnly(2),
-        status: 'IN_PROGRESS', description: '바지 기장 1.5cm 줄임', cost: 30000,
+        status: 'IN_PROGRESS', description: '바지 기장 1.5cm 줄임',
         orderId: o4, orderItemId: oi8,
         events: [
           { newStatus: 'RECEIVED', eventDate: dateOnly(-7) },
@@ -1202,37 +1201,10 @@ async function main(): Promise<void> {
       // 일반 수선: 강하늘 (외부 의류 반입)
       await repair({
         customerId: 강하늘, repairType: 'GENERAL', requestDate: dateOnly(-1), dueDate: dateOnly(5),
-        status: 'RECEIVED', description: '외부 구입 자켓 소매 기장 수선', cost: 20000,
+        status: 'RECEIVED', description: '외부 구입 자켓 소매 기장 수선',
         events: [{ newStatus: 'RECEIVED', eventDate: dateOnly(-1) }],
       });
       console.log('repair_requests: 3건');
-
-      // -----------------------------------------------------------------------
-      // 10) 결제 (계약금 완료 · 김민준 잔금 미수, 정우성 완납)
-      // -----------------------------------------------------------------------
-      const payment = async (args: {
-        contractId: string; paymentType: string; amount: number; paymentDate: Date;
-        paymentMethod: string; memo?: string;
-      }): Promise<void> => {
-        await tx.payment.create({
-          data: {
-            id: uuid(),
-            contractId: args.contractId,
-            paymentType: args.paymentType,
-            amount: args.amount,
-            paymentDate: args.paymentDate,
-            paymentMethod: args.paymentMethod,
-            status: 'COMPLETED',
-            memo: args.memo ?? null,
-            createdBy: adminId,
-          },
-        });
-      };
-      await payment({ contractId: ct1, paymentType: 'DEPOSIT', amount: 1000000, paymentDate: dateOnly(-30), paymentMethod: 'CARD', memo: '입금자: 김민준' });
-      await payment({ contractId: ct2, paymentType: 'DEPOSIT', amount: 500000, paymentDate: dateOnly(-15), paymentMethod: 'TRANSFER', memo: '입금자: 이서연' });
-      await payment({ contractId: ct3, paymentType: 'DEPOSIT', amount: 500000, paymentDate: dateOnly(-85), paymentMethod: 'CARD' });
-      await payment({ contractId: ct3, paymentType: 'BALANCE', amount: 1000000, paymentDate: dateOnly(-60), paymentMethod: 'CARD', memo: '잔금 완납' });
-      console.log('payments: 4건 (김민준 잔금 2,200,000 미수·예정일 경과)');
 
       // -----------------------------------------------------------------------
       // 11) 알림 템플릿 3종 (승인 상태)

@@ -8,9 +8,11 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { NotificationSuggestionService } from '../notifications/notification-suggestion.service';
 import { DEFAULT_STALLED_DAYS } from './journeys.constants';
+import { computeGating, type GatingResult } from './journey-gating';
 import {
   ChangeStageDto,
   CloseJourneyDto,
+  CompleteItemDto,
   CreateJourneyDto,
   ListJourneysQueryDto,
   ListStagesQueryDto,
@@ -46,7 +48,15 @@ const EVENT_SELECT = {
 } satisfies Prisma.JourneyEventSelect;
 
 type JourneyRow = Prisma.CustomerJourneyGetPayload<{ select: typeof JOURNEY_SELECT }>;
-type StageRow = { code: string; name: string; sequenceNo: number; templateId: string | null };
+type StageRow = {
+  id: string;
+  code: string;
+  name: string;
+  sequenceNo: number;
+  templateId: string | null;
+  completionMode: string;
+  targetScope: string;
+};
 
 /** 화면이 쓰는 평면 뷰 (연동정합화 계약과 동일한 원칙: 응답은 화면 요구 형태로) */
 function toJourneyView(row: JourneyRow, stages: StageRow[]) {
@@ -140,13 +150,243 @@ export class JourneysService {
     const stages = await this.prisma.journeyStage.findMany({
       where: { trackType, active: true },
       orderBy: { sequenceNo: 'asc' },
-      select: { code: true, name: true, sequenceNo: true, templateId: true },
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        sequenceNo: true,
+        templateId: true,
+        completionMode: true,
+        targetScope: true,
+      },
     });
     if (stages.length === 0)
       throw new BusinessException('VALIDATION_ERROR', `진행 단계가 정의되지 않은 트랙입니다: ${trackType}`, [
         { field: 'trackType', reason: 'NO_STAGES' },
       ]);
     return stages;
+  }
+
+  // ---------------------------------------------------------------------------
+  // 품목별 완료 / 게이팅 (v2 D2 · 설계서 02 §3·§4)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * 단계의 게이팅 대상 품목을 화면 표시 정보와 함께 해석한다.
+   * - ORDER_ITEMS: 진행에 묶인 주문의 활성 품목(취소 제외) — CUSTOM/RENTAL
+   * - REPAIR_ITEMS: 수선요청(RepairRequest) — REPAIR 트랙(S6에서 연결)
+   */
+  private async resolveTargets(
+    journey: Pick<JourneyRow, 'orderId'>,
+    stage: Pick<StageRow, 'targetScope'>,
+  ): Promise<{
+    targetType: 'ORDER_ITEM' | 'REPAIR_ITEM' | null;
+    targets: Array<{ id: string; displayName: string; productCategory: string; status: string }>;
+  }> {
+    if (stage.targetScope === 'ORDER_ITEMS') {
+      if (!journey.orderId) return { targetType: 'ORDER_ITEM', targets: [] };
+      const items = await this.prisma.orderItem.findMany({
+        where: { orderId: journey.orderId, status: { not: 'CANCELLED' } },
+        orderBy: [{ productCategory: 'asc' }, { sequenceNo: 'asc' }],
+        select: { id: true, displayName: true, productCategory: true, status: true },
+      });
+      return { targetType: 'ORDER_ITEM', targets: items };
+    }
+    if (stage.targetScope === 'REPAIR_ITEMS') {
+      // REPAIR 트랙 대상 해석은 수선 모듈 연동(S6)에서 채운다. 그 전까지 게이팅 대상 없음.
+      return { targetType: 'REPAIR_ITEM', targets: [] };
+    }
+    return { targetType: null, targets: [] };
+  }
+
+  /** 단계 게이팅 현황 계산 (대상 품목 vs 완료 기록). */
+  private async gatingOf(
+    journey: Pick<JourneyRow, 'id' | 'orderId'>,
+    stage: Pick<StageRow, 'code' | 'completionMode' | 'targetScope'>,
+  ): Promise<GatingResult> {
+    const mode = stage.completionMode === 'AUTO' ? 'AUTO' : 'GATED';
+    const { targets } = await this.resolveTargets(journey, stage);
+    const completions = await this.prisma.journeyStageItemCompletion.findMany({
+      where: { journeyId: journey.id, stageCode: stage.code },
+      select: { targetId: true, revokedAt: true },
+    });
+    return computeGating(
+      stage.code,
+      mode,
+      targets.map((t) => t.id),
+      completions,
+    );
+  }
+
+  /** 단계 대상 품목 목록 + 완료상태 + 게이팅 + production 힌트 */
+  async getStageItems(id: string, stageCode: string) {
+    const journey = await this.prisma.customerJourney.findUnique({
+      where: { id },
+      select: JOURNEY_SELECT,
+    });
+    if (!journey) throw new NotFoundException('진행이 없습니다.');
+    const stages = await this.stagesOf(journey.trackType);
+    const stage = stages.find((s) => s.code === stageCode);
+    if (!stage)
+      throw new BusinessException('VALIDATION_ERROR', `이 트랙에 없는 단계입니다: ${stageCode}`, [
+        { field: 'stageCode', reason: 'UNKNOWN_STAGE' },
+      ]);
+
+    const { targetType, targets } = await this.resolveTargets(journey, stage);
+    const completions = await this.prisma.journeyStageItemCompletion.findMany({
+      where: { journeyId: id, stageCode },
+      select: {
+        targetId: true,
+        revokedAt: true,
+        completedAt: true,
+        completedBy: true,
+        completedByUser: { select: { id: true, displayName: true } },
+      },
+    });
+    const byTarget = new Map(completions.map((c) => [c.targetId, c]));
+
+    const items = targets.map((t) => {
+      const c = byTarget.get(t.id);
+      const done = c != null && c.revokedAt === null;
+      return {
+        targetId: t.id,
+        targetType,
+        displayName: t.displayName,
+        productCategory: t.productCategory,
+        completed: done,
+        completedAt: done ? c!.completedAt : null,
+        completedBy: done ? c!.completedBy : null,
+        completedByName: done ? (c!.completedByUser?.displayName ?? null) : null,
+        // production 상태는 힌트일 뿐 완료를 자동 생성하지 않는다(D2 비연동).
+        productionHint: { status: t.status },
+      };
+    });
+    const gating = computeGating(
+      stageCode,
+      stage.completionMode === 'AUTO' ? 'AUTO' : 'GATED',
+      targets.map((t) => t.id),
+      completions,
+    );
+    return { stageCode, completionMode: stage.completionMode, items, gating };
+  }
+
+  /** 품목 완료(멱등 upsert). 완료 취소된 기록은 되살린다. */
+  async completeItem(
+    id: string,
+    stageCode: string,
+    targetId: string,
+    dto: CompleteItemDto,
+    actor: AuthUser,
+  ) {
+    const journey = await this.prisma.customerJourney.findUnique({
+      where: { id },
+      select: JOURNEY_SELECT,
+    });
+    if (!journey) throw new NotFoundException('진행이 없습니다.');
+    const stages = await this.stagesOf(journey.trackType);
+    const stage = stages.find((s) => s.code === stageCode);
+    if (!stage)
+      throw new BusinessException('VALIDATION_ERROR', `이 트랙에 없는 단계입니다: ${stageCode}`, [
+        { field: 'stageCode', reason: 'UNKNOWN_STAGE' },
+      ]);
+    if (stage.completionMode !== 'GATED')
+      throw new BusinessException('VALIDATION_ERROR', '이 단계는 품목별 완료 대상이 아닙니다.', [
+        { field: 'stageCode', reason: 'NOT_GATED' },
+      ]);
+
+    // 대상 품목 검증 (다형 참조라 앱에서 존재·소속 검증)
+    const { targetType, targets } = await this.resolveTargets(journey, stage);
+    if (!targets.some((t) => t.id === targetId))
+      throw new BusinessException('VALIDATION_ERROR', '이 단계의 대상 품목이 아닙니다.', [
+        { field: 'targetId', reason: 'NOT_A_TARGET' },
+      ]);
+
+    const now = new Date();
+    const existing = await this.prisma.journeyStageItemCompletion.findUnique({
+      where: {
+        journeyId_stageCode_targetType_targetId: {
+          journeyId: id,
+          stageCode,
+          targetType: targetType!,
+          targetId,
+        },
+      },
+    });
+    if (existing) {
+      // 멱등: 이미 완료면 그대로, 취소상태면 되살린다.
+      if (existing.revokedAt !== null) {
+        await this.prisma.journeyStageItemCompletion.update({
+          where: { id: existing.id },
+          data: { revokedAt: null, completedAt: now, completedBy: actor.id, notes: dto.notes ?? null },
+        });
+      }
+    } else {
+      await this.prisma.journeyStageItemCompletion.create({
+        data: {
+          id: randomUUID(),
+          journeyId: id,
+          stageCode,
+          targetType: targetType!,
+          targetId,
+          completedAt: now,
+          completedBy: actor.id,
+          notes: dto.notes ?? null,
+        },
+      });
+    }
+    await this.audit.log({
+      userId: actor.id,
+      action: 'UPDATE',
+      entityType: 'JOURNEY_STAGE_ITEM_COMPLETION',
+      entityId: id,
+      after: { stageCode, targetId, completed: true },
+    });
+
+    const gating = await this.gatingOf(journey, stage);
+    return {
+      completion: { targetId, targetType, completedAt: now, completedBy: actor.id },
+      gating,
+    };
+  }
+
+  /** 품목 완료 취소(revokedAt 세팅, 물리삭제 금지). */
+  async uncompleteItem(id: string, stageCode: string, targetId: string, actor: AuthUser) {
+    const journey = await this.prisma.customerJourney.findUnique({
+      where: { id },
+      select: JOURNEY_SELECT,
+    });
+    if (!journey) throw new NotFoundException('진행이 없습니다.');
+    const stages = await this.stagesOf(journey.trackType);
+    const stage = stages.find((s) => s.code === stageCode);
+    if (!stage)
+      throw new BusinessException('VALIDATION_ERROR', `이 트랙에 없는 단계입니다: ${stageCode}`, [
+        { field: 'stageCode', reason: 'UNKNOWN_STAGE' },
+      ]);
+    const { targetType } = await this.resolveTargets(journey, stage);
+    const existing = await this.prisma.journeyStageItemCompletion.findUnique({
+      where: {
+        journeyId_stageCode_targetType_targetId: {
+          journeyId: id,
+          stageCode,
+          targetType: targetType!,
+          targetId,
+        },
+      },
+    });
+    if (existing && existing.revokedAt === null) {
+      await this.prisma.journeyStageItemCompletion.update({
+        where: { id: existing.id },
+        data: { revokedAt: new Date() },
+      });
+      await this.audit.log({
+        userId: actor.id,
+        action: 'UPDATE',
+        entityType: 'JOURNEY_STAGE_ITEM_COMPLETION',
+        entityId: id,
+        after: { stageCode, targetId, completed: false },
+      });
+    }
+    return { gating: await this.gatingOf(journey, stage) };
   }
 
   // ---------------------------------------------------------------------------
@@ -240,14 +480,62 @@ export class JourneysService {
         ? await this.buildSuggestion(row, currentStage, enteringEvent.id)
         : null;
 
-    return {
-      ...toJourneyView(row, stages),
-      stages: stages.map((s) => ({
+    // 게이팅: 대상 품목은 트랙 내 GATED 단계가 공유(= 주문 활성 품목)하므로 한 번만 해석한다.
+    const orderTargets =
+      row.orderId != null
+        ? await this.prisma.orderItem.findMany({
+            where: { orderId: row.orderId, status: { not: 'CANCELLED' } },
+            select: { id: true },
+          })
+        : [];
+    const orderTargetIds = orderTargets.map((t) => t.id);
+    const completions = await this.prisma.journeyStageItemCompletion.findMany({
+      where: { journeyId: id },
+      select: { stageCode: true, targetId: true, revokedAt: true },
+    });
+    const completionsByStage = new Map<string, { targetId: string; revokedAt: Date | null }[]>();
+    for (const c of completions) {
+      const arr = completionsByStage.get(c.stageCode) ?? [];
+      arr.push({ targetId: c.targetId, revokedAt: c.revokedAt });
+      completionsByStage.set(c.stageCode, arr);
+    }
+
+    // 각 단계의 완료일·비고 = "fromStageCode=단계"인 가장 최근 전진 이벤트(events는 changedAt desc 정렬).
+    const leaveEventByStage = new Map<string, { changedAt: Date; notes: string | null }>();
+    for (const e of events) {
+      if (e.fromStageCode && !leaveEventByStage.has(e.fromStageCode)) {
+        leaveEventByStage.set(e.fromStageCode, { changedAt: e.changedAt, notes: e.notes });
+      }
+    }
+
+    const stagesView = stages.map((s) => {
+      // REPAIR_ITEMS 대상은 아직 미연동(S6) → 빈 대상. 그 외 GATED는 주문 품목 공유.
+      const targetIds = s.targetScope === 'ORDER_ITEMS' ? orderTargetIds : [];
+      const gating = computeGating(
+        s.code,
+        s.completionMode === 'AUTO' ? 'AUTO' : 'GATED',
+        targetIds,
+        completionsByStage.get(s.code) ?? [],
+      );
+      const leave = leaveEventByStage.get(s.code);
+      return {
         code: s.code,
         name: s.name,
         sequenceNo: s.sequenceNo,
         hasTemplate: s.templateId != null,
-      })),
+        completionMode: s.completionMode,
+        targetCount: gating.targetCount,
+        completedCount: gating.completedCount,
+        canComplete: gating.canComplete,
+        completed: leave != null,
+        completedAt: leave?.changedAt ?? null,
+        notes: leave?.notes ?? null,
+      };
+    });
+
+    return {
+      ...toJourneyView(row, stages),
+      stages: stagesView,
       events,
       currentSuggestion,
     };
@@ -297,10 +585,20 @@ export class JourneysService {
         { field: 'reason', reason: 'REQUIRED_FOR_BACKWARD' },
       ]);
 
-    const stageRow = await this.prisma.journeyStage.findUnique({
-      where: { trackType_code: { trackType: journey.trackType, code: target.code } },
-      select: { id: true },
-    });
+    // 게이팅(D2): 전진일 때 현재 단계가 GATED면 대상 전 품목 완료를 서버에서 재검증한다.
+    // 후진·건너뛰기 시 중간 단계는 검증하지 않는다(현장 유연성, 설계서 02 §5.1).
+    const isForward = target.sequenceNo > currentSeq;
+    const currentMeta = stages.find((s) => s.code === journey.currentStageCode);
+    if (isForward && currentMeta?.completionMode === 'GATED') {
+      const gate = await this.gatingOf(journey, currentMeta);
+      if (!gate.canComplete)
+        throw new BusinessException(
+          'STAGE_NOT_COMPLETE',
+          '이 단계의 모든 품목이 완료되어야 다음 단계로 넘어갈 수 있습니다.',
+          [{ field: 'toStageCode', reason: 'STAGE_ITEMS_INCOMPLETE' }],
+          { targetCount: gate.targetCount, completedCount: gate.completedCount },
+        );
+    }
 
     const now = new Date();
     const result = await this.prisma.$transaction(async (tx) => {
@@ -308,7 +606,7 @@ export class JourneysService {
         data: {
           id: randomUUID(),
           journeyId: id,
-          stageId: stageRow!.id,
+          stageId: target.id,
           fromStageCode: journey.currentStageCode,
           toStageCode: target.code,
           reason: dto.reason ?? null,

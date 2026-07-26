@@ -247,22 +247,6 @@ export function MeasurementEditPage() {
     onError: (e) => message.error(e instanceof ApiError ? e.message : '삭제에 실패했습니다.'),
   });
 
-  if (!isNew && (sessionQuery.isLoading || !form || !session)) {
-    if (sessionQuery.error) {
-      return (
-        <Alert
-          type="error"
-          showIcon
-          message="채촌 기록을 불러오지 못했습니다."
-          description={sessionQuery.error instanceof ApiError ? sessionQuery.error.message : undefined}
-          action={<Button onClick={() => navigate('/measurements')}>채촌 목록으로</Button>}
-        />
-      );
-    }
-    return <Spin style={{ display: 'block', margin: '80px auto' }} size="large" />;
-  }
-  if (!form) return <Spin style={{ display: 'block', margin: '80px auto' }} size="large" />;
-
   // 작업지시서 출력에 쓰인 채촌은 읽기 전용 (설계서 09 §2.1)
   const readOnly = session?.locked ?? false;
   const fieldOrder = MEASUREMENT_FIELDS.map((f) => f.key);
@@ -338,6 +322,22 @@ export function MeasurementEditPage() {
     return () => window.removeEventListener('keydown', onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeKey, readOnly]);
+
+  if (!isNew && (sessionQuery.isLoading || !form || !session)) {
+    if (sessionQuery.error) {
+      return (
+        <Alert
+          type="error"
+          showIcon
+          message="채촌 기록을 불러오지 못했습니다."
+          description={sessionQuery.error instanceof ApiError ? sessionQuery.error.message : undefined}
+          action={<Button onClick={() => navigate('/measurements')}>채촌 목록으로</Button>}
+        />
+      );
+    }
+    return <Spin style={{ display: 'block', margin: '80px auto' }} size="large" />;
+  }
+  if (!form) return <Spin style={{ display: 'block', margin: '80px auto' }} size="large" />;
 
   const confirmDelete = () => {
     if (!session) return;

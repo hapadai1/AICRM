@@ -6,6 +6,7 @@ import { AuthUser } from '../../common/decorators';
 import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { FilesService, UploadedMulterFile } from '../files/files.service';
 import { MEASUREMENT_ITEM_MAP } from './measurement-catalog';
 import {
   CloneMeasurementSessionDto,
@@ -25,6 +26,12 @@ interface NormalizedValue {
   unit: string;
   sortOrder: number;
 }
+
+/** 채촌 이미지 첨부는 범용 EntityFile을 재사용한다 (스키마 무변경, 설계서 05 §4.1). */
+const IMAGE_ENTITY_TYPE = 'MEASUREMENT_SESSION';
+const IMAGE_PURPOSE = 'PHOTO';
+/** 세션당 첨부 사진 최대 장수 (설계서 05 §4.2, plan_v2). */
+const MAX_IMAGES = 50;
 
 const SESSION_INCLUDE = {
   createdByUser: { select: { id: true, displayName: true } },
@@ -65,6 +72,7 @@ export class MeasurementsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly files: FilesService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -718,6 +726,114 @@ export class MeasurementsService {
       isCurrent: link.isCurrent,
       linkedBy: link.linkedBy,
       linkedAt: link.linkedAt,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // 이미지 첨부 (설계서 05 §4 — 범용 EntityFile 재사용, 스키마 무변경)
+  // ---------------------------------------------------------------------------
+
+  /** 세션 첨부 이미지 목록 (정렬: createdAt) */
+  async listImages(sessionId: string) {
+    await this.getSessionOrThrow(sessionId);
+    const links = await this.prisma.entityFile.findMany({
+      where: { entityType: IMAGE_ENTITY_TYPE, entityId: sessionId, purpose: IMAGE_PURPOSE },
+      orderBy: { createdAt: 'asc' },
+      include: { file: true },
+    });
+    return links.map((l) => this.toImageView(l));
+  }
+
+  /**
+   * 이미지 추가: files 모듈로 업로드(File 생성) → 세션에 EntityFile로 연결.
+   * 50장 초과면 업로드 전에 거부해 고아 파일이 남지 않게 한다.
+   *
+   * 잠금 세션(작업지시서 출력됨) 정책(설계서 05 미결 M4): 이미지는 치수 데이터가 아니라
+   * assertNotLocked 대상에서 제외한다(출력 후에도 사진 첨부 허용). 세션 존재만 검증한다.
+   */
+  async addImage(sessionId: string, file: UploadedMulterFile | undefined, actor: AuthUser) {
+    await this.getSessionOrThrow(sessionId);
+    const count = await this.prisma.entityFile.count({
+      where: { entityType: IMAGE_ENTITY_TYPE, entityId: sessionId, purpose: IMAGE_PURPOSE },
+    });
+    if (count >= MAX_IMAGES)
+      throw new BusinessException(
+        'VALIDATION_ERROR',
+        `첨부 사진은 최대 ${MAX_IMAGES}장까지 등록할 수 있습니다.`,
+        [{ field: 'images', reason: 'MAX_50_EXCEEDED' }],
+      );
+
+    const uploaded = await this.files.upload(file, actor);
+    const link = await this.prisma.entityFile.create({
+      data: {
+        id: randomUUID(),
+        fileId: uploaded.id,
+        entityType: IMAGE_ENTITY_TYPE,
+        entityId: sessionId,
+        purpose: IMAGE_PURPOSE,
+      },
+      include: { file: true },
+    });
+    const view = this.toImageView(link);
+    await this.audit.log({
+      userId: actor.id,
+      action: 'LINK',
+      entityType: 'MEASUREMENT_SESSION_IMAGE',
+      entityId: sessionId,
+      after: { fileId: uploaded.id, entityFileId: link.id, originalName: uploaded.originalName },
+    });
+    return view;
+  }
+
+  /**
+   * 이미지 제거: 세션-파일 연결(EntityFile)을 끊고, 다른 참조가 없으면 File 원본까지 정리한다.
+   * 잠금 세션도 이미지 삭제는 허용한다(M4 기본 허용).
+   */
+  async removeImage(sessionId: string, fileId: string, actor: AuthUser) {
+    await this.getSessionOrThrow(sessionId);
+    const link = await this.prisma.entityFile.findFirst({
+      where: {
+        entityType: IMAGE_ENTITY_TYPE,
+        entityId: sessionId,
+        purpose: IMAGE_PURPOSE,
+        fileId,
+      },
+    });
+    if (!link) throw new NotFoundException('첨부 이미지가 없습니다.');
+
+    await this.prisma.entityFile.delete({ where: { id: link.id } });
+    await this.audit.log({
+      userId: actor.id,
+      action: 'UNLINK',
+      entityType: 'MEASUREMENT_SESSION_IMAGE',
+      entityId: sessionId,
+      before: { fileId, entityFileId: link.id },
+    });
+    // 참조가 남지 않은 파일만 정리한다. FilesService.remove는 참조 시 예외를 던지므로 무시한다.
+    await this.files.remove(fileId, actor).catch(() => undefined);
+    return { fileId, deleted: true };
+  }
+
+  private async getSessionOrThrow(sessionId: string) {
+    const session = await this.prisma.measurementSession.findUnique({ where: { id: sessionId } });
+    if (!session) throw new NotFoundException('채촌 세션이 없습니다.');
+    return session;
+  }
+
+  private toImageView(link: {
+    id: string;
+    fileId: string;
+    createdAt: Date;
+    file: { originalName: string; mimeType: string; sizeBytes: bigint };
+  }) {
+    return {
+      id: link.id,
+      fileId: link.fileId,
+      originalName: link.file.originalName,
+      mimeType: link.file.mimeType,
+      sizeBytes: Number(link.file.sizeBytes),
+      downloadUrl: `/api/v1/files/${link.fileId}`,
+      createdAt: link.createdAt,
     };
   }
 

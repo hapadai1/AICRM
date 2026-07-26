@@ -75,8 +75,6 @@ describe('고객 관리 (Phase 2)', () => {
     expect(res.body.data.summary).toEqual({
       contractCount: 0,
       totalAmount: 0,
-      paidAmount: 0,
-      balanceAmount: 0,
     });
     expect(res.body.data.contracts).toEqual([]);
     expect(res.body.data.orders).toEqual([]);
@@ -86,7 +84,6 @@ describe('고객 관리 (Phase 2)', () => {
     expect(res.body.data.components).toEqual([]);
     expect(res.body.data.rentals).toEqual([]);
     expect(res.body.data.repairs).toEqual([]);
-    expect(res.body.data.payments).toEqual([]);
   });
 
   it('고객 수정은 낙관적 잠금을 적용하고 버전 불일치 시 VERSION_CONFLICT를 반환한다', async () => {
@@ -132,6 +129,64 @@ describe('고객 관리 (Phase 2)', () => {
       .set(auth(ctx))
       .expect(200);
     expect(none.body.data).toBeNull();
+  });
+
+  describe('예약 고객 등록 (registeredAt)', () => {
+    let prospectId: string;
+
+    beforeAll(async () => {
+      // 예약 등록 흐름과 동일하게 미등록 PROSPECT 고객을 만든다
+      prospectId = randomUUID();
+      await ctx.prisma.customer.create({
+        data: {
+          id: prospectId,
+          name: '예약고객',
+          phone: '010-5555-0001',
+          phoneNormalized: '01055550001',
+          customerStatus: 'PROSPECT',
+          firstReservedAt: new Date(),
+        },
+      });
+    });
+
+    it('미등록 고객은 includeProspect를 켜거나 status=ALL이어도 고객 목록에 나오지 않는다', async () => {
+      const withProspect = await api(ctx)
+        .get('/api/v1/customers?includeProspect=true')
+        .set(auth(ctx))
+        .expect(200);
+      expect(withProspect.body.data.map((c: { name: string }) => c.name)).not.toContain('예약고객');
+
+      const all = await api(ctx).get('/api/v1/customers?status=ALL').set(auth(ctx)).expect(200);
+      expect(all.body.data.map((c: { name: string }) => c.name)).not.toContain('예약고객');
+    });
+
+    it('등록하면 registeredAt이 찍히고 고객 목록에 나타난다', async () => {
+      const before = await ctx.prisma.customer.findUniqueOrThrow({ where: { id: prospectId } });
+      const res = await api(ctx)
+        .post(`/api/v1/customers/${prospectId}/register`)
+        .set(auth(ctx))
+        .send({ name: '예약고객', email: 'reserve@example.com', version: before.rowVersion })
+        .expect(201);
+      expect(res.body.data.registeredAt).toBeTruthy();
+      // 등록은 계약 전환이 아니다 — 상태는 PROSPECT 그대로
+      expect(res.body.data.customerStatus).toBe('PROSPECT');
+
+      const list = await api(ctx)
+        .get('/api/v1/customers?includeProspect=true')
+        .set(auth(ctx))
+        .expect(200);
+      expect(list.body.data.map((c: { name: string }) => c.name)).toContain('예약고객');
+    });
+
+    it('이미 등록된 고객을 다시 등록하면 CUSTOMER_ALREADY_REGISTERED', async () => {
+      const row = await ctx.prisma.customer.findUniqueOrThrow({ where: { id: prospectId } });
+      const res = await api(ctx)
+        .post(`/api/v1/customers/${prospectId}/register`)
+        .set(auth(ctx))
+        .send({ name: '예약고객', version: row.rowVersion })
+        .expect(409);
+      expect(res.body.error.code).toBe('CUSTOMER_ALREADY_REGISTERED');
+    });
   });
 
   it('고객 비활성 처리는 물리 삭제 없이 INACTIVE로 전환하고 감사로그를 남긴다', async () => {
@@ -181,6 +236,8 @@ describe('고객 관리 (Phase 2)', () => {
           phoneNormalized: '01077770001',
           customerStatus: 'CONTRACTED',
           contractedAt: new Date(),
+          // 계약 고객은 반드시 등록을 거친다 (미등록 고객은 고객 목록에서 제외됨)
+          registeredAt: new Date(),
         },
       });
       contractId = randomUUID();
@@ -261,17 +318,6 @@ describe('고객 관리 (Phase 2)', () => {
           createdBy: admin.id,
         },
       });
-      await ctx.prisma.payment.create({
-        data: {
-          id: randomUUID(),
-          contractId,
-          paymentType: 'DEPOSIT',
-          amount: 300_000,
-          paymentDate: new Date(),
-          status: 'COMPLETED',
-          createdBy: admin.id,
-        },
-      });
     });
 
     it('includeProspect=true면 CONTRACTED 목록에 PROSPECT를 포함한다 (INACTIVE 제외)', async () => {
@@ -310,8 +356,6 @@ describe('고객 관리 (Phase 2)', () => {
       expect(data.summary).toEqual({
         contractCount: 1,
         totalAmount: 1_000_000,
-        paidAmount: 300_000,
-        balanceAmount: 700_000,
       });
 
       // 계약 뷰 (연동정합화 계약 §2)
@@ -341,14 +385,6 @@ describe('고객 관리 (Phase 2)', () => {
         orderItemName: '정장 #1',
         orderNo: 'ORD-260721-901',
         status: 'CREATED',
-      });
-
-      expect(data.payments).toHaveLength(1);
-      expect(data.payments[0]).toMatchObject({
-        contractNo: 'CTR-260721-901',
-        paymentType: 'DEPOSIT',
-        amount: 300_000,
-        status: 'COMPLETED',
       });
 
       expect(data.rentals).toEqual([]);

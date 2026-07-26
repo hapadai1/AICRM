@@ -6,6 +6,7 @@ import { AuthUser } from '../../common/decorators';
 import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { FilesService, UploadedMulterFile } from '../files/files.service';
 import { NotificationSuggestionService } from '../notifications/notification-suggestion.service';
 import { buildWorkOrderView, workOrderStatusSelect } from '../work-orders/work-order-status';
 import {
@@ -72,6 +73,7 @@ export class ProductionService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly suggestions: NotificationSuggestionService,
+    private readonly files: FilesService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -522,6 +524,81 @@ export class ProductionService {
       .toISOString()
       .slice(0, 10)}.xlsx`;
     return { buffer, fileName };
+  }
+
+  // ---------------------------------------------------------------------------
+  // 가봉 첨부 파일 (설계서 06 §5.4) — 공장 회신/마킹본 보관용. EntityFile 재사용.
+  // ---------------------------------------------------------------------------
+
+  /** 가봉 세션에 파일 첨부. File 저장(FilesService 재사용) + EntityFile(FITTING_SESSION/FACTORY_REPLY) 연결. */
+  async uploadFittingFile(fittingId: string, file: UploadedMulterFile | undefined, actor: AuthUser) {
+    await this.assertFittingExists(fittingId);
+    const uploaded = await this.files.upload(file, actor);
+    await this.prisma.entityFile.create({
+      data: {
+        id: randomUUID(),
+        fileId: uploaded.id,
+        entityType: 'FITTING_SESSION',
+        entityId: fittingId,
+        purpose: 'FACTORY_REPLY',
+      },
+    });
+    await this.audit.log({
+      userId: actor.id,
+      action: 'CREATE',
+      entityType: 'FITTING_SESSION',
+      entityId: fittingId,
+      after: { fileId: uploaded.id, purpose: 'FACTORY_REPLY', originalName: uploaded.originalName },
+    });
+    return { ...uploaded, purpose: 'FACTORY_REPLY' };
+  }
+
+  /** 가봉 세션 첨부 목록. */
+  async listFittingFiles(fittingId: string) {
+    await this.assertFittingExists(fittingId);
+    const entityFiles = await this.prisma.entityFile.findMany({
+      where: { entityType: 'FITTING_SESSION', entityId: fittingId },
+      orderBy: { createdAt: 'asc' },
+      include: { file: true },
+    });
+    return entityFiles.map((ef) => ({
+      id: ef.file.id,
+      entityFileId: ef.id,
+      purpose: ef.purpose,
+      originalName: ef.file.originalName,
+      mimeType: ef.file.mimeType,
+      sizeBytes: Number(ef.file.sizeBytes),
+      checksumSha256: ef.file.checksumSha256,
+      downloadUrl: `/api/v1/files/${ef.file.id}`,
+      createdAt: ef.createdAt,
+    }));
+  }
+
+  /** 가봉 세션 첨부 제거. EntityFile 링크를 먼저 끊고 미참조 File을 삭제한다(FilesService.remove). */
+  async removeFittingFile(fittingId: string, fileId: string, actor: AuthUser) {
+    const link = await this.prisma.entityFile.findFirst({
+      where: { entityType: 'FITTING_SESSION', entityId: fittingId, fileId },
+    });
+    if (!link) throw new NotFoundException('가봉 첨부 파일이 없습니다.');
+    // 참조 중인 File은 삭제되지 않으므로(FilesService.remove 규칙) 링크를 먼저 제거한다.
+    await this.prisma.entityFile.delete({ where: { id: link.id } });
+    await this.files.remove(fileId, actor);
+    await this.audit.log({
+      userId: actor.id,
+      action: 'DELETE',
+      entityType: 'FITTING_SESSION',
+      entityId: fittingId,
+      before: { fileId, purpose: link.purpose },
+    });
+    return { id: fileId, deleted: true };
+  }
+
+  private async assertFittingExists(fittingId: string): Promise<void> {
+    const session = await this.prisma.fittingSession.findUnique({
+      where: { id: fittingId },
+      select: { id: true },
+    });
+    if (!session) throw new NotFoundException('가봉 기록이 없습니다.');
   }
 
   private async findComponent(componentId: string) {

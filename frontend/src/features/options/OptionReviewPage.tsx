@@ -10,10 +10,11 @@ import {
   confirmOptionSession,
   fetchOptionReview,
   fetchOptionSessionByItem,
+  startOptionSession,
 } from '../../api/options';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { metaOf } from '../../shared/status-meta';
-import { choiceColor, OPTION_STATUS_META, photoFrameStyle } from './option-meta';
+import { choiceColor, fabricFieldLabel, OPTION_STATUS_META, photoFrameStyle } from './option-meta';
 
 /** 선택지 사진이 세로로 긴 원본이라 확인서 카드도 세로로 넉넉히 잡는다. */
 const MEDIA_HEIGHT = 260;
@@ -181,13 +182,38 @@ export function OptionReviewPage() {
     onError: (e: Error) => message.error(e.message),
   });
 
+  // 확정 세션 재선택(설계서 §8.5) — 시작 API가 확정본을 복사한 새 선택 버전을 만든다.
+  const reopenMutation = useMutation({
+    mutationFn: () => startOptionSession(orderItemId ?? '', session?.fabric ?? undefined),
+    onSuccess: (created) => {
+      queryClient.setQueryData(['options', 'session', orderItemId], created);
+      void queryClient.invalidateQueries({ queryKey: ['options'] });
+      void queryClient.invalidateQueries({ queryKey: ['workorders'] });
+      message.success('새 선택 버전으로 변경을 시작했습니다. 수정 후 다시 확정해 주세요.');
+    },
+    onError: (e: Error) => message.error(e.message),
+  });
+
+  const openReopenDialog = () => {
+    modal.confirm({
+      title: '확정된 옵션 변경',
+      icon: <ExclamationCircleOutlined />,
+      content:
+        '확정본은 그대로 두고 새 선택 버전에서 이어서 수정합니다. 변경 후에는 다시 확정해야 하며, 작업지시서 재출력 대상이 됩니다. 변경하시겠습니까?',
+      okText: '변경 시작',
+      cancelText: '취소',
+      okButtonProps: { size: 'large' },
+      cancelButtonProps: { size: 'large' },
+      onOk: () => reopenMutation.mutateAsync(),
+    });
+  };
+
   const applyMutation = useMutation({
     mutationFn: () => applyOptionSurcharge(sessionId ?? ''),
     onSuccess: (result) => {
       message.success(`계약금액에 반영되었습니다. 계약금액 ${won(result.contract?.totalAmount ?? 0)}`);
       void queryClient.invalidateQueries({ queryKey: ['options'] });
       void queryClient.invalidateQueries({ queryKey: ['contracts'] });
-      void queryClient.invalidateQueries({ queryKey: ['payments'] });
       void queryClient.invalidateQueries({ queryKey: ['customers'] });
     },
     onError: (e: Error) => message.error(e.message),
@@ -305,7 +331,8 @@ export function OptionReviewPage() {
               옵션 확인서 — {session?.displayName ?? '맞춤 품목'}
             </Typography.Title>
             <Typography.Text type="secondary">
-              원단: {review.fabric ?? '미입력'} · 옵션 세트 V{session?.optionSetVersionNo ?? '-'}
+              {fabricFieldLabel(session?.productCategory)}: {review.fabric ?? '미입력'} · 옵션 세트 V
+              {session?.optionSetVersionNo ?? '-'}
             </Typography.Text>
           </div>
           <Space>
@@ -329,7 +356,7 @@ export function OptionReviewPage() {
             style={{ marginTop: 12 }}
             type="success"
             showIcon
-            message="확정된 옵션입니다. 카드를 눌러 열람할 수 있습니다."
+            message="확정된 옵션입니다. 카드를 눌러 열람하고, 바꾸려면 아래 '옵션 변경'을 눌러 새 선택 버전을 시작하세요."
           />
         )}
       </Card>
@@ -348,7 +375,17 @@ export function OptionReviewPage() {
           <Button size="large" style={{ height: 56, minWidth: 140, fontSize: 18 }} onClick={() => navigate(-1)}>
             이전화면
           </Button>
-          {!isConfirmed && (
+          {isConfirmed ? (
+            <Button
+              type="primary"
+              size="large"
+              style={{ height: 56, minWidth: 220, fontSize: 18 }}
+              loading={reopenMutation.isPending}
+              onClick={openReopenDialog}
+            >
+              옵션 변경
+            </Button>
+          ) : (
             <Tooltip title={review.missingCount > 0 ? '모든 단계를 선택해야 확정할 수 있습니다.' : ''}>
               <Button
                 type="primary"
