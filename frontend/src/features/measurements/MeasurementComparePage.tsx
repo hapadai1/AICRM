@@ -1,16 +1,21 @@
 /** MEAS-003 채촌 버전 비교 — 항목/이전/현재/차이 표 (±값 색 강조, 문자 사이즈는 변경 여부만) */
 import { SwapOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Button, Card, Col, Row, Select, Space, Spin, Table, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Col, Row, Segmented, Select, Space, Spin, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { MeasurementCompareRow, MeasurementCompareVersionMeta } from '../../api/measurements';
 import {
   MEASUREMENT_GROUP_LABELS,
   MEASUREMENT_TYPE_LABELS,
+  cmToInch,
   fetchMeasurementCompare,
   fetchMeasurements,
 } from '../../api/measurements';
+
+/** 화면 표시 단위 (백엔드 compare 응답은 항상 CM — 표시·diff만 파생 환산) */
+type Unit = 'CM' | 'INCH';
 import { MEASUREMENT_TYPE_META } from './meas-meta';
 import { BackButton } from '../../shared/BackButton';
 import { StatusBadge } from '../../shared/StatusBadge';
@@ -20,12 +25,14 @@ function versionLabel(meta: MeasurementCompareVersionMeta): string {
   return `V${meta.versionNo} · ${meta.measurementDate} · ${labelOf(MEASUREMENT_TYPE_LABELS, meta.measurementType)}`;
 }
 
-function renderValue(row: MeasurementCompareRow, value: number | string | null) {
+function renderValue(row: MeasurementCompareRow, value: number | string | null, unit: Unit) {
   if (value === null || value === '') return <Typography.Text type="secondary">-</Typography.Text>;
+  const display =
+    row.kind === 'number' && typeof value === 'number' && unit === 'INCH' ? cmToInch(value) : value;
   return (
     <Typography.Text style={{ fontSize: 16 }}>
-      {value}
-      {row.kind === 'number' ? ' cm' : ''}
+      {display}
+      {row.kind === 'number' ? (unit === 'INCH' ? ' in' : ' cm') : ''}
     </Typography.Text>
   );
 }
@@ -33,6 +40,7 @@ function renderValue(row: MeasurementCompareRow, value: number | string | null) 
 export function MeasurementComparePage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [unit, setUnit] = useState<Unit>('CM');
   const leftId = searchParams.get('left');
   const rightId = searchParams.get('right');
 
@@ -100,12 +108,12 @@ export function MeasurementComparePage() {
     {
       title: `이전 (${versionLabel(data.left)})`,
       key: 'left',
-      render: (_, row) => renderValue(row, row.leftValue),
+      render: (_, row) => renderValue(row, row.leftValue, unit),
     },
     {
       title: `현재 (${versionLabel(data.right)})`,
       key: 'right',
-      render: (_, row) => renderValue(row, row.rightValue),
+      render: (_, row) => renderValue(row, row.rightValue, unit),
     },
     {
       title: '차이',
@@ -119,10 +127,12 @@ export function MeasurementComparePage() {
         if (row.diff === null) return <Typography.Text type="secondary">-</Typography.Text>;
         if (row.diff === 0) return <Typography.Text type="secondary">0</Typography.Text>;
         const positive = row.diff > 0;
+        // 서버 diff는 CM. inch 표시일 때는 diff도 파생 환산해 보여준다.
+        const diffDisplay = unit === 'INCH' ? cmToInch(row.diff) : row.diff;
         return (
           <Typography.Text strong style={{ color: positive ? '#cf1322' : '#1668dc', fontSize: 16 }}>
             {positive ? '+' : ''}
-            {row.diff} cm
+            {diffDisplay} {unit === 'INCH' ? 'in' : 'cm'}
           </Typography.Text>
         );
       },
@@ -183,6 +193,18 @@ export function MeasurementComparePage() {
               <StatusBadge
                 label={metaOf(MEASUREMENT_TYPE_META, data.right.measurementType).label}
                 color={metaOf(MEASUREMENT_TYPE_META, data.right.measurementType).color}
+              />
+            </Space>
+            <Space direction="vertical" size={4} style={{ marginTop: 8 }}>
+              <Typography.Text type="secondary">표시 단위</Typography.Text>
+              <Segmented
+                size="large"
+                value={unit}
+                onChange={(v) => setUnit(v as Unit)}
+                options={[
+                  { label: 'cm', value: 'CM' },
+                  { label: 'inch', value: 'INCH' },
+                ]}
               />
             </Space>
           </Space>

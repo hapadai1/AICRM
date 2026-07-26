@@ -19,6 +19,7 @@ import {
   Radio,
   Space,
   Table,
+  Tabs,
   Tag,
   Typography,
 } from 'antd';
@@ -27,16 +28,17 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   activateOptionSetVersion,
   createOptionSetVersion,
-  fetchOptionSetVersion,
   fetchOptionSets,
-  saveOptionStages,
 } from '../../api/admin';
 import { CHOICE_SLOTS, MAX_CHOICES, MIN_CHOICES } from '../../api/admin';
-import type {
-  OptionSetVersionStatus,
-  OptionSetVersionSummary,
-  OptionStageInput,
-} from '../../api/admin';
+import type { OptionSetVersionStatus, OptionSetVersionSummary } from '../../api/admin';
+import {
+  componentGroupLabel,
+  fetchAdminOptionSetVersion,
+  OPTION_COMPONENT_GROUPS,
+  saveAdminOptionStages,
+} from '../../api/options';
+import type { AdminOptionStageInput } from '../../api/options';
 import { ApiError, fetchFileObjectUrl } from '../../api/client';
 import { PRODUCT_CATEGORY_LABEL } from '../contracts/labels';
 import { metaOf } from '../../shared/status-meta';
@@ -63,6 +65,8 @@ interface EditableStage {
   name: string;
   sortOrder: number;
   required: boolean;
+  /** 부위 그룹(JACKET/TROUSERS/VEST). 셔츠·구두 등 단일 부위 세트는 null. */
+  componentGroup: string | null;
   /** 2~40개, 화면 순서가 곧 A~Z·AA~ 슬롯이다 */
   choices: EditableChoice[];
 }
@@ -152,6 +156,10 @@ export function AdminOptionsPage() {
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [draftStages, setDraftStages] = useState<EditableStage[]>([]);
   const [dirty, setDirty] = useState(false);
+  // 정장 세트는 부위(상의/하의/베스트) 탭으로 세분한다. 셔츠·구두는 단일 화면.
+  const componentGroups = OPTION_COMPONENT_GROUPS[category];
+  const hasGroups = componentGroups.length > 1;
+  const [activeGroup, setActiveGroup] = useState<string>(componentGroups[0] ?? '');
   const queryClient = useQueryClient();
   const { message, modal } = App.useApp();
 
@@ -172,9 +180,14 @@ export function AdminOptionsPage() {
     });
   }, [currentSet]);
 
+  // 대분류 변경 시 부위 탭을 그 카테고리의 첫 부위로 되돌린다.
+  useEffect(() => {
+    setActiveGroup(componentGroups[0] ?? '');
+  }, [componentGroups]);
+
   const versionQuery = useQuery({
     queryKey: ['option-set-versions', selectedVersionId],
-    queryFn: () => fetchOptionSetVersion(selectedVersionId!),
+    queryFn: () => fetchAdminOptionSetVersion(selectedVersionId!),
     enabled: !!selectedVersionId,
   });
   const version = versionQuery.data;
@@ -195,6 +208,7 @@ export function AdminOptionsPage() {
         name: s.name,
         sortOrder: s.sortOrder,
         required: s.required,
+        componentGroup: s.componentGroup,
         choices: CHOICE_SLOTS.map((slot) => s.choices.find((c) => c.slot === slot))
           .filter((c): c is NonNullable<typeof c> => !!c)
           .map((c) => ({
@@ -228,12 +242,13 @@ export function AdminOptionsPage() {
 
   const saveMutation = useMutation({
     mutationFn: () => {
-      const stages: OptionStageInput[] = draftStages.map((s, idx) => ({
+      const stages: AdminOptionStageInput[] = draftStages.map((s, idx) => ({
         id: s.id,
         code: s.code,
         name: s.name,
         sortOrder: s.sortOrder || idx + 1,
         required: s.required,
+        componentGroup: s.componentGroup,
         choices: s.choices.map((c, i) => ({
           slot: CHOICE_SLOTS[i],
           name: c.name,
@@ -242,7 +257,7 @@ export function AdminOptionsPage() {
           imageFileId: c.imageFileId,
         })),
       }));
-      return saveOptionStages(selectedVersionId!, stages);
+      return saveAdminOptionStages(selectedVersionId!, stages);
     },
     onSuccess: () => {
       message.success('단계가 저장되었습니다.');
@@ -533,6 +548,43 @@ export function AdminOptionsPage() {
       : []),
   ];
 
+  const sortedStages = [...draftStages].sort((a, b) => a.sortOrder - b.sortOrder);
+
+  const stageTable = (rows: EditableStage[]) => (
+    <Table<EditableStage>
+      rowKey="key"
+      size="small"
+      loading={versionQuery.isLoading}
+      dataSource={rows}
+      columns={stageColumns}
+      pagination={false}
+      scroll={{ x: 400 + CHOICE_COL_WIDTH * choiceColumnCount }}
+      locale={{ emptyText: '단계가 없습니다. 단계를 추가해 주세요.' }}
+    />
+  );
+
+  // 정장 세트 부위 탭: 표준 부위(상의/하의/베스트) + 미지정(구 버전 백필 전) 단계가 있으면 마지막 탭.
+  const NONE_KEY = '__none__';
+  const ungroupedStages = sortedStages.filter(
+    (s) => !s.componentGroup || !componentGroups.includes(s.componentGroup),
+  );
+  const groupTabItems = [
+    ...componentGroups.map((g) => ({
+      key: g,
+      label: `${componentGroupLabel(g)} (${sortedStages.filter((s) => s.componentGroup === g).length})`,
+      children: stageTable(sortedStages.filter((s) => s.componentGroup === g)),
+    })),
+    ...(ungroupedStages.length > 0
+      ? [
+          {
+            key: NONE_KEY,
+            label: `미지정 (${ungroupedStages.length})`,
+            children: stageTable(ungroupedStages),
+          },
+        ]
+      : []),
+  ];
+
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <Card size="small" title="옵션 세트·단계 관리">
@@ -613,13 +665,18 @@ export function AdminOptionsPage() {
                         name: '',
                         sortOrder: prev.length + 1,
                         required: true,
+                        // 정장 세트는 현재 부위 탭에 단계를 추가한다. 셔츠·구두는 부위 없음(null).
+                        componentGroup:
+                          hasGroups && componentGroups.includes(activeGroup) ? activeGroup : null,
                         choices: [emptyChoice(), emptyChoice()],
                       },
                     ]);
                     setDirty(true);
                   }}
                 >
-                  단계 추가
+                  {hasGroups && componentGroups.includes(activeGroup)
+                    ? `${componentGroupLabel(activeGroup)} 단계 추가`
+                    : '단계 추가'}
                 </Button>
                 <Button
                   size="small"
@@ -659,16 +716,15 @@ export function AdminOptionsPage() {
               message="저장되지 않은 변경이 있습니다."
             />
           )}
-          <Table<EditableStage>
-            rowKey="key"
-            size="small"
-            loading={versionQuery.isLoading}
-            dataSource={[...draftStages].sort((a, b) => a.sortOrder - b.sortOrder)}
-            columns={stageColumns}
-            pagination={false}
-            scroll={{ x: 400 + CHOICE_COL_WIDTH * choiceColumnCount }}
-            locale={{ emptyText: '단계가 없습니다. 단계를 추가해 주세요.' }}
-          />
+          {hasGroups ? (
+            <Tabs
+              activeKey={activeGroup}
+              onChange={setActiveGroup}
+              items={groupTabItems}
+            />
+          ) : (
+            stageTable(sortedStages)
+          )}
         </Card>
       )}
     </Space>

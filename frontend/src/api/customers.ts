@@ -1,6 +1,14 @@
 import type { Appointment, Consultation, CustomerStatus, Paged } from './appointments';
 import { request } from './client';
 
+/** 진행 journey의 현재 단계 (설계서 06 §2 / 02 진행상태 재정의) */
+export interface CustomerCurrentStage {
+  code: string;
+  name: string;
+  trackType: 'CUSTOM' | 'RENTAL' | 'REPAIR';
+  status: 'ACTIVE' | 'COMPLETED' | 'CANCELLED';
+}
+
 export interface CustomerListItem {
   id: string;
   name: string;
@@ -10,6 +18,8 @@ export interface CustomerListItem {
   lastVisitDate?: string;
   /** 최근 거래 유형 */
   lastTransactionType?: 'CUSTOM' | 'RENTAL';
+  /** 세부 진행상태: 진행 journey의 현재 단계. 진행 journey가 없으면 null */
+  currentStage?: CustomerCurrentStage | null;
   contractCount: number;
   balanceAmount: number;
 }
@@ -19,6 +29,8 @@ export interface CustomerListParams {
   /** true면 PROSPECT·INACTIVE 포함 (기본 CONTRACTED만) */
   includeProspect?: boolean;
   transactionType?: 'CUSTOM' | 'RENTAL';
+  /** 진행상태 검색: ACTIVE(진행중) | DONE(완료) | ALL(전체) */
+  progress?: 'ACTIVE' | 'DONE' | 'ALL';
   page?: number;
   size?: number;
 }
@@ -135,6 +147,7 @@ export function fetchCustomers(params: CustomerListParams): Promise<Paged<Custom
       q: params.q || undefined,
       includeProspect: params.includeProspect ? 'true' : undefined,
       transactionType: params.transactionType || undefined,
+      progress: params.progress && params.progress !== 'ALL' ? params.progress : undefined,
       page: params.page ?? 1,
       size: params.size ?? 30,
     },

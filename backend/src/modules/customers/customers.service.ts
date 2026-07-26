@@ -80,6 +80,27 @@ export class CustomersService {
       where.id = { in: latest.map((r) => r.customer_id) };
     }
 
+    // 진행상태 검색 (설계서 06 §2 / 02): journey status 기준으로 진행중/완료 필터.
+    // 기존 where.OR(q)·where.id(transactionType)와 충돌하지 않도록 AND 절에 얹는다.
+    if (query.progress === 'ACTIVE') {
+      where.AND = [{ journeys: { some: { status: 'ACTIVE' } } }];
+    } else if (query.progress === 'DONE') {
+      // 완료 = 계약 완료(CONTRACTED) 이거나, 진행중 journey 없이 완료 journey를 보유
+      where.AND = [
+        {
+          OR: [
+            { customerStatus: 'CONTRACTED' },
+            {
+              AND: [
+                { journeys: { some: { status: 'COMPLETED' } } },
+                { journeys: { none: { status: 'ACTIVE' } } },
+              ],
+            },
+          ],
+        },
+      ];
+    }
+
     const q = query.q?.trim();
     if (q) {
       const digits = q.replace(/\D/g, '');
@@ -108,7 +129,7 @@ export class CustomersService {
 
     // 목록 화면 요약 필드: 계약 건수·미수 잔금·최근 방문일 (CUST-001)
     const ids = items.map((c) => (c as { id: string }).id);
-    const [contracts, visits, orders] = ids.length
+    const [contracts, visits, orders, journeys, stages] = ids.length
       ? await this.prisma.$transaction([
           this.prisma.contract.findMany({
             where: { customerId: { in: ids }, status: { not: 'CANCELLED' } },
@@ -127,8 +148,16 @@ export class CustomersService {
             select: { transactionType: true, createdAt: true, contract: { select: { customerId: true } } },
             orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
           }),
+          // 세부 진행상태 열(설계서 06 §2 / 02): 고객별 진행 journey 단계. active 우선, 최근순.
+          this.prisma.customerJourney.findMany({
+            where: { customerId: { in: ids } },
+            select: { customerId: true, currentStageCode: true, trackType: true, status: true },
+            orderBy: [{ startedAt: 'desc' }],
+          }),
+          // 단계 코드→표시명 매핑 (journey_stages는 소규모 시드 테이블)
+          this.prisma.journeyStage.findMany({ select: { trackType: true, code: true, name: true } }),
         ])
-      : [[], [], []];
+      : [[], [], [], [], []];
 
     const summaryByCustomer = new Map<string, { contractCount: number; balanceAmount: number }>();
     for (const c of contracts as { customerId: string; currentVersion: { balanceAmount: unknown } | null }[]) {
@@ -150,15 +179,39 @@ export class CustomersService {
         lastTxByCustomer.set(o.contract.customerId, o.transactionType);
     }
 
+    // 단계 코드→표시명 (trackType별 code 고유, 설계서 02 §2 매핑)
+    const stageNameByKey = new Map<string, string>();
+    for (const s of stages as { trackType: string; code: string; name: string }[]) {
+      stageNameByKey.set(`${s.trackType}:${s.code}`, s.name);
+    }
+    // journeys는 startedAt desc 정렬 → 고객별 진행 journey 선택(ACTIVE 우선, 없으면 최근순)
+    type JourneyRow = { customerId: string; currentStageCode: string; trackType: string; status: string };
+    const journeyByCustomer = new Map<string, JourneyRow>();
+    for (const j of journeys as JourneyRow[]) {
+      const prev = journeyByCustomer.get(j.customerId);
+      if (!prev) journeyByCustomer.set(j.customerId, j);
+      else if (prev.status !== 'ACTIVE' && j.status === 'ACTIVE') journeyByCustomer.set(j.customerId, j);
+    }
+
     const enriched = items.map((c) => {
       const row = c as { id: string };
       const summary = summaryByCustomer.get(row.id);
+      const journey = journeyByCustomer.get(row.id);
       return {
         ...c,
         contractCount: summary?.contractCount ?? 0,
         balanceAmount: summary?.balanceAmount ?? 0,
         lastVisitDate: visitByCustomer.get(row.id) ?? null,
         lastTransactionType: lastTxByCustomer.get(row.id) ?? null,
+        // 세부 진행상태: 진행 journey의 현재 단계(코드/표시명/트랙/상태). 없으면 null
+        currentStage: journey
+          ? {
+              code: journey.currentStageCode,
+              name: stageNameByKey.get(`${journey.trackType}:${journey.currentStageCode}`) ?? journey.currentStageCode,
+              trackType: journey.trackType,
+              status: journey.status,
+            }
+          : null,
       };
     });
     return new Paginated(enriched, query.page, query.size, total);

@@ -13,6 +13,7 @@ import {
   startOptionSession,
 } from '../../api/options';
 import { choiceColor, fabricFieldLabel, fabricFieldPlaceholder, photoFrameStyle } from './option-meta';
+import { ComponentAttrsPanel } from './ComponentAttrsPanel';
 
 /** 선택지 이미지 영역 — 등록 이미지가 있으면 사진, 없으면 색상 블록으로 폴백한다. */
 function ChoiceMedia({ choice, maxHeight }: { choice: OptionChoiceView; maxHeight: string }) {
@@ -366,6 +367,8 @@ export function OptionStagePage() {
           </Typography.Text>
         </Space>
       </Card>
+
+      <ComponentAttrsPanel session={session} orderItemId={orderItemId} />
 
       <div style={{ display: 'grid', gridTemplateColumns: `repeat(${perRow}, minmax(0, 1fr))`, gap: 16 }}>
         {stage.choices.map((choice) => {

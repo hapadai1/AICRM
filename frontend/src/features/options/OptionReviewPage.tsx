@@ -1,12 +1,13 @@
 /** OPT-003 옵션 확인서 — 전체 단계 카드 검토 후 최종 저장(확정) */
 import { CheckCircleFilled, ExclamationCircleOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Button, Card, Col, Image, Modal, Row, Space, Spin, Tag, Tooltip, Typography, message } from 'antd';
+import { Alert, Button, Card, Col, Descriptions, Image, Modal, Row, Space, Spin, Tag, Tooltip, Typography, message } from 'antd';
 import { useNavigate, useParams } from 'react-router-dom';
 import { fetchFileObjectUrl } from '../../api/client';
-import type { OptionReviewStage, OptionSurcharge } from '../../api/options';
+import type { OptionComponentAttr, OptionReviewStage, OptionSurcharge } from '../../api/options';
 import {
   applyOptionSurcharge,
+  componentGroupLabel,
   confirmOptionSession,
   fetchOptionReview,
   fetchOptionSessionByItem,
@@ -68,6 +69,31 @@ function StageMedia({ st }: { st: OptionReviewStage }) {
 }
 
 const won = (v: number) => `${v.toLocaleString()}원`;
+
+/** 부위(상의/하의/베스트)별 원단·컬러·패턴·비고 출력 (설계서 04 §2). */
+function ComponentAttrsSummary({ components }: { components: OptionComponentAttr[] }) {
+  if (components.length === 0) return null;
+  return (
+    <Card size="small" title="부위별 원단·컬러·패턴">
+      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        {components.map((c) => (
+          <Descriptions
+            key={c.componentGroup}
+            size="small"
+            column={2}
+            bordered
+            title={componentGroupLabel(c.componentGroup)}
+          >
+            <Descriptions.Item label="원단">{c.fabricName || '-'}</Descriptions.Item>
+            <Descriptions.Item label="컬러">{c.colorName || '-'}</Descriptions.Item>
+            <Descriptions.Item label="패턴">{c.patternName || '-'}</Descriptions.Item>
+            <Descriptions.Item label="비고">{c.notes || '-'}</Descriptions.Item>
+          </Descriptions>
+        ))}
+      </Space>
+    </Card>
+  );
+}
 
 /**
  * 옵션 추가금액과 계약금액 차액 안내.
@@ -360,6 +386,8 @@ export function OptionReviewPage() {
           />
         )}
       </Card>
+
+      <ComponentAttrsSummary components={review.components} />
 
       <SurchargePanel
         surcharge={review.surcharge}

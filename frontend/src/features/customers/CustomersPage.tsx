@@ -1,6 +1,6 @@
 import { CalendarOutlined, FilterOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Button, Card, Empty, Input, Radio, Space, Table, Typography } from 'antd';
+import { Button, Card, Empty, Input, Radio, Segmented, Space, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -12,6 +12,13 @@ import { CustomerRegisterModal } from './CustomerRegisterModal';
 import { CUSTOMER_STATUS_META, TRANSACTION_TYPE_LABEL, formatAmount } from './customer-constants';
 import { metaOf } from '../../shared/status-meta';
 
+/** 진행 journey 상태별 세부 단계 배지 색상 (진행상태 재정의 02) */
+const JOURNEY_STATUS_COLOR: Record<'ACTIVE' | 'COMPLETED' | 'CANCELLED', string> = {
+  ACTIVE: 'processing',
+  COMPLETED: 'green',
+  CANCELLED: 'default',
+};
+
 /** CUST-001 고객 목록: 계약 고객(CONTRACTED)만 조회, 통합 검색 */
 export function CustomersPage() {
   const navigate = useNavigate();
@@ -19,14 +26,15 @@ export function CustomersPage() {
   const [keyword, setKeyword] = useState('');
   const [q, setQ] = useState('');
   const [transactionType, setTransactionType] = useState<'CUSTOM' | 'RENTAL' | undefined>(undefined);
+  const [progress, setProgress] = useState<'ACTIVE' | 'DONE' | 'ALL'>('ALL');
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(30);
   const [createOpen, setCreateOpen] = useState(false);
   const [fromAppointmentOpen, setFromAppointmentOpen] = useState(false);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['customers', { q, transactionType: transactionType ?? '', page, size }],
-    queryFn: () => fetchCustomers({ q, includeProspect: false, transactionType, page, size }),
+    queryKey: ['customers', { q, transactionType: transactionType ?? '', progress, page, size }],
+    queryFn: () => fetchCustomers({ q, includeProspect: false, transactionType, progress, page, size }),
   });
 
   const runSearch = () => {
@@ -75,9 +83,18 @@ export function CustomersPage() {
     {
       title: '고객 상태',
       dataIndex: 'customerStatus',
-      width: 100,
-      render: (v: CustomerListItem['customerStatus']) => (
-        <StatusBadge label={metaOf(CUSTOMER_STATUS_META, v).label} color={metaOf(CUSTOMER_STATUS_META, v).color} />
+      width: 160,
+      // 계약상태 배지 + 진행 journey의 세부 단계(진행상태 재정의 02) 병기
+      render: (v: CustomerListItem['customerStatus'], row) => (
+        <Space direction="vertical" size={2}>
+          <StatusBadge label={metaOf(CUSTOMER_STATUS_META, v).label} color={metaOf(CUSTOMER_STATUS_META, v).color} />
+          {row.currentStage ? (
+            <StatusBadge
+              label={row.currentStage.name}
+              color={JOURNEY_STATUS_COLOR[row.currentStage.status] ?? 'default'}
+            />
+          ) : null}
+        </Space>
       ),
     },
     {
@@ -132,6 +149,19 @@ export function CustomersPage() {
           <Button icon={<SearchOutlined />} onClick={runSearch}>
             검색
           </Button>
+          {/* 진행상태 검색(설계서 06 §2 / 02): 진행중/완료/전체 */}
+          <Segmented<'ACTIVE' | 'DONE' | 'ALL'>
+            value={progress}
+            onChange={(v) => {
+              setProgress(v);
+              setPage(1);
+            }}
+            options={[
+              { label: '전체', value: 'ALL' },
+              { label: '진행중', value: 'ACTIVE' },
+              { label: '완료', value: 'DONE' },
+            ]}
+          />
         </Space>
 
         <Table<CustomerListItem>

@@ -391,4 +391,90 @@ describe('고객 관리 (Phase 2)', () => {
       expect(data.repairs).toEqual([]);
     });
   });
+
+  describe('진행상태 검색 + 세부 진행상태 열 (S6-2, 설계서 06 §2 / 02)', () => {
+    let activeId: string;
+    let doneId: string;
+
+    beforeAll(async () => {
+      // 진행중(ACTIVE) journey 보유 고객 — 세부 단계 STYLE_CONSULTING
+      activeId = randomUUID();
+      await ctx.prisma.customer.create({
+        data: {
+          id: activeId,
+          name: '진행중고객',
+          phone: '010-8888-0001',
+          phoneNormalized: '01088880001',
+          customerStatus: 'PROSPECT',
+          registeredAt: new Date(),
+        },
+      });
+      await ctx.prisma.customerJourney.create({
+        data: {
+          id: randomUUID(),
+          customerId: activeId,
+          trackType: 'CUSTOM',
+          currentStageCode: 'STYLE_CONSULTING',
+          status: 'ACTIVE',
+          startedAt: new Date(),
+        },
+      });
+
+      // 완료(COMPLETED) journey 보유 고객 — 진행중 journey 없음
+      doneId = randomUUID();
+      await ctx.prisma.customer.create({
+        data: {
+          id: doneId,
+          name: '완료고객',
+          phone: '010-8888-0002',
+          phoneNormalized: '01088880002',
+          customerStatus: 'PROSPECT',
+          registeredAt: new Date(),
+        },
+      });
+      await ctx.prisma.customerJourney.create({
+        data: {
+          id: randomUUID(),
+          customerId: doneId,
+          trackType: 'CUSTOM',
+          currentStageCode: 'RELEASED',
+          status: 'COMPLETED',
+          startedAt: new Date(),
+          completedAt: new Date(),
+        },
+      });
+    });
+
+    it('목록은 진행 journey의 세부 진행상태(currentStage: 단계명·트랙·상태)를 함께 반환한다', async () => {
+      const res = await api(ctx).get('/api/v1/customers?status=ALL').set(auth(ctx)).expect(200);
+      const active = res.body.data.find((c: { id: string }) => c.id === activeId);
+      expect(active.currentStage).toEqual({
+        code: 'STYLE_CONSULTING',
+        name: '스타일 컨설팅',
+        trackType: 'CUSTOM',
+        status: 'ACTIVE',
+      });
+      // 진행 journey가 없는 고객은 currentStage=null
+      const rich = res.body.data.find((c: { name: string }) => c.name === '조계약');
+      expect(rich.currentStage).toBeNull();
+    });
+
+    it('progress=ACTIVE는 진행중 journey 보유 고객만, DONE은 완료 고객만 반환한다', async () => {
+      const activeList = await api(ctx)
+        .get('/api/v1/customers?status=ALL&progress=ACTIVE')
+        .set(auth(ctx))
+        .expect(200);
+      const activeNames = activeList.body.data.map((c: { name: string }) => c.name);
+      expect(activeNames).toContain('진행중고객');
+      expect(activeNames).not.toContain('완료고객');
+
+      const doneList = await api(ctx)
+        .get('/api/v1/customers?status=ALL&progress=DONE')
+        .set(auth(ctx))
+        .expect(200);
+      const doneNames = doneList.body.data.map((c: { name: string }) => c.name);
+      expect(doneNames).toContain('완료고객');
+      expect(doneNames).not.toContain('진행중고객');
+    });
+  });
 });

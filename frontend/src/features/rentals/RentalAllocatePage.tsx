@@ -1,210 +1,103 @@
-import { ArrowLeftOutlined, CheckOutlined, SearchOutlined } from '@ant-design/icons';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { SearchOutlined } from '@ant-design/icons';
+import { useQuery } from '@tanstack/react-query';
 import {
-  Alert,
-  App,
+  Badge,
   Button,
+  Calendar,
   Card,
-  DatePicker,
-  Descriptions,
   Empty,
   Form,
   Input,
-  Radio,
   Select,
   Space,
   Table,
-  Tag,
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs, { type Dayjs } from 'dayjs';
-import { useEffect, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ApiError } from '../../api/client';
+import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   RENTAL_COMPONENT_TYPE_LABELS,
-  RENTAL_ITEM_STATUS_META,
-  allocateRentalItem,
-  fetchAvailability,
-  fetchRentalComponentTargets,
+  fetchAvailabilityCalendar,
+  type RentalCalendarFilters,
+  type RentalCalendarItem,
   type RentalComponentType,
-  type RentalItem,
 } from '../../api/rentals';
-import { StatusBadge } from '../../shared/StatusBadge';
 import { COLOR_OPTIONS, DESIGN_OPTIONS, componentTypeOptions } from './rental-constants';
-import { metaOf } from '../../shared/status-meta';
 
-interface SearchValues {
-  pickupDate: Dayjs;
-  returnDueDate: Dayjs;
-  availabilityEndDate: Dayjs;
+interface FilterValues {
+  q?: string;
+  sku?: string;
   componentType?: RentalComponentType;
   design?: string;
   color?: string;
   size?: string;
 }
 
-interface SearchCriteria {
-  pickupDate: string;
-  returnDueDate: string;
-  availabilityEndDate: string;
-  /** 백엔드 가용 조회 필수 파라미터 — 대상 구성품 구분이 기본값이다. */
-  componentType: RentalComponentType;
-  design?: string;
-  color?: string;
-  size?: string;
+/** 가용 수에 따른 배지 색 — 0건은 회색, 소량은 주황, 여유는 초록. */
+function countColor(count: number): string {
+  if (count <= 0) return 'default';
+  if (count <= 2) return 'orange';
+  return 'green';
 }
 
-/** RENT-003 렌탈 가용 검색·실물 배정 (?componentId= 쿼리 수용) */
+/**
+ * 렌탈예약 달력 (설계서 06 §4, A7).
+ * 월 캘린더에 일자별 가용 렌탈용품 수를 배지로 표기하고, 검색어·SKU·구분 등으로 필터한다.
+ * 날짜 셀을 누르면 그 날짜에 가용한 실물 목록을 하단에 펼친다. (표시용 — 정합성은 배정 시 DB 제약이 보장)
+ */
 export function RentalAllocatePage() {
-  const { message } = App.useApp();
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const [searchParams] = useSearchParams();
-  const componentIdParam = searchParams.get('componentId') ?? undefined;
+  const [form] = Form.useForm<FilterValues>();
 
-  const [form] = Form.useForm<SearchValues>();
-  const [targetComponentId, setTargetComponentId] = useState<string | undefined>(componentIdParam);
-  const [criteria, setCriteria] = useState<SearchCriteria | null>(null);
-  const [selectedItemId, setSelectedItemId] = useState<string | undefined>();
-  const [manualCode, setManualCode] = useState('');
-  const [allocError, setAllocError] = useState<{ code: string; message: string } | null>(null);
+  const [month, setMonth] = useState<Dayjs>(dayjs());
+  const [filters, setFilters] = useState<FilterValues>({});
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
-  const targetsQuery = useQuery({
-    queryKey: ['rentals', 'component-targets'],
-    queryFn: () => fetchRentalComponentTargets(),
+  const from = month.startOf('month').format('YYYY-MM-DD');
+  const to = month.endOf('month').format('YYYY-MM-DD');
+
+  const queryFilters: RentalCalendarFilters = { from, to, ...filters };
+  const calendarQuery = useQuery({
+    queryKey: ['rentals', 'availability-calendar', queryFilters],
+    queryFn: () => fetchAvailabilityCalendar(queryFilters),
   });
 
-  const target = targetsQuery.data?.find((t) => t.componentId === targetComponentId);
-
-  // 대상 구성품이 정해지면 구분·기본 기간을 자동 반영
-  useEffect(() => {
-    if (target) {
-      const alloc = target.currentAllocation;
-      form.setFieldsValue({
-        componentType: target.componentType,
-        pickupDate: alloc?.pickupDate ? dayjs(alloc.pickupDate) : dayjs(),
-        returnDueDate: alloc?.returnDueDate ? dayjs(alloc.returnDueDate) : dayjs().add(2, 'day'),
-        availabilityEndDate: alloc?.availabilityEndDate
-          ? dayjs(alloc.availabilityEndDate)
-          : dayjs().add(4, 'day'),
-      });
+  // 날짜별 사전 버킷팅 — 셀마다 전체 배열을 훑지 않게 한다 (MonthCalendar 패턴).
+  const byDate = useMemo(() => {
+    const map = new Map<string, { availableCount: number; items: RentalCalendarItem[] }>();
+    for (const day of calendarQuery.data ?? []) {
+      map.set(day.date, { availableCount: day.availableCount, items: day.items });
     }
-  }, [target, form]);
+    return map;
+  }, [calendarQuery.data]);
 
-  const availabilityQuery = useQuery({
-    queryKey: ['rentals', 'availability', criteria],
-    queryFn: () =>
-      fetchAvailability({
-        componentType: criteria!.componentType,
-        design: criteria!.design,
-        color: criteria!.color,
-        size: criteria!.size,
-        pickupDate: criteria!.pickupDate,
-        availabilityEndDate: criteria!.availabilityEndDate,
-      }),
-    enabled: !!criteria,
-  });
-
-  const allocateMutation = useMutation({
-    mutationFn: (v: { inventoryItemId?: string; itemCode?: string }) => {
-      if (!target || !criteria) throw new ApiError('VALIDATION_ERROR', '배정 대상 구성품과 기간을 먼저 선택해 주세요.');
-      return allocateRentalItem(target.orderId, {
-        componentId: target.componentId,
-        inventoryItemId: v.inventoryItemId,
-        itemCode: v.itemCode,
-        pickupDate: criteria.pickupDate,
-        returnDueDate: criteria.returnDueDate,
-        availabilityEndDate: criteria.availabilityEndDate,
-      });
-    },
-    onSuccess: (alloc) => {
-      setAllocError(null);
-      setSelectedItemId(undefined);
-      setManualCode('');
-      message.success(`관리 ID ${alloc.managementCode}가 배정되었습니다. (${alloc.pickupDate} ~ ${alloc.returnDueDate})`);
-      void queryClient.invalidateQueries({ queryKey: ['rentals'] });
-    },
-    onError: (e) => {
-      if (e instanceof ApiError) {
-        setAllocError({ code: e.code, message: e.message });
-        // 기간 겹침이면 가용 목록 재조회 유도
-        if (e.code === 'RENTAL_PERIOD_OVERLAP') {
-          void queryClient.invalidateQueries({ queryKey: ['rentals', 'availability'] });
-        }
-      } else {
-        setAllocError({ code: 'UNKNOWN_ERROR', message: '배정에 실패했습니다.' });
-      }
-    },
-  });
-
-  const onSearch = (values: SearchValues) => {
-    setAllocError(null);
-    setSelectedItemId(undefined);
-    if (!values.componentType && !target?.componentType) {
-      setAllocError({
-        code: 'VALIDATION_ERROR',
-        message: '구분을 선택하거나 배정 대상 구성품을 먼저 고르세요.',
-      });
-      return;
-    }
-    setCriteria({
-      pickupDate: values.pickupDate.format('YYYY-MM-DD'),
-      returnDueDate: values.returnDueDate.format('YYYY-MM-DD'),
-      availabilityEndDate: values.availabilityEndDate.format('YYYY-MM-DD'),
-      // 백엔드가 필수로 요구하므로 미선택 시 대상 구성품 구분을 쓴다.
-      componentType: (values.componentType ?? target?.componentType) as RentalComponentType,
-      design: values.design,
-      color: values.color,
-      size: values.size,
-    });
+  const onSearch = (values: FilterValues) => {
+    setFilters(values);
+    setSelectedDate(null);
   };
 
-  const columns: ColumnsType<RentalItem> = [
-    {
-      title: '선택',
-      key: 'select',
-      width: 60,
-      render: (_, r) => (
-        <Radio checked={selectedItemId === r.id} onChange={() => setSelectedItemId(r.id)} />
-      ),
-    },
-    // 사람이 아는 정보(구분·디자인·컬러·사이즈)를 앞에, 관리 ID는 뒤에 둔다(재고 화면과 순서 일치).
+  const selectedItems = selectedDate ? (byDate.get(selectedDate)?.items ?? []) : [];
+
+  const columns: ColumnsType<RentalCalendarItem> = [
     {
       title: '구분',
       dataIndex: 'componentType',
       width: 120,
       render: (c: RentalComponentType) => RENTAL_COMPONENT_TYPE_LABELS[c] ?? c,
     },
-    { title: '디자인', dataIndex: 'design', width: 100 },
-    { title: '컬러', dataIndex: 'color', width: 90 },
-    { title: '사이즈', dataIndex: 'size', width: 80 },
-    {
-      title: '현재 상태',
-      dataIndex: 'status',
-      width: 110,
-      render: (s: RentalItem['status']) => (
-        <StatusBadge label={metaOf(RENTAL_ITEM_STATUS_META, s).label} color={metaOf(RENTAL_ITEM_STATUS_META, s).color} />
-      ),
-    },
-    {
-      title: '가용',
-      key: 'availability',
-      render: (_, r) =>
-        r.currentAllocation ? (
-          <Typography.Text type="secondary">
-            다른 기간 예약 있음 ({r.currentAllocation.pickupDate} ~ {r.currentAllocation.returnDueDate})
-          </Typography.Text>
-        ) : (
-          <Tag color="green">요청 기간 가용</Tag>
-        ),
-    },
+    { title: '디자인', dataIndex: 'design', width: 120 },
+    { title: '컬러', dataIndex: 'color', width: 100 },
+    { title: '사이즈', dataIndex: 'size', width: 90 },
     {
       title: '관리 ID',
       dataIndex: 'managementCode',
-      width: 170,
-      render: (v: string) => <Typography.Text type="secondary">{v}</Typography.Text>,
+      render: (v: string, r) => (
+        <Button type="link" style={{ padding: 0 }} onClick={() => navigate(`/rentals/${r.id}`)}>
+          {v}
+        </Button>
+      ),
     },
   ];
 
@@ -212,94 +105,29 @@ export function RentalAllocatePage() {
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Card>
         <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
+          <Typography.Title level={4} style={{ margin: 0 }}>
+            렌탈예약 — 가용 달력
+          </Typography.Title>
           <Space>
-            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/rentals')}>
-              재고 목록
-            </Button>
-            <Typography.Title level={4} style={{ margin: 0 }}>
-              가용 검색·실물 배정
-            </Typography.Title>
+            <Button onClick={() => navigate('/rentals/handover')}>출고·반납으로</Button>
+            <Button onClick={() => navigate('/rentals')}>전체관리로</Button>
           </Space>
-          <Button onClick={() => navigate('/rentals/handover')}>출고·반납으로</Button>
         </Space>
 
-        <Alert
-          style={{ marginTop: 16 }}
-          type="info"
-          showIcon
-          message="상의·하의는 서로 다른 사이즈의 실물을 각각 배정할 수 있습니다. 구성품을 바꿔가며 관리 ID를 확정하세요."
-        />
-
-        <Form.Item label="배정 대상 구성품" style={{ marginTop: 16, marginBottom: 8 }} required>
-          <Select
-            style={{ width: '100%', maxWidth: 640 }}
-            placeholder="배정할 렌탈 구성품 선택"
-            loading={targetsQuery.isLoading}
-            value={targetComponentId}
-            onChange={(v: string) => {
-              setTargetComponentId(v);
-              setCriteria(null);
-              setAllocError(null);
-            }}
-            options={(targetsQuery.data ?? []).map((t) => {
-              const label = `${t.customerName} · ${t.orderNo} · ${t.displayName} · ${RENTAL_COMPONENT_TYPE_LABELS[t.componentType]}`;
-              return {
-                value: t.componentId,
-                label: t.currentAllocation
-                  ? `${label} — 현재 배정: ${t.currentAllocation.managementCode}`
-                  : label,
-              };
-            })}
-          />
-        </Form.Item>
-        {target && (
-          <Descriptions size="small" bordered column={4} style={{ marginBottom: 8 }}>
-            <Descriptions.Item label="고객">{target.customerName}</Descriptions.Item>
-            <Descriptions.Item label="주문번호">{target.orderNo}</Descriptions.Item>
-            <Descriptions.Item label="구분">{RENTAL_COMPONENT_TYPE_LABELS[target.componentType]}</Descriptions.Item>
-            <Descriptions.Item label="현재 배정 ID">{target.currentAllocation?.managementCode ?? '-'}</Descriptions.Item>
-          </Descriptions>
-        )}
-
-        <Form<SearchValues>
+        <Form<FilterValues>
           form={form}
           layout="inline"
-          style={{ rowGap: 8, marginTop: 8 }}
-          initialValues={{
-            pickupDate: dayjs(),
-            returnDueDate: dayjs().add(2, 'day'),
-            availabilityEndDate: dayjs().add(4, 'day'),
-          }}
+          style={{ rowGap: 8, marginTop: 16 }}
           onFinish={onSearch}
         >
-          <Form.Item
-            name="pickupDate"
-            label="픽업일"
-            rules={[{ required: true, message: '픽업일을 선택해 주세요.' }]}
-          >
-            <DatePicker />
+          <Form.Item name="q" label="검색어">
+            <Input allowClear placeholder="관리코드·디자인·컬러" style={{ width: 180 }} />
           </Form.Item>
-          <Form.Item
-            name="returnDueDate"
-            label="반납 예정일"
-            rules={[{ required: true, message: '반납 예정일을 선택해 주세요.' }]}
-          >
-            <DatePicker />
+          <Form.Item name="sku" label="SKU">
+            <Input allowClear placeholder="SKU 설명" style={{ width: 140 }} />
           </Form.Item>
-          <Form.Item
-            name="availabilityEndDate"
-            label="가용 종료일(정비 포함)"
-            rules={[{ required: true, message: '가용 종료일을 선택해 주세요.' }]}
-          >
-            <DatePicker />
-          </Form.Item>
-          <Form.Item name="componentType" label="구분" extra="대상 구성품 선택 시 자동 지정">
-            <Select
-              allowClear
-              placeholder="구분 선택"
-              style={{ width: 140 }}
-              options={componentTypeOptions}
-            />
+          <Form.Item name="componentType" label="구분">
+            <Select allowClear placeholder="전체" style={{ width: 130 }} options={componentTypeOptions} />
           </Form.Item>
           <Form.Item name="design" label="디자인">
             <Select allowClear placeholder="전체" style={{ width: 120 }} options={DESIGN_OPTIONS} />
@@ -311,73 +139,55 @@ export function RentalAllocatePage() {
             <Input allowClear placeholder="예: 100" style={{ width: 100 }} />
           </Form.Item>
           <Form.Item>
-            <Button type="primary" htmlType="submit" icon={<SearchOutlined />}>
-              가용 조회
+            <Button type="primary" htmlType="submit" icon={<SearchOutlined />} loading={calendarQuery.isLoading}>
+              조회
             </Button>
           </Form.Item>
         </Form>
+        <Typography.Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
+          조회 기간: {from} ~ {to} (달력의 월을 이동하면 자동 재조회됩니다)
+        </Typography.Text>
       </Card>
 
-      {allocError && (
-        <Alert
-          type="error"
-          showIcon
-          closable
-          onClose={() => setAllocError(null)}
-          message={`배정 실패 (${allocError.code})`}
-          description={allocError.message}
+      <Card styles={{ body: { paddingTop: 0 } }}>
+        <Calendar
+          value={month}
+          onPanelChange={(value) => {
+            setMonth(value);
+            setSelectedDate(null);
+          }}
+          onSelect={(date, info) => {
+            if (info?.source === 'date') setSelectedDate(date.format('YYYY-MM-DD'));
+          }}
+          cellRender={(current, info) => {
+            if (info.type !== 'date') return info.originNode;
+            const key = current.format('YYYY-MM-DD');
+            const day = byDate.get(key);
+            if (!day) return null;
+            return (
+              <Badge
+                color={countColor(day.availableCount)}
+                text={<span style={{ fontSize: 12 }}>가용 {day.availableCount}건</span>}
+              />
+            );
+          }}
         />
-      )}
+      </Card>
 
-      <Card
-        title={
-          criteria
-            ? `가용 실물 목록 — ${criteria.pickupDate} ~ ${criteria.availabilityEndDate}`
-            : '가용 실물 목록'
-        }
-        extra={
-          <Button
-            type="primary"
-            icon={<CheckOutlined />}
-            disabled={!selectedItemId || !target}
-            loading={allocateMutation.isPending}
-            onClick={() => allocateMutation.mutate({ inventoryItemId: selectedItemId })}
-          >
-            선택 실물 배정
-          </Button>
-        }
-      >
-        {criteria ? (
-          <Table<RentalItem>
+      <Card title={selectedDate ? `${selectedDate} 가용 실물 (${selectedItems.length}건)` : '가용 실물'}>
+        {selectedDate ? (
+          <Table<RentalCalendarItem>
             rowKey="id"
-            scroll={{ x: 'max-content' }}
             size="middle"
-            loading={availabilityQuery.isLoading}
-            dataSource={availabilityQuery.data ?? []}
+            scroll={{ x: 'max-content' }}
+            dataSource={selectedItems}
             columns={columns}
             pagination={false}
-            onRow={(r) => ({ onClick: () => setSelectedItemId(r.id) })}
+            locale={{ emptyText: '이 날짜에 가용한 실물이 없습니다.' }}
           />
         ) : (
-          <Empty description="기간과 조건을 입력한 뒤 가용 조회를 실행해 주세요." image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          <Empty description="달력에서 날짜를 선택하면 그날 가용한 실물이 표시됩니다." image={Empty.PRESENTED_IMAGE_SIMPLE} />
         )}
-
-        <Space style={{ marginTop: 16 }} wrap>
-          <Typography.Text type="secondary">관리 ID 직접 입력 배정(기간 겹침 검증 데모):</Typography.Text>
-          <Input
-            style={{ width: 220 }}
-            placeholder="예: JKT-BLK-100-001"
-            value={manualCode}
-            onChange={(e) => setManualCode(e.target.value)}
-          />
-          <Button
-            disabled={!manualCode.trim() || !target || !criteria}
-            loading={allocateMutation.isPending}
-            onClick={() => allocateMutation.mutate({ itemCode: manualCode.trim() })}
-          >
-            직접 배정
-          </Button>
-        </Space>
       </Card>
     </Space>
   );

@@ -33,6 +33,14 @@ export class CustomerListQueryDto extends PageQueryDto {
 
   /** 해당 거래방식(CUSTOM/RENTAL) 주문 보유 고객만 조회 (연동정합화 계약 §2) */
   @IsOptional() @IsIn(['CUSTOM', 'RENTAL']) transactionType?: string;
+
+  /**
+   * 진행상태 검색 (설계서 06 §2 / 02 진행상태 재정의).
+   * - ACTIVE: 진행중 journey(status=ACTIVE) 보유 고객
+   * - DONE:   완료(모든 journey COMPLETED) 또는 계약 완료(CONTRACTED) 고객
+   * - ALL:    전체(기본)
+   */
+  @IsOptional() @IsIn(['ACTIVE', 'DONE', 'ALL']) progress?: string;
 }
 
 /** 신체 정보(키·체중·나이) — v2 작업지시서 연동, 선택 입력. Create/Update/Register 공통 */

@@ -17,6 +17,7 @@ import { JourneyBoardPage } from '../features/journeys/JourneyBoardPage';
 import { MeasurementComparePage } from '../features/measurements/MeasurementComparePage';
 import { MeasurementEditPage } from '../features/measurements/MeasurementEditPage';
 import { MeasurementListPage } from '../features/measurements/MeasurementListPage';
+import { MeasurementPhotoPrint } from '../features/measurements/MeasurementPhotoPrint';
 import { NotificationsPage } from '../features/notifications/NotificationsPage';
 import { ContractOptionsPage } from '../features/options/ContractOptionsPage';
 import { OptionProgressListPage } from '../features/options/OptionProgressListPage';
@@ -27,13 +28,17 @@ import { ContractProductionPage } from '../features/production/ContractProductio
 import { ProductionPage } from '../features/production/ProductionPage';
 import { RentalAllocatePage } from '../features/rentals/RentalAllocatePage';
 import { RentalHandoverPage } from '../features/rentals/RentalHandoverPage';
+import { RentalSelectionPage } from '../features/rentals/RentalSelectionPage';
 import { RentalInventoryPage } from '../features/rentals/RentalInventoryPage';
 import { RentalItemDetailPage } from '../features/rentals/RentalItemDetailPage';
 import { RepairsPage } from '../features/repairs/RepairsPage';
 import { WorkOrderPreviewPage } from '../features/workorders/WorkOrderPreviewPage';
+import { CustomerModeHomePage } from '../features/customer-mode/CustomerModeHomePage';
+import { CustomerSearchPage } from '../features/customer-mode/CustomerSearchPage';
 import { PlaceholderPage } from '../pages/PlaceholderPage';
 import { AppLayout } from './AppLayout';
 import { AuthGuard } from './AuthGuard';
+import { CustomerModeGuard } from './CustomerModeGuard';
 import { LoginPage } from './LoginPage';
 
 export const router = createBrowserRouter([
@@ -70,6 +75,8 @@ export const router = createBrowserRouter([
       { path: 'measurements', element: <MeasurementListPage /> },
       { path: 'measurements/new', element: <MeasurementEditPage /> },
       { path: 'measurements/compare', element: <MeasurementComparePage /> },
+      // 채촌 사진 A4 인쇄 전용 화면 (설계서 v2 05 §5). :id보다 먼저 선언.
+      { path: 'measurements/:id/print', element: <MeasurementPhotoPrint /> },
       { path: 'measurements/:id', element: <MeasurementEditPage /> },
       // 옵션·작업지시서
       { path: 'options', element: <OptionProgressListPage /> },
@@ -83,6 +90,8 @@ export const router = createBrowserRouter([
       { path: 'rentals', element: <RentalInventoryPage /> },
       { path: 'rentals/allocate', element: <RentalAllocatePage /> },
       { path: 'rentals/handover', element: <RentalHandoverPage /> },
+      // 렌탈 스타일 선택(컨설팅) — 품목 단위. :id보다 먼저 선언.
+      { path: 'rentals/selection/:orderItemId', element: <RentalSelectionPage /> },
       { path: 'rentals/:id', element: <RentalItemDetailPage /> },
       { path: 'repairs', element: <RepairsPage /> },
       // 연락
@@ -93,6 +102,22 @@ export const router = createBrowserRouter([
       { path: 'admin/options', element: <AdminOptionsPage /> },
       { path: 'admin/users', element: <AdminUsersPage /> },
       { path: 'admin/audit', element: <AuditLogPage /> },
+      // ── 고객모드 서브트리 (설계서 01 §3.2) ──
+      // CustomerModeGuard가 경로↔모드 동기화·컨텍스트 강제·유휴 타임아웃을 담당한다.
+      {
+        path: 'c',
+        element: <CustomerModeGuard />,
+        children: [
+          { index: true, element: <CustomerSearchPage /> },
+          { path: ':customerId', element: <CustomerModeHomePage /> },
+          // 흐름 화면(계약/컨설팅/채촌)은 후속 에이전트가 구현한다.
+          // TODO(후속): 아래 3개는 고객모드 전용 계약/컨설팅/채촌 화면으로 교체.
+          //   현재는 진행상태 요약 홈으로 임시 라우팅해 메뉴·버튼이 죽지 않게 한다.
+          { path: ':customerId/contract', element: <CustomerModeHomePage /> },
+          { path: ':customerId/consulting', element: <CustomerModeHomePage /> },
+          { path: ':customerId/measurement', element: <CustomerModeHomePage /> },
+        ],
+      },
       { path: '*', element: <PlaceholderPage title="페이지를 찾을 수 없습니다" phase={0} /> },
     ],
   },
