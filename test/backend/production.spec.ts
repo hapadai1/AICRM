@@ -103,6 +103,9 @@ describe('제작 상태·부분 입출고·가봉 (ProductionModule)', () => {
         .send({})
         .expect(201);
       expect(res2.body.data.orderItemStatus).toBe('RECEIVED');
+      // D7 일원화(설계서 02 §8·§10.3 #4): 완성복 입고 연락 제안은 production이 아니라
+      // 진행(journey) PRODUCT_RECEIVED 단계에서만 만든다. 여기서는 항상 null.
+      expect(res2.body.data.suggestedNotification).toBeNull();
 
       const full = await ctx.prisma.orderItem.findUniqueOrThrow({ where: { id: item.id } });
       expect(full.status).toBe('RECEIVED');

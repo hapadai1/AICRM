@@ -17,14 +17,16 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { Dayjs } from 'dayjs';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ApiError } from '../../api/client';
 import {
   RENTAL_COMPONENT_TYPE_LABELS,
   RENTAL_ITEM_STATUS_META,
   createRentalItem,
+  fetchRentalColors,
   fetchRentalItems,
+  fetchRentalSizes,
   retireRentalItem,
   type RentalComponentType,
   type RentalItem,
@@ -62,6 +64,18 @@ export function RentalInventoryPage() {
   const [registerForm] = Form.useForm<RegisterValues>();
   const [filters, setFilters] = useState<FilterValues>({});
   const [registerOpen, setRegisterOpen] = useState(false);
+
+  // E10: 컬러·사이즈는 기준정보(rental_colors/rental_sizes) 활성 코드에서 선택한다.
+  const colorsQuery = useQuery({ queryKey: ['rentals', 'colors'], queryFn: fetchRentalColors });
+  const sizesQuery = useQuery({ queryKey: ['rentals', 'sizes'], queryFn: fetchRentalSizes });
+  const colorSelectOptions = useMemo(
+    () => (colorsQuery.data ?? []).map((c) => ({ value: c.code, label: `${c.name} (${c.code})` })),
+    [colorsQuery.data],
+  );
+  const sizeSelectOptions = useMemo(
+    () => (sizesQuery.data ?? []).map((s) => ({ value: s.code, label: `${s.name} (${s.code})` })),
+    [sizesQuery.data],
+  );
 
   const listQuery = useQuery({
     queryKey: ['rentals', 'inventory', filters],
@@ -268,10 +282,18 @@ export function RentalInventoryPage() {
             <Select options={DESIGN_OPTIONS} />
           </Form.Item>
           <Form.Item name="color" label="컬러" rules={[{ required: true, message: '컬러를 선택해 주세요.' }]}>
-            <Select options={COLOR_OPTIONS} />
+            <Select
+              placeholder="컬러 선택"
+              loading={colorsQuery.isLoading}
+              options={colorSelectOptions}
+            />
           </Form.Item>
-          <Form.Item name="size" label="사이즈" rules={[{ required: true, message: '사이즈를 입력해 주세요.' }]}>
-            <Input placeholder="예: 100, 32, 270" />
+          <Form.Item name="size" label="사이즈" rules={[{ required: true, message: '사이즈를 선택해 주세요.' }]}>
+            <Select
+              placeholder="사이즈 선택"
+              loading={sizesQuery.isLoading}
+              options={sizeSelectOptions}
+            />
           </Form.Item>
           <Form.Item
             name="managementCode"

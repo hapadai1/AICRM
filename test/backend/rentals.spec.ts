@@ -120,7 +120,7 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
 
   it('import는 dryRun 미리보기와 오류 행 분리를 지원한다', async () => {
     const items = [
-      { componentType: 'TROUSERS', design: '클래식', color: 'BLACK', size: '32', managementCode: 'PNT-BK-32-001' },
+      { componentType: 'TROUSERS', design: '클래식', color: 'BLACK', size: '95', managementCode: 'PNT-BK-32-001' },
       { componentType: 'JACKET', design: '클래식', color: 'BLACK', size: '100', managementCode: 'JKT-BK-100-002' }, // DB 중복
       { componentType: 'HAT', design: '모자', color: 'GRAY', size: 'F', managementCode: 'HAT-001' }, // 허용되지 않은 품목
       { componentType: 'SHOES', design: '더비', color: 'BROWN' }, // 필수값 누락
@@ -147,6 +147,63 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
     const errorRows = real.body.data.errors.map((e: { row: number }) => e.row).sort();
     expect(errorRows).toEqual([2, 3, 4]);
     expect(await ctx.prisma.rentalInventoryItem.count({ where: { managementCode: 'PNT-BK-32-001' } })).toBe(1);
+  });
+
+  // ---------------------------------------------------------------------------
+  // 1-b. E10 — 컬러·사이즈 기준정보 코드 검증
+  // ---------------------------------------------------------------------------
+
+  it('E10: 활성 기준정보 코드(color/size)면 실물 등록이 통과한다', async () => {
+    await api(ctx)
+      .post('/api/v1/rental-inventory')
+      .set(auth(ctx))
+      .send({ componentType: 'JACKET', design: 'E10', color: 'CHARCOAL', size: '110', managementCode: 'E10-OK-001' })
+      .expect(201);
+  });
+
+  it('E10: 미등록 color/size 코드는 VALIDATION_ERROR fieldErrors로 차단한다', async () => {
+    // 미등록 컬러
+    const badColor = await api(ctx)
+      .post('/api/v1/rental-inventory')
+      .set(auth(ctx))
+      .send({ componentType: 'JACKET', design: 'E10', color: 'RAINBOW', size: '100', managementCode: 'E10-BADC-001' })
+      .expect(400);
+    expect(badColor.body.error.code).toBe('VALIDATION_ERROR');
+    expect(badColor.body.error.fieldErrors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ field: 'color', reason: 'INVALID_COLOR_CODE' })]),
+    );
+    expect(await ctx.prisma.rentalInventoryItem.count({ where: { managementCode: 'E10-BADC-001' } })).toBe(0);
+
+    // 미등록 사이즈 (호수 체계 밖: '32')
+    const badSize = await api(ctx)
+      .post('/api/v1/rental-inventory')
+      .set(auth(ctx))
+      .send({ componentType: 'TROUSERS', design: 'E10', color: 'BLACK', size: '32', managementCode: 'E10-BADS-001' })
+      .expect(400);
+    expect(badSize.body.error.code).toBe('VALIDATION_ERROR');
+    expect(badSize.body.error.fieldErrors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ field: 'size', reason: 'INVALID_SIZE_CODE' })]),
+    );
+    expect(await ctx.prisma.rentalInventoryItem.count({ where: { managementCode: 'E10-BADS-001' } })).toBe(0);
+  });
+
+  it('E10: import은 미등록 color/size 행을 오류로 분리한다', async () => {
+    const res = await api(ctx)
+      .post('/api/v1/rental-inventory/import')
+      .set(auth(ctx))
+      .send({
+        dryRun: true,
+        items: [
+          { componentType: 'JACKET', design: 'E10', color: 'NAVY', size: '100', managementCode: 'E10-IMP-OK' },
+          { componentType: 'JACKET', design: 'E10', color: 'RAINBOW', size: '999', managementCode: 'E10-IMP-BAD' },
+        ],
+      })
+      .expect(201);
+    expect(res.body.data.successCount).toBe(1);
+    expect(res.body.data.errorCount).toBe(1);
+    const badRow = res.body.data.errors.find((e: { managementCode: string }) => e.managementCode === 'E10-IMP-BAD');
+    expect(badRow.errors.join(' ')).toMatch(/color/);
+    expect(badRow.errors.join(' ')).toMatch(/size/);
   });
 
   // ---------------------------------------------------------------------------
@@ -376,7 +433,7 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
     const created = await api(ctx)
       .post('/api/v1/rental-inventory')
       .set(auth(ctx))
-      .send({ componentType: 'SHOES', design: '더비', color: 'BLACK', size: '270', managementCode: 'SHO-RET-001' })
+      .send({ componentType: 'SHOES', design: '더비', color: 'BLACK', size: '100', managementCode: 'SHO-RET-001' })
       .expect(201);
     const shoesId = created.body.data[0].id;
     const retired = await api(ctx)

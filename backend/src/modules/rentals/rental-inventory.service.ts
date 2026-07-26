@@ -185,6 +185,7 @@ export class RentalInventoryService {
         : Array.from({ length: quantity }, (_, i) => `${dto.managementCode.trim()}-${String(startNo + i).padStart(3, '0')}`);
 
     await this.assertManagementCodesFree(codes);
+    await this.assertActiveColorSize(dto.color, dto.size);
 
     const created = await this.prisma.$transaction(async (tx) => {
       const sku = await this.findOrCreateSku(tx, dto.componentType, dto.design, dto.color, dto.size, dto.skuDescription);
@@ -241,6 +242,9 @@ export class RentalInventoryService {
     });
     const existingCodes = new Set(existing.map((e) => e.managementCode));
 
+    // E10: 컬러·사이즈는 활성 기준정보(rental_colors/rental_sizes) 코드여야 한다.
+    const { colors: activeColors, sizes: activeSizes } = await this.loadActiveCodeSets();
+
     dto.items.forEach((raw, index) => {
       const rowNo = index + 1;
       const rowErrors: string[] = [];
@@ -261,7 +265,9 @@ export class RentalInventoryService {
         rowErrors.push(`componentType이 허용되지 않은 품목입니다: ${componentType}`);
       if (!design) rowErrors.push('design 필수값이 없습니다.');
       if (!color) rowErrors.push('color 필수값이 없습니다.');
+      else if (!activeColors.has(color)) rowErrors.push(`color가 활성 기준정보 코드가 아닙니다: ${color}`);
       if (!size) rowErrors.push('size 필수값이 없습니다.');
+      else if (!activeSizes.has(size)) rowErrors.push(`size가 활성 기준정보 코드가 아닙니다: ${size}`);
       if (!managementCode) rowErrors.push('managementCode 필수값이 없습니다.');
       else {
         if (existingCodes.has(managementCode)) rowErrors.push(`이미 등록된 관리코드입니다: ${managementCode}`);
@@ -368,11 +374,18 @@ export class RentalInventoryService {
       await this.assertManagementCodesFree([dto.managementCode.trim()]);
     }
 
+    const colorChanged = !!dto.color && dto.color.trim() !== before.rentalSku.color;
+    const sizeChanged = !!dto.size && dto.size.trim() !== before.rentalSku.size;
+    // E10: 컬러·사이즈를 바꾸는 경우에만 활성 기준정보 코드 검증(자유문자 유입 차단).
+    if (colorChanged || sizeChanged) {
+      await this.assertActiveColorSize(colorChanged ? dto.color : undefined, sizeChanged ? dto.size : undefined);
+    }
+
     const skuChanged =
       (dto.componentType && dto.componentType !== before.rentalSku.componentType) ||
       (dto.design && dto.design !== before.rentalSku.design) ||
-      (dto.color && dto.color !== before.rentalSku.color) ||
-      (dto.size && dto.size !== before.rentalSku.size);
+      colorChanged ||
+      sizeChanged;
 
     const updated = await this.prisma.$transaction(async (tx) => {
       let rentalSkuId = before.rentalSkuId;
@@ -655,6 +668,38 @@ export class RentalInventoryService {
   // ---------------------------------------------------------------------------
   // 내부 헬퍼
   // ---------------------------------------------------------------------------
+
+  /** 활성 렌탈 컬러·사이즈 코드 집합 (E10 검증 소스). */
+  private async loadActiveCodeSets(): Promise<{ colors: Set<string>; sizes: Set<string> }> {
+    const [colors, sizes] = await Promise.all([
+      this.prisma.rentalColor.findMany({ where: { active: true }, select: { code: true } }),
+      this.prisma.rentalSize.findMany({ where: { active: true }, select: { code: true } }),
+    ]);
+    return {
+      colors: new Set(colors.map((c) => c.code)),
+      sizes: new Set(sizes.map((s) => s.code)),
+    };
+  }
+
+  /**
+   * E10: 컬러·사이즈가 활성 기준정보(rental_colors/rental_sizes) 코드인지 검증한다.
+   * 인자가 주어진 항목만 검사하며(수정 시 부분 변경 대응), 하나라도 어긋나면 fieldErrors로 반환.
+   */
+  private async assertActiveColorSize(color?: string, size?: string): Promise<void> {
+    if (color === undefined && size === undefined) return;
+    const { colors, sizes } = await this.loadActiveCodeSets();
+    const fieldErrors: FieldError[] = [];
+    if (color !== undefined && !colors.has(color.trim()))
+      fieldErrors.push({ field: 'color', reason: 'INVALID_COLOR_CODE' });
+    if (size !== undefined && !sizes.has(size.trim()))
+      fieldErrors.push({ field: 'size', reason: 'INVALID_SIZE_CODE' });
+    if (fieldErrors.length > 0)
+      throw new BusinessException(
+        'VALIDATION_ERROR',
+        '컬러·사이즈는 활성 렌탈 기준정보 코드여야 합니다.',
+        fieldErrors,
+      );
+  }
 
   private async findOrCreateSku(
     tx: Prisma.TransactionClient,

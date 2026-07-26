@@ -641,8 +641,8 @@ export function MeasurementEditPage() {
                   value={unit}
                   onChange={(v) => changeUnit(v as Unit)}
                   options={[
-                    { label: 'cm', value: 'CM' },
-                    { label: 'inch', value: 'INCH' },
+                    { label: 'cm로 보기', value: 'CM' },
+                    { label: '인치로 보기', value: 'INCH' },
                   ]}
                 />
               </Space>

@@ -7,7 +7,6 @@ import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FilesService, UploadedMulterFile } from '../files/files.service';
-import { NotificationSuggestionService } from '../notifications/notification-suggestion.service';
 import { buildWorkOrderView, workOrderStatusSelect } from '../work-orders/work-order-status';
 import {
   AGGREGATE_ONLY_STATUSES,
@@ -72,7 +71,6 @@ export class ProductionService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
-    private readonly suggestions: NotificationSuggestionService,
     private readonly files: FilesService,
   ) {}
 
@@ -250,39 +248,10 @@ export class ProductionService {
       const itemStatus = await this.aggregateItemStatus(tx, component.orderItemId, change.eventDate, actor);
       return { event, component: updated, orderItemStatus: itemStatus };
     });
-    // 전체 입고(완성복)면 고객 연락 문구를 함께 준비한다 — 발송은 화면 확인창에서 별도로.
-    // 기존 응답 필드는 유지하고 suggestedNotification만 덧붙인다(하위호환, repairs와 동일).
-    const suggestedNotification = await this.buildReceivedSuggestion(
-      component.orderItemId,
-      result.orderItemStatus,
-    );
-    return { ...result, suggestedNotification };
-  }
-
-  /** 맞춤 품목이 전체 입고(RECEIVED)되면 '완성복 입고 안내' 연락 제안을 만든다. */
-  private async buildReceivedSuggestion(orderItemId: string, itemStatus: string) {
-    if (itemStatus !== 'RECEIVED') return null;
-    const item = await this.prisma.orderItem.findUnique({
-      where: { id: orderItemId },
-      select: {
-        order: {
-          select: { id: true, transactionType: true, contract: { select: { customerId: true } } },
-        },
-      },
-    });
-    if (!item || item.order.transactionType !== 'CUSTOM') return null;
-    const template = await this.prisma.notificationTemplate.findUnique({
-      where: { code: 'JOURNEY_PRODUCT_RECEIVED' },
-      select: { id: true },
-    });
-    if (!template) return null;
-    return this.suggestions.build({
-      templateId: template.id,
-      customerId: item.order.contract.customerId,
-      orderId: item.order.id,
-      // 같은 품목의 전체 입고 연락은 한 번만 발송된다.
-      triggerKey: `production:${orderItemId}:RECEIVED`,
-    });
+    // D7 일원화(설계서 02 §8·§10.3 #4): 완성복 입고 고객 연락 제안은 진행(journey)
+    // PRODUCT_RECEIVED 단계 진입에서만 만든다. production 쪽 자동 제안은 제거해 이중 노출을 없앤다.
+    // 응답 필드는 하위호환을 위해 유지하되 항상 null(연락은 진행 카드에서).
+    return { ...result, suggestedNotification: null };
   }
 
   /** 구성품 상태를 집계해 품목 상태를 갱신하고, 변경 시 집계 이벤트를 남긴다. */

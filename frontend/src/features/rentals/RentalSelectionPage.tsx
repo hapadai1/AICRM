@@ -1,4 +1,4 @@
-import { CheckOutlined, FileTextOutlined, SearchOutlined } from '@ant-design/icons';
+import { CheckOutlined, FileTextOutlined, SearchOutlined, SwapOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
@@ -18,7 +18,7 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { ApiError } from '../../api/client';
 import {
   RENTAL_COMPONENT_TYPE_LABELS,
@@ -33,6 +33,7 @@ import {
   saveRentalLine,
   selectRentalLineItem,
   startRentalSelection,
+  type RentalAllocatePrefill,
   type RentalCandidate,
   type RentalComponentType,
   type RentalSelectionComponent,
@@ -56,6 +57,7 @@ interface Draft {
 export function RentalSelectionPage() {
   const { orderItemId } = useParams<{ orderItemId: string }>();
   const { message } = App.useApp();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
@@ -298,6 +300,26 @@ export function RentalSelectionPage() {
     },
   ];
 
+  // C5: 확정 후 [배정으로] — 선택된 실물·구성품을 배정 화면으로 프리필 전달(자동 생성 아님, 날짜는 배정 모달에서 입력).
+  const allocationPrefill: RentalAllocatePrefill = {
+    items: detail.components
+      .filter((c) => c.selectedItem)
+      .map((c) => ({
+        componentId: c.orderItemComponentId,
+        orderNo: detail.orderNo,
+        customerName: detail.customerName,
+        item: {
+          id: c.selectedItem!.id,
+          managementCode: c.selectedItem!.managementCode,
+          componentType: c.componentType,
+          design: c.selectedItem!.design,
+          color: c.selectedItem!.color,
+          size: c.selectedItem!.size,
+        },
+      })),
+  };
+  const canAllocate = detail.status === 'CONFIRMED' && allocationPrefill.items.length > 0;
+
   const candidateColumns: ColumnsType<RentalCandidate> = [
     { title: '관리 ID', dataIndex: 'managementCode', width: 170 },
     { title: '디자인', dataIndex: 'design', width: 110 },
@@ -338,6 +360,16 @@ export function RentalSelectionPage() {
             <Button icon={<FileTextOutlined />} onClick={() => setReviewOpen(true)}>
               확인서
             </Button>
+            {canAllocate && (
+              <Button
+                icon={<SwapOutlined />}
+                onClick={() =>
+                  navigate('/rentals/allocate', { state: { rentalAllocatePrefill: allocationPrefill } })
+                }
+              >
+                배정으로
+              </Button>
+            )}
             <Button
               type="primary"
               icon={<CheckOutlined />}

@@ -471,74 +471,26 @@ describe('수선 (RepairsModule)', () => {
     });
   });
   /** 개발설계서 05 G-06 — 상태를 바꾸면 문구를 준비해 확인창 재료로 돌려준다. */
-  describe('고객 연락 제안', () => {
-    it('연락 대상 상태에서만 치환된 문구와 멱등키를 제안한다', async () => {
+  // D8 일원화(설계서 02 §8·§10.3 #5): 수선 고객 연락 제안은 상태변경(status-events)이
+  // 아니라 REPAIR 진행(journey) REPAIR_CHECKED_IN 단계 진입에서만 만든다.
+  // status-events 응답의 suggestedNotification은 하위호환용으로 남되 항상 null이다.
+  // 진행 경로의 실제 연락 제안 검증은 journeys.spec.ts(REPAIR 트랙)에서 한다.
+  describe('고객 연락 제안 (진행 경로로 일원화)', () => {
+    it('상태변경은 어떤 상태에서도 연락 제안을 만들지 않는다 (항상 null)', async () => {
       const { customer } = await seedRepairTargets(ctx.prisma);
       const repairId = await createGeneralRepair(customer.id);
 
-      // 접수(RECEIVED)는 생성 시점 상태다. 다음 전이 REQUESTED는 연락 대상이 아니다.
-      const notTarget = await api(ctx)
-        .post(`/api/v1/repairs/${repairId}/status-events`)
-        .set(auth(ctx))
-        .send({ newStatus: 'REQUESTED' })
-        .expect(201);
-      expect(notTarget.body.data.suggestedNotification).toBeNull();
-
-      for (const status of ['IN_PROGRESS', 'RETURNED_TO_SHOP']) {
-        await api(ctx)
+      // 과거 연락 대상이던 상태(RETURNED_TO_SHOP, CUSTOMER_NOTIFIED)까지 전이해도 제안이 없어야 한다.
+      for (const status of ['REQUESTED', 'IN_PROGRESS', 'RETURNED_TO_SHOP', 'CUSTOMER_NOTIFIED']) {
+        const res = await api(ctx)
           .post(`/api/v1/repairs/${repairId}/status-events`)
           .set(auth(ctx))
           .send({ newStatus: status })
           .expect(201);
+        expect(res.body.data.suggestedNotification).toBeNull();
+        // 상태변경 자체는 그대로 동작한다(하위호환).
+        expect(res.body.data.newStatus).toBe(status);
       }
-
-      const target = await api(ctx)
-        .post(`/api/v1/repairs/${repairId}/status-events`)
-        .set(auth(ctx))
-        .send({ newStatus: 'CUSTOMER_NOTIFIED' })
-        .expect(201);
-
-      const s = target.body.data.suggestedNotification;
-      expect(s).toMatchObject({
-        templateCode: 'REPAIR_READY_NOTICE',
-        channel: 'ALIMTALK',
-        recipientPhone: customer.phone,
-        customerId: customer.id,
-        triggerKey: `repair:${repairId}:CUSTOMER_NOTIFIED`,
-      });
-      expect(s.renderedBody).toContain(customer.name);
-      expect(s.renderedBody).not.toContain('#{');
-      // 기존 응답 필드는 그대로 유지된다(하위호환).
-      expect(target.body.data.newStatus).toBe('CUSTOMER_NOTIFIED');
-    });
-
-    it('연결된 규칙이 없으면 제안하지 않는다 (기존 동작 유지)', async () => {
-      const { customer } = await seedRepairTargets(ctx.prisma);
-      const repairId = await createGeneralRepair(customer.id);
-      // 규칙을 끄면 연락 대상 상태여도 제안이 없어야 한다.
-      await ctx.prisma.notificationRule.updateMany({
-        where: { triggerType: 'REPAIR:CUSTOMER_NOTIFIED' },
-        data: { active: false },
-      });
-
-      for (const status of ['REQUESTED', 'IN_PROGRESS', 'RETURNED_TO_SHOP']) {
-        await api(ctx)
-          .post(`/api/v1/repairs/${repairId}/status-events`)
-          .set(auth(ctx))
-          .send({ newStatus: status })
-          .expect(201);
-      }
-      const res = await api(ctx)
-        .post(`/api/v1/repairs/${repairId}/status-events`)
-        .set(auth(ctx))
-        .send({ newStatus: 'CUSTOMER_NOTIFIED' })
-        .expect(201);
-      expect(res.body.data.suggestedNotification).toBeNull();
-
-      await ctx.prisma.notificationRule.updateMany({
-        where: { triggerType: 'REPAIR:CUSTOMER_NOTIFIED' },
-        data: { active: true },
-      });
     });
   });
   /** 개발설계서 05 G-07 — 설계 PDF 1페이지 "수선 물품 방문" 대응 */
