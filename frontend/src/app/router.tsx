@@ -33,7 +33,10 @@ import { RentalInventoryPage } from '../features/rentals/RentalInventoryPage';
 import { RentalItemDetailPage } from '../features/rentals/RentalItemDetailPage';
 import { RepairsPage } from '../features/repairs/RepairsPage';
 import { WorkOrderPreviewPage } from '../features/workorders/WorkOrderPreviewPage';
+import { CustomerModeConsultingPage } from '../features/customer-mode/CustomerModeConsultingPage';
+import { CustomerModeContractPage } from '../features/customer-mode/CustomerModeContractPage';
 import { CustomerModeHomePage } from '../features/customer-mode/CustomerModeHomePage';
+import { CustomerModeMeasurementPage } from '../features/customer-mode/CustomerModeMeasurementPage';
 import { CustomerSearchPage } from '../features/customer-mode/CustomerSearchPage';
 import { PlaceholderPage } from '../pages/PlaceholderPage';
 import { AppLayout } from './AppLayout';
@@ -110,12 +113,10 @@ export const router = createBrowserRouter([
         children: [
           { index: true, element: <CustomerSearchPage /> },
           { path: ':customerId', element: <CustomerModeHomePage /> },
-          // 흐름 화면(계약/컨설팅/채촌)은 후속 에이전트가 구현한다.
-          // TODO(후속): 아래 3개는 고객모드 전용 계약/컨설팅/채촌 화면으로 교체.
-          //   현재는 진행상태 요약 홈으로 임시 라우팅해 메뉴·버튼이 죽지 않게 한다.
-          { path: ':customerId/contract', element: <CustomerModeHomePage /> },
-          { path: ':customerId/consulting', element: <CustomerModeHomePage /> },
-          { path: ':customerId/measurement', element: <CustomerModeHomePage /> },
+          // 흐름 화면: 계약서 → 스타일 컨설팅 → 채촌 (고객모드 딥플로우, 설계서 01 §4)
+          { path: ':customerId/contract', element: <CustomerModeContractPage /> },
+          { path: ':customerId/consulting', element: <CustomerModeConsultingPage /> },
+          { path: ':customerId/measurement', element: <CustomerModeMeasurementPage /> },
         ],
       },
       { path: '*', element: <PlaceholderPage title="페이지를 찾을 수 없습니다" phase={0} /> },
