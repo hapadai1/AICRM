@@ -88,6 +88,7 @@ export function JourneyBoardPage() {
               options={[
                 { label: '비즈니스 맞춤', value: 'CUSTOM' },
                 { label: '웨딩패키지 렌탈', value: 'RENTAL' },
+                { label: '수선', value: 'REPAIR' },
               ]}
             />
           </Space>

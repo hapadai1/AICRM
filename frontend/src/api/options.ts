@@ -11,6 +11,58 @@ import { toDateTime } from './transform';
 export type OptionStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'REVIEW' | 'CONFIRMED';
 export type ProductCategory = 'SUIT' | 'SHIRT' | 'SHOES';
 
+/**
+ * 맞춤 옵션 부위(구성품) 그룹 (설계서 04 §2.3 / 백엔드 option-component-groups.ts와 동일).
+ * 품목 대분류 → 부위 그룹 목록. 맞춤 세션의 부위별 원단·컬러·패턴 입력과
+ * 옵션세트 단계의 componentGroup 축을 공유한다.
+ */
+export const OPTION_COMPONENT_GROUPS: Record<ProductCategory, string[]> = {
+  SUIT: ['JACKET', 'TROUSERS', 'VEST'],
+  SHIRT: ['SHIRT'],
+  SHOES: ['SHOES'],
+};
+
+/** 부위 그룹 코드 → 한글 라벨 (백엔드 COMPONENT_GROUP_LABELS와 동일) */
+export const COMPONENT_GROUP_LABELS: Record<string, string> = {
+  JACKET: '상의(자켓)',
+  TROUSERS: '하의(바지)',
+  VEST: '베스트',
+  SHIRT: '셔츠',
+  SHOES: '구두',
+};
+
+/** 카테고리의 부위 그룹 목록 (미지정 카테고리는 빈 배열) */
+export function componentGroupsFor(
+  category: ProductCategory | string | null | undefined,
+): string[] {
+  return category ? (OPTION_COMPONENT_GROUPS[category as ProductCategory] ?? []) : [];
+}
+
+/** 부위 그룹 코드의 표시 라벨(미등록 코드는 코드 그대로) */
+export function componentGroupLabel(group: string): string {
+  return COMPONENT_GROUP_LABELS[group] ?? group;
+}
+
+/**
+ * 부위(구성품 그룹)별 원단·컬러·패턴·비고 (설계서 04 §2).
+ * 세션 detail/review 응답의 `components[]` 각 원소. 저장값이 없으면 각 필드 null.
+ */
+export interface OptionComponentAttr {
+  componentGroup: string;
+  fabricName: string | null;
+  colorName: string | null;
+  patternName: string | null;
+  notes: string | null;
+}
+
+/** 부위별 원단·컬러·패턴·비고 입력 (start body / component-attrs upsert 공용) */
+export interface ComponentAttrInput {
+  fabricName?: string;
+  colorName?: string;
+  patternName?: string;
+  notes?: string;
+}
+
 /** OPT-001 목록 행 — 백엔드 progress()가 이미 평면 형태로 내려준다. */
 export interface OptionProgressItem {
   orderItemId: string;
@@ -108,6 +160,8 @@ export interface OptionSessionDetail {
   lastStageOrder: number;
   version: number;
   stages: OptionStageView[];
+  /** 부위별 원단·컬러·패턴·비고 (설계서 04 §2). 카테고리별 부위 슬롯이 백엔드에서 내려온다. */
+  components: OptionComponentAttr[];
 }
 
 // --- 백엔드 원본 행 ---------------------------------------------------------
@@ -151,6 +205,8 @@ interface OptionSessionApiRow {
   totalStages: number;
   completedStages: number;
   stages: OptionStageApiRow[];
+  /** 부위별 원단·컬러·패턴·비고 (설계서 04 §2). 백엔드 buildComponents() 결과. */
+  components?: OptionComponentAttr[];
   /** currentSession 응답에만 있다. */
   resumeStageId?: string | null;
 }
@@ -193,6 +249,7 @@ function toOptionSession(row: OptionSessionApiRow): OptionSessionDetail {
     lastStageOrder: lastSelected.length > 0 ? lastSelected[lastSelected.length - 1].order : 0,
     version: row.version,
     stages,
+    components: row.components ?? [],
   };
 }
 
@@ -233,6 +290,8 @@ export interface OptionReviewData {
   missingCount: number;
   version: number;
   stages: OptionReviewStage[];
+  /** 부위별 원단·컬러·패턴·비고 (설계서 04 §2). 확인서에 부위 선택·입력 출력용. */
+  components: OptionComponentAttr[];
   surcharge: OptionSurcharge;
 }
 
@@ -258,6 +317,7 @@ interface OptionReviewApiRow {
       imageFileId?: string | null;
     } | null;
   }[];
+  components?: OptionComponentAttr[];
   surcharge: OptionSurcharge;
   version: number;
 }
@@ -282,6 +342,7 @@ function toOptionReview(row: OptionReviewApiRow): OptionReviewData {
       extraPrice: Number(s.selected?.extraPrice ?? 0),
       imageUrl: s.selected?.imageFileId ? `/files/${s.selected.imageFileId}` : null,
     })),
+    components: row.components ?? [],
     surcharge: row.surcharge,
   };
 }
@@ -314,16 +375,49 @@ export function fetchOptionSessionByItem(orderItemId: string): Promise<OptionSes
   }).then((res) => (res.session ? toOptionSession(res.session) : null));
 }
 
-/** 옵션 선택 세션 시작 (§13.4) — 응답은 세션 상세(평면) */
+/** start body의 부위별 입력 항목 (componentGroup 지정) */
+export interface StartComponentAttrInput extends ComponentAttrInput {
+  componentGroup: string;
+}
+
+/**
+ * 옵션 선택 세션 시작 (§13.4) — 응답은 세션 상세(평면).
+ * componentAttrs를 함께 보내면 부위별 원단·컬러·패턴을 시작 시점에 upsert한다(설계서 04 §2.4).
+ */
 export function startOptionSession(
   orderItemId: string,
   fabric?: string,
+  componentAttrs?: StartComponentAttrInput[],
 ): Promise<OptionSessionDetail> {
   return request<OptionSessionApiRow>({
     url: `/order-items/${orderItemId}/option-sessions`,
     method: 'POST',
-    data: { fabric },
+    data: { fabric, componentAttrs },
   }).then(toOptionSession);
+}
+
+/** PUT /option-sessions/:id/component-attrs/:group 응답 */
+export interface SaveComponentAttrResult {
+  sessionId: string;
+  componentGroup: string;
+  component: OptionComponentAttr | null;
+  version: number;
+}
+
+/**
+ * 부위(구성품 그룹)별 원단·컬러·패턴·비고 upsert (설계서 04 §2.4, 낙관적 잠금).
+ * 확정(CONFIRMED) 세션은 백엔드가 거부한다. 저장 시 세션 rowVersion이 증가한다.
+ */
+export function saveOptionComponentAttr(
+  sessionId: string,
+  group: string,
+  body: ComponentAttrInput & { version: number },
+): Promise<SaveComponentAttrResult> {
+  return request<SaveComponentAttrResult>({
+    url: `/option-sessions/${sessionId}/component-attrs/${group}`,
+    method: 'PUT',
+    data: body,
+  });
 }
 
 /** 옵션 세션 조회 */
@@ -403,4 +497,177 @@ export function copyOptionSession(
     method: 'POST',
     data: { targetOrderItemId },
   }).then(toOptionSession);
+}
+
+// ---------------------------------------------------------------------------
+// 옵션세트 관리(ADMIN-002) — 부위 그룹(componentGroup) 세분 (설계서 04 §3)
+//
+// api/admin.ts 의 옵션세트 함수는 componentGroup 축이 없어, 부위별 세분이 필요한
+// 관리자 화면(정장 세트)은 아래 함수로 버전 상세 조회·단계 저장을 대신한다.
+// (버전 목록·새 버전·활성화는 api/admin.ts 를 그대로 재사용한다.)
+// ---------------------------------------------------------------------------
+
+const OPTION_SET_STATUS = ['DRAFT', 'ACTIVE', 'RETIRED'] as const;
+export type AdminOptionSetStatus = (typeof OPTION_SET_STATUS)[number];
+
+export interface AdminOptionChoice {
+  id: string;
+  /** 선택지 코드(A/B/C…) */
+  slot: string;
+  name: string;
+  factoryName?: string;
+  /** 이 선택지를 고를 때 계약금액에 더해지는 추가금액(원) */
+  extraPrice: number;
+  imageFileId?: string;
+  imageUrl: string | null;
+}
+
+export interface AdminOptionStage {
+  id: string;
+  code: string;
+  name: string;
+  sortOrder: number;
+  required: boolean;
+  /** 부위 그룹(JACKET/TROUSERS/VEST). 셔츠·구두 등 단일 부위는 null. */
+  componentGroup: string | null;
+  choices: AdminOptionChoice[];
+}
+
+export interface AdminOptionSetVersionDetail {
+  id: string;
+  optionSetId: string;
+  versionNo: number;
+  status: AdminOptionSetStatus;
+  stages: AdminOptionStage[];
+}
+
+export interface AdminOptionStageInput {
+  id?: string;
+  code?: string;
+  name: string;
+  sortOrder: number;
+  required: boolean;
+  componentGroup?: string | null;
+  choices: {
+    slot: string;
+    name: string;
+    factoryName?: string;
+    extraPrice?: number;
+    imageFileId?: string;
+  }[];
+}
+
+interface AdminOptionChoiceApiRow {
+  id: string;
+  choiceCode: string;
+  choiceName: string;
+  factoryLabel?: string | null;
+  extraPrice?: number | null;
+  imageFileId?: string | null;
+  active: boolean;
+}
+
+interface AdminOptionStageApiRow {
+  id: string;
+  stageCode: string;
+  stageName: string;
+  sequenceNo: number;
+  required: boolean;
+  componentGroup?: string | null;
+  active: boolean;
+  choices: AdminOptionChoiceApiRow[];
+}
+
+interface AdminOptionSetVersionApiRow {
+  id: string;
+  optionSetId: string;
+  versionNo: number;
+  status: AdminOptionSetStatus;
+  stages?: AdminOptionStageApiRow[];
+}
+
+function toAdminVersionDetail(v: AdminOptionSetVersionApiRow): AdminOptionSetVersionDetail {
+  return {
+    id: v.id,
+    optionSetId: v.optionSetId,
+    versionNo: v.versionNo,
+    status: v.status,
+    stages: (v.stages ?? []).map((s) => ({
+      id: s.id,
+      code: s.stageCode,
+      name: s.stageName,
+      sortOrder: s.sequenceNo,
+      required: s.required,
+      componentGroup: s.componentGroup ?? null,
+      choices: s.choices.map((c) => ({
+        id: c.id,
+        slot: c.choiceCode,
+        name: c.choiceName,
+        factoryName: c.factoryLabel ?? undefined,
+        extraPrice: Number(c.extraPrice ?? 0),
+        imageFileId: c.imageFileId ?? undefined,
+        imageUrl: c.imageFileId ? `/files/${c.imageFileId}` : null,
+      })),
+    })),
+  };
+}
+
+/** 신규 단계의 stageCode를 단계명(ASCII)에서 생성 (기존 단계는 서버 코드 유지). api/admin.ts와 동일 규칙. */
+function adminStageCodes(stages: AdminOptionStageInput[]): string[] {
+  const used = new Set(stages.map((s) => s.code).filter((c): c is string => !!c));
+  return stages.map((s, index) => {
+    if (s.code) return s.code;
+    const ascii = s.name
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+    const base = (ascii || `STAGE_${index + 1}`).slice(0, 36);
+    let code = base;
+    let suffix = 2;
+    while (used.has(code)) {
+      code = `${base}_${suffix}`;
+      suffix += 1;
+    }
+    used.add(code);
+    return code;
+  });
+}
+
+/** 옵션세트 버전 상세 (부위 그룹 포함) 조회 — 관리자 화면 편집용 */
+export async function fetchAdminOptionSetVersion(
+  versionId: string,
+): Promise<AdminOptionSetVersionDetail> {
+  return toAdminVersionDetail(
+    await request<AdminOptionSetVersionApiRow>({ url: `/option-set-versions/${versionId}` }),
+  );
+}
+
+/** 옵션세트 단계 저장 (부위 그룹 포함, DRAFT만) — saveStages 입력에 componentGroup 전달 */
+export async function saveAdminOptionStages(
+  versionId: string,
+  stages: AdminOptionStageInput[],
+): Promise<AdminOptionSetVersionDetail> {
+  const codes = adminStageCodes(stages);
+  return toAdminVersionDetail(
+    await request<AdminOptionSetVersionApiRow>({
+      url: `/option-set-versions/${versionId}/stages`,
+      method: 'PUT',
+      data: {
+        stages: stages.map((s, i) => ({
+          stageCode: codes[i],
+          stageName: s.name,
+          sequenceNo: s.sortOrder,
+          required: s.required,
+          componentGroup: s.componentGroup ?? null,
+          choices: s.choices.map((c) => ({
+            choiceCode: c.slot,
+            choiceName: c.name,
+            factoryLabel: c.factoryName,
+            extraPrice: c.extraPrice ?? 0,
+            imageFileId: c.imageFileId,
+          })),
+        })),
+      },
+    }),
+  );
 }

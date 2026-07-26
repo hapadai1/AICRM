@@ -8,14 +8,15 @@ import { request, type ListResult } from './client';
  * 코드값·응답 형태는 백엔드(`journeys.service.ts`)가 기준이다.
  */
 
-/** 진행 트랙 — 상담 용도(usageType)와 1:1 대응 */
-export type TrackType = 'CUSTOM' | 'RENTAL';
+/** 진행 트랙 — CUSTOM/RENTAL은 상담 용도(usageType)와 대응, REPAIR는 수선 접수에서 시작(설계서 v2 02 §2.2) */
+export type TrackType = 'CUSTOM' | 'RENTAL' | 'REPAIR';
 
-export const TRACK_TYPES: TrackType[] = ['CUSTOM', 'RENTAL'];
+export const TRACK_TYPES: TrackType[] = ['CUSTOM', 'RENTAL', 'REPAIR'];
 
 export const TRACK_TYPE_LABELS: Record<TrackType, string> = {
   CUSTOM: '비즈니스 맞춤',
   RENTAL: '웨딩패키지 렌탈',
+  REPAIR: '수선',
 };
 
 export function trackTypeLabel(track: string): string {
@@ -89,11 +90,82 @@ export interface JourneyEvent {
   actor?: { id: string; displayName: string } | null;
 }
 
+/** 단계 완료 방식 — AUTO(자동완료·수동버튼 없음) | GATED(품목 전수완료 후 [전체 완료] 활성) */
+export type StageCompletionMode = 'AUTO' | 'GATED';
+
+/**
+ * GET /journeys/:id 의 stages 항목 (설계서 v2 02 §6.2).
+ * 게이팅(품목 완료 집계)과 완료 이력(상태·완료일·비고 3종)을 함께 내려준다.
+ */
+export interface JourneyStageView {
+  code: string;
+  name: string;
+  sequenceNo: number;
+  hasTemplate: boolean;
+  completionMode: StageCompletionMode;
+  /** 대상 품목 수 */
+  targetCount: number;
+  /** 완료(revoke 안 된) 품목 수 */
+  completedCount: number;
+  /** [전체 완료] 활성 여부(전 품목 완료 시 true) */
+  canComplete: boolean;
+  /** 이 단계를 완료(떠남)했는지 */
+  completed: boolean;
+  /** 완료일 = 그 단계를 떠난 최신 이벤트의 changedAt */
+  completedAt: string | null;
+  /** 비고 = 그 단계를 떠난 최신 이벤트의 notes */
+  notes: string | null;
+}
+
 export interface JourneyDetail extends Journey {
-  stages: { code: string; name: string; sequenceNo: number; hasTemplate: boolean }[];
+  stages: JourneyStageView[];
   events: JourneyEvent[];
   /** 현재 단계가 연락 단계이고 아직 발송 전이면 실려 온다 (상시 [고객 연락] 버튼용) */
   currentSuggestion: SuggestedNotification | null;
+}
+
+/** 품목별 완료의 대상 종류 (다형 참조) */
+export type CompletionTargetType = 'ORDER_ITEM' | 'REPAIR_ITEM';
+
+/** 단계 게이팅 현황 — 품목 완료 클릭·전진 응답에 실려 온다 */
+export interface StageGating {
+  stageCode: string;
+  targetCount: number;
+  completedCount: number;
+  canComplete: boolean;
+}
+
+/** 단계 대상 품목 1건 (완료 체크리스트의 행) */
+export interface StageItem {
+  targetId: string;
+  targetType: CompletionTargetType;
+  displayName: string;
+  productCategory: string | null;
+  completed: boolean;
+  completedAt: string | null;
+  completedBy: string | null;
+  completedByName: string | null;
+  /** production 상태 힌트(읽기 전용, 완료를 자동 생성하지 않음) */
+  productionHint: { status: string | null } | null;
+}
+
+/** GET /journeys/:id/stages/:stageCode/items */
+export interface StageItemsResult {
+  stageCode: string;
+  completionMode: StageCompletionMode;
+  items: StageItem[];
+  gating: StageGating;
+}
+
+/** POST .../complete 응답 */
+export interface CompleteItemResult {
+  completion: {
+    targetId: string;
+    targetType: CompletionTargetType;
+    completedAt: string;
+    completedBy: string;
+  };
+  gating: StageGating;
 }
 
 /**
@@ -158,6 +230,39 @@ export function createJourney(
 /** GET /journeys/{id} */
 export function fetchJourney(id: string): Promise<JourneyDetail> {
   return request<JourneyDetail>({ url: `/journeys/${id}` });
+}
+
+/** GET /journeys/{id}/stages/{stageCode}/items — 단계 대상 품목 + 완료상태 + 게이팅 */
+export function getStageItems(id: string, stageCode: string): Promise<StageItemsResult> {
+  return request<StageItemsResult>({
+    url: `/journeys/${id}/stages/${encodeURIComponent(stageCode)}/items`,
+  });
+}
+
+/** POST /journeys/{id}/stages/{stageCode}/items/{targetId}/complete — 품목 완료(멱등) */
+export function completeStageItem(
+  id: string,
+  stageCode: string,
+  targetId: string,
+  body?: { notes?: string },
+): Promise<CompleteItemResult> {
+  return request<CompleteItemResult>({
+    url: `/journeys/${id}/stages/${encodeURIComponent(stageCode)}/items/${targetId}/complete`,
+    method: 'POST',
+    data: body ?? {},
+  });
+}
+
+/** POST /journeys/{id}/stages/{stageCode}/items/{targetId}/uncomplete — 완료 취소 */
+export function uncompleteStageItem(
+  id: string,
+  stageCode: string,
+  targetId: string,
+): Promise<{ gating: StageGating }> {
+  return request<{ gating: StageGating }>({
+    url: `/journeys/${id}/stages/${encodeURIComponent(stageCode)}/items/${targetId}/uncomplete`,
+    method: 'POST',
+  });
 }
 
 /** POST /journeys/{id}/stage — 되돌리기(후진)는 reason이 필수다. */

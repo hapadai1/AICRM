@@ -7,7 +7,12 @@ import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { toAppointmentView, toConsultationView } from '../appointments/appointment-view';
-import { CreateCustomerDto, CustomerListQueryDto, UpdateCustomerDto } from './customers.dto';
+import {
+  CreateCustomerDto,
+  CustomerListQueryDto,
+  RegisterCustomerDto,
+  UpdateCustomerDto,
+} from './customers.dto';
 import { normalizePhone } from './phone.util';
 
 const CUSTOMER_SELECT = {
@@ -17,9 +22,13 @@ const CUSTOMER_SELECT = {
   phoneNormalized: true,
   email: true,
   customerStatus: true,
+  registeredAt: true,
   firstReservedAt: true,
   contractedAt: true,
   notes: true,
+  heightCm: true,
+  weightKg: true,
+  age: true,
   rowVersion: true,
   createdAt: true,
   updatedAt: true,
@@ -49,7 +58,9 @@ export class CustomersService {
 
   /** 고객 목록. 기본은 CONTRACTED만 조회하고 PROSPECT는 필터로만 노출한다 (설계서 5.3). */
   async list(query: CustomerListQueryDto): Promise<Paginated<unknown>> {
-    const where: Prisma.CustomerWhereInput = {};
+    // 예약으로 자동 생성된 미등록 고객은 고객 메뉴에 노출하지 않는다.
+    // 이들은 [예약 고객 등록]에서만 다루며, 등록되어야 이 목록에 들어온다.
+    const where: Prisma.CustomerWhereInput = { registeredAt: { not: null } };
     if (query.status !== 'ALL') {
       const statuses = [...new Set([query.status, ...(query.includeProspect ? ['PROSPECT'] : [])])];
       where.customerStatus = statuses.length > 1 ? { in: statuses } : query.status;
@@ -67,6 +78,27 @@ export class CustomersService {
         WHERE latest.tx = ${query.transactionType}
       `;
       where.id = { in: latest.map((r) => r.customer_id) };
+    }
+
+    // 진행상태 검색 (설계서 06 §2 / 02): journey status 기준으로 진행중/완료 필터.
+    // 기존 where.OR(q)·where.id(transactionType)와 충돌하지 않도록 AND 절에 얹는다.
+    if (query.progress === 'ACTIVE') {
+      where.AND = [{ journeys: { some: { status: 'ACTIVE' } } }];
+    } else if (query.progress === 'DONE') {
+      // 완료 = 계약 완료(CONTRACTED) 이거나, 진행중 journey 없이 완료 journey를 보유
+      where.AND = [
+        {
+          OR: [
+            { customerStatus: 'CONTRACTED' },
+            {
+              AND: [
+                { journeys: { some: { status: 'COMPLETED' } } },
+                { journeys: { none: { status: 'ACTIVE' } } },
+              ],
+            },
+          ],
+        },
+      ];
     }
 
     const q = query.q?.trim();
@@ -97,7 +129,7 @@ export class CustomersService {
 
     // 목록 화면 요약 필드: 계약 건수·미수 잔금·최근 방문일 (CUST-001)
     const ids = items.map((c) => (c as { id: string }).id);
-    const [contracts, visits, orders] = ids.length
+    const [contracts, visits, orders, journeys, stages] = ids.length
       ? await this.prisma.$transaction([
           this.prisma.contract.findMany({
             where: { customerId: { in: ids }, status: { not: 'CANCELLED' } },
@@ -116,8 +148,16 @@ export class CustomersService {
             select: { transactionType: true, createdAt: true, contract: { select: { customerId: true } } },
             orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
           }),
+          // 세부 진행상태 열(설계서 06 §2 / 02): 고객별 진행 journey 단계. active 우선, 최근순.
+          this.prisma.customerJourney.findMany({
+            where: { customerId: { in: ids } },
+            select: { customerId: true, currentStageCode: true, trackType: true, status: true },
+            orderBy: [{ startedAt: 'desc' }],
+          }),
+          // 단계 코드→표시명 매핑 (journey_stages는 소규모 시드 테이블)
+          this.prisma.journeyStage.findMany({ select: { trackType: true, code: true, name: true } }),
         ])
-      : [[], [], []];
+      : [[], [], [], [], []];
 
     const summaryByCustomer = new Map<string, { contractCount: number; balanceAmount: number }>();
     for (const c of contracts as { customerId: string; currentVersion: { balanceAmount: unknown } | null }[]) {
@@ -139,15 +179,39 @@ export class CustomersService {
         lastTxByCustomer.set(o.contract.customerId, o.transactionType);
     }
 
+    // 단계 코드→표시명 (trackType별 code 고유, 설계서 02 §2 매핑)
+    const stageNameByKey = new Map<string, string>();
+    for (const s of stages as { trackType: string; code: string; name: string }[]) {
+      stageNameByKey.set(`${s.trackType}:${s.code}`, s.name);
+    }
+    // journeys는 startedAt desc 정렬 → 고객별 진행 journey 선택(ACTIVE 우선, 없으면 최근순)
+    type JourneyRow = { customerId: string; currentStageCode: string; trackType: string; status: string };
+    const journeyByCustomer = new Map<string, JourneyRow>();
+    for (const j of journeys as JourneyRow[]) {
+      const prev = journeyByCustomer.get(j.customerId);
+      if (!prev) journeyByCustomer.set(j.customerId, j);
+      else if (prev.status !== 'ACTIVE' && j.status === 'ACTIVE') journeyByCustomer.set(j.customerId, j);
+    }
+
     const enriched = items.map((c) => {
       const row = c as { id: string };
       const summary = summaryByCustomer.get(row.id);
+      const journey = journeyByCustomer.get(row.id);
       return {
         ...c,
         contractCount: summary?.contractCount ?? 0,
         balanceAmount: summary?.balanceAmount ?? 0,
         lastVisitDate: visitByCustomer.get(row.id) ?? null,
         lastTransactionType: lastTxByCustomer.get(row.id) ?? null,
+        // 세부 진행상태: 진행 journey의 현재 단계(코드/표시명/트랙/상태). 없으면 null
+        currentStage: journey
+          ? {
+              code: journey.currentStageCode,
+              name: stageNameByKey.get(`${journey.trackType}:${journey.currentStageCode}`) ?? journey.currentStageCode,
+              trackType: journey.trackType,
+              status: journey.status,
+            }
+          : null,
       };
     });
     return new Paginated(enriched, query.page, query.size, total);
@@ -166,7 +230,12 @@ export class CustomersService {
         phoneNormalized,
         email: dto.email,
         notes: dto.notes,
+        heightCm: dto.heightCm ?? null,
+        weightKg: dto.weightKg ?? null,
+        age: dto.age ?? null,
         customerStatus,
+        // 고객 메뉴에서 직접 등록한 고객은 즉시 등록 완료 상태다
+        registeredAt: new Date(),
         ...(customerStatus === 'CONTRACTED' ? { contractedAt: new Date() } : {}),
         ...(dto.firstReservedAt ? { firstReservedAt: new Date(dto.firstReservedAt) } : {}),
       },
@@ -185,7 +254,7 @@ export class CustomersService {
   /**
    * 고객 상세 (연동정합화 계약 §2):
    * { customer, summary, appointments, consultations, contracts(뷰), orders,
-   *   measurements, components, rentals, repairs, payments } 구조로 반환한다.
+   *   measurements, components, rentals, repairs } 구조로 반환한다.
    */
   async detail(id: string) {
     const customer = await this.prisma.customer.findUnique({
@@ -194,7 +263,7 @@ export class CustomersService {
     });
     if (!customer) throw new BusinessException('CUSTOMER_NOT_FOUND', '고객이 없습니다.');
 
-    const [contracts, orders, appointments, consultations, measurements, components, rentals, repairs, payments] =
+    const [contracts, orders, appointments, consultations, measurements, components, rentals, repairs] =
       await Promise.all([
         this.prisma.contract.findMany({
           where: { customerId: id },
@@ -313,21 +382,13 @@ export class CustomersService {
             rentalInventoryItem: { select: { managementCode: true } },
           },
         }),
-        this.prisma.payment.findMany({
-          where: { contract: { customerId: id } },
-          orderBy: { paymentDate: 'desc' },
-          include: { contract: { select: { contractNo: true } } },
-        }),
       ]);
 
-    // 요약: 취소 계약 제외 금액 합계, 결제는 COMPLETED 기준(REFUND는 차감)
+    // 요약: 취소 계약 제외 계약 금액 합계
     const activeContractIds = new Set(contracts.filter((c) => c.status !== 'CANCELLED').map((c) => c.id));
     const totalAmount = contracts
       .filter((c) => activeContractIds.has(c.id))
       .reduce((sum, c) => sum + Number(c.currentVersion?.totalAmount ?? 0), 0);
-    const paidAmount = payments
-      .filter((p) => p.status === 'COMPLETED' && activeContractIds.has(p.contractId))
-      .reduce((sum, p) => sum + Number(p.amount) * (p.paymentType === 'REFUND' ? -1 : 1), 0);
 
     const contractNoById = new Map(contracts.map((c) => [c.id, c.contractNo]));
 
@@ -336,8 +397,6 @@ export class CustomersService {
       summary: {
         contractCount: contracts.length,
         totalAmount,
-        paidAmount,
-        balanceAmount: totalAmount - paidAmount,
       },
       appointments: appointments.map(toAppointmentView),
       consultations: consultations.map(toConsultationView),
@@ -425,22 +484,6 @@ export class CustomersService {
         status: r.status,
         repairType: r.repairType,
         dueDate: toDateOnly(r.dueDate),
-        cost: r.cost === null ? null : Number(r.cost),
-      })),
-      payments: payments.map((p) => ({
-        id: p.id,
-        contractId: p.contractId,
-        contractNo: p.contract.contractNo,
-        type: p.paymentType,
-        paymentType: p.paymentType,
-        amount: Number(p.amount),
-        paidAt: toDateOnly(p.paymentDate),
-        paymentDate: toDateOnly(p.paymentDate),
-        method: p.paymentMethod,
-        paymentMethod: p.paymentMethod,
-        status: p.status,
-        memo: p.memo,
-        createdAt: p.createdAt,
       })),
     };
   }
@@ -454,6 +497,9 @@ export class CustomersService {
     if (dto.name !== undefined) data.name = dto.name.trim();
     if (dto.email !== undefined) data.email = dto.email;
     if (dto.notes !== undefined) data.notes = dto.notes;
+    if (dto.heightCm !== undefined) data.heightCm = dto.heightCm;
+    if (dto.weightKg !== undefined) data.weightKg = dto.weightKg;
+    if (dto.age !== undefined) data.age = dto.age;
     if (dto.phone !== undefined) {
       const phoneNormalized = normalizePhone(dto.phone);
       if (phoneNormalized !== before.phoneNormalized) {
@@ -500,6 +546,60 @@ export class CustomersService {
     });
     // 호출부(고객 등록 모달)가 낙관적 잠금에 쓰도록 detail과 동일하게 version으로 노출한다
     return customer ? { ...customer, version: customer.rowVersion } : null;
+  }
+
+  /**
+   * 예약으로 생긴 미등록 고객을 정식 고객으로 등록한다.
+   * 등록 시각을 찍어야 고객 목록에 나타나므로 일반 수정과 별도 액션으로 둔다.
+   */
+  async register(id: string, dto: RegisterCustomerDto, actor: AuthUser) {
+    const before = await this.prisma.customer.findUnique({ where: { id } });
+    if (!before) throw new BusinessException('CUSTOMER_NOT_FOUND', '고객이 없습니다.');
+    if (before.registeredAt) {
+      throw new BusinessException('CUSTOMER_ALREADY_REGISTERED', '이미 등록된 고객입니다.', undefined, {
+        registeredAt: before.registeredAt,
+      });
+    }
+    if (before.customerStatus === 'INACTIVE') {
+      throw new BusinessException('INVALID_STATUS_TRANSITION', '비활성 고객은 등록할 수 없습니다.');
+    }
+
+    const result = await this.prisma.customer.updateMany({
+      where: { id, rowVersion: dto.version },
+      data: {
+        name: dto.name.trim(),
+        ...(dto.email !== undefined ? { email: dto.email } : {}),
+        ...(dto.notes !== undefined ? { notes: dto.notes } : {}),
+        ...(dto.heightCm !== undefined ? { heightCm: dto.heightCm } : {}),
+        ...(dto.weightKg !== undefined ? { weightKg: dto.weightKg } : {}),
+        ...(dto.age !== undefined ? { age: dto.age } : {}),
+        registeredAt: new Date(),
+        rowVersion: { increment: 1 },
+      },
+    });
+    if (result.count === 0) {
+      throw new BusinessException(
+        'VERSION_CONFLICT',
+        '다른 사용자가 먼저 수정했습니다. 최신 정보를 다시 조회해 주세요.',
+        undefined,
+        { currentVersion: before.rowVersion },
+      );
+    }
+
+    const after = await this.prisma.customer.findUniqueOrThrow({
+      where: { id },
+      select: CUSTOMER_SELECT,
+    });
+    await this.audit.log({
+      userId: actor.id,
+      action: 'UPDATE',
+      entityType: 'CUSTOMER',
+      entityId: id,
+      before,
+      after,
+      reason: '예약 고객을 정식 고객으로 등록',
+    });
+    return { ...after, version: after.rowVersion };
   }
 
   /** 물리 삭제 대신 비활성 처리 (설계서 19 — 계약 고객 물리 삭제 금지). */

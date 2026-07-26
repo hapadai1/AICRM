@@ -4,7 +4,9 @@ import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import { createHash, randomBytes, randomUUID } from 'crypto';
 import { BusinessException } from '../../common/business.exception';
+import { AuthUser } from '../../common/decorators';
 import { PrismaService } from '../../prisma/prisma.service';
+import { AuditService } from '../audit/audit.service';
 
 const MAX_LOGIN_FAILURES = 5;
 
@@ -17,6 +19,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    private readonly audit: AuditService,
   ) {}
 
   async login(loginId: string, password: string) {
@@ -57,6 +60,46 @@ export class AuthService {
       ...tokens,
       user: { id: user.id, loginId: user.loginId, displayName: user.displayName, permissions },
     };
+  }
+
+  /**
+   * 관리자 재인증 (설계서 01 §6). 현재 토큰 사용자의 비밀번호만 재확인하고 토큰은 발급/회전하지 않는다.
+   * 실패는 login()과 동일한 loginFailures 카운터를 공유해 5회 누적 시 계정을 잠근다.
+   * 성공·실패 모두 REAUTH 감사로그를 남긴다(비밀번호는 기록하지 않음).
+   */
+  async verifyPassword(actor: AuthUser, password: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: actor.id } });
+    if (!user || user.status !== 'ACTIVE')
+      throw new BusinessException('AUTH_INVALID_CREDENTIALS', '재인증에 실패했습니다.');
+
+    const valid = await bcrypt.compare(password, user.passwordHash);
+    if (!valid) {
+      const failures = (this.loginFailures.get(user.loginId) ?? 0) + 1;
+      this.loginFailures.set(user.loginId, failures);
+      await this.audit.log({
+        userId: user.id,
+        action: 'REAUTH',
+        entityType: 'USER',
+        entityId: user.id,
+        reason: '재인증 실패',
+      });
+      if (failures >= MAX_LOGIN_FAILURES) {
+        await this.prisma.user.update({ where: { id: user.id }, data: { status: 'LOCKED' } });
+        this.loginFailures.delete(user.loginId);
+        throw new BusinessException('AUTH_ACCOUNT_LOCKED', '재인증 5회 실패로 계정이 잠겼습니다. 관리자에게 문의하세요.');
+      }
+      throw new BusinessException('AUTH_INVALID_CREDENTIALS', '비밀번호가 올바르지 않습니다.');
+    }
+
+    this.loginFailures.delete(user.loginId);
+    await this.audit.log({
+      userId: user.id,
+      action: 'REAUTH',
+      entityType: 'USER',
+      entityId: user.id,
+      reason: '재인증 성공',
+    });
+    return { verified: true };
   }
 
   /** refresh token 회전: 기존 토큰 폐기 후 신규 발급 */

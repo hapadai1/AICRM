@@ -11,7 +11,14 @@ import { AuthUser } from '../../common/decorators';
 import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
-import { buildWorkOrderExcel } from './work-order-excel';
+import { MEASUREMENT_ITEM_MAP } from '../measurements/measurement-catalog';
+import {
+  buildShoesWorkOrderExcel,
+  buildWorkOrderExcel,
+  buildWorkOrderPreviewHtml,
+  renderStoredWorkOrderHtml,
+  type WorkOrderExcelData,
+} from './work-order-excel';
 import { resolveWorkOrderStatus } from './work-order-status';
 import {
   IssueWorkOrderVersionDto,
@@ -34,6 +41,8 @@ const orderItemInclude = Prisma.validator<Prisma.OrderItemInclude>()({
         include: { optionStage: true, optionChoice: true },
         orderBy: { optionStage: { sequenceNo: Prisma.SortOrder.asc } },
       },
+      // 부위별 원단·컬러·패턴 (v2 D3 / 설계서 04 §2.5)
+      componentAttrs: true,
     },
   },
   measurementLinks: {
@@ -51,6 +60,9 @@ const orderItemInclude = Prisma.validator<Prisma.OrderItemInclude>()({
     },
   },
   workOrder: { include: { currentVersion: true } },
+  // 작업지시서 양식의 상의/하의/조끼 벌수·가봉일 칸을 채우는 원본
+  components: { where: { active: true } },
+  fittingSessions: { orderBy: { fittingDate: Prisma.SortOrder.desc }, take: 1 },
 });
 
 type OrderItemWithSources = Prisma.OrderItemGetPayload<{ include: typeof orderItemInclude }>;
@@ -64,6 +76,16 @@ type VersionWithFile = Prisma.WorkOrderVersionGetPayload<{
 
 function toDateString(date: Date): string {
   return date.toISOString().slice(0, 10);
+}
+
+/** 작업지시서 양식의 상의/하의/조끼 '벌' 칸 (구성품 타입별 개수) */
+function countComponents(components: Array<{ componentType: string }>): {
+  jacket: number;
+  trousers: number;
+  vest: number;
+} {
+  const count = (type: string) => components.filter((c) => c.componentType === type).length;
+  return { jacket: count('JACKET'), trousers: count('TROUSERS'), vest: count('VEST') };
 }
 
 @Injectable()
@@ -211,6 +233,8 @@ export class WorkOrdersService {
         isLinked: !!link && c.id === link.measurementSessionId,
       })),
       currentVersionNo: currentVersion?.versionNo ?? null,
+      // 미리보기 화면에서 최신 출력본을 바로 내려받게 하려면 버전 id가 필요하다.
+      currentVersionId: currentVersion?.id ?? null,
       lastIssuedAt: currentVersion?.issuedAt.toISOString() ?? null,
       status: resolveWorkOrderStatus(session, link, currentVersion),
       // 정식 출력 가능 판정 (docs/dev/08 §4): 옵션 확정 + 채촌 연결·완료
@@ -218,6 +242,60 @@ export class WorkOrdersService {
       measurementCompleted: !!measurementSession && measurementSession.completedAt != null,
       printable:
         session.status === 'CONFIRMED' && !!measurementSession && measurementSession.completedAt != null,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // 양식 미리보기 (HTML) — 파일·버전을 만들지 않는다
+  // ---------------------------------------------------------------------------
+
+  /**
+   * WO-002: 출력 전 실제 양식 모습 그대로 확인. 출력과 **같은 워크북**을 그려서
+   * 미리 본 것과 내려받은 것이 어긋나지 않게 한다. 버전·파일은 생기지 않는다.
+   */
+  async formPreview(
+    orderItemId: string,
+    measurementSessionId?: string,
+  ): Promise<{ orderItemId: string; versionNo: number; html: string }> {
+    const item = await this.loadOrderItem(orderItemId);
+    const { session, measurementSession: linkedSession } = this.requirePrerequisites(item, {
+      measurementOptional: measurementSessionId != null,
+    });
+    const measurementSession = await this.resolveMeasurementSession(
+      item,
+      linkedSession,
+      measurementSessionId,
+    );
+    // 아직 출력 전이므로 "다음에 붙을 버전 번호"를 보여준다.
+    const nextVersionNo = (item.workOrder?.currentVersion?.versionNo ?? 0) + 1;
+    const html = await buildWorkOrderPreviewHtml(
+      this.buildExcelData(
+        item,
+        this.buildOptionSnapshot(session),
+        this.buildMeasurementSnapshot(measurementSession),
+        { fabricName: session.fabricName, versionNo: nextVersionNo, issuedAt: new Date(), note: null },
+      ),
+    );
+    return { orderItemId: item.id, versionNo: nextVersionNo, html };
+  }
+
+  /** WO-002: 저장된 출력본을 그대로 화면에서 본다 (출력 이력 보기) */
+  async versionFormPreview(versionId: string): Promise<{ versionId: string; versionNo: number; html: string }> {
+    const version = await this.prisma.workOrderVersion.findUnique({
+      where: { id: versionId },
+      include: { outputFile: true },
+    });
+    if (!version) {
+      throw new BusinessException('NOT_FOUND', '작업지시서 버전을 찾을 수 없습니다.');
+    }
+    const filePath = resolve(this.storageRoot(), version.outputFile.storageKey);
+    if (!existsSync(filePath)) {
+      throw new BusinessException('NOT_FOUND', '출력 파일이 저장소에 존재하지 않습니다.');
+    }
+    return {
+      versionId,
+      versionNo: version.versionNo,
+      html: await renderStoredWorkOrderHtml(filePath),
     };
   }
 
@@ -291,26 +369,18 @@ export class WorkOrdersService {
         const versionNo = (last?.versionNo ?? 0) + 1;
         const fileName = `${item.order.orderNo}_${item.productCategory}-${String(item.sequenceNo).padStart(2, '0')}_V${versionNo}.xlsx`;
 
-        // Excel 생성 (MVP 기본 양식, 이미지 없음 — 통합설계서 §10.3)
-        const buffer = await buildWorkOrderExcel({
-          customerName: item.order.contract.customer.name,
-          orderNo: item.order.orderNo,
-          itemLabel: item.displayName,
-          productCategory: item.productCategory,
-          sequenceNo: item.sequenceNo,
+        // Excel 생성 — 정장/셔츠는 실물 공장 양식(송파) 템플릿, 구두는 간이 메모형 시트로 분기
+        // (설계서 06 §5-a). 버전관리·파일저장·감사(EXPORT) 흐름은 카테고리와 무관하게 동일하다.
+        const excelData = this.buildExcelData(item, optionSnapshot, measurementSnapshot, {
           fabricName: session.fabricName,
           versionNo,
           issuedAt,
           note: dto.note ?? null,
-          measurementDate: measurementSnapshot.measurementDate,
-          measurementVersionNo: measurementSnapshot.versionNo,
-          options: optionSnapshot.stages.map((s) => ({ stageName: s.stageName, choiceName: s.choiceName })),
-          measurements: measurementSnapshot.values.map((v) => ({
-            name: v.measurementCode,
-            value: v.value != null ? String(v.value) : (v.textValue ?? '-'),
-            unit: v.unit,
-          })),
         });
+        const buffer =
+          item.productCategory === 'SHOES'
+            ? await buildShoesWorkOrderExcel(excelData)
+            : await buildWorkOrderExcel(excelData);
 
         const storageKey = `work-orders/${versionId}.xlsx`;
         const filePath = resolve(this.storageRoot(), storageKey);
@@ -507,6 +577,68 @@ export class WorkOrdersService {
       throw new BusinessException('NOT_FOUND', '해당 고객의 채촌 세션을 찾을 수 없습니다.');
     }
     return session;
+  }
+
+  /**
+   * 양식 채우기에 넘길 값 묶음. 출력(파일 저장)과 미리보기(HTML)가 같은 입력을 쓰도록
+   * 한 곳에서 만든다 — 미리 본 것과 내려받은 것이 어긋나지 않게 하는 단일 출처.
+   */
+  private buildExcelData(
+    item: OrderItemWithSources,
+    optionSnapshot: ReturnType<WorkOrdersService['buildOptionSnapshot']>,
+    measurementSnapshot: ReturnType<WorkOrdersService['buildMeasurementSnapshot']>,
+    meta: { fabricName: string | null; versionNo: number; issuedAt: Date; note: string | null },
+  ): WorkOrderExcelData {
+    return {
+      customerName: item.order.contract.customer.name,
+      customerPhone: item.order.contract.customer.phone,
+      orderNo: item.order.orderNo,
+      itemLabel: item.displayName,
+      productCategory: item.productCategory,
+      sequenceNo: item.sequenceNo,
+      fabricName: meta.fabricName,
+      versionNo: meta.versionNo,
+      issuedAt: meta.issuedAt,
+      note: meta.note,
+      orderDate: toDateString(item.order.contract.contractedAt ?? item.order.createdAt),
+      fittingDate: item.fittingSessions[0] ? toDateString(item.fittingSessions[0].fittingDate) : null,
+      completionDate: item.order.completionDueDate
+        ? toDateString(item.order.completionDueDate)
+        : null,
+      componentCounts: countComponents(item.components),
+      measurementDate: measurementSnapshot.measurementDate,
+      measurementVersionNo: measurementSnapshot.versionNo,
+      options: optionSnapshot.stages.map((s) => ({
+        stageCode: s.stageCode,
+        stageName: s.stageName,
+        choiceName: s.choiceName,
+      })),
+      measurements: measurementSnapshot.values.map((v) => ({
+        code: v.measurementCode,
+        label: MEASUREMENT_ITEM_MAP.get(v.measurementCode)?.label ?? v.measurementCode,
+        value: v.value != null ? String(v.value) : (v.textValue ?? '-'),
+        unit: v.unit,
+      })),
+      components: this.buildComponentAttrs(item.optionSelectionSessions[0]),
+    };
+  }
+
+  /**
+   * 세션의 부위별 원단·컬러·패턴을 작업지시서 양식 구조로 변환 (설계서 04 §2.5).
+   * 저장된 부위 attr이 없으면 undefined를 반환해 기존 fabricName 단일 출력을 유지한다.
+   */
+  private buildComponentAttrs(
+    session: ConfirmedOptionSession | undefined,
+  ): WorkOrderExcelData['components'] {
+    const attrs = session?.componentAttrs ?? [];
+    if (attrs.length === 0) return undefined;
+    const pick = (group: string) => {
+      const a = attrs.find((x) => x.componentGroup === group);
+      return a
+        ? { fabricName: a.fabricName, colorName: a.colorName, patternName: a.patternName, notes: a.notes }
+        : undefined;
+    };
+    return { JACKET: pick('JACKET'), TROUSERS: pick('TROUSERS'), VEST: pick('VEST') };
   }
 
   /** 출력 당시 단계명·선택 옵션명·원단 스냅샷 (데이터모델 §10.2) */

@@ -3,6 +3,7 @@ import {
   ColumnHeightOutlined,
   DashboardOutlined,
   FileTextOutlined,
+  LockOutlined,
   LogoutOutlined,
   ScissorOutlined,
   SettingOutlined,
@@ -12,14 +13,17 @@ import {
   ToolOutlined,
   UserOutlined,
 } from '@ant-design/icons';
-import { Avatar, Button, Layout, Menu, Space, Typography, theme } from 'antd';
+import { Avatar, Button, Layout, Menu, Space, Tag, Typography, theme } from 'antd';
 import type { MenuProps } from 'antd';
 
 type MenuItem = NonNullable<MenuProps['items']>[number];
+import { useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { useHydrateCodeLabels } from '../api/code-labels';
+import { ReauthModal } from '../shared/ReauthModal';
 import { useAuthStore } from './auth-store';
+import { useModeStore } from './mode-store';
 
 const { Sider, Header, Content } = Layout;
 
@@ -29,6 +33,16 @@ export function AppLayout() {
   const user = useAuthStore((s) => s.user);
   const refreshToken = useAuthStore((s) => s.refreshToken);
   const clear = useAuthStore((s) => s.clear);
+
+  // 고객모드 상태(설계서 01). ADMIN이면 기존 전체 메뉴, CUSTOMER면 4메뉴만.
+  const mode = useModeStore((s) => s.mode);
+  const selectedCustomerId = useModeStore((s) => s.selectedCustomerId);
+  const selectedCustomerName = useModeStore((s) => s.selectedCustomerName);
+  const setMode = useModeStore((s) => s.setMode);
+  const clearSelectedCustomer = useModeStore((s) => s.clearSelectedCustomer);
+  const clearMode = useModeStore((s) => s.clear);
+  const [reauthOpen, setReauthOpen] = useState(false);
+
   const {
     token: { colorBgContainer },
   } = theme.useToken();
@@ -40,7 +54,32 @@ export function AppLayout() {
   const canSeeAdmin =
     permissions.includes('USER_ADMIN') || permissions.includes('ADMIN_MASTER_EDIT');
 
-  const menuItems: MenuItem[] = [
+  const cid = selectedCustomerId;
+  // 고객모드 4메뉴(고객·계약관리·스타일컨설팅·채촌) — 선택 고객 1명 컨텍스트로만 이동.
+  // 고객 미선택이면 '고객'(검색)만 활성, 나머지는 비활성(설계 §3.1).
+  const customerMenuItems: MenuItem[] = [
+    { key: cid ? `/c/${cid}` : '/c', icon: <TeamOutlined />, label: '고객' },
+    {
+      key: cid ? `/c/${cid}/contract` : 'c-contract',
+      icon: <FileTextOutlined />,
+      label: '계약 관리',
+      disabled: !cid,
+    },
+    {
+      key: cid ? `/c/${cid}/consulting` : 'c-consulting',
+      icon: <SkinOutlined />,
+      label: '스타일 컨설팅',
+      disabled: !cid,
+    },
+    {
+      key: cid ? `/c/${cid}/measurement` : 'c-measurement',
+      icon: <ColumnHeightOutlined />,
+      label: '채촌',
+      disabled: !cid,
+    },
+  ];
+
+  const adminMenuItems: MenuItem[] = [
     { key: '/', icon: <DashboardOutlined />, label: '대시보드' },
     { key: '/journeys', icon: <SwapOutlined />, label: '진행 현황' },
     { key: '/appointments', icon: <CalendarOutlined />, label: '예약' },
@@ -51,15 +90,15 @@ export function AppLayout() {
     { key: '/measurements', icon: <ColumnHeightOutlined />, label: '채촌' },
     { key: '/production', icon: <ScissorOutlined />, label: '제작 관리' },
     { key: '/repairs', icon: <ToolOutlined />, label: '수선' },
-    { key: '/payments', icon: <FileTextOutlined />, label: '결제' },
     {
+      // 렌탈 메뉴 개칭·순서(설계 S6 §4). path는 유지(딥링크 보존), 라벨·순서만 변경.
       key: 'g-rental',
       icon: <SwapOutlined />,
       label: '렌탈 관리',
       children: [
-        { key: '/rentals', label: '실물 재고' },
-        { key: '/rentals/allocate', label: '가용 검색·배정' },
+        { key: '/rentals/allocate', label: '렌탈 예약' },
         { key: '/rentals/handover', label: '출고·반납' },
+        { key: '/rentals', label: '전체 관리' },
       ],
     },
     { key: '/notifications', icon: <CalendarOutlined />, label: '고객 연락' },
@@ -80,6 +119,8 @@ export function AppLayout() {
         ]
       : []),
   ];
+
+  const menuItems: MenuItem[] = mode === 'CUSTOMER' ? customerMenuItems : adminMenuItems;
 
   const leafKeys = menuItems.flatMap((item) => {
     const anyItem = item as { key?: unknown; children?: { key?: unknown }[] };
@@ -119,34 +160,67 @@ export function AppLayout() {
       // 로그아웃 API 실패는 무시한다.
     }
     clear();
+    clearMode(); // 로그아웃 시 고객모드·선택 고객도 초기화(설계 §7)
     navigate('/login', { replace: true });
+  };
+
+  // ADMIN → CUSTOMER: 비밀번호 없이 즉시 전환 후 고객 검색으로(설계 §3.1).
+  const enterCustomerMode = () => {
+    setMode('CUSTOMER');
+    clearSelectedCustomer();
+    navigate('/c');
+  };
+
+  // CUSTOMER → ADMIN: 재인증 모달 성공 시에만 전환(설계 §3.1·§6).
+  const handleReauthSuccess = () => {
+    setReauthOpen(false);
+    clearMode();
+    navigate('/', { replace: true });
   };
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
       <Sider breakpoint="lg" collapsedWidth={64}>
         <div
-          style={{
-            height: 64,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: '#fff',
-            fontSize: 18,
-            fontWeight: 700,
-            letterSpacing: 1,
-          }}
+          style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}
         >
-          <SkinOutlined style={{ marginRight: 8 }} />
-          AICRM
+          <div
+            style={{
+              height: 64,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#fff',
+              fontSize: 18,
+              fontWeight: 700,
+              letterSpacing: 1,
+            }}
+          >
+            <SkinOutlined style={{ marginRight: 8 }} />
+            AICRM
+          </div>
+          <div style={{ flex: 1, overflowY: 'auto' }}>
+            <Menu
+              theme="dark"
+              mode="inline"
+              selectedKeys={[selectedKey]}
+              items={menuItems}
+              onClick={({ key }) => navigate(key)}
+            />
+          </div>
+          {/* 좌측 최하단 [모드 전환] 버튼(설계 §3.1) */}
+          <div style={{ padding: 12, borderTop: '1px solid rgba(255,255,255,0.12)' }}>
+            {mode === 'ADMIN' ? (
+              <Button block icon={<SwapOutlined />} onClick={enterCustomerMode}>
+                고객 모드로 전환
+              </Button>
+            ) : (
+              <Button block icon={<LockOutlined />} onClick={() => setReauthOpen(true)}>
+                관리자 모드로 복귀
+              </Button>
+            )}
+          </div>
         </div>
-        <Menu
-          theme="dark"
-          mode="inline"
-          selectedKeys={[selectedKey]}
-          items={menuItems}
-          onClick={({ key }) => navigate(key)}
-        />
       </Sider>
       <Layout>
         <Header
@@ -158,9 +232,16 @@ export function AppLayout() {
             paddingInline: 24,
           }}
         >
-          <Typography.Title level={4} style={{ margin: 0 }}>
-            {pageTitle}
-          </Typography.Title>
+          <Space align="center">
+            <Typography.Title level={4} style={{ margin: 0 }}>
+              {pageTitle}
+            </Typography.Title>
+            {mode === 'CUSTOMER' && (
+              <Tag color="processing">
+                고객 모드{selectedCustomerName ? ` · ${selectedCustomerName}` : ''}
+              </Tag>
+            )}
+          </Space>
           <Space size="middle">
             <Space size="small">
               <Avatar size="small" icon={<UserOutlined />} />
@@ -175,6 +256,12 @@ export function AppLayout() {
           <Outlet />
         </Content>
       </Layout>
+      <ReauthModal
+        open={reauthOpen}
+        onCancel={() => setReauthOpen(false)}
+        onSuccess={handleReauthSuccess}
+        onLocked={handleLogout}
+      />
     </Layout>
   );
 }

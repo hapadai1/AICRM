@@ -62,7 +62,7 @@ export function AppointmentFormModal({ open, appointment, defaultDate, onClose }
         purposeCode: appointment.purposeCode,
         startAt: dayjs(appointment.startAt),
         durationMinutes: Math.max(
-          30,
+          60,
           dayjs(appointment.endAt).diff(dayjs(appointment.startAt), 'minute'),
         ),
         memo: appointment.memo,
@@ -168,7 +168,9 @@ export function AppointmentFormModal({ open, appointment, defaultDate, onClose }
           rules={[{ required: true, message: '예약 일시를 선택해 주세요.' }]}
         >
           <DatePicker
-            showTime={{ format: 'HH:mm', minuteStep: 30 }}
+            // A1: 예약 시간단위 1시간 — 분 선택을 숨겨 정각(:00)만 고르게 한다.
+            // (antd minuteStep은 1~59만 허용해 60을 못 쓰므로 showMinute:false로 처리)
+            showTime={{ format: 'HH:mm', showMinute: false }}
             format="YYYY-MM-DD HH:mm"
             style={{ width: '100%' }}
           />
@@ -180,10 +182,9 @@ export function AppointmentFormModal({ open, appointment, defaultDate, onClose }
         >
           <Select
             options={[
-              { value: 30, label: '30분' },
               { value: 60, label: '1시간' },
-              { value: 90, label: '1시간 30분' },
               { value: 120, label: '2시간' },
+              { value: 180, label: '3시간' },
             ]}
           />
         </Form.Item>

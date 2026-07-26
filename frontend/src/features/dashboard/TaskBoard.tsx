@@ -16,7 +16,6 @@ import { metaOf } from '../../shared/status-meta';
 const TASK_META: Record<DashboardTaskType, { label: string; color: string }> = {
   LATE_RETURN: { label: '반납 지연', color: '#cf1322' },
   INBOUND_DELAY: { label: '입고 지연', color: '#d46b08' },
-  PAYMENT_DELAY: { label: '결제 지연', color: '#c41d7f' },
   UNORDERED: { label: '미주문', color: '#1d39c4' },
   REPRINT_NEEDED: { label: '재출력 필요', color: '#531dab' },
 };
@@ -24,7 +23,6 @@ const TASK_META: Record<DashboardTaskType, { label: string; color: string }> = {
 const TASK_TYPES: DashboardTaskType[] = [
   'LATE_RETURN',
   'INBOUND_DELAY',
-  'PAYMENT_DELAY',
   'UNORDERED',
   'REPRINT_NEEDED',
 ];
@@ -32,8 +30,6 @@ const TASK_TYPES: DashboardTaskType[] = [
 /** 확인사항 행 클릭 시 이동할 상세 화면 경로 (id 없으면 목록으로 폴백) */
 function taskTargetPath(task: DashboardTask): string {
   switch (task.taskType) {
-    case 'PAYMENT_DELAY':
-      return task.contractId ? `/payments?contractId=${task.contractId}` : '/payments';
     case 'LATE_RETURN':
       return task.rentalItemId ? `/rentals/${task.rentalItemId}` : '/rentals';
     case 'UNORDERED':

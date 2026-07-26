@@ -1,15 +1,13 @@
 /**
- * 계약 목록 — 계약·수금 현황 조회 화면 (개편계획 06)
+ * 계약 목록 — 계약 현황 조회 화면 (개편계획 06)
  * - 진입점은 고객과 기간: 기간 기준 선택 + 통합검색 + 고객 검색 팝업
- * - 컬럼에 실수납액·미수금·최근 결제일을 실어 상세로 들어가지 않아도 수금 상태가 보인다
  * - 필터는 URL 쿼리에 동기화한다(새로고침·뒤로가기·링크 공유 보존)
  */
-import { CreditCardOutlined, PlusOutlined, ReloadOutlined, SettingOutlined, UserOutlined } from '@ant-design/icons';
+import { PlusOutlined, ReloadOutlined, SettingOutlined, UserOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import {
   Button,
   Card,
-  Checkbox,
   Col,
   DatePicker,
   Flex,
@@ -20,7 +18,6 @@ import {
   Statistic,
   Table,
   Tag,
-  Tooltip,
   Typography,
 } from 'antd';
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
@@ -58,7 +55,6 @@ type DateField = NonNullable<ContractSearchParams['dateField']>;
 
 const DATE_FIELD_OPTIONS: { value: DateField; label: string }[] = [
   { value: 'contractedAt', label: '계약일' },
-  { value: 'paymentDate', label: '결제일' },
   { value: 'completionDueDate', label: '완료 예정일' },
 ];
 
@@ -73,7 +69,6 @@ interface Filters {
   dateTo?: string;
   status?: ContractStatus;
   contractTypeId?: string;
-  unpaidOnly: boolean;
   customerId?: string;
   customerLabel?: string;
   sort: string;
@@ -90,7 +85,6 @@ function readFilters(params: URLSearchParams): Filters {
     dateTo: params.get('dateTo') ?? to.format('YYYY-MM-DD'),
     status: (params.get('status') as ContractStatus | null) ?? undefined,
     contractTypeId: params.get('contractTypeId') ?? undefined,
-    unpaidOnly: params.get('unpaidOnly') === 'true',
     customerId: params.get('customerId') ?? undefined,
     customerLabel: params.get('customerLabel') ?? undefined,
     sort: params.get('sort') ?? 'contractedAt,desc',
@@ -107,7 +101,6 @@ function writeFilters(filters: Filters): Record<string, string> {
     ['dateTo', filters.dateTo],
     ['status', filters.status],
     ['contractTypeId', filters.contractTypeId],
-    ['unpaidOnly', filters.unpaidOnly ? 'true' : undefined],
     ['customerId', filters.customerId],
     ['customerLabel', filters.customerLabel],
     ['sort', filters.sort],
@@ -142,7 +135,6 @@ export function ContractListPage() {
     dateTo: filters.dateTo,
     status: filters.status,
     contractTypeId: filters.contractTypeId,
-    unpaidOnly: filters.unpaidOnly,
     sort: filters.sort,
     page: filters.page,
     size: filters.size,
@@ -173,7 +165,6 @@ export function ContractListPage() {
         dateField: 'contractedAt',
         dateFrom: from.format('YYYY-MM-DD'),
         dateTo: to.format('YYYY-MM-DD'),
-        unpaidOnly: false,
         sort: 'contractedAt,desc',
         page: 1,
         size: 30,
@@ -244,41 +235,6 @@ export function ContractListPage() {
       render: formatKrw,
     },
     {
-      title: '수납액',
-      dataIndex: 'paidAmount',
-      width: 130,
-      align: 'right',
-      sorter: true,
-      sortOrder: orderOf('paidAmount'),
-      render: (v: number) => <Typography.Text type="success">{formatKrw(v)}</Typography.Text>,
-    },
-    {
-      title: '미수금',
-      dataIndex: 'unpaidAmount',
-      width: 140,
-      align: 'right',
-      sorter: true,
-      sortOrder: orderOf('unpaidAmount'),
-      // 색만으로 구분하지 않고 과납은 태그로 병기한다 (구현표준 §2)
-      render: (v: number) =>
-        v > 0 ? (
-          <Typography.Text type="danger">{formatKrw(v)}</Typography.Text>
-        ) : v < 0 ? (
-          <Space size={4}>
-            <Typography.Text>{formatKrw(-v)}</Typography.Text>
-            <Tag color="orange">과납</Tag>
-          </Space>
-        ) : (
-          <Typography.Text type="secondary">완납</Typography.Text>
-        ),
-    },
-    {
-      title: '최근 결제일',
-      dataIndex: 'lastPaymentDate',
-      width: 110,
-      render: (v: string | null) => v ?? '-',
-    },
-    {
       title: '완료 예정일',
       dataIndex: 'completionDueDate',
       width: 110,
@@ -290,22 +246,7 @@ export function ContractListPage() {
       title: '계약번호',
       dataIndex: 'contractNo',
       width: 165,
-      render: (v: string, row) => (
-        <Space size={4}>
-          <Typography.Text type="secondary">{v}</Typography.Text>
-          <Tooltip title="이 계약의 결제 관리로 이동">
-            <Button
-              size="small"
-              type="text"
-              icon={<CreditCardOutlined />}
-              onClick={(e) => {
-                e.stopPropagation();
-                navigate(`/payments?contractId=${row.id}`);
-              }}
-            />
-          </Tooltip>
-        </Space>
-      ),
+      render: (v: string) => <Typography.Text type="secondary">{v}</Typography.Text>,
     },
   ];
 
@@ -407,14 +348,6 @@ export function ContractListPage() {
               onChange={(v?: ContractStatus) => update({ status: v })}
             />
           </Col>
-          <Col xs={12} md={4}>
-            <Checkbox
-              checked={filters.unpaidOnly}
-              onChange={(e) => update({ unpaidOnly: e.target.checked })}
-            >
-              미수금만
-            </Checkbox>
-          </Col>
           <Col xs={12} md={11}>
             <Space>
               <Button icon={<ReloadOutlined />} onClick={resetFilters}>
@@ -435,26 +368,6 @@ export function ContractListPage() {
         <Col xs={12} md={6}>
           <Card size="small">
             <Statistic title="계약금액 합계" value={totals?.totalAmount ?? 0} suffix="원" />
-          </Card>
-        </Col>
-        <Col xs={12} md={6}>
-          <Card size="small">
-            <Statistic
-              title="수납액 합계"
-              value={totals?.paidAmount ?? 0}
-              suffix="원"
-              valueStyle={{ color: '#3f8600' }}
-            />
-          </Card>
-        </Col>
-        <Col xs={12} md={6}>
-          <Card size="small">
-            <Statistic
-              title="미수금 합계"
-              value={totals?.unpaidAmount ?? 0}
-              suffix="원"
-              valueStyle={{ color: (totals?.unpaidAmount ?? 0) > 0 ? '#cf1322' : undefined }}
-            />
           </Card>
         </Col>
       </Row>

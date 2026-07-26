@@ -1,4 +1,4 @@
-import { request, type ListResult } from './client';
+import { downloadFile, request, type ListResult } from './client';
 import { toDateOnly, toNumber } from './transform';
 
 /**
@@ -101,10 +101,6 @@ interface ContractListApiRow {
   customer: { id: string; name: string; phone: string };
   contractType?: { code: string; name: string } | null;
   currentVersion?: ContractListVersionApiRow | null;
-  /** 실수납액(환불 차감·취소 제외) — 개편계획 06 §3.2. 백엔드가 평면 필드로 내려준다 */
-  paidAmount?: string | number | null;
-  unpaidAmount?: string | number | null;
-  lastPaymentDate?: string | null;
 }
 
 interface ContractOrderApiRow {
@@ -160,12 +156,6 @@ export interface ContractListItem {
   status: ContractStatus;
   currentVersionNo?: number;
   totalAmount?: number;
-  /** 실수납액 = 완료 결제 합계 − 환불 (개편계획 06) */
-  paidAmount: number;
-  /** 미수금 = 계약금액 − 실수납액. 음수면 과납 */
-  unpaidAmount: number;
-  /** 최근 결제일 (`YYYY-MM-DD`), 없으면 null */
-  lastPaymentDate: string | null;
   /** 계약일 (`YYYY-MM-DD`) */
   contractedAt?: string;
   completionDueDate?: string;
@@ -175,8 +165,6 @@ export interface ContractListItem {
 export interface ContractListTotals {
   count: number;
   totalAmount: number;
-  paidAmount: number;
-  unpaidAmount: number;
 }
 
 export type ContractListResult = ListResult<ContractListItem> & { totals?: ContractListTotals };
@@ -274,9 +262,6 @@ function toContractListItem(row: ContractListApiRow): ContractListItem {
     status: row.status,
     currentVersionNo: row.currentVersion?.versionNo,
     totalAmount: toNumber(row.currentVersion?.totalAmount),
-    paidAmount: toNumber(row.paidAmount) ?? 0,
-    unpaidAmount: toNumber(row.unpaidAmount) ?? 0,
-    lastPaymentDate: toDateOnly(row.lastPaymentDate) ?? null,
     contractedAt: toDateOnly(row.contractedAt),
     completionDueDate: toDateOnly(row.currentVersion?.completionDueDate),
   };
@@ -370,12 +355,10 @@ export interface ContractSearchParams {
   status?: ContractStatus;
   customerId?: string;
   /** 기간 필터 기준 (기본 계약일) */
-  dateField?: 'contractedAt' | 'paymentDate' | 'completionDueDate';
+  dateField?: 'contractedAt' | 'completionDueDate';
   dateFrom?: string;
   dateTo?: string;
   contractTypeId?: string;
-  /** 미수금이 남은 계약만 */
-  unpaidOnly?: boolean;
   /** `필드,방향` 예) `contractedAt,desc` */
   sort?: string;
   page?: number;
@@ -414,8 +397,7 @@ export function retireContractType(id: string) {
 export function fetchContracts(params: ContractSearchParams): Promise<ContractListResult> {
   return request<ContractListResult & { data: ContractListApiRow[] }>({
     url: '/contracts',
-    // false는 서버에서 문자열 'false'로 굳어지므로 아예 보내지 않는다.
-    params: { ...params, unpaidOnly: params.unpaidOnly ? true : undefined },
+    params,
   }).then((res) => ({
     ...res,
     data: res.data.map(toContractListItem),
@@ -520,4 +502,190 @@ export function cancelContract(id: string, body: { reason: string; version: numb
 export async function fetchCustomerSummary(id: string): Promise<CustomerSummary> {
   const aggregate = await request<{ customer: CustomerSummary }>({ url: `/customers/${id}` });
   return aggregate.customer;
+}
+
+// ---------- 전자서명 (설계서 v2 03 §3·§4) ----------
+
+/** 서명 저장 요청 본문. imageDataUrl 은 `data:image/png;base64,...` 형식이어야 한다. */
+export interface SaveSignatureInput {
+  imageDataUrl: string;
+  signerName: string;
+  /** 낙관적 잠금 — contracts.rowVersion (ContractDetail.version) */
+  version?: number;
+}
+
+/** 서명 저장 성공 응답 */
+export interface SignatureSaveResult {
+  versionId: string;
+  signatureFileId: string;
+  signerName: string;
+  signedAt: string;
+  downloadUrl: string;
+}
+
+/** 서명 메타(존재 여부·서명자·다운로드 경로). 확정/엑셀 버튼 게이팅에 쓴다. */
+export interface SignatureMeta {
+  versionId: string;
+  signed: boolean;
+  signatureFileId?: string | null;
+  signerName?: string | null;
+  /** 서버 ISO 문자열 — 표시용으로만 사용한다(초 단위까지). */
+  signedAt?: string | null;
+  downloadUrl?: string | null;
+}
+
+/** 서명 이미지 저장·교체 (DRAFT 버전 한정). */
+export function saveSignature(
+  contractId: string,
+  versionId: string,
+  body: SaveSignatureInput,
+): Promise<SignatureSaveResult> {
+  return request<SignatureSaveResult>({
+    url: `/contracts/${contractId}/versions/${versionId}/signature`,
+    method: 'POST',
+    data: body,
+  });
+}
+
+/** 서명 제거 (다시 받기용, DRAFT 한정). */
+export function removeSignature(contractId: string, versionId: string): Promise<{ versionId: string; signed: boolean }> {
+  return request({
+    url: `/contracts/${contractId}/versions/${versionId}/signature`,
+    method: 'DELETE',
+  });
+}
+
+/** 서명 메타 조회. */
+export function getSignature(contractId: string, versionId: string): Promise<SignatureMeta> {
+  return request<SignatureMeta>({ url: `/contracts/${contractId}/versions/${versionId}/signature` });
+}
+
+// ---------- 계약서 엑셀 (설계서 v2 03 §5·§8) ----------
+
+/**
+ * 계약서 엑셀(xlsx)을 blob 으로 내려받는다.
+ * 인증 헤더가 필요하므로 `<a href>` 가 아니라 axios blob 다운로드(client.downloadFile)를 쓴다.
+ */
+export function downloadContractExcel(contractId: string, contractNo: string): Promise<void> {
+  return downloadFile(`/contracts/${contractId}/excel`, `contract-${contractNo}.xlsx`);
+}
+
+// ---------- 계약서 웹 표시 (설계서 v2 03 §6·§7) ----------
+
+/** 웹 표시용 라인 — 세부품목(구성품)·세부가격을 노출한다(D7). */
+export interface ContractDocumentLine {
+  transactionType: TransactionType;
+  productCategory: ProductCategory;
+  categoryLabel: string;
+  itemDescription?: string;
+  /** 상세 토글에서 펼칠 구성품 라벨(상의·하의·베스트 등) */
+  components: string[];
+  quantity: number;
+  unitPrice: number;
+  lineAmount: number;
+  notes?: string;
+}
+
+/** 웹 표시용 스타일 옵션 — 옵션명·추가금액을 노출한다(D7). */
+export interface ContractDocumentOption {
+  optionName: string;
+  extraPrice: number;
+}
+
+/** 서명 상태(웹 표시·게이팅용) */
+export interface ContractDocumentSignature {
+  signed: boolean;
+  signerName?: string;
+  signedAt?: string;
+  downloadUrl?: string;
+}
+
+export interface ContractDocument {
+  contractNo: string;
+  status: ContractStatus;
+  contractedAt?: string;
+  customer: { id: string; name: string; phone: string };
+  contractTypeName?: string;
+  versionNo?: number;
+  totalAmount: number;
+  depositAmount: number;
+  balanceAmount: number;
+  completionDueDate?: string;
+  photoDate?: string;
+  weddingDate?: string;
+  lines: ContractDocumentLine[];
+  options: ContractDocumentOption[];
+  signature: ContractDocumentSignature;
+}
+
+interface ContractDocumentLineApiRow {
+  transactionType: TransactionType;
+  productCategory: ProductCategory;
+  categoryLabel: string;
+  itemDescription?: string | null;
+  components: string[];
+  quantity: number;
+  unitPrice?: string | number | null;
+  lineAmount?: string | number | null;
+  notes?: string | null;
+}
+
+interface ContractDocumentApiRow {
+  contractNo: string;
+  status: ContractStatus;
+  contractedAt?: string | null;
+  customer: { id: string; name: string; phone: string };
+  contractType?: { id?: string; code: string; name: string } | null;
+  version?: {
+    versionNo: number;
+    versionStatus: ContractVersionStatus;
+    totalAmount: string | number;
+    depositAmount: string | number;
+    balanceAmount: string | number;
+    completionDueDate?: string | null;
+    photoDate?: string | null;
+    weddingDate?: string | null;
+  } | null;
+  lines: ContractDocumentLineApiRow[];
+  options: { optionName: string; extraPrice?: string | number | null }[];
+  signature: { signed: boolean; signerName?: string | null; signedAt?: string | null; downloadUrl?: string | null };
+}
+
+/** 웹 계약서 표시 데이터. 금액은 Decimal 문자열로 오므로 number 로 흡수한다. */
+export function fetchContractDocument(id: string): Promise<ContractDocument> {
+  return request<ContractDocumentApiRow>({ url: `/contracts/${id}/document` }).then((row) => ({
+    contractNo: row.contractNo,
+    status: row.status,
+    contractedAt: toDateOnly(row.contractedAt),
+    customer: row.customer,
+    contractTypeName: row.contractType?.name ?? undefined,
+    versionNo: row.version?.versionNo,
+    totalAmount: toNumber(row.version?.totalAmount) ?? 0,
+    depositAmount: toNumber(row.version?.depositAmount) ?? 0,
+    balanceAmount: toNumber(row.version?.balanceAmount) ?? 0,
+    completionDueDate: toDateOnly(row.version?.completionDueDate),
+    photoDate: toDateOnly(row.version?.photoDate),
+    weddingDate: toDateOnly(row.version?.weddingDate),
+    lines: (row.lines ?? []).map((l) => ({
+      transactionType: l.transactionType,
+      productCategory: l.productCategory,
+      categoryLabel: l.categoryLabel,
+      itemDescription: l.itemDescription ?? undefined,
+      components: l.components ?? [],
+      quantity: l.quantity,
+      unitPrice: toNumber(l.unitPrice) ?? 0,
+      lineAmount: toNumber(l.lineAmount) ?? 0,
+      notes: l.notes ?? undefined,
+    })),
+    options: (row.options ?? []).map((o) => ({
+      optionName: o.optionName,
+      extraPrice: toNumber(o.extraPrice) ?? 0,
+    })),
+    signature: {
+      signed: row.signature?.signed ?? false,
+      signerName: row.signature?.signerName ?? undefined,
+      signedAt: row.signature?.signedAt ?? undefined,
+      downloadUrl: row.signature?.downloadUrl ?? undefined,
+    },
+  }));
 }

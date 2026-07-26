@@ -1,4 +1,4 @@
-import { request } from './client';
+import { downloadFile, request } from './client';
 import { toDateOnly, toDateTime, toNumber } from './transform';
 
 /**
@@ -138,6 +138,7 @@ interface WorkOrderPreviewApi {
   measurement: MeasurementSnapshotApi | null;
   measurementCandidates: MeasurementCandidateApi[];
   currentVersionNo: number | null;
+  currentVersionId: string | null;
   lastIssuedAt: string | null;
   status: string;
   optionConfirmed?: boolean;
@@ -235,6 +236,8 @@ export interface WorkOrderPreview {
   fabricName?: string;
   status: string;
   currentVersionNo?: number;
+  /** 최신 출력본 버전 id — 다시 출력하지 않고 그대로 내려받을 때 쓴다 */
+  currentVersionId?: string;
   lastIssuedAt?: string;
   optionSessionId?: string;
   /** 옵션 세션 확정 버전 (표시용) */
@@ -260,6 +263,15 @@ export interface WorkOrderVersionRow {
   downloadUrl: string;
   changeReason?: string;
   measurementSessionId: string;
+}
+
+/**
+ * 양식 미리보기 — 백엔드가 실제 출력 워크북을 HTML 표로 그려 보낸다.
+ * iframe srcdoc로 그대로 띄운다(완결형 문서).
+ */
+export interface WorkOrderFormPreview {
+  versionNo: number;
+  html: string;
 }
 
 /** §14.5 Excel 출력 응답 */
@@ -337,6 +349,7 @@ function toPreview(raw: WorkOrderPreviewApi): WorkOrderPreview {
     fabricName: raw.fabricName ?? raw.option?.fabricName ?? undefined,
     status: raw.status,
     currentVersionNo: raw.currentVersionNo ?? undefined,
+    currentVersionId: raw.currentVersionId ?? undefined,
     lastIssuedAt: toDateTime(raw.lastIssuedAt),
     optionSessionId: raw.option?.optionSessionId,
     optionVersionNo: raw.option?.selectionVersionNo,
@@ -409,6 +422,33 @@ export function issueWorkOrderVersion(
     method: 'POST',
     data: body,
   });
+}
+
+/**
+ * 출력 전 양식 미리보기 (HTML) — GET /order-items/{id}/work-order/form-preview.
+ * 버전·파일을 만들지 않으므로 몇 번을 봐도 이력이 늘지 않는다.
+ */
+export function fetchWorkOrderFormPreview(
+  orderItemId: string,
+  measurementSessionId?: string,
+): Promise<WorkOrderFormPreview> {
+  return request<WorkOrderFormPreview>({
+    url: `/order-items/${orderItemId}/work-order/form-preview`,
+    params: measurementSessionId ? { measurementSessionId } : undefined,
+  });
+}
+
+/** 저장된 출력본 양식 미리보기 — GET /work-order-versions/{id}/form-preview */
+export function fetchWorkOrderVersionFormPreview(versionId: string): Promise<WorkOrderFormPreview> {
+  return request<WorkOrderFormPreview>({ url: `/work-order-versions/${versionId}/form-preview` });
+}
+
+/**
+ * 저장된 작업지시서 Excel 내려받기 — GET /work-order-versions/{versionId}/file.
+ * 이미 만들어진 파일을 그대로 주므로 새 버전이 생기지 않는다.
+ */
+export function downloadWorkOrderVersionFile(versionId: string, fileName: string): Promise<void> {
+  return downloadFile(`/work-order-versions/${versionId}/file`, fileName);
 }
 
 /** 출력 이력 — GET /work-orders/{workOrderId}/versions */

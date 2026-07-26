@@ -6,6 +6,8 @@ import { AuthUser } from '../../common/decorators';
 import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { FilesService } from '../files/files.service';
+import { buildContractExcel, ContractExcelLine } from './contract-excel';
 import {
   CancelContractDto,
   ConfirmContractDto,
@@ -15,6 +17,7 @@ import {
   ContractListQueryDto,
   CreateContractDto,
   CreateRevisionDto,
+  SaveSignatureDto,
   UpdateContractDto,
 } from './contracts.dto';
 
@@ -31,12 +34,34 @@ const CATEGORY_LABEL: Record<string, string> = {
   SHOES: '구두',
 };
 
+/** 구성품(부위) 한글 라벨 (설계서 03 §5.3) */
+const COMPONENT_LABEL: Record<string, string> = {
+  JACKET: '상의',
+  TROUSERS: '하의',
+  VEST: '베스트',
+  SHIRT: '셔츠',
+  SHOES: '구두',
+};
+
+/** 서명 이미지 디코드 버퍼 상한 (설계서 03 §2.3) */
+const SIGNATURE_MAX_BYTES = 2 * 1024 * 1024;
+
 const VERSION_INCLUDE = {
   lines: { orderBy: { sortOrder: 'asc' } },
 } satisfies Prisma.ContractVersionInclude;
 
 const DETAIL_INCLUDE = {
-  customer: { select: { id: true, name: true, phone: true, email: true, customerStatus: true } },
+  customer: {
+    select: {
+      id: true,
+      name: true,
+      phone: true,
+      email: true,
+      customerStatus: true,
+      contractedAt: true,
+      registeredAt: true,
+    },
+  },
   contractType: { select: { id: true, code: true, name: true } },
   currentVersion: { include: VERSION_INCLUDE },
   versions: { include: VERSION_INCLUDE, orderBy: { versionNo: 'asc' } },
@@ -72,8 +97,6 @@ interface ContractListRow {
   contractedAt: Date | null;
   createdAt: Date;
   currentVersion: { totalAmount: Prisma.Decimal; completionDueDate: Date | null } | null;
-  paidAmount: number;
-  unpaidAmount: number;
 }
 
 type OrderSummary = { id: string; orderNo: string; tradeType: string };
@@ -83,6 +106,7 @@ export class ContractsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly files: FilesService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -162,8 +186,7 @@ export class ContractsService {
 
   /**
    * 계약 목록 (개편계획 06).
-   * 실수납액·미수금은 Prisma where로 표현할 수 없는 집계라 필터에 맞는 계약을 모두 읽고
-   * 결제 집계를 병합한 뒤 메모리에서 정렬·페이징한다. (온프레미스 단일 매장 규모 전제)
+   * 필터에 맞는 계약을 모두 읽고 메모리에서 정렬·페이징한다. (온프레미스 단일 매장 규모 전제)
    */
   async list(query: ContractListQueryDto) {
     const where = this.buildListWhere(query);
@@ -173,22 +196,7 @@ export class ContractsService {
       orderBy: { createdAt: 'desc' },
     });
 
-    const paymentByContract = await this.aggregatePayments(rows.map((r) => r.id));
-    const enriched = rows
-      .map((row) => {
-        const totalAmount = Number(row.currentVersion?.totalAmount ?? 0);
-        const agg = paymentByContract.get(row.id);
-        const paidAmount = agg?.paidAmount ?? 0;
-        return {
-          ...row,
-          paidAmount,
-          unpaidAmount: totalAmount - paidAmount,
-          lastPaymentDate: agg?.lastPaymentDate ?? null,
-        };
-      })
-      .filter((row) => !query.unpaidOnly || row.unpaidAmount > 0);
-
-    const sorted = this.sortList(enriched, query.sort);
+    const sorted = this.sortList(rows, query.sort);
     const page = sorted.slice(query.skip, query.skip + query.size);
 
     // 요약은 페이지가 아니라 필터 전체 기준이다.
@@ -196,11 +204,9 @@ export class ContractsService {
       (acc, row) => {
         acc.count += 1;
         acc.totalAmount += Number(row.currentVersion?.totalAmount ?? 0);
-        acc.paidAmount += row.paidAmount;
-        acc.unpaidAmount += row.unpaidAmount;
         return acc;
       },
-      { count: 0, totalAmount: 0, paidAmount: 0, unpaidAmount: 0 },
+      { count: 0, totalAmount: 0 },
     );
 
     return new Paginated(page, query.page, query.size, sorted.length, { totals });
@@ -256,41 +262,10 @@ export class ContractsService {
     dateField: string,
     range: { gte?: Date; lt?: Date },
   ): Prisma.ContractWhereInput {
-    if (dateField === 'paymentDate') {
-      // 해당 기간에 완료된 결제가 1건이라도 있는 계약
-      return { payments: { some: { status: 'COMPLETED', paymentDate: range } } };
-    }
     if (dateField === 'completionDueDate') {
       return { currentVersion: { completionDueDate: range } };
     }
     return { contractedAt: range };
-  }
-
-  /** 계약별 실수납액(환불 차감)과 최근 결제일. 취소된 결제는 제외한다. */
-  private async aggregatePayments(
-    contractIds: string[],
-  ): Promise<Map<string, { paidAmount: number; lastPaymentDate: string | null }>> {
-    const result = new Map<string, { paidAmount: number; lastPaymentDate: string | null }>();
-    if (contractIds.length === 0) return result;
-
-    const grouped = await this.prisma.payment.groupBy({
-      by: ['contractId', 'paymentType'],
-      where: { contractId: { in: contractIds }, status: 'COMPLETED' },
-      _sum: { amount: true },
-      _max: { paymentDate: true },
-    });
-
-    for (const g of grouped) {
-      const current = result.get(g.contractId) ?? { paidAmount: 0, lastPaymentDate: null };
-      const amount = Number(g._sum.amount ?? 0);
-      current.paidAmount += g.paymentType === 'REFUND' ? -amount : amount;
-      const last = g._max.paymentDate ? g._max.paymentDate.toISOString().slice(0, 10) : null;
-      if (last && (!current.lastPaymentDate || last > current.lastPaymentDate)) {
-        current.lastPaymentDate = last;
-      }
-      result.set(g.contractId, current);
-    }
-    return result;
   }
 
   /** `필드,방향` 정렬. 허용 밖 필드는 기본값(계약일 내림차순)으로 되돌린다. */
@@ -303,10 +278,6 @@ export class ContractsService {
       switch (key) {
         case 'totalAmount':
           return Number(row.currentVersion?.totalAmount ?? 0);
-        case 'paidAmount':
-          return row.paidAmount;
-        case 'unpaidAmount':
-          return row.unpaidAmount;
         case 'completionDueDate':
           return row.currentVersion?.completionDueDate?.getTime() ?? 0;
         default:
@@ -369,6 +340,10 @@ export class ContractsService {
           ...(dto.completionDueDate !== undefined ? { completionDueDate: toDate(dto.completionDueDate) } : {}),
           ...(dto.photoDate !== undefined ? { photoDate: toDate(dto.photoDate) } : {}),
           ...(dto.weddingDate !== undefined ? { weddingDate: toDate(dto.weddingDate) } : {}),
+          // 서명 후 내용 수정 시 서명 무효화 (설계서 03 §2.6) — 재서명 강제.
+          ...(draft.signatureFileId
+            ? { signatureFileId: null, signedAt: null, signerName: null }
+            : {}),
         },
       });
       await tx.contract.update({
@@ -408,6 +383,7 @@ export class ContractsService {
           orderBy: { versionNo: 'desc' },
         });
         if (!draft) throw new BusinessException('CONTRACT_NOT_DRAFT', '확정할 초안 버전이 없습니다.');
+        this.assertSigned(draft.signatureFileId);
 
         const confirmedAt = dto.confirmedDate ? new Date(dto.confirmedDate) : new Date();
         await tx.contractVersion.update({
@@ -424,6 +400,8 @@ export class ContractsService {
           data: {
             customerStatus: 'CONTRACTED',
             contractedAt: contract.customer?.contractedAt ?? confirmedAt,
+            // 등록 절차를 거치지 않고 계약까지 온 경우를 보정한다 (계약 고객은 반드시 고객 목록에 있어야 한다)
+            ...(contract.customer?.registeredAt ? {} : { registeredAt: confirmedAt }),
             rowVersion: { increment: 1 },
           },
         });
@@ -434,6 +412,9 @@ export class ContractsService {
           weddingDate: draft.weddingDate,
           cancelReason: null,
         });
+
+        // AUTO 진행단계 훅 (설계서 02 §9.2 / 03 §6): 계약완료 시 고객 진행을 CONTRACT_CONFIRMED로 전진.
+        await this.advanceJourneysToContractConfirmed(tx, contract.customerId, confirmedAt, actor.id);
 
         const response = {
           contractId: id,
@@ -546,6 +527,8 @@ export class ContractsService {
       throw new BusinessException('CONTRACT_NOT_DRAFT', '초안 상태의 변경계약만 확정할 수 있습니다.', undefined, {
         versionStatus: revision.versionStatus,
       });
+    // 재계약도 서명이 전제조건 (설계서 03 §2.5) — 재서명 강제.
+    this.assertSigned(revision.signatureFileId);
 
     const changeReason = dto.changeReason ?? revision.changeReason;
     if (!changeReason)
@@ -672,11 +655,15 @@ export class ContractsService {
     return this.getDetail(id);
   }
 
-  /** 계약서 출력용 JSON 요약 (현재 적용 버전 기준). */
+  /**
+   * 계약서 출력용 JSON (현재 적용 버전 기준).
+   * 웹 표시 규칙(D7): 세부가격 노출 — 라인 세부품목·라인금액 + 옵션명·추가금액 + 서명 상태.
+   */
   async getDocument(id: string) {
     const contract = await this.getDetail(id);
     const version =
       contract.currentVersion ?? contract.versions[contract.versions.length - 1] ?? null;
+    const options = await this.loadContractOptions(id);
     return {
       contractNo: contract.contractNo,
       status: contract.status,
@@ -699,14 +686,166 @@ export class ContractsService {
       lines: (version?.lines ?? []).map((l) => ({
         transactionType: l.transactionType,
         productCategory: l.productCategory,
+        categoryLabel: CATEGORY_LABEL[l.productCategory] ?? l.productCategory,
         itemDescription: l.itemDescription,
+        // 웹 상세 토글용 세부품목(구성품) 라벨
+        components: componentLabels(l.productCategory),
         quantity: l.quantity,
         unitPrice: l.unitPrice,
         lineAmount: l.lineAmount,
         notes: l.notes,
       })),
+      // 웹은 옵션명·추가금액을 노출한다 (D7)
+      options: options.map((o) => ({ optionName: o.optionName, extraPrice: o.extraPrice })),
+      // 서명 상태 (엑셀 버튼·확정 버튼 게이팅용)
+      signature: version
+        ? {
+            signed: version.signatureFileId != null,
+            signerName: version.signerName,
+            signedAt: version.signedAt,
+            downloadUrl: version.signatureFileId ? `/api/v1/files/${version.signatureFileId}` : null,
+          }
+        : { signed: false, signerName: null, signedAt: null, downloadUrl: null },
       printedAt: new Date().toISOString(),
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // 전자서명 (설계서 03 §3)
+  // ---------------------------------------------------------------------------
+
+  /** 서명 저장·교체. DRAFT 버전 한정. 이미지는 files 모듈에 저장하고 버전에 연결한다. */
+  async saveSignature(id: string, versionId: string, dto: SaveSignatureDto, actor: AuthUser) {
+    const contract = await this.getContractOrThrow(id);
+    const version = await this.prisma.contractVersion.findUnique({ where: { id: versionId } });
+    if (!version || version.contractId !== id) throw new NotFoundException('계약 버전이 없습니다.');
+    if (version.versionStatus !== 'DRAFT')
+      throw new BusinessException('CONTRACT_NOT_DRAFT', '초안 상태의 버전만 서명할 수 있습니다.', undefined, {
+        versionStatus: version.versionStatus,
+      });
+    this.assertVersionMatch(contract.rowVersion, dto.version);
+
+    const buffer = decodeSignaturePng(dto.imageDataUrl);
+    // 파일 저장은 별도 커밋이라도 무방하다(롤백 시 고아 PNG는 무해). 버전 연결·감사는 tx로 묶는다.
+    const file = await this.files.saveBuffer(
+      { buffer, mimeType: 'image/png', originalName: `signature-${versionId}.png` },
+      actor,
+    );
+
+    const signedAt = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      await tx.contractVersion.update({
+        where: { id: versionId },
+        data: { signatureFileId: file.id, signedAt, signerName: dto.signerName },
+      });
+      await this.audit.log(
+        {
+          userId: actor.id,
+          action: 'SIGN',
+          entityType: 'CONTRACT_VERSION',
+          entityId: versionId,
+          after: { signerName: dto.signerName, signedAt },
+        },
+        asAuditClient(tx),
+      );
+    });
+
+    return {
+      versionId,
+      signatureFileId: file.id,
+      signerName: dto.signerName,
+      signedAt,
+      downloadUrl: file.downloadUrl,
+    };
+  }
+
+  /** 서명 제거 (다시 받기용, DRAFT 한정). */
+  async removeSignature(id: string, versionId: string, actor: AuthUser) {
+    const contract = await this.getContractOrThrow(id);
+    const version = await this.prisma.contractVersion.findUnique({ where: { id: versionId } });
+    if (!version || version.contractId !== id) throw new NotFoundException('계약 버전이 없습니다.');
+    if (version.versionStatus !== 'DRAFT')
+      throw new BusinessException('CONTRACT_NOT_DRAFT', '초안 상태의 버전만 서명을 제거할 수 있습니다.', undefined, {
+        versionStatus: version.versionStatus,
+      });
+    void contract;
+
+    await this.prisma.contractVersion.update({
+      where: { id: versionId },
+      data: { signatureFileId: null, signedAt: null, signerName: null },
+    });
+    await this.audit.log({
+      userId: actor.id,
+      action: 'DELETE',
+      entityType: 'CONTRACT_VERSION',
+      entityId: versionId,
+      before: { signatureFileId: version.signatureFileId },
+    });
+    return { versionId, signed: false };
+  }
+
+  /** 서명 메타 조회. */
+  async getSignature(id: string, versionId: string) {
+    const version = await this.prisma.contractVersion.findUnique({ where: { id: versionId } });
+    if (!version || version.contractId !== id) throw new NotFoundException('계약 버전이 없습니다.');
+    return {
+      versionId,
+      signed: version.signatureFileId != null,
+      signatureFileId: version.signatureFileId,
+      signerName: version.signerName,
+      signedAt: version.signedAt,
+      downloadUrl: version.signatureFileId ? `/api/v1/files/${version.signatureFileId}` : null,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // 계약서 엑셀 (설계서 03 §5·§8) — 즉석 스트리밍
+  // ---------------------------------------------------------------------------
+
+  async buildContractDocumentExcel(id: string, actor: AuthUser): Promise<{ buffer: Buffer; fileName: string }> {
+    const contract = await this.getDetail(id);
+    const version =
+      contract.currentVersion ?? contract.versions[contract.versions.length - 1] ?? null;
+    if (!version) throw new NotFoundException('계약 버전이 없습니다.');
+
+    const lines: ContractExcelLine[] = version.lines.map((l) => ({
+      category: CATEGORY_LABEL[l.productCategory] ?? l.productCategory,
+      components: componentLabels(l.productCategory),
+      quantity: l.quantity,
+    }));
+    const options = await this.loadContractOptions(id);
+
+    let signature: { pngBuffer: Buffer; signerName: string; signedAt: Date } | null = null;
+    if (version.signatureFileId && version.signedAt) {
+      const pngBuffer = await this.files.readBuffer(version.signatureFileId);
+      signature = { pngBuffer, signerName: version.signerName ?? '', signedAt: version.signedAt };
+    }
+
+    const buffer = await buildContractExcel({
+      contractNo: contract.contractNo,
+      status: contract.status,
+      contractedAt: contract.contractedAt,
+      customer: { name: contract.customer?.name ?? '', phone: contract.customer?.phone ?? null },
+      contractType: contract.contractType?.name ?? null,
+      lines,
+      options: options.map((o) => ({ optionName: o.optionName })),
+      totalAmount: Number(version.totalAmount), // D7: 총액만
+      completionDueDate: version.completionDueDate,
+      photoDate: version.photoDate,
+      weddingDate: version.weddingDate,
+      signature,
+      issuedAt: new Date(),
+    });
+
+    await this.audit.log({
+      userId: actor.id,
+      action: 'EXPORT',
+      entityType: 'CONTRACT',
+      entityId: id,
+      after: { contractNo: contract.contractNo, format: 'xlsx' },
+    });
+
+    return { buffer, fileName: `contract-${contract.contractNo}.xlsx` };
   }
 
   // ---------------------------------------------------------------------------
@@ -886,6 +1025,78 @@ export class ContractsService {
     return contract;
   }
 
+  /** 서명 없이 확정 시도를 차단한다 (설계서 03 §2.4 / D4). */
+  private assertSigned(signatureFileId: string | null): void {
+    if (!signatureFileId)
+      throw new BusinessException(
+        'CONTRACT_SIGNATURE_REQUIRED',
+        '서명이 완료되어야 계약을 확정할 수 있습니다.',
+        [{ field: 'signature', reason: 'REQUIRED' }],
+      );
+  }
+
+  /** 계약의 현재 옵션 선택값(옵션명·추가금액)을 모은다. (웹·엑셀 공통 소스, 설계서 03 §7.1) */
+  private async loadContractOptions(
+    contractId: string,
+  ): Promise<Array<{ optionName: string; extraPrice: number }>> {
+    const values = await this.prisma.optionSelectionValue.findMany({
+      where: {
+        selectionSession: { isCurrent: true, orderItem: { order: { contractId } } },
+      },
+      include: { optionChoice: { select: { choiceName: true } } },
+      orderBy: { selectedAt: 'asc' },
+    });
+    return values.map((v) => ({
+      optionName: v.optionChoice.choiceName,
+      extraPrice: Number(v.extraPriceSnapshot),
+    }));
+  }
+
+  /**
+   * 계약완료 시 고객 진행을 CONTRACT_CONFIRMED로 전진한다 (설계서 03 §6, 최소 연동).
+   * ACTIVE 진행 중 CONTRACT_CONFIRMED보다 앞선 단계에 있는 건만 전진한다. 진행이 없으면 skip.
+   */
+  private async advanceJourneysToContractConfirmed(
+    tx: Prisma.TransactionClient,
+    customerId: string,
+    changedAt: Date,
+    actorId: string,
+  ): Promise<void> {
+    const journeys = await tx.customerJourney.findMany({
+      where: { customerId, status: 'ACTIVE' },
+    });
+    if (journeys.length === 0) return;
+
+    for (const journey of journeys) {
+      const stages = await tx.journeyStage.findMany({
+        where: { trackType: journey.trackType, active: true },
+        orderBy: { sequenceNo: 'asc' },
+      });
+      const target = stages.find((s) => s.code === 'CONTRACT_CONFIRMED');
+      if (!target) continue;
+      const currentSeq = stages.find((s) => s.code === journey.currentStageCode)?.sequenceNo ?? -1;
+      // 이미 계약확정 이상이면 전진하지 않는다(후진 금지).
+      if (currentSeq >= target.sequenceNo) continue;
+
+      await tx.journeyEvent.create({
+        data: {
+          id: randomUUID(),
+          journeyId: journey.id,
+          stageId: target.id,
+          fromStageCode: journey.currentStageCode,
+          toStageCode: target.code,
+          notificationOutcome: 'NONE',
+          actorId,
+          changedAt,
+        },
+      });
+      await tx.customerJourney.update({
+        where: { id: journey.id },
+        data: { currentStageCode: target.code, rowVersion: { increment: 1 } },
+      });
+    }
+  }
+
   private assertVersionMatch(current: number, expected?: number): void {
     if (expected !== undefined && expected !== current)
       throw new BusinessException(
@@ -968,6 +1179,37 @@ export class ContractsService {
 
 function toDate(value?: string | null): Date | null {
   return value ? new Date(value) : null;
+}
+
+/** 대분류의 기본 구성품을 한글 세부품목 라벨로 (설계서 03 §5.3). */
+function componentLabels(productCategory: string): string[] {
+  const components = COMPONENT_MAP[productCategory] ?? [productCategory];
+  return components.map((c) => COMPONENT_LABEL[c] ?? c);
+}
+
+/** PNG dataURL → Buffer. PNG 형식·용량(2MB) 검증 (설계서 03 §2.3). */
+function decodeSignaturePng(dataUrl: string): Buffer {
+  const match = /^data:image\/png;base64,(.+)$/s.exec(dataUrl);
+  if (!match)
+    throw new BusinessException('VALIDATION_ERROR', '서명 이미지는 PNG dataURL이어야 합니다.', [
+      { field: 'imageDataUrl', reason: 'INVALID_FORMAT' },
+    ]);
+  const buffer = Buffer.from(match[1], 'base64');
+  if (buffer.length === 0)
+    throw new BusinessException('VALIDATION_ERROR', '서명 이미지가 비어 있습니다.', [
+      { field: 'imageDataUrl', reason: 'EMPTY' },
+    ]);
+  if (buffer.length > SIGNATURE_MAX_BYTES)
+    throw new BusinessException('VALIDATION_ERROR', '서명 이미지 용량이 너무 큽니다.', [
+      { field: 'imageDataUrl', reason: 'TOO_LARGE' },
+    ]);
+  // PNG 시그니처(매직바이트) 확인
+  const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  if (!buffer.subarray(0, 4).equals(PNG_MAGIC))
+    throw new BusinessException('VALIDATION_ERROR', '서명 이미지가 올바른 PNG가 아닙니다.', [
+      { field: 'imageDataUrl', reason: 'NOT_PNG' },
+    ]);
+  return buffer;
 }
 
 /** AuditService.log의 tx 파라미터 타입에 맞춘 캐스팅 (delegate 구조는 동일) */

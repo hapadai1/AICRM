@@ -16,7 +16,6 @@ import { MeasurementsModule } from './modules/measurements/measurements.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { OptionsModule } from './modules/options/options.module';
 import { OrdersModule } from './modules/orders/orders.module';
-import { PaymentsModule } from './modules/payments/payments.module';
 import { ProductionModule } from './modules/production/production.module';
 import { RentalsModule } from './modules/rentals/rentals.module';
 import { RepairsModule } from './modules/repairs/repairs.module';
@@ -42,7 +41,6 @@ import { PrismaModule } from './prisma/prisma.module';
     ProductionModule,
     RepairsModule,
     RentalsModule,
-    PaymentsModule,
     NotificationsModule,
     DashboardModule,
     AdminMasterModule,

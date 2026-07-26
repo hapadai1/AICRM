@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
   HttpCode,
@@ -9,7 +10,9 @@ import {
   Patch,
   Post,
   Query,
+  Res,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { AuthUser, CurrentUser, RequirePermission } from '../../common/decorators';
 import {
   CancelContractDto,
@@ -18,6 +21,7 @@ import {
   ContractListQueryDto,
   CreateContractDto,
   CreateRevisionDto,
+  SaveSignatureDto,
   UpdateContractDto,
 } from './contracts.dto';
 import { ContractsService } from './contracts.service';
@@ -98,5 +102,61 @@ export class ContractsController {
   @RequirePermission('CONTRACT_VIEW')
   document(@Param('id') id: string) {
     return this.contracts.getDocument(id);
+  }
+
+  // --- v2 전자서명 (설계서 03 §3) ---
+
+  /** 계약 버전 서명 저장/교체 (DRAFT 한정). PNG dataURL. */
+  @Post(':id/versions/:versionId/signature')
+  @RequirePermission('CONTRACT_SIGN')
+  saveSignature(
+    @Param('id') id: string,
+    @Param('versionId') versionId: string,
+    @Body() dto: SaveSignatureDto,
+    @CurrentUser() actor: AuthUser,
+  ) {
+    return this.contracts.saveSignature(id, versionId, dto, actor);
+  }
+
+  /** 서명 제거 (다시 받기용, DRAFT 한정) */
+  @Delete(':id/versions/:versionId/signature')
+  @RequirePermission('CONTRACT_SIGN')
+  removeSignature(
+    @Param('id') id: string,
+    @Param('versionId') versionId: string,
+    @CurrentUser() actor: AuthUser,
+  ) {
+    return this.contracts.removeSignature(id, versionId, actor);
+  }
+
+  /** 서명 이미지 메타 조회 */
+  @Get(':id/versions/:versionId/signature')
+  @RequirePermission('CONTRACT_VIEW')
+  getSignature(@Param('id') id: string, @Param('versionId') versionId: string) {
+    return this.contracts.getSignature(id, versionId);
+  }
+
+  // --- v2 계약서 엑셀 출력 (설계서 03 §8) ---
+
+  /** 계약서 엑셀 즉석 생성·다운로드 (서명 이미지 포함, 총액만) */
+  @Get(':id/excel')
+  @RequirePermission('CONTRACT_VIEW')
+  async downloadExcel(
+    @Param('id') id: string,
+    @CurrentUser() actor: AuthUser,
+    @Res() res: Response,
+  ): Promise<void> {
+    const { buffer, fileName } = await this.contracts.buildContractDocumentExcel(id, actor);
+    const encodedName = encodeURIComponent(fileName);
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader('Content-Length', String(buffer.length));
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${encodedName}"; filename*=UTF-8''${encodedName}`,
+    );
+    res.end(buffer);
   }
 }

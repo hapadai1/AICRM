@@ -439,3 +439,258 @@ export function fetchRentalComponentTargets(orderId?: string): Promise<RentalOrd
     params: orderId ? { orderId } : undefined,
   });
 }
+
+// ---------------------------------------------------------------------------
+// 렌탈예약 달력 — GET /rental-inventory/availability-calendar (설계서 06 §4.4)
+// ---------------------------------------------------------------------------
+
+/** 달력 셀에 표시할 가용 실물 요약 (백엔드 availabilityCalendar.items[]) */
+export interface RentalCalendarItem {
+  id: string;
+  managementCode: string;
+  componentType: RentalComponentType;
+  design: string;
+  color: string;
+  size: string;
+}
+
+/** 일자별 가용 집계 (백엔드 availabilityCalendar 반환 배열 요소) */
+export interface RentalCalendarDay {
+  date: string;
+  availableCount: number;
+  items: RentalCalendarItem[];
+}
+
+export interface RentalCalendarFilters {
+  from: string;
+  to: string;
+  componentType?: RentalComponentType;
+  design?: string;
+  color?: string;
+  size?: string;
+  /** 자유 검색어(관리코드·디자인·컬러 부분일치) */
+  q?: string;
+  /** SKU 설명(코드) 부분일치 */
+  sku?: string;
+}
+
+/**
+ * 기간 내 일자별 가용 집계 — GET /rental-inventory/availability-calendar (설계서 06 §4).
+ * 달력 뷰용 표시 집계이며, 정합성(이중예약 차단)은 배정 시점 DB 제약이 보장한다.
+ */
+export function fetchAvailabilityCalendar(filters: RentalCalendarFilters): Promise<RentalCalendarDay[]> {
+  const params: Record<string, string> = { from: filters.from, to: filters.to };
+  if (filters.componentType) params.componentType = filters.componentType;
+  if (filters.design) params.design = filters.design;
+  if (filters.color) params.color = filters.color;
+  if (filters.size) params.size = filters.size;
+  if (filters.q?.trim()) params.q = filters.q.trim();
+  if (filters.sku?.trim()) params.sku = filters.sku.trim();
+  return request<RentalCalendarDay[]>({ url: '/rental-inventory/availability-calendar', params });
+}
+
+// ---------------------------------------------------------------------------
+// 렌탈 스타일 선택 세션 (v2 D3 / 설계서 04 §4 — rental-selection.controller.ts)
+// ---------------------------------------------------------------------------
+
+export type RentalSelectionStatus = 'IN_PROGRESS' | 'CONFIRMED';
+
+export const RENTAL_SELECTION_STATUS_META: Record<RentalSelectionStatus, { label: string; color: string }> = {
+  IN_PROGRESS: { label: '작성 중', color: 'processing' },
+  CONFIRMED: { label: '확정', color: 'green' },
+};
+
+/** 선택 세션의 선택된 실물 요약 (detail.components[].selectedItem) */
+export interface RentalSelectedItem {
+  id: string;
+  managementCode: string;
+  design: string;
+  color: string;
+  size: string;
+  status: RentalItemStatus;
+}
+
+/** 부위(구성품)별 선택 슬롯 (GET /rental-selections/:id) */
+export interface RentalSelectionComponent {
+  orderItemComponentId: string;
+  componentType: RentalComponentType;
+  sequenceNo?: number;
+  colorCode: string | null;
+  sizeCode: string | null;
+  notes: string | null;
+  selectedInventoryItemId: string | null;
+  selectedItem: RentalSelectedItem | null;
+}
+
+/** 렌탈 선택 세션 상세 (start / current.session / detail 공통 형태) */
+export interface RentalSelectionDetail {
+  sessionId: string;
+  orderItemId: string;
+  displayName: string;
+  productCategory?: string;
+  orderNo: string;
+  customerId: string;
+  customerName: string;
+  status: RentalSelectionStatus;
+  isCurrent: boolean;
+  confirmedAt: string | null;
+  version: number;
+  components: RentalSelectionComponent[];
+}
+
+/** 후보 실물 (AVAILABLE 재고, componentType×color×size 필터) */
+export interface RentalCandidate {
+  id: string;
+  managementCode: string;
+  design: string;
+  color: string;
+  size: string;
+  status: RentalItemStatus;
+}
+
+/** GET /rental-selections/:id/lines/:componentId/candidates */
+export interface RentalLineCandidates {
+  sessionId: string;
+  orderItemComponentId: string;
+  componentType: RentalComponentType;
+  colorCode: string | null;
+  sizeCode: string | null;
+  candidates: RentalCandidate[];
+}
+
+/** 확인서 부위별 행 (GET /rental-selections/:id/review — 코드→표시명 병기) */
+export interface RentalReviewComponent {
+  orderItemComponentId: string;
+  componentType: RentalComponentType;
+  colorCode: string | null;
+  colorName: string | null;
+  sizeCode: string | null;
+  sizeName: string | null;
+  notes: string | null;
+  selectedItem: { id: string; managementCode: string; design: string } | null;
+}
+
+/** 확인서 (GET /rental-selections/:id/review) */
+export interface RentalSelectionReview {
+  sessionId: string;
+  orderItemId: string;
+  displayName: string;
+  customerName: string;
+  orderNo: string;
+  status: RentalSelectionStatus;
+  confirmedAt: string | null;
+  components: RentalReviewComponent[];
+  version: number;
+}
+
+/** 세션 시작/현재본 반환 — POST /order-items/:id/rental-selection (RENTAL 품목만) */
+export function startRentalSelection(orderItemId: string): Promise<RentalSelectionDetail> {
+  return request<RentalSelectionDetail>({
+    url: `/order-items/${orderItemId}/rental-selection`,
+    method: 'POST',
+  });
+}
+
+/** 현재 세션 상세 — GET /order-items/:id/rental-selection (없으면 { session: null }) */
+export function fetchCurrentRentalSelection(
+  orderItemId: string,
+): Promise<{ session: RentalSelectionDetail | null }> {
+  return request<{ session: RentalSelectionDetail | null }>({
+    url: `/order-items/${orderItemId}/rental-selection`,
+  });
+}
+
+/** 세션 상세 — GET /rental-selections/:id */
+export function fetchRentalSelectionDetail(sessionId: string): Promise<RentalSelectionDetail> {
+  return request<RentalSelectionDetail>({ url: `/rental-selections/${sessionId}` });
+}
+
+/** 부위별 컬러·사이즈·비고 upsert — PUT /rental-selections/:id/lines/:componentId */
+export function saveRentalLine(
+  sessionId: string,
+  componentId: string,
+  body: { colorCode?: string; sizeCode?: string; notes?: string; version?: number },
+): Promise<RentalSelectionDetail> {
+  return request<RentalSelectionDetail>({
+    url: `/rental-selections/${sessionId}/lines/${componentId}`,
+    method: 'PUT',
+    data: body,
+  });
+}
+
+/** 후보 실물 검색 — GET /rental-selections/:id/lines/:componentId/candidates */
+export function fetchRentalLineCandidates(
+  sessionId: string,
+  componentId: string,
+): Promise<RentalLineCandidates> {
+  return request<RentalLineCandidates>({
+    url: `/rental-selections/${sessionId}/lines/${componentId}/candidates`,
+  });
+}
+
+/** 후보 실물 선택(또는 해제: inventoryItemId=null) — PUT /rental-selections/:id/lines/:componentId/item */
+export function selectRentalLineItem(
+  sessionId: string,
+  componentId: string,
+  body: { inventoryItemId?: string | null; itemCode?: string; version?: number },
+): Promise<RentalSelectionDetail> {
+  return request<RentalSelectionDetail>({
+    url: `/rental-selections/${sessionId}/lines/${componentId}/item`,
+    method: 'PUT',
+    data: body,
+  });
+}
+
+/** 확정 — POST /rental-selections/:id/confirm */
+export function confirmRentalSelection(
+  sessionId: string,
+  body: { version?: number },
+): Promise<RentalSelectionDetail> {
+  return request<RentalSelectionDetail>({
+    url: `/rental-selections/${sessionId}/confirm`,
+    method: 'POST',
+    data: body,
+  });
+}
+
+/** 확인서 — GET /rental-selections/:id/review */
+export function fetchRentalSelectionReview(sessionId: string): Promise<RentalSelectionReview> {
+  return request<RentalSelectionReview>({ url: `/rental-selections/${sessionId}/review` });
+}
+
+// ---------------------------------------------------------------------------
+// 렌탈 기준정보 — 컬러 12색·사이즈 활성 코드 (설계서 04 §5, /admin/master)
+// ---------------------------------------------------------------------------
+
+/** 렌탈 컬러·사이즈 기준정보 코드 (활성만, sortOrder 정렬) */
+export interface RentalMasterCode {
+  code: string;
+  name: string;
+  sortOrder: number;
+}
+
+interface RawMasterItem {
+  code: string;
+  name: string;
+  sortOrder: number;
+  active: boolean;
+}
+
+function fetchActiveMaster(type: 'rental-colors' | 'rental-sizes'): Promise<RentalMasterCode[]> {
+  return request<RawMasterItem[]>({ url: `/admin/master/${type}` }).then((rows) =>
+    rows
+      .filter((r) => r.active)
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .map((r) => ({ code: r.code, name: r.name, sortOrder: r.sortOrder })),
+  );
+}
+
+/** 렌탈 컬러 12색 활성 코드 — GET /admin/master/rental-colors */
+export function fetchRentalColors(): Promise<RentalMasterCode[]> {
+  return fetchActiveMaster('rental-colors');
+}
+
+/** 렌탈 사이즈 활성 코드 — GET /admin/master/rental-sizes */
+export function fetchRentalSizes(): Promise<RentalMasterCode[]> {
+  return fetchActiveMaster('rental-sizes');
+}

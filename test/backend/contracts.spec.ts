@@ -10,7 +10,12 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
     ctx = await createTestContext([ContractsModule, OrdersModule]);
     await truncateBusinessData(ctx.prisma);
     // contract_types는 시드 보존 대상이므로 이 스위트가 만든 비시드 항목만 정리한다 (재실행 안전)
-    const seedCodes = ['BUSINESS_SUIT_CUSTOM', 'WEDDING_PACKAGE_RENTAL'];
+    const seedCodes = [
+      'BUSINESS_SUIT_CUSTOM',
+      'SHOES_CUSTOM',
+      'SUIT_SHOES_CUSTOM',
+      'WEDDING_PACKAGE_RENTAL',
+    ];
     await ctx.prisma.contractTypeLine.deleteMany({
       where: { contractType: { code: { notIn: seedCodes } } },
     });
@@ -40,6 +45,24 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
   async function currentRowVersion(contractId: string): Promise<number> {
     const row = await ctx.prisma.contract.findUniqueOrThrow({ where: { id: contractId } });
     return row.rowVersion;
+  }
+
+  /** 유효한 1x1 흰 PNG dataURL — 서명 게이팅(v2 D4) 충족용 */
+  const SIGNATURE_PNG =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
+  /** 현재 DRAFT 버전에 서명을 저장한다 — 확정(계약완료) 전제조건. */
+  async function signDraft(contractId: string): Promise<void> {
+    const versions = await api(ctx)
+      .get(`/api/v1/contracts/${contractId}/versions`)
+      .set(auth(ctx))
+      .expect(200);
+    const draft = versions.body.data.find((v: { versionStatus: string }) => v.versionStatus === 'DRAFT');
+    await api(ctx)
+      .post(`/api/v1/contracts/${contractId}/versions/${draft.id}/signature`)
+      .set(auth(ctx))
+      .send({ imageDataUrl: SIGNATURE_PNG, signerName: '고객서명' })
+      .expect(201);
   }
 
   // ---------------------------------------------------------------------------
@@ -228,6 +251,7 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
     });
 
     it('확정 시 CUSTOM/RENTAL 주문 분리·수량만큼 품목 펼침·고객 CONTRACTED 전환이 한 번에 처리된다', async () => {
+      await signDraft(contractId);
       const version = await currentRowVersion(contractId);
       const res = await api(ctx)
         .post(`/api/v1/contracts/${contractId}/confirm`)
@@ -341,6 +365,7 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
         .expect(409);
       expect(conflict.body.error.code).toBe('CONTRACT_VERSION_CONFLICT');
 
+      await signDraft(contractId);
       const version = await currentRowVersion(contractId);
       const res = await api(ctx)
         .post(`/api/v1/contracts/${contractId}/revisions/${revision.body.data.id}/confirm`)
@@ -379,6 +404,7 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
           ],
         })
         .expect(201);
+      await signDraft(contractId);
       const version = await currentRowVersion(contractId);
       await api(ctx)
         .post(`/api/v1/contracts/${contractId}/revisions/${revision.body.data.id}/confirm`)
@@ -407,6 +433,7 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
         .set(auth(ctx))
         .send({ lines: [{ transactionType: 'CUSTOM', productCategory: 'SUIT', quantity: 2 }] })
         .expect(201);
+      await signDraft(contractId);
       const version = await currentRowVersion(contractId);
       const res = await api(ctx)
         .post(`/api/v1/contracts/${contractId}/revisions/${revision.body.data.id}/confirm`)
@@ -476,6 +503,7 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
       const draft = versions.body.data.find((v: { versionStatus: string }) => v.versionStatus === 'DRAFT');
       expect(draft.versionNo).toBe(4);
 
+      await signDraft(contractId);
       const version = await currentRowVersion(contractId);
       const res = await api(ctx)
         .post(`/api/v1/contracts/${contractId}/revisions/${draft.id}/confirm`)
@@ -536,6 +564,7 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
         })
         .expect(201);
       const contractId = created.body.data.id as string;
+      await signDraft(contractId);
       const version = await currentRowVersion(contractId);
       await api(ctx).post(`/api/v1/contracts/${contractId}/confirm`).set(auth(ctx)).send({ version }).expect(200);
 
@@ -566,6 +595,128 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
       expect(logs).toHaveLength(1);
       expect(logs[0].reason).toBe('고객 단순 변심');
     });
+  });
+});
+
+/** v2 계약 서명·엑셀 (설계서 03 / D4·D7) */
+describe('계약 서명·엑셀 (v2)', () => {
+  let ctx: TestContext;
+  const SIGN_PNG =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
+  beforeAll(async () => {
+    ctx = await createTestContext([ContractsModule, OrdersModule]);
+    await truncateBusinessData(ctx.prisma);
+  });
+  afterAll(async () => {
+    await ctx.app.close();
+  });
+
+  async function newCustomer(): Promise<string> {
+    const c = await ctx.prisma.customer.create({
+      data: {
+        id: randomUUID(),
+        name: `서명고객-${randomUUID().slice(0, 6)}`,
+        phone: '010-2222-3333',
+        phoneNormalized: `${Date.now()}${Math.floor(Math.random() * 1e6)}`.slice(0, 20),
+      },
+    });
+    return c.id;
+  }
+
+  async function draftContract(): Promise<{ contractId: string; versionId: string }> {
+    const customerId = await newCustomer();
+    const created = await api(ctx)
+      .post('/api/v1/contracts')
+      .set(auth(ctx))
+      .send({
+        customerId,
+        totalAmount: 1_500_000,
+        lines: [{ transactionType: 'CUSTOM', productCategory: 'SUIT', quantity: 1 }],
+      })
+      .expect(201);
+    const contractId = created.body.data.id as string;
+    const draft = await ctx.prisma.contractVersion.findFirstOrThrow({
+      where: { contractId, versionStatus: 'DRAFT' },
+    });
+    return { contractId, versionId: draft.id };
+  }
+
+  it('서명 없이 확정하면 CONTRACT_SIGNATURE_REQUIRED(409)로 막는다', async () => {
+    const { contractId } = await draftContract();
+    const version = (await ctx.prisma.contract.findUniqueOrThrow({ where: { id: contractId } })).rowVersion;
+    const res = await api(ctx)
+      .post(`/api/v1/contracts/${contractId}/confirm`)
+      .set(auth(ctx))
+      .send({ version })
+      .expect(409);
+    expect(res.body.error.code).toBe('CONTRACT_SIGNATURE_REQUIRED');
+  });
+
+  it('서명 저장 후 확정에 성공하고, 비PNG는 거부한다', async () => {
+    const { contractId, versionId } = await draftContract();
+
+    const badType = await api(ctx)
+      .post(`/api/v1/contracts/${contractId}/versions/${versionId}/signature`)
+      .set(auth(ctx))
+      .send({ imageDataUrl: 'data:image/jpeg;base64,AAAA', signerName: '홍길동' });
+    expect(badType.status).toBe(400);
+
+    const saved = await api(ctx)
+      .post(`/api/v1/contracts/${contractId}/versions/${versionId}/signature`)
+      .set(auth(ctx))
+      .send({ imageDataUrl: SIGN_PNG, signerName: '홍길동' })
+      .expect(201);
+    expect(saved.body.data).toMatchObject({ versionId, signerName: '홍길동' });
+    expect(saved.body.data.signatureFileId).toBeTruthy();
+
+    const version = (await ctx.prisma.contract.findUniqueOrThrow({ where: { id: contractId } })).rowVersion;
+    await api(ctx).post(`/api/v1/contracts/${contractId}/confirm`).set(auth(ctx)).send({ version }).expect(200);
+
+    // 감사로그에 SIGN이 남는다
+    const signLogs = await ctx.prisma.auditLog.findMany({
+      where: { entityType: 'CONTRACT_VERSION', action: 'SIGN', entityId: versionId },
+    });
+    expect(signLogs).toHaveLength(1);
+  });
+
+  it('서명 있는 초안을 수정하면 서명이 무효화된다', async () => {
+    const { contractId, versionId } = await draftContract();
+    await api(ctx)
+      .post(`/api/v1/contracts/${contractId}/versions/${versionId}/signature`)
+      .set(auth(ctx))
+      .send({ imageDataUrl: SIGN_PNG, signerName: '홍길동' })
+      .expect(201);
+
+    await api(ctx)
+      .patch(`/api/v1/contracts/${contractId}`)
+      .set(auth(ctx))
+      .send({ totalAmount: 1_600_000 })
+      .expect(200);
+
+    const v = await ctx.prisma.contractVersion.findUniqueOrThrow({ where: { id: versionId } });
+    expect(v.signatureFileId).toBeNull();
+    expect(v.signedAt).toBeNull();
+  });
+
+  it('계약서 엑셀을 다운로드한다 (xlsx)', async () => {
+    const { contractId, versionId } = await draftContract();
+    await api(ctx)
+      .post(`/api/v1/contracts/${contractId}/versions/${versionId}/signature`)
+      .set(auth(ctx))
+      .send({ imageDataUrl: SIGN_PNG, signerName: '홍길동' })
+      .expect(201);
+    const version = (await ctx.prisma.contract.findUniqueOrThrow({ where: { id: contractId } })).rowVersion;
+    await api(ctx).post(`/api/v1/contracts/${contractId}/confirm`).set(auth(ctx)).send({ version }).expect(200);
+
+    const res = await api(ctx).get(`/api/v1/contracts/${contractId}/excel`).set(auth(ctx)).expect(200);
+    expect(res.headers['content-type']).toContain('spreadsheetml');
+    expect(Number(res.headers['content-length'])).toBeGreaterThan(0);
+
+    const logs = await ctx.prisma.auditLog.findMany({
+      where: { entityType: 'CONTRACT', action: 'EXPORT', entityId: contractId },
+    });
+    expect(logs.length).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -619,27 +770,6 @@ describe('계약 목록 검색 (GET /contracts 확장)', () => {
     return contractId;
   }
 
-  async function seedPayment(
-    contractId: string,
-    paymentType: string,
-    amount: number,
-    paymentDate: string,
-    status = 'COMPLETED',
-  ): Promise<void> {
-    const admin = await ctx.prisma.user.findUniqueOrThrow({ where: { loginId: 'admin' } });
-    await ctx.prisma.payment.create({
-      data: {
-        id: randomUUID(),
-        contractId,
-        paymentType,
-        amount,
-        paymentDate: new Date(paymentDate),
-        status,
-        createdBy: admin.id,
-      },
-    });
-  }
-
   beforeAll(async () => {
     ctx = await createTestContext([ContractsModule]);
     await truncateBusinessData(ctx.prisma);
@@ -685,36 +815,19 @@ describe('계약 목록 검색 (GET /contracts 확장)', () => {
       contractedAt: '2026-07-15',
       totalAmount: 1_000_000,
     });
-
-    // 홍길동 주계약: 수납 500,000 + 300,000 − 환불 100,000 = 700,000 (취소 200,000은 제외)
-    await seedPayment(hongMainId, 'DEPOSIT', 500_000, '2026-06-10');
-    await seedPayment(hongMainId, 'BALANCE', 300_000, '2026-07-05');
-    await seedPayment(hongMainId, 'REFUND', 100_000, '2026-07-06');
-    await seedPayment(hongMainId, 'ETC', 200_000, '2026-07-07', 'CANCELLED');
-    // 이순신: 전액 수납
-    await seedPayment(leeId2, 'DEPOSIT', 1_000_000, '2026-07-15');
   });
 
   afterAll(async () => {
     await ctx.app.close();
   });
 
-  it('기본 정렬은 계약일 내림차순이고 수납액·미수금·최근 결제일을 함께 반환한다', async () => {
+  it('기본 정렬은 계약일 내림차순이다', async () => {
     const res = await api(ctx).get('/api/v1/contracts').set(auth(ctx)).expect(200);
     expect(res.body.data.map((c: { contractNo: string }) => c.contractNo)).toEqual([
       'CTR-260715-003',
       'CTR-260610-001',
       'CTR-260501-002',
     ]);
-
-    const main = res.body.data.find((c: { id: string }) => c.id === hongMainId);
-    expect(main.paidAmount).toBe(700_000);
-    expect(main.unpaidAmount).toBe(2_300_000);
-    expect(main.lastPaymentDate).toBe('2026-07-06');
-
-    const old = res.body.data.find((c: { id: string }) => c.id === hongOldId);
-    expect(old.paidAmount).toBe(0);
-    expect(old.lastPaymentDate).toBeNull();
   });
 
   it('계약일 범위는 경계일을 포함한다', async () => {
@@ -727,18 +840,6 @@ describe('계약 목록 검색 (GET /contracts 확장)', () => {
       'CTR-260715-003',
       'CTR-260610-001',
     ]);
-  });
-
-  it('dateField=paymentDate는 해당 기간에 결제가 있는 계약만 반환한다', async () => {
-    const res = await api(ctx)
-      .get('/api/v1/contracts')
-      .query({ dateField: 'paymentDate', dateFrom: '2026-07-01', dateTo: '2026-07-31' })
-      .set(auth(ctx))
-      .expect(200);
-    const ids = res.body.data.map((c: { id: string }) => c.id);
-    expect(ids).toHaveLength(2);
-    expect(ids).toEqual(expect.arrayContaining([hongMainId, leeId2]));
-    expect(ids).not.toContain(hongOldId);
   });
 
   it('q로 고객 전화번호(하이픈 무관)와 계약 구분명을 검색한다', async () => {
@@ -762,19 +863,13 @@ describe('계약 목록 검색 (GET /contracts 확장)', () => {
     );
   });
 
-  it('contractTypeId 필터와 unpaidOnly가 동작한다', async () => {
+  it('contractTypeId 필터가 동작한다', async () => {
     const byType = await api(ctx)
       .get('/api/v1/contracts')
       .query({ contractTypeId: rentalTypeId })
       .set(auth(ctx))
       .expect(200);
     expect(byType.body.data.map((c: { id: string }) => c.id)).toEqual([leeId2]);
-
-    // 전액 수납된 이순신 계약은 제외된다
-    const unpaid = await api(ctx).get('/api/v1/contracts').query({ unpaidOnly: true }).set(auth(ctx)).expect(200);
-    const ids = unpaid.body.data.map((c: { id: string }) => c.id);
-    expect(ids).toEqual(expect.arrayContaining([hongMainId, hongOldId]));
-    expect(ids).not.toContain(leeId2);
   });
 
   it('totals는 페이지가 아니라 필터 전체 기준이다', async () => {
@@ -784,12 +879,10 @@ describe('계약 목록 검색 (GET /contracts 확장)', () => {
     expect(res.body.totals).toEqual({
       count: 3,
       totalAmount: 4_500_000,
-      paidAmount: 1_700_000,
-      unpaidAmount: 2_800_000,
     });
   });
 
-  it('sort로 계약일 오름차순·미수금 내림차순 정렬을 지원한다', async () => {
+  it('sort로 계약일 오름차순 정렬을 지원한다', async () => {
     const asc = await api(ctx)
       .get('/api/v1/contracts')
       .query({ sort: 'contractedAt,asc' })
@@ -800,13 +893,6 @@ describe('계약 목록 검색 (GET /contracts 확장)', () => {
       'CTR-260610-001',
       'CTR-260715-003',
     ]);
-
-    const byUnpaid = await api(ctx)
-      .get('/api/v1/contracts')
-      .query({ sort: 'unpaidAmount,desc' })
-      .set(auth(ctx))
-      .expect(200);
-    expect(byUnpaid.body.data.map((c: { id: string }) => c.id)).toEqual([hongMainId, hongOldId, leeId2]);
   });
 
   it('잘못된 기간 형식과 정렬 형식은 VALIDATION_ERROR를 반환한다', async () => {

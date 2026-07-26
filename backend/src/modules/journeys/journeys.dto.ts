@@ -50,6 +50,11 @@ export class CloseJourneyDto {
   @IsOptional() @IsString() @IsNotEmpty() reason?: string;
 }
 
+/** 단계 품목별 완료 (v2 설계서 02 §9.1) */
+export class CompleteItemDto {
+  @IsOptional() @IsString() notes?: string;
+}
+
 export class ListJourneysQueryDto extends PageQueryDto {
   @IsOptional() @IsIn([...TRACK_TYPES]) trackType?: string;
   @IsOptional() @IsIn([...JOURNEY_STATUSES]) status?: string;

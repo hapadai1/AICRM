@@ -263,6 +263,9 @@ describe('제작 상태·부분 입출고·가봉 (ProductionModule)', () => {
       expect(found.workOrder).toBeDefined();
       expect(['WAITING', 'UNORDERED', 'REPRINT_NEEDED', 'CURRENT']).toContain(found.workOrder.status);
       expect(typeof found.workOrder.canIssue).toBe('boolean');
+      // 목록에서 최신 Excel을 바로 내려받으려면 버전 id·파일명이 함께 와야 한다.
+      expect(found.workOrder).toHaveProperty('currentVersionId');
+      expect(found.workOrder).toHaveProperty('currentFileName');
     });
   });
 
@@ -396,6 +399,79 @@ describe('제작 상태·부분 입출고·가봉 (ProductionModule)', () => {
         where: { entityType: 'FITTING_SESSION', entityId: created.body.data.id, action: 'EXPORT' },
       });
       expect(logs).toHaveLength(1);
+    });
+
+    /** 설계서 06 §5.4 — 공장 회신/마킹본 파일 첨부(EntityFile 재사용) */
+    it('가봉 세션에 파일을 업로드→목록→다운로드→삭제한다', async () => {
+      const { item } = await seedOrderItem(ctx.prisma, { itemStatus: 'BASTING_RECEIVED' });
+      const created = await api(ctx)
+        .post(`/api/v1/order-items/${item.id}/fittings`)
+        .set(auth(ctx))
+        .send({ fittingDate: '2026-07-21', adjustments: [{ area: '가슴', instruction: '여유분 1cm' }] })
+        .expect(201);
+      const fittingId = created.body.data.id;
+
+      // 업로드 (multipart) — 공장 회신본 첨부
+      const uploaded = await api(ctx)
+        .post(`/api/v1/fittings/${fittingId}/files`)
+        .set(auth(ctx))
+        .attach('file', Buffer.from('factory reply body'), 'reply.pdf')
+        .expect(201);
+      const fileId = uploaded.body.data.id;
+      expect(uploaded.body.data.purpose).toBe('FACTORY_REPLY');
+      expect(uploaded.body.data.originalName).toBe('reply.pdf');
+
+      // EntityFile purpose 태깅 확인
+      const link = await ctx.prisma.entityFile.findFirstOrThrow({
+        where: { entityType: 'FITTING_SESSION', entityId: fittingId, fileId },
+      });
+      expect(link.purpose).toBe('FACTORY_REPLY');
+
+      // 업로드 감사로그(CREATE)
+      const createLogs = await ctx.prisma.auditLog.findMany({
+        where: { entityType: 'FITTING_SESSION', entityId: fittingId, action: 'CREATE' },
+      });
+      expect(createLogs.length).toBeGreaterThanOrEqual(1);
+
+      // 목록
+      const list = await api(ctx).get(`/api/v1/fittings/${fittingId}/files`).set(auth(ctx)).expect(200);
+      expect(list.body.data.length).toBe(1);
+      expect(list.body.data[0].id).toBe(fileId);
+      expect(list.body.data[0].downloadUrl).toContain(fileId);
+
+      // 다운로드 (공용 파일 다운로드 엔드포인트)
+      const down = await api(ctx)
+        .get(`/api/v1/files/${fileId}`)
+        .set(auth(ctx))
+        .buffer(true)
+        .parse((r, cb) => {
+          const chunks: Buffer[] = [];
+          r.on('data', (c: Buffer) => chunks.push(c));
+          r.on('end', () => cb(null, Buffer.concat(chunks)));
+        })
+        .expect(200);
+      expect((down.body as Buffer).toString()).toBe('factory reply body');
+
+      // 삭제
+      await api(ctx).delete(`/api/v1/fittings/${fittingId}/files/${fileId}`).set(auth(ctx)).expect(200);
+      const after = await api(ctx).get(`/api/v1/fittings/${fittingId}/files`).set(auth(ctx)).expect(200);
+      expect(after.body.data.length).toBe(0);
+      // 링크·파일 모두 제거되고 삭제 감사로그가 남는다
+      expect(
+        await ctx.prisma.entityFile.count({ where: { entityType: 'FITTING_SESSION', entityId: fittingId } }),
+      ).toBe(0);
+      const delLogs = await ctx.prisma.auditLog.findMany({
+        where: { entityType: 'FITTING_SESSION', entityId: fittingId, action: 'DELETE' },
+      });
+      expect(delLogs.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('없는 가봉 세션에 파일 업로드는 404', async () => {
+      await api(ctx)
+        .post(`/api/v1/fittings/${randomUUID()}/files`)
+        .set(auth(ctx))
+        .attach('file', Buffer.from('x'), 'x.pdf')
+        .expect(404);
     });
   });
 });

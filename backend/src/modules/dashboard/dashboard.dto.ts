@@ -3,7 +3,6 @@ import { IsIn, IsNotEmpty, IsOptional, IsString, IsUUID, Matches } from 'class-v
 export const DASHBOARD_TASK_TYPES = [
   'LATE_RETURN',
   'INBOUND_DELAY',
-  'PAYMENT_DELAY',
   'UNORDERED',
   'REPRINT_NEEDED',
 ] as const;

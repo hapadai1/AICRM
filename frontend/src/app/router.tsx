@@ -17,24 +17,31 @@ import { JourneyBoardPage } from '../features/journeys/JourneyBoardPage';
 import { MeasurementComparePage } from '../features/measurements/MeasurementComparePage';
 import { MeasurementEditPage } from '../features/measurements/MeasurementEditPage';
 import { MeasurementListPage } from '../features/measurements/MeasurementListPage';
+import { MeasurementPhotoPrint } from '../features/measurements/MeasurementPhotoPrint';
 import { NotificationsPage } from '../features/notifications/NotificationsPage';
 import { ContractOptionsPage } from '../features/options/ContractOptionsPage';
 import { OptionProgressListPage } from '../features/options/OptionProgressListPage';
 import { OptionReviewPage } from '../features/options/OptionReviewPage';
 import { OptionStagePage } from '../features/options/OptionStagePage';
 import { OrderDetailPage } from '../features/orders/OrderDetailPage';
-import { PaymentsPage } from '../features/payments/PaymentsPage';
 import { ContractProductionPage } from '../features/production/ContractProductionPage';
 import { ProductionPage } from '../features/production/ProductionPage';
 import { RentalAllocatePage } from '../features/rentals/RentalAllocatePage';
 import { RentalHandoverPage } from '../features/rentals/RentalHandoverPage';
+import { RentalSelectionPage } from '../features/rentals/RentalSelectionPage';
 import { RentalInventoryPage } from '../features/rentals/RentalInventoryPage';
 import { RentalItemDetailPage } from '../features/rentals/RentalItemDetailPage';
 import { RepairsPage } from '../features/repairs/RepairsPage';
 import { WorkOrderPreviewPage } from '../features/workorders/WorkOrderPreviewPage';
+import { CustomerModeConsultingPage } from '../features/customer-mode/CustomerModeConsultingPage';
+import { CustomerModeContractPage } from '../features/customer-mode/CustomerModeContractPage';
+import { CustomerModeHomePage } from '../features/customer-mode/CustomerModeHomePage';
+import { CustomerModeMeasurementPage } from '../features/customer-mode/CustomerModeMeasurementPage';
+import { CustomerSearchPage } from '../features/customer-mode/CustomerSearchPage';
 import { PlaceholderPage } from '../pages/PlaceholderPage';
 import { AppLayout } from './AppLayout';
 import { AuthGuard } from './AuthGuard';
+import { CustomerModeGuard } from './CustomerModeGuard';
 import { LoginPage } from './LoginPage';
 
 export const router = createBrowserRouter([
@@ -71,6 +78,8 @@ export const router = createBrowserRouter([
       { path: 'measurements', element: <MeasurementListPage /> },
       { path: 'measurements/new', element: <MeasurementEditPage /> },
       { path: 'measurements/compare', element: <MeasurementComparePage /> },
+      // 채촌 사진 A4 인쇄 전용 화면 (설계서 v2 05 §5). :id보다 먼저 선언.
+      { path: 'measurements/:id/print', element: <MeasurementPhotoPrint /> },
       { path: 'measurements/:id', element: <MeasurementEditPage /> },
       // 옵션·작업지시서
       { path: 'options', element: <OptionProgressListPage /> },
@@ -84,10 +93,11 @@ export const router = createBrowserRouter([
       { path: 'rentals', element: <RentalInventoryPage /> },
       { path: 'rentals/allocate', element: <RentalAllocatePage /> },
       { path: 'rentals/handover', element: <RentalHandoverPage /> },
+      // 렌탈 스타일 선택(컨설팅) — 품목 단위. :id보다 먼저 선언.
+      { path: 'rentals/selection/:orderItemId', element: <RentalSelectionPage /> },
       { path: 'rentals/:id', element: <RentalItemDetailPage /> },
       { path: 'repairs', element: <RepairsPage /> },
-      // 결제·연락
-      { path: 'payments', element: <PaymentsPage /> },
+      // 연락
       { path: 'notifications', element: <NotificationsPage /> },
       // 관리자
       { path: 'admin/master', element: <AdminMasterPage /> },
@@ -95,6 +105,20 @@ export const router = createBrowserRouter([
       { path: 'admin/options', element: <AdminOptionsPage /> },
       { path: 'admin/users', element: <AdminUsersPage /> },
       { path: 'admin/audit', element: <AuditLogPage /> },
+      // ── 고객모드 서브트리 (설계서 01 §3.2) ──
+      // CustomerModeGuard가 경로↔모드 동기화·컨텍스트 강제·유휴 타임아웃을 담당한다.
+      {
+        path: 'c',
+        element: <CustomerModeGuard />,
+        children: [
+          { index: true, element: <CustomerSearchPage /> },
+          { path: ':customerId', element: <CustomerModeHomePage /> },
+          // 흐름 화면: 계약서 → 스타일 컨설팅 → 채촌 (고객모드 딥플로우, 설계서 01 §4)
+          { path: ':customerId/contract', element: <CustomerModeContractPage /> },
+          { path: ':customerId/consulting', element: <CustomerModeConsultingPage /> },
+          { path: ':customerId/measurement', element: <CustomerModeMeasurementPage /> },
+        ],
+      },
       { path: '*', element: <PlaceholderPage title="페이지를 찾을 수 없습니다" phase={0} /> },
     ],
   },

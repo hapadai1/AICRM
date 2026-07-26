@@ -3,6 +3,7 @@ import { AuthUser, CurrentUser, RequirePermission } from '../../common/decorator
 import {
   ChangeStageDto,
   CloseJourneyDto,
+  CompleteItemDto,
   CreateJourneyDto,
   ListJourneysQueryDto,
   ListStagesQueryDto,
@@ -64,7 +65,42 @@ export class JourneysController {
     return this.journeysService.get(id);
   }
 
-  /** 단계 변경 — 응답의 suggestedNotification이 발송 확인창의 재료가 된다. */
+  /** 단계 대상 품목 + 완료상태 + 게이팅 (v2) */
+  @Get('journeys/:id/stages/:stageCode/items')
+  @RequirePermission('CUSTOMER_VIEW')
+  getStageItems(@Param('id') id: string, @Param('stageCode') stageCode: string) {
+    return this.journeysService.getStageItems(id, stageCode);
+  }
+
+  /** 품목 완료(수동 버튼, 멱등) — 전 품목 완료 시 [전체 완료] 활성 (v2 D2) */
+  @Post('journeys/:id/stages/:stageCode/items/:targetId/complete')
+  @RequirePermission('JOURNEY_EDIT')
+  completeItem(
+    @Param('id') id: string,
+    @Param('stageCode') stageCode: string,
+    @Param('targetId') targetId: string,
+    @Body() dto: CompleteItemDto,
+    @CurrentUser() actor: AuthUser,
+  ) {
+    return this.journeysService.completeItem(id, stageCode, targetId, dto, actor);
+  }
+
+  /** 품목 완료 취소 */
+  @Post('journeys/:id/stages/:stageCode/items/:targetId/uncomplete')
+  @RequirePermission('JOURNEY_EDIT')
+  uncompleteItem(
+    @Param('id') id: string,
+    @Param('stageCode') stageCode: string,
+    @Param('targetId') targetId: string,
+    @CurrentUser() actor: AuthUser,
+  ) {
+    return this.journeysService.uncompleteItem(id, stageCode, targetId, actor);
+  }
+
+  /**
+   * 단계 변경([전체 완료]) — GATED 단계는 전 품목 완료 시에만 전진 가능(422).
+   * 응답의 suggestedNotification이 발송 확인창의 재료가 된다.
+   */
   @Post('journeys/:id/stage')
   @RequirePermission('JOURNEY_EDIT')
   changeStage(

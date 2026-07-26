@@ -21,11 +21,15 @@ export const ERROR_CODES = {
   // 고객·예약
   CUSTOMER_NOT_FOUND: HttpStatus.NOT_FOUND,
   CUSTOMER_PHONE_DUPLICATE: HttpStatus.CONFLICT,
+  /** 이미 정식 고객으로 등록된 고객에 [예약 고객 등록]을 다시 시도 */
+  CUSTOMER_ALREADY_REGISTERED: HttpStatus.CONFLICT,
   NAVER_RESERVATION_CONFLICT: HttpStatus.CONFLICT,
 
   // 계약·주문
   CONTRACT_NOT_DRAFT: HttpStatus.CONFLICT,
   CONTRACT_VERSION_CONFLICT: HttpStatus.CONFLICT,
+  /** 서명 없이 계약 확정을 시도 (v2 설계서 03 §2.4 / D4) */
+  CONTRACT_SIGNATURE_REQUIRED: HttpStatus.CONFLICT,
   ORDER_ITEM_COUNT_LOCKED: HttpStatus.UNPROCESSABLE_ENTITY,
 
   // 옵션·채촌·작업지시서
@@ -35,6 +39,8 @@ export const ERROR_CODES = {
   /** 작업지시서 출력 근거로 쓰인 채촌의 수정·삭제·완료해제 (설계서 09 §2.1) */
   MEASUREMENT_LOCKED: HttpStatus.CONFLICT,
   WORK_ORDER_PREREQUISITE_MISSING: HttpStatus.UNPROCESSABLE_ENTITY,
+  /** 진행 단계 전진 시 대상 품목이 전수완료되지 않음 (v2 설계서 02 §5) */
+  STAGE_NOT_COMPLETE: HttpStatus.UNPROCESSABLE_ENTITY,
 
   // 렌탈
   RENTAL_PERIOD_OVERLAP: HttpStatus.CONFLICT,

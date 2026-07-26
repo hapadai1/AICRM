@@ -6,15 +6,35 @@
  * 조정할 수 있다. 여기에는 코드가 아닌 "축"만 정의한다.
  */
 
-/** 진행 트랙 — 상담 usageType(BUSINESS_CUSTOM/WEDDING_RENTAL)과 1:1 대응 */
-export const TRACK_TYPES = ['CUSTOM', 'RENTAL'] as const;
+/**
+ * 진행 트랙.
+ * - CUSTOM/RENTAL: 상담 usageType(BUSINESS_CUSTOM/WEDDING_RENTAL)과 1:1 대응, 계약에서 시작
+ * - REPAIR: 수선 접수 등록 시 시작(상담 매핑 없음) — v2 PDF 2페이지 수선 트랙 (설계서 02 §2.2)
+ */
+export const TRACK_TYPES = ['CUSTOM', 'RENTAL', 'REPAIR'] as const;
 export type TrackType = (typeof TRACK_TYPES)[number];
 
-/** 상담 용도 → 진행 트랙 매핑 */
+/** 상담 용도 → 진행 트랙 매핑 (REPAIR는 상담이 아니라 수선 접수에서 시작하므로 제외) */
 export const USAGE_TYPE_TO_TRACK: Record<string, TrackType> = {
   BUSINESS_CUSTOM: 'CUSTOM',
   WEDDING_RENTAL: 'RENTAL',
 };
+
+/** 품목별 완료의 대상 종류 (다형 참조, 설계서 02 §3.3) */
+export const COMPLETION_TARGET_TYPES = ['ORDER_ITEM', 'REPAIR_ITEM'] as const;
+export type CompletionTargetType = (typeof COMPLETION_TARGET_TYPES)[number];
+
+/**
+ * 단계 완료 방식 (설계서 02 §4).
+ * - AUTO:  자동완료(수동 버튼 없음) — 도메인 이벤트 훅으로 전진
+ * - GATED: 대상 품목 전수완료 후 [전체 완료] 활성
+ */
+export const STAGE_COMPLETION_MODES = ['AUTO', 'GATED'] as const;
+export type StageCompletionMode = (typeof STAGE_COMPLETION_MODES)[number];
+
+/** 게이팅 대상 품목 범위 */
+export const STAGE_TARGET_SCOPES = ['ORDER_ITEMS', 'REPAIR_ITEMS', 'NONE'] as const;
+export type StageTargetScope = (typeof STAGE_TARGET_SCOPES)[number];
 
 export const JOURNEY_STATUSES = ['ACTIVE', 'COMPLETED', 'CANCELLED'] as const;
 

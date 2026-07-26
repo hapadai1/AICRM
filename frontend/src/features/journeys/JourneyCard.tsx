@@ -22,6 +22,7 @@ import {
   Spin,
   Steps,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
 import { useState } from 'react';
@@ -32,16 +33,20 @@ import {
   cancelJourney,
   changeJourneyStage,
   completeJourney,
+  completeStageItem,
   createJourney,
   fetchCustomerJourneys,
   fetchJourney,
+  getStageItems,
   journeyStatusMeta,
   OUTCOME_META,
   setNotificationOutcome,
   trackTypeLabel,
   TRACK_TYPES,
+  uncompleteStageItem,
   type Journey,
   type JourneyEvent,
+  type JourneyStageView,
   type TrackType,
 } from '../../api/journeys';
 import { useAuthStore } from '../../app/auth-store';
@@ -105,6 +110,9 @@ export function JourneyCard({ customerId, customerName, contracts, orders }: Pro
   const [startOpen, setStartOpen] = useState(false);
   const [startForm] = Form.useForm<{ trackType: TrackType }>();
   const [contactOpen, setContactOpen] = useState(false);
+  // [전체 완료] 시 비고 입력 모달 (선택 입력)
+  const [completeOpen, setCompleteOpen] = useState(false);
+  const [completeNotes, setCompleteNotes] = useState('');
 
   const journeysQuery = useQuery({
     queryKey: ['customer-journeys', customerId],
@@ -144,7 +152,7 @@ export function JourneyCard({ customerId, customerName, contracts, orders }: Pro
 
   // 단계 이동(전진 완료 / 되돌리기 공용). 새 단계가 연락 단계면 재조회로 [고객 연락] 버튼이 뜬다.
   const stageMutation = useMutation({
-    mutationFn: (vars: { toStageCode: string; version: number; reason?: string }) =>
+    mutationFn: (vars: { toStageCode: string; version: number; reason?: string; notes?: string }) =>
       changeJourneyStage(activeId as string, vars),
     onSuccess: (result) => {
       message.success(`‘${result.journey.currentStageName}’ 단계로 이동했습니다.`);
@@ -179,6 +187,45 @@ export function JourneyCard({ customerId, customerName, contracts, orders }: Pro
   // ---- 파생 값 -------------------------------------------------------------
   const currentSeq = detail?.currentStageSequenceNo ?? 0;
   const nextStage = detail?.stages.find((s) => s.sequenceNo === currentSeq + 1) ?? null;
+  // 현재 단계 메타(게이팅·완료방식) — 품목 체크리스트/전체완료 활성 판단의 근거
+  const currentStage = detail?.stages.find((s) => s.code === detail.currentStageCode) ?? null;
+  const isGatedCurrent = currentStage?.completionMode === 'GATED';
+  const isActive = detail?.status === 'ACTIVE';
+
+  // 현재 단계가 GATED면 품목별 완료 체크리스트를 조회한다. AUTO 단계는 품목 대상이 없다.
+  const stageItemsQuery = useQuery({
+    queryKey: ['journey-stage-items', activeId, detail?.currentStageCode],
+    queryFn: () => getStageItems(activeId as string, detail!.currentStageCode),
+    enabled: activeId != null && detail != null && isActive && isGatedCurrent,
+  });
+  const stageItems = stageItemsQuery.data?.items ?? [];
+
+  const invalidateStageItems = () =>
+    void queryClient.invalidateQueries({
+      queryKey: ['journey-stage-items', activeId, detail?.currentStageCode],
+    });
+
+  // 품목 완료/취소 — 클릭마다 게이팅이 재계산되어 [전체 완료] 활성/비활성이 토글된다.
+  const completeItemMutation = useMutation({
+    mutationFn: (targetId: string) =>
+      completeStageItem(activeId as string, detail!.currentStageCode, targetId),
+    onSuccess: () => {
+      invalidateStageItems();
+      invalidate();
+    },
+    onError: (error) =>
+      message.error(error instanceof ApiError ? error.message : '품목 완료에 실패했습니다.'),
+  });
+  const uncompleteItemMutation = useMutation({
+    mutationFn: (targetId: string) =>
+      uncompleteStageItem(activeId as string, detail!.currentStageCode, targetId),
+    onSuccess: () => {
+      invalidateStageItems();
+      invalidate();
+    },
+    onError: (error) =>
+      message.error(error instanceof ApiError ? error.message : '완료 취소에 실패했습니다.'),
+  });
   const currentWorkAction = detail ? (WORK_ACTION[detail.currentStageCode] ?? null) : null;
 
   // 진행에 연결된 주문 → 없으면 고객의 첫 주문. 계약은 그 주문의 계약번호로 역참조.
@@ -205,6 +252,7 @@ export function JourneyCard({ customerId, customerName, contracts, orders }: Pro
     navigate(`${to}?q=${encodeURIComponent(q)}`);
   };
 
+  // [전체 완료] — 마지막 단계면 진행 완료, 아니면 비고 입력 모달을 띄운다(§6.1).
   const handleCompleteStage = () => {
     if (!detail) return;
     if (!nextStage) {
@@ -217,13 +265,25 @@ export function JourneyCard({ customerId, customerName, contracts, orders }: Pro
       });
       return;
     }
-    modal.confirm({
-      title: `‘${detail.currentStageName}’ 단계를 완료할까요?`,
-      content: `완료 기록을 남기고 ‘${nextStage.name}’ 단계로 넘어갑니다.`,
-      okText: '단계 완료',
-      cancelText: '취소',
-      onOk: () => stageMutation.mutateAsync({ toStageCode: nextStage.code, version: detail.version }),
-    });
+    setCompleteNotes('');
+    setCompleteOpen(true);
+  };
+
+  const handleCompleteConfirm = () => {
+    if (!detail || !nextStage) return;
+    stageMutation
+      .mutateAsync({
+        toStageCode: nextStage.code,
+        version: detail.version,
+        notes: completeNotes.trim() || undefined,
+      })
+      .then(() => {
+        setCompleteOpen(false);
+        setCompleteNotes('');
+      })
+      .catch(() => {
+        // 게이팅 미충족(422 STAGE_NOT_COMPLETE) 등은 onError에서 메시지 처리 — 모달은 유지
+      });
   };
 
   const handleRollback = () => {
@@ -318,8 +378,84 @@ export function JourneyCard({ customerId, customerName, contracts, orders }: Pro
     );
   };
 
+  // ---- 현재 단계 품목 완료 체크리스트 (GATED 전용) -------------------------
+  // 각 품목을 [완료]/[취소]로 수동 확정하고, 전 품목 완료 시 [전체 완료]가 열린다(설계서 v2 02 §4·§9.3).
+  const renderStageChecklist = () => {
+    if (!isGatedCurrent) return null;
+    const remaining = (currentStage?.targetCount ?? 0) - (currentStage?.completedCount ?? 0);
+    return (
+      <Space direction="vertical" size={6} style={{ width: '100%' }}>
+        <Space size={6}>
+          <Typography.Text strong style={{ fontSize: 12 }}>
+            품목 완료
+          </Typography.Text>
+          <Tag color={remaining === 0 && (currentStage?.targetCount ?? 0) > 0 ? 'green' : 'blue'}>
+            {currentStage?.completedCount ?? 0}/{currentStage?.targetCount ?? 0}
+          </Tag>
+        </Space>
+        {stageItemsQuery.isLoading ? (
+          <Spin size="small" />
+        ) : stageItems.length === 0 ? (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            대상 품목이 없습니다.
+          </Typography.Text>
+        ) : (
+          stageItems.map((it) => (
+            <Space key={it.targetId} size={6} wrap>
+              {canEdit ? (
+                it.completed ? (
+                  <Button
+                    size="small"
+                    onClick={() => uncompleteItemMutation.mutate(it.targetId)}
+                    loading={
+                      uncompleteItemMutation.isPending &&
+                      uncompleteItemMutation.variables === it.targetId
+                    }
+                  >
+                    취소
+                  </Button>
+                ) : (
+                  <Button
+                    size="small"
+                    type="primary"
+                    ghost
+                    icon={<CheckOutlined />}
+                    onClick={() => completeItemMutation.mutate(it.targetId)}
+                    loading={
+                      completeItemMutation.isPending &&
+                      completeItemMutation.variables === it.targetId
+                    }
+                  >
+                    완료
+                  </Button>
+                )
+              ) : (
+                <Tag color={it.completed ? 'green' : 'default'}>
+                  {it.completed ? '완료' : '대기'}
+                </Tag>
+              )}
+              <Typography.Text style={{ fontSize: 12 }}>{it.displayName}</Typography.Text>
+              {it.productionHint?.status && (
+                <Tooltip title="제작 상태 힌트 (자동 완료 아님)">
+                  <Tag color="default" style={{ marginInlineEnd: 0 }}>
+                    {it.productionHint.status}
+                  </Tag>
+                </Tooltip>
+              )}
+              {it.completed && it.completedByName && (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {it.completedByName}
+                </Typography.Text>
+              )}
+            </Space>
+          ))
+        )}
+      </Space>
+    );
+  };
+
   // ---- 단계 노드 설명 ------------------------------------------------------
-  const stageDescription = (s: { code: string; sequenceNo: number }) => {
+  const stageDescription = (s: JourneyStageView) => {
     const isCurrent = detail?.currentStageCode === s.code;
     const done = completionByCode.get(s.code);
     const isGap = !isCurrent && !done && s.sequenceNo < currentSeq;
@@ -362,60 +498,90 @@ export function JourneyCard({ customerId, customerName, contracts, orders }: Pro
             {done.reason}
           </Typography.Text>
         )}
-        {isCurrent &&
-          detail?.status === 'ACTIVE' &&
-          (canEdit ? (
-            <Space
-              wrap
-              size="small"
-              style={{
-                marginTop: 4,
-                padding: 8,
-                border: '1px solid #91caff',
-                background: '#e6f4ff',
-                borderRadius: 8,
-              }}
-            >
-              {currentWorkAction && (
-                <Button
-                  size="small"
-                  icon={<ArrowRightOutlined />}
-                  onClick={() => goWork(currentWorkAction.to)}
-                >
-                  {currentWorkAction.label}
-                </Button>
-              )}
-              {detail.currentSuggestion && (
-                <Button size="small" icon={<PhoneOutlined />} onClick={() => setContactOpen(true)}>
-                  고객 연락
-                </Button>
-              )}
-              <Button
-                size="small"
-                type="primary"
-                icon={<CheckOutlined />}
-                loading={stageMutation.isPending || closeMutation.isPending}
-                onClick={handleCompleteStage}
-              >
-                {nextStage ? `이 단계 완료 → ${nextStage.name}` : '진행 완료'}
-              </Button>
-              {currentSeq > 1 && (
-                <Button size="small" icon={<RollbackOutlined />} onClick={handleRollback}>
-                  되돌리기
-                </Button>
-              )}
-            </Space>
-          ) : (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              진행 중
-            </Typography.Text>
-          ))}
+        {s.notes && (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            비고: {s.notes}
+          </Typography.Text>
+        )}
+        {isCurrent && detail?.status === 'ACTIVE' && (
+          <Space
+            direction="vertical"
+            size={8}
+            style={{
+              width: '100%',
+              marginTop: 4,
+              padding: 8,
+              border: '1px solid #91caff',
+              background: '#e6f4ff',
+              borderRadius: 8,
+            }}
+          >
+            {renderStageChecklist()}
+            {canEdit ? (
+              <Space wrap size="small">
+                {currentWorkAction && (
+                  <Button
+                    size="small"
+                    icon={<ArrowRightOutlined />}
+                    onClick={() => goWork(currentWorkAction.to)}
+                  >
+                    {currentWorkAction.label}
+                  </Button>
+                )}
+                {detail.currentSuggestion && (
+                  <Button size="small" icon={<PhoneOutlined />} onClick={() => setContactOpen(true)}>
+                    고객 연락
+                  </Button>
+                )}
+                {nextStage ? (
+                  <Tooltip
+                    title={
+                      isGatedCurrent && !currentStage?.canComplete
+                        ? `품목 ${(currentStage?.targetCount ?? 0) - (currentStage?.completedCount ?? 0)}건 미완료`
+                        : undefined
+                    }
+                  >
+                    <Button
+                      size="small"
+                      type="primary"
+                      icon={<CheckOutlined />}
+                      disabled={isGatedCurrent && !currentStage?.canComplete}
+                      loading={stageMutation.isPending}
+                      onClick={handleCompleteStage}
+                    >
+                      {isGatedCurrent ? '전체 완료' : '이 단계 완료'} → {nextStage.name}
+                    </Button>
+                  </Tooltip>
+                ) : (
+                  <Button
+                    size="small"
+                    type="primary"
+                    icon={<CheckOutlined />}
+                    loading={closeMutation.isPending}
+                    onClick={handleCompleteStage}
+                  >
+                    진행 완료
+                  </Button>
+                )}
+                {currentSeq > 1 && (
+                  <Button size="small" icon={<RollbackOutlined />} onClick={handleRollback}>
+                    되돌리기
+                  </Button>
+                )}
+              </Space>
+            ) : (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                진행 중
+              </Typography.Text>
+            )}
+          </Space>
+        )}
         {isGap && <Tag color="warning">완료 기록 없음 (건너뜀)</Tag>}
       </Space>
     );
   };
 
-  const stageStatus = (s: { code: string; sequenceNo: number }) => {
+  const stageStatus = (s: JourneyStageView) => {
     if (detail?.currentStageCode === s.code) {
       if (detail.status === 'COMPLETED') return 'finish' as const;
       if (detail.status === 'CANCELLED') return 'error' as const;
@@ -512,6 +678,31 @@ export function JourneyCard({ customerId, customerName, contracts, orders }: Pro
             />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        open={completeOpen}
+        title={
+          detail && nextStage
+            ? `‘${detail.currentStageName}’ 단계 완료 → ‘${nextStage.name}’`
+            : '단계 완료'
+        }
+        okText="완료"
+        cancelText="취소"
+        confirmLoading={stageMutation.isPending}
+        onCancel={() => setCompleteOpen(false)}
+        onOk={handleCompleteConfirm}
+      >
+        <Typography.Paragraph type="secondary">
+          완료 기록을 남기고 다음 단계로 넘어갑니다. 비고는 선택 입력입니다.
+        </Typography.Paragraph>
+        <Input.TextArea
+          rows={3}
+          value={completeNotes}
+          onChange={(e) => setCompleteNotes(e.target.value)}
+          placeholder="비고 (선택)"
+          maxLength={1000}
+        />
       </Modal>
 
       <NotificationConfirmModal

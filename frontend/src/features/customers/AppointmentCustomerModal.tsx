@@ -1,19 +1,20 @@
 /**
  * 예약 고객 등록 모달 (CUST-001)
- * - 업무의 99%는 예약 후 상담한 고객이다. 예약을 검색해서 그 고객을 정식 등록한다.
- * - 예약 등록 시점에 고객 행(PROSPECT)은 이미 생성되어 있으므로(customers.service
- *   linkOrCreateProspectByPhone), 여기서는 이름·이메일·메모 등 빠진 정보를 채워 저장한다.
+ * - 업무의 99%는 예약 후 상담한 고객이다. 아직 고객으로 등록되지 않은 예약만 보여주고,
+ *   정보를 채워 정식 고객으로 등록한다. 등록되면 이 목록에서 빠지고 고객 메뉴에 나타난다.
+ * - 예약 등록 시점에 고객 행은 이미 PROSPECT로 만들어져 있으므로(linkOrCreateProspectByPhone)
+ *   신규 생성이 아니라 registeredAt을 찍는 POST /customers/:id/register를 호출한다.
  *   PROSPECT → CONTRACTED 전환은 계약 확정이 담당하므로 여기서 다루지 않는다.
  */
 import { ArrowLeftOutlined, SearchOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App, Alert, Button, DatePicker, Descriptions, Form, Input, Modal, Space, Switch, Table, Tag, Typography } from 'antd';
+import { App, Alert, Button, DatePicker, Descriptions, Form, Input, Modal, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { useState } from 'react';
 import { fetchAppointments, type Appointment } from '../../api/appointments';
 import { ApiError } from '../../api/client';
-import { findCustomerByPhone, updateCustomer, type CustomerBase } from '../../api/customers';
+import { findCustomerByPhone, registerCustomer, type CustomerBase } from '../../api/customers';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { metaOf } from '../../shared/status-meta';
 import { APPT_STATUS_META, SOURCE_META } from '../appointments/appointment-constants';
@@ -42,15 +43,12 @@ export function AppointmentCustomerModal({ open, onClose, onGoDetail }: Props) {
   const [keyword, setKeyword] = useState('');
   const [q, setQ] = useState('');
   const [page, setPage] = useState(1);
-  /** 이미 계약 상태인 고객의 예약까지 보여줄지 */
-  const [includeContracted, setIncludeContracted] = useState(false);
   const [picked, setPicked] = useState<{ appointment: Appointment; customer: CustomerBase } | null>(null);
 
   const reset = () => {
     setKeyword('');
     setQ('');
     setPage(1);
-    setIncludeContracted(false);
     setPicked(null);
     form.resetFields();
   };
@@ -60,9 +58,17 @@ export function AppointmentCustomerModal({ open, onClose, onGoDetail }: Props) {
     onClose();
   };
 
+  // 아직 고객으로 등록되지 않은 예약만 조회한다
   const { data, isFetching } = useQuery({
     queryKey: ['appointments', 'customer-register', { q, page }],
-    queryFn: () => fetchAppointments({ q, statuses: [...TARGET_STATUSES], page, size: 8 }),
+    queryFn: () =>
+      fetchAppointments({
+        q,
+        customerRegistered: false,
+        statuses: [...TARGET_STATUSES],
+        page,
+        size: 8,
+      }),
     enabled: open,
   });
 
@@ -88,14 +94,11 @@ export function AppointmentCustomerModal({ open, onClose, onGoDetail }: Props) {
 
   const saveMutation = useMutation({
     mutationFn: (values: FormValues) =>
-      updateCustomer(picked!.customer.id, {
-        ...values,
-        phone: picked!.customer.phone,
-        version: picked!.customer.version,
-      }),
+      registerCustomer(picked!.customer.id, { ...values, version: picked!.customer.version }),
     onSuccess: (saved) => {
       message.success(`고객 "${saved.name}"을(를) 등록했습니다.`);
       void queryClient.invalidateQueries({ queryKey: ['customers'] });
+      void queryClient.invalidateQueries({ queryKey: ['appointments'] });
       close();
       onGoDetail(saved.id);
     },
@@ -108,10 +111,6 @@ export function AppointmentCustomerModal({ open, onClose, onGoDetail }: Props) {
     setPage(1);
     setQ(keyword.trim());
   };
-
-  const rows = (data?.data ?? []).filter(
-    (a) => includeContracted || a.customerStatus !== 'CONTRACTED',
-  );
 
   const columns: ColumnsType<Appointment> = [
     {
@@ -132,13 +131,6 @@ export function AppointmentCustomerModal({ open, onClose, onGoDetail }: Props) {
       ),
     },
     {
-      title: '고객 상태',
-      dataIndex: 'customerStatus',
-      width: 90,
-      render: (v: Appointment['customerStatus']) =>
-        v ? <StatusBadge label={metaOf(CUSTOMER_STATUS_META, v).label} color={metaOf(CUSTOMER_STATUS_META, v).color} /> : '-',
-    },
-    {
       title: '경로',
       dataIndex: 'source',
       width: 80,
@@ -152,9 +144,6 @@ export function AppointmentCustomerModal({ open, onClose, onGoDetail }: Props) {
     ? [
         <Button key="back" icon={<ArrowLeftOutlined />} onClick={() => setPicked(null)}>
           예약 다시 선택
-        </Button>,
-        <Button key="detail" onClick={() => { const id = picked.customer.id; close(); onGoDetail(id); }}>
-          그대로 상세로 이동
         </Button>,
         <Button
           key="save"
@@ -220,7 +209,7 @@ export function AppointmentCustomerModal({ open, onClose, onGoDetail }: Props) {
       ) : (
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           <Typography.Text type="secondary">
-            예약을 검색해서 선택하면 해당 고객 정보를 채워 등록합니다.
+            아직 고객으로 등록되지 않은 예약입니다. 선택해서 정보를 채우면 고객으로 등록됩니다.
           </Typography.Text>
           <Space wrap>
             <Input
@@ -235,10 +224,6 @@ export function AppointmentCustomerModal({ open, onClose, onGoDetail }: Props) {
             <Button icon={<SearchOutlined />} onClick={runSearch}>
               검색
             </Button>
-            <Space size={6}>
-              <Switch checked={includeContracted} onChange={setIncludeContracted} />
-              <Typography.Text>계약 고객 포함</Typography.Text>
-            </Space>
           </Space>
 
           {pickMutation.isError && (
@@ -251,7 +236,7 @@ export function AppointmentCustomerModal({ open, onClose, onGoDetail }: Props) {
             scroll={{ x: 'max-content' }}
             loading={isFetching || pickMutation.isPending}
             columns={columns}
-            dataSource={rows}
+            dataSource={data?.data ?? []}
             pagination={{
               current: page,
               pageSize: 8,
@@ -263,7 +248,7 @@ export function AppointmentCustomerModal({ open, onClose, onGoDetail }: Props) {
               onClick: () => pickMutation.mutate(r),
               style: { cursor: 'pointer' },
             })}
-            locale={{ emptyText: '조건에 해당하는 예약이 없습니다.' }}
+            locale={{ emptyText: '등록 대기 중인 예약 고객이 없습니다.' }}
           />
         </Space>
       )}

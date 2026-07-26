@@ -1,6 +1,14 @@
 import type { Appointment, Consultation, CustomerStatus, Paged } from './appointments';
 import { request } from './client';
 
+/** 진행 journey의 현재 단계 (설계서 06 §2 / 02 진행상태 재정의) */
+export interface CustomerCurrentStage {
+  code: string;
+  name: string;
+  trackType: 'CUSTOM' | 'RENTAL' | 'REPAIR';
+  status: 'ACTIVE' | 'COMPLETED' | 'CANCELLED';
+}
+
 export interface CustomerListItem {
   id: string;
   name: string;
@@ -10,6 +18,8 @@ export interface CustomerListItem {
   lastVisitDate?: string;
   /** 최근 거래 유형 */
   lastTransactionType?: 'CUSTOM' | 'RENTAL';
+  /** 세부 진행상태: 진행 journey의 현재 단계. 진행 journey가 없으면 null */
+  currentStage?: CustomerCurrentStage | null;
   contractCount: number;
   balanceAmount: number;
 }
@@ -19,6 +29,8 @@ export interface CustomerListParams {
   /** true면 PROSPECT·INACTIVE 포함 (기본 CONTRACTED만) */
   includeProspect?: boolean;
   transactionType?: 'CUSTOM' | 'RENTAL';
+  /** 진행상태 검색: ACTIVE(진행중) | DONE(완료) | ALL(전체) */
+  progress?: 'ACTIVE' | 'DONE' | 'ALL';
   page?: number;
   size?: number;
 }
@@ -29,6 +41,8 @@ export interface CustomerBase {
   phone: string;
   email?: string;
   customerStatus: CustomerStatus;
+  /** 정식 고객으로 등록된 시각. 없으면 예약만 있는 미등록 고객 */
+  registeredAt?: string | null;
   firstReservedAt?: string;
   contractedAt?: string;
   notes?: string;
@@ -39,8 +53,6 @@ export interface CustomerBase {
 export interface CustomerSummary {
   contractCount: number;
   totalAmount: number;
-  paidAmount: number;
-  balanceAmount: number;
 }
 
 export interface CustomerContractRow {
@@ -103,15 +115,6 @@ export interface CustomerRepairRow {
   status: string;
 }
 
-export interface CustomerPaymentRow {
-  id: string;
-  contractNo: string;
-  type: string;
-  amount: number;
-  paidAt: string;
-  method?: string | null;
-}
-
 /** GET /customers/:id 단일 aggregate 응답 (문서 03 §5.2) */
 export interface CustomerAggregate {
   customer: CustomerBase;
@@ -124,7 +127,6 @@ export interface CustomerAggregate {
   components: CustomerComponentRow[];
   rentals: CustomerComponentRow[];
   repairs: CustomerRepairRow[];
-  payments: CustomerPaymentRow[];
 }
 
 export interface CustomerSaveBody {
@@ -145,6 +147,7 @@ export function fetchCustomers(params: CustomerListParams): Promise<Paged<Custom
       q: params.q || undefined,
       includeProspect: params.includeProspect ? 'true' : undefined,
       transactionType: params.transactionType || undefined,
+      progress: params.progress && params.progress !== 'ALL' ? params.progress : undefined,
       page: params.page ?? 1,
       size: params.size ?? 30,
     },
@@ -161,6 +164,14 @@ export function createCustomer(body: CustomerSaveBody): Promise<CustomerBase> {
 
 export function updateCustomer(id: string, body: CustomerSaveBody): Promise<CustomerBase> {
   return request({ url: `/customers/${id}`, method: 'PATCH', data: body });
+}
+
+/** 예약으로 생긴 미등록 고객을 정식 고객으로 등록 (CUST-001 [예약 고객 등록]) */
+export function registerCustomer(
+  id: string,
+  body: { name: string; email?: string; notes?: string; version: number },
+): Promise<CustomerBase> {
+  return request({ url: `/customers/${id}/register`, method: 'POST', data: body });
 }
 
 export function deactivateCustomer(id: string, reason: string): Promise<CustomerBase> {

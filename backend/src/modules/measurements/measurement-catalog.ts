@@ -35,6 +35,10 @@ export const MEASUREMENT_ITEMS: MeasurementItemDef[] = [
   { code: 'KNEE', label: '무릎둘레', bodySection: 'LOWER', valueType: 'NUMERIC', sortOrder: 260 },
   { code: 'PANTS_OPENING', label: '바지부리', bodySection: 'LOWER', valueType: 'NUMERIC', sortOrder: 270 },
   { code: 'PANTS_LENGTH', label: '바지기장', bodySection: 'LOWER', valueType: 'NUMERIC', sortOrder: 280 },
+  // 앞마다/뒷마다(股, mata)는 밑아래 재단선으로, FRONT_RISE/BACK_RISE(밑위 길이)와 별개 항목이다.
+  // (설계서 05 §2.1) — 엑셀에서는 신체열이 아니라 하의 추가요청사항(앞/뒤)에 매핑된다.
+  { code: 'FRONT_MADA', label: '앞마다', bodySection: 'LOWER', valueType: 'NUMERIC', sortOrder: 290 },
+  { code: 'BACK_MADA', label: '뒷마다', bodySection: 'LOWER', valueType: 'NUMERIC', sortOrder: 300 },
   // 셔츠
   { code: 'SHIRT_NECK', label: '목', bodySection: 'SHIRT', valueType: 'NUMERIC', sortOrder: 300 },
   { code: 'SHIRT_SHOULDER', label: '어깨', bodySection: 'SHIRT', valueType: 'NUMERIC', sortOrder: 310 },

@@ -319,7 +319,7 @@ describe('수선 (RepairsModule)', () => {
       expect(none.body.page.totalElements).toBe(0);
     });
 
-    it('PATCH로 완료예정일·비용·내용을 수정한다', async () => {
+    it('PATCH로 완료예정일·내용을 수정한다', async () => {
       const { customer } = await seedRepairTargets(ctx.prisma);
       const created = await api(ctx)
         .post('/api/v1/repairs')
@@ -330,10 +330,9 @@ describe('수선 (RepairsModule)', () => {
       const res = await api(ctx)
         .patch(`/api/v1/repairs/${created.body.data.id}`)
         .set(auth(ctx))
-        .send({ dueDate: '2026-08-05', cost: 15000, description: '바지 기장 수선', notes: '급행' })
+        .send({ dueDate: '2026-08-05', description: '바지 기장 수선', notes: '급행' })
         .expect(200);
       expect(res.body.data.description).toBe('바지 기장 수선');
-      expect(Number(res.body.data.cost)).toBe(15000);
       expect(res.body.data.dueDate).toContain('2026-08-05');
       expect(res.body.data.notes).toBe('급행');
     });

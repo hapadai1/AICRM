@@ -1,6 +1,19 @@
-import { Body, Controller, Get, Param, Post, Query, Res } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+  Query,
+  Res,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
 import { AuthUser, CurrentUser, RequirePermission } from '../../common/decorators';
+import { UploadedMulterFile } from '../files/files.service';
 import {
   CreateFittingDto,
   CreateProductionEventDto,
@@ -106,5 +119,36 @@ export class ProductionController {
       `attachment; filename="${encodedName}"; filename*=UTF-8''${encodedName}`,
     );
     res.end(buffer);
+  }
+
+  /**
+   * 가봉 세션 파일 첨부 (설계서 06 §5.4) — 공장 회신/마킹본 보관.
+   * EntityFile(entityType='FITTING_SESSION', purpose='FACTORY_REPLY')로 연결한다.
+   */
+  @Post('fittings/:id/files')
+  @RequirePermission('FITTING_EDIT')
+  @UseInterceptors(FileInterceptor('file'))
+  uploadFittingFile(
+    @Param('id') id: string,
+    @UploadedFile() file: UploadedMulterFile | undefined,
+    @CurrentUser() actor: AuthUser,
+  ) {
+    return this.productionService.uploadFittingFile(id, file, actor);
+  }
+
+  @Get('fittings/:id/files')
+  @RequirePermission('FITTING_VIEW')
+  listFittingFiles(@Param('id') id: string) {
+    return this.productionService.listFittingFiles(id);
+  }
+
+  @Delete('fittings/:id/files/:fileId')
+  @RequirePermission('FITTING_EDIT')
+  removeFittingFile(
+    @Param('id') id: string,
+    @Param('fileId') fileId: string,
+    @CurrentUser() actor: AuthUser,
+  ) {
+    return this.productionService.removeFittingFile(id, fileId, actor);
   }
 }
