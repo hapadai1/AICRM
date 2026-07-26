@@ -454,6 +454,22 @@ export interface RentalCalendarItem {
   size: string;
 }
 
+/**
+ * C5: 렌탈 선택 확정 → 배정 화면 프리필 전달 페이로드 (navigate state).
+ * 자동 배정이 아니라, 배정 모달을 선택 실물·구성품 기본값으로 열기 위한 값만 담는다(날짜는 배정에서 입력).
+ */
+export interface RentalAllocatePrefillEntry {
+  /** 배정 대상 주문 구성품(orderItemComponentId = 배정 API의 componentId) */
+  componentId: string;
+  orderNo: string;
+  customerName: string;
+  item: RentalCalendarItem;
+}
+
+export interface RentalAllocatePrefill {
+  items: RentalAllocatePrefillEntry[];
+}
+
 /** 일자별 가용 집계 (백엔드 availabilityCalendar 반환 배열 요소) */
 export interface RentalCalendarDay {
   date: string;

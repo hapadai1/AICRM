@@ -19,14 +19,15 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs, { type Dayjs } from 'dayjs';
-import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { ApiError } from '../../api/client';
 import {
   RENTAL_COMPONENT_TYPE_LABELS,
   allocateRentalItem,
   fetchAvailabilityCalendar,
   fetchRentalComponentTargets,
+  type RentalAllocatePrefill,
   type RentalCalendarFilters,
   type RentalCalendarItem,
   type RentalComponentType,
@@ -63,6 +64,7 @@ interface AllocateFormValues {
 
 export function RentalAllocatePage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { message } = App.useApp();
   const queryClient = useQueryClient();
   const [form] = Form.useForm<FilterValues>();
@@ -131,16 +133,31 @@ export function RentalAllocatePage() {
     onError: (e) => message.error(e instanceof ApiError ? e.message : '배정에 실패했습니다.'),
   });
 
-  const openAllocate = (item: RentalCalendarItem) => {
+  const openAllocate = (item: RentalCalendarItem, preselectComponentId?: string) => {
     setAllocateItem(item);
     const pickup = selectedDate ? dayjs(selectedDate) : dayjs();
     allocForm.setFieldsValue({
-      componentId: undefined as unknown as string,
+      componentId: (preselectComponentId ?? undefined) as unknown as string,
       pickupDate: pickup,
       returnDueDate: pickup.add(1, 'day'),
       availabilityEndDate: pickup.add(3, 'day'),
     });
   };
+
+  // C5: 렌탈 선택 확정 화면에서 [배정으로]로 넘어온 경우, 첫 선택 실물로 배정 모달을 프리필해 연다.
+  // (자동 생성 아님 — 직원이 기간을 입력하고 배정 버튼을 눌러야 확정된다)
+  useEffect(() => {
+    const prefill = (location.state as { rentalAllocatePrefill?: RentalAllocatePrefill } | null)
+      ?.rentalAllocatePrefill;
+    const first = prefill?.items?.[0];
+    if (first) {
+      openAllocate(first.item, first.componentId);
+      // 새로고침·뒤로가기 시 모달이 다시 열리지 않도록 state를 비운다.
+      navigate('.', { replace: true, state: null });
+    }
+    // 마운트 시 1회만 실행
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const selectedItems = selectedDate ? (byDate.get(selectedDate)?.items ?? []) : [];
 

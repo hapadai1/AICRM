@@ -13,6 +13,9 @@ interface ReauthForm {
   password: string;
 }
 
+/** 개발/데모 편의: 시드 관리자 계정 비밀번호를 미리 채워 "확인"만으로 복귀 가능하게 한다. */
+const DEFAULT_ADMIN_PASSWORD = 'admin1234!';
+
 interface Props {
   open: boolean;
   onCancel: () => void;
@@ -31,6 +34,7 @@ export function ReauthModal({ open, onCancel, onSuccess, onLocked }: Props) {
   useEffect(() => {
     if (open) {
       form.resetFields();
+      form.setFieldsValue({ password: DEFAULT_ADMIN_PASSWORD });
       setError(null);
     }
   }, [open, form]);

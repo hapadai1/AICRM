@@ -7,7 +7,6 @@ import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { JourneysService } from '../journeys/journeys.service';
-import { NotificationSuggestionService } from '../notifications/notification-suggestion.service';
 import {
   CreateRepairDto,
   CreateRepairStatusEventDto,
@@ -27,14 +26,6 @@ export const REPAIR_STATUS_FLOW = [
 ] as const;
 
 const CANCELLED = 'CANCELLED';
-
-/**
- * 고객 연락을 제안할 수선 상태 (개발설계서 05 G-06).
- * 설계 PDF 1페이지 수선 구분의 "고객연락" 업무에 대응한다.
- * 실제 발송 여부는 notification_rules에 규칙이 있을 때만 제안되며,
- * 규칙이 없으면 아무 일도 일어나지 않는다(기존 동작 유지).
- */
-const NOTIFY_STATUSES = ['RECEIVED', 'CUSTOMER_NOTIFIED'];
 
 const CUSTOM_TYPES = ['CUSTOM_DURING', 'AFTER_SALE'];
 const RENTAL_TYPES = ['RENTAL_PRE', 'RENTAL_POST'];
@@ -89,7 +80,6 @@ export class RepairsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
-    private readonly suggestions: NotificationSuggestionService,
     private readonly journeys: JourneysService,
   ) {}
 
@@ -336,26 +326,11 @@ export class RepairsService {
       return event;
     });
 
-    // 연락 대상 상태면 문구를 준비해 화면의 확인창 재료로 함께 돌려준다.
-    // 발송은 별도 요청이므로 발송 실패가 상태 변경을 되돌리지 않는다.
-    // 기존 응답 필드는 그대로 두고 suggestedNotification만 덧붙인다(하위호환).
-    return { ...result, suggestedNotification: await this.buildSuggestion(repair, dto.newStatus) };
-  }
-
-  private async buildSuggestion(
-    repair: { id: string; customerId: string; orderId: string | null },
-    newStatus: string,
-  ) {
-    if (!NOTIFY_STATUSES.includes(newStatus)) return null;
-    const templateId = await this.suggestions.templateIdForTrigger(`REPAIR:${newStatus}`);
-    if (!templateId) return null;
-    return this.suggestions.build({
-      templateId,
-      customerId: repair.customerId,
-      orderId: repair.orderId,
-      // 같은 수선의 같은 상태는 한 번만 발송된다.
-      triggerKey: `repair:${repair.id}:${newStatus}`,
-    });
+    // D8 일원화(설계서 02 §8·§10.3 #5): 수선 고객 연락 제안은 REPAIR 진행(journey)
+    // REPAIR_CHECKED_IN 단계 진입에서만 만든다. 상태변경 기반 자동 제안은 제거해 이중 노출을 없앤다.
+    // notification_rules(REPAIR:*)·템플릿은 물리삭제하지 않고 존치(미사용).
+    // 응답 필드는 하위호환을 위해 유지하되 항상 null(연락은 진행 카드에서).
+    return { ...result, suggestedNotification: null };
   }
 
   /**

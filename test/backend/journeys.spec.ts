@@ -522,6 +522,13 @@ describe('진행 단계 (JOURNEY) — v2 재정의', () => {
         version: 1,
       }).expect(201);
       expect(advanced.body.data.journey.currentStageCode).toBe('REPAIR_CHECKED_IN');
+      // D8 일원화(설계서 02 §8·§10.3 #5): 수선 고객 연락 제안은 이 진행(journey) 경로에서만 만든다.
+      // repairs 상태변경 경로의 자동 제안은 제거됐다(repairs.spec.ts 참조).
+      const s = advanced.body.data.suggestedNotification;
+      expect(s).toMatchObject({
+        templateCode: 'JOURNEY_REPAIR_CHECKED_IN',
+        triggerKey: `journey:${journeyId}:REPAIR_CHECKED_IN`,
+      });
     });
 
     it('상세 응답의 REPAIR_ITEMS 단계에도 게이팅 대상이 해석된다 (4단계)', async () => {
