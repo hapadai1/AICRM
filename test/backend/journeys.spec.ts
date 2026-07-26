@@ -468,4 +468,110 @@ describe('진행 단계 (JOURNEY) — v2 재정의', () => {
     expect(res.body.data[0]).toHaveProperty('currentStageName');
     expect(res.body.data[0].customerId).toBe(customerId);
   });
+
+  // ---------------------------------------------------------------------------
+  // REPAIR 트랙 — 수선 진행 (설계서 02 §7.2·§9.2)
+  // ---------------------------------------------------------------------------
+
+  describe('REPAIR 트랙', () => {
+    /** 수선 접수 → REPAIR 진행 자동생성. 접수건 id와 자동생성된 진행 id를 돌려준다. */
+    async function createRepairJourney() {
+      const repair = await api(ctx)
+        .post('/api/v1/repairs')
+        .set(auth(ctx))
+        .send({ customerId, repairType: 'GENERAL', requestDate: '2026-07-21', description: '바지 기장 수선' })
+        .expect(201);
+      const repairId = repair.body.data.id;
+      const journey = await ctx.prisma.customerJourney.findFirstOrThrow({
+        where: { sourceRepairRequestId: repairId },
+      });
+      return { repairId, journeyId: journey.id };
+    }
+
+    it('접수 자동완료 → 요청 단계 품목완료 → 게이팅 통과로 전진한다', async () => {
+      const { repairId, journeyId } = await createRepairJourney();
+
+      // AUTO(REPAIR_RECEIVED)에서 GATED(REPAIR_REQUESTED)로 게이팅 없이 진입
+      await changeStage(journeyId, { toStageCode: 'REPAIR_REQUESTED', version: 0 }).expect(201);
+
+      // 대상 = 그 수선요청 1건 (RepairRequest 1건 = journey 1건, 기본안)
+      const items = await api(ctx)
+        .get(`/api/v1/journeys/${journeyId}/stages/REPAIR_REQUESTED/items`)
+        .set(auth(ctx))
+        .expect(200);
+      expect(items.body.data.items).toHaveLength(1);
+      expect(items.body.data.items[0]).toMatchObject({ targetId: repairId, targetType: 'REPAIR_ITEM' });
+      expect(items.body.data.gating).toMatchObject({ targetCount: 1, completedCount: 0, canComplete: false });
+
+      // 미완료 전진 → 422
+      const blocked = await changeStage(journeyId, { toStageCode: 'REPAIR_CHECKED_IN', version: 1 });
+      expect(blocked.status).toBe(422);
+      expect(blocked.body.error.code).toBe('STAGE_NOT_COMPLETE');
+
+      // 수선요청 품목 완료 → 게이팅 개방
+      const done = await api(ctx)
+        .post(`/api/v1/journeys/${journeyId}/stages/REPAIR_REQUESTED/items/${repairId}/complete`)
+        .set(auth(ctx))
+        .send({})
+        .expect(201);
+      expect(done.body.data.gating).toMatchObject({ completedCount: 1, canComplete: true });
+
+      // 전진 성공
+      const advanced = await changeStage(journeyId, {
+        toStageCode: 'REPAIR_CHECKED_IN',
+        version: 1,
+      }).expect(201);
+      expect(advanced.body.data.journey.currentStageCode).toBe('REPAIR_CHECKED_IN');
+    });
+
+    it('상세 응답의 REPAIR_ITEMS 단계에도 게이팅 대상이 해석된다 (4단계)', async () => {
+      const { journeyId } = await createRepairJourney();
+      const detail = await api(ctx).get(`/api/v1/journeys/${journeyId}`).set(auth(ctx)).expect(200);
+      expect(detail.body.data.stages).toHaveLength(4);
+      const requested = detail.body.data.stages.find((s: { code: string }) => s.code === 'REPAIR_REQUESTED');
+      expect(requested).toMatchObject({ targetCount: 1, completedCount: 0, canComplete: false });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // CONSULT_RESERVED 자동종료 지연평가 힌트 (설계서 02 §9.2·§10.3)
+  // ---------------------------------------------------------------------------
+
+  describe('CONSULT_RESERVED 자동종료(expired) 힌트', () => {
+    it('예약 후 임계 일수가 지나고 계약이 없으면 expired 힌트가 붙는다 (get·list)', async () => {
+      const created = await createJourney(); // CONSULT_RESERVED, orderId 없음
+      const id = created.body.data.id;
+
+      // 최근 시작 → 아직 만료 아님
+      const fresh = await api(ctx).get(`/api/v1/journeys/${id}`).set(auth(ctx)).expect(200);
+      expect(fresh.body.data.expired).toBe(false);
+
+      // 예약(시작)일을 임계 일수 이전으로 되돌려 지연평가를 시뮬레이션한다.
+      await ctx.prisma.customerJourney.update({
+        where: { id },
+        data: { startedAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+      });
+      const stale = await api(ctx).get(`/api/v1/journeys/${id}`).set(auth(ctx)).expect(200);
+      expect(stale.body.data.expired).toBe(true);
+
+      const list = await api(ctx)
+        .get(`/api/v1/journeys?customerId=${customerId}&stageCodes=CONSULT_RESERVED`)
+        .set(auth(ctx))
+        .expect(200);
+      const listed = list.body.data.find((j: { id: string }) => j.id === id);
+      expect(listed.expired).toBe(true);
+    });
+
+    it('계약(주문)이 연결되면 오래되어도 만료로 보지 않는다', async () => {
+      const { order } = await createOrderWithItems(ctx.prisma, customerId, adminId, 1);
+      const created = await createJourney({ orderId: order.id });
+      const id = created.body.data.id;
+      await ctx.prisma.customerJourney.update({
+        where: { id },
+        data: { startedAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+      });
+      const detail = await api(ctx).get(`/api/v1/journeys/${id}`).set(auth(ctx)).expect(200);
+      expect(detail.body.data.expired).toBe(false);
+    });
+  });
 });

@@ -284,13 +284,15 @@ const RENTAL_COLORS: Array<{ code: string; name: string }> = [
   { code: 'GREEN', name: '그린' },
 ];
 
-// 렌탈 사이즈 (v2 D3 / 설계서 04 §5.2·M3)
+// 렌탈 사이즈 (v2 D3 / 설계서 04 §5.2·M3, F3: 호수 체계로 확정)
 const RENTAL_SIZES: Array<{ code: string; name: string }> = [
-  { code: 'S', name: 'S' },
-  { code: 'M', name: 'M' },
-  { code: 'L', name: 'L' },
-  { code: 'XL', name: 'XL' },
-  { code: 'XXL', name: 'XXL' },
+  { code: '90', name: '90호' },
+  { code: '95', name: '95호' },
+  { code: '100', name: '100호' },
+  { code: '105', name: '105호' },
+  { code: '110', name: '110호' },
+  { code: '115', name: '115호' },
+  { code: '120', name: '120호' },
 ];
 
 async function seedRentalColors(): Promise<void> {
@@ -314,7 +316,13 @@ async function seedRentalSizes(): Promise<void> {
       create: { id: randomUUID(), code: s.code, name: s.name, sortOrder: i + 1, active: true },
     });
   }
-  console.log(`rental_sizes: ${RENTAL_SIZES.length}건`);
+  // F3: S~XXL 등 예전 사이즈 행은 물리삭제하지 않고 비활성 처리(호수 체계로 전환).
+  const codes = RENTAL_SIZES.map((s) => s.code);
+  const deactivated = await prisma.rentalSize.updateMany({
+    where: { code: { notIn: codes }, active: true },
+    data: { active: false },
+  });
+  console.log(`rental_sizes: ${RENTAL_SIZES.length}건 (예전 사이즈 ${deactivated.count}건 비활성)`);
 }
 
 async function seedOptionSets(): Promise<void> {

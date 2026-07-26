@@ -1,13 +1,17 @@
 import { SearchOutlined } from '@ant-design/icons';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  App,
   Badge,
   Button,
   Calendar,
   Card,
+  DatePicker,
+  Descriptions,
   Empty,
   Form,
   Input,
+  Modal,
   Select,
   Space,
   Table,
@@ -17,9 +21,12 @@ import type { ColumnsType } from 'antd/es/table';
 import dayjs, { type Dayjs } from 'dayjs';
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { ApiError } from '../../api/client';
 import {
   RENTAL_COMPONENT_TYPE_LABELS,
+  allocateRentalItem,
   fetchAvailabilityCalendar,
+  fetchRentalComponentTargets,
   type RentalCalendarFilters,
   type RentalCalendarItem,
   type RentalComponentType,
@@ -47,13 +54,25 @@ function countColor(count: number): string {
  * 월 캘린더에 일자별 가용 렌탈용품 수를 배지로 표기하고, 검색어·SKU·구분 등으로 필터한다.
  * 날짜 셀을 누르면 그 날짜에 가용한 실물 목록을 하단에 펼친다. (표시용 — 정합성은 배정 시 DB 제약이 보장)
  */
+interface AllocateFormValues {
+  componentId: string;
+  pickupDate: Dayjs;
+  returnDueDate: Dayjs;
+  availabilityEndDate: Dayjs;
+}
+
 export function RentalAllocatePage() {
   const navigate = useNavigate();
+  const { message } = App.useApp();
+  const queryClient = useQueryClient();
   const [form] = Form.useForm<FilterValues>();
+  const [allocForm] = Form.useForm<AllocateFormValues>();
 
   const [month, setMonth] = useState<Dayjs>(dayjs());
   const [filters, setFilters] = useState<FilterValues>({});
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  // 배정 실행 대상 실물 (달력에서 [배정] 클릭 시 설정) — 모달을 연다.
+  const [allocateItem, setAllocateItem] = useState<RentalCalendarItem | null>(null);
 
   const from = month.startOf('month').format('YYYY-MM-DD');
   const to = month.endOf('month').format('YYYY-MM-DD');
@@ -78,6 +97,51 @@ export function RentalAllocatePage() {
     setSelectedDate(null);
   };
 
+  // 배정 대상 렌탈 주문 구성품 — 선택한 실물과 같은 구분(componentType)의 미배정 구성품만 노출.
+  const targetsQuery = useQuery({
+    queryKey: ['rentals', 'order-components', allocateItem?.componentType],
+    queryFn: () => fetchRentalComponentTargets(),
+    enabled: !!allocateItem,
+  });
+  const allocatableTargets = useMemo(
+    () =>
+      (targetsQuery.data ?? []).filter(
+        (t) => t.componentType === allocateItem?.componentType && t.currentAllocation === null,
+      ),
+    [targetsQuery.data, allocateItem],
+  );
+
+  const allocateMutation = useMutation({
+    mutationFn: (v: AllocateFormValues) => {
+      const target = allocatableTargets.find((t) => t.componentId === v.componentId);
+      if (!target) throw new Error('배정 대상 구성품을 찾을 수 없습니다.');
+      return allocateRentalItem(target.orderId, {
+        componentId: v.componentId,
+        inventoryItemId: allocateItem!.id,
+        pickupDate: v.pickupDate.format('YYYY-MM-DD'),
+        returnDueDate: v.returnDueDate.format('YYYY-MM-DD'),
+        availabilityEndDate: v.availabilityEndDate.format('YYYY-MM-DD'),
+      });
+    },
+    onSuccess: (alloc) => {
+      message.success(`관리 ID ${alloc.managementCode} 배정되었습니다.`);
+      setAllocateItem(null);
+      void queryClient.invalidateQueries({ queryKey: ['rentals'] });
+    },
+    onError: (e) => message.error(e instanceof ApiError ? e.message : '배정에 실패했습니다.'),
+  });
+
+  const openAllocate = (item: RentalCalendarItem) => {
+    setAllocateItem(item);
+    const pickup = selectedDate ? dayjs(selectedDate) : dayjs();
+    allocForm.setFieldsValue({
+      componentId: undefined as unknown as string,
+      pickupDate: pickup,
+      returnDueDate: pickup.add(1, 'day'),
+      availabilityEndDate: pickup.add(3, 'day'),
+    });
+  };
+
   const selectedItems = selectedDate ? (byDate.get(selectedDate)?.items ?? []) : [];
 
   const columns: ColumnsType<RentalCalendarItem> = [
@@ -96,6 +160,16 @@ export function RentalAllocatePage() {
       render: (v: string, r) => (
         <Button type="link" style={{ padding: 0 }} onClick={() => navigate(`/rentals/${r.id}`)}>
           {v}
+        </Button>
+      ),
+    },
+    {
+      title: '배정',
+      key: 'allocate',
+      width: 90,
+      render: (_, r) => (
+        <Button size="small" type="primary" onClick={() => openAllocate(r)}>
+          배정
         </Button>
       ),
     },
@@ -189,6 +263,82 @@ export function RentalAllocatePage() {
           <Empty description="달력에서 날짜를 선택하면 그날 가용한 실물이 표시됩니다." image={Empty.PRESENTED_IMAGE_SIMPLE} />
         )}
       </Card>
+
+      {/* 배정 실행 모달: 실물 → 렌탈 주문·구성품 선택 + 대여 기간 → 배정 생성 */}
+      <Modal
+        title={allocateItem ? `배정 — ${allocateItem.managementCode}` : '배정'}
+        open={!!allocateItem}
+        onCancel={() => setAllocateItem(null)}
+        onOk={() => allocForm.submit()}
+        okText="배정"
+        cancelText="취소"
+        confirmLoading={allocateMutation.isPending}
+        destroyOnClose
+      >
+        {allocateItem && (
+          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            <Descriptions size="small" bordered column={1}>
+              <Descriptions.Item label="실물">
+                <Typography.Text strong>{allocateItem.managementCode}</Typography.Text>
+              </Descriptions.Item>
+              <Descriptions.Item label="규격">
+                {RENTAL_COMPONENT_TYPE_LABELS[allocateItem.componentType] ?? allocateItem.componentType} ·{' '}
+                {allocateItem.design} · {allocateItem.color} · {allocateItem.size}
+              </Descriptions.Item>
+            </Descriptions>
+
+            <Form<AllocateFormValues>
+              form={allocForm}
+              layout="vertical"
+              onFinish={(values) => allocateMutation.mutate(values)}
+            >
+              <Form.Item
+                name="componentId"
+                label="렌탈 주문·구성품 (동일 구분의 미배정 건)"
+                rules={[{ required: true, message: '배정할 주문 구성품을 선택해 주세요.' }]}
+              >
+                <Select
+                  showSearch
+                  loading={targetsQuery.isLoading}
+                  placeholder="주문 구성품 선택"
+                  optionFilterProp="label"
+                  notFoundContent={
+                    targetsQuery.isLoading ? '조회 중…' : '배정 가능한 주문 구성품이 없습니다.'
+                  }
+                  options={allocatableTargets.map((t) => ({
+                    value: t.componentId,
+                    label: `${t.customerName} · ${t.orderNo} · ${t.displayName}`,
+                  }))}
+                />
+              </Form.Item>
+              <Form.Item
+                name="pickupDate"
+                label="픽업일"
+                rules={[{ required: true, message: '픽업일을 선택해 주세요.' }]}
+              >
+                <DatePicker style={{ width: '100%' }} />
+              </Form.Item>
+              <Form.Item
+                name="returnDueDate"
+                label="반납 예정일"
+                rules={[{ required: true, message: '반납 예정일을 선택해 주세요.' }]}
+              >
+                <DatePicker style={{ width: '100%' }} />
+              </Form.Item>
+              <Form.Item
+                name="availabilityEndDate"
+                label="가용 종료일 (정비 포함 다음 대여 가능 시점)"
+                rules={[{ required: true, message: '가용 종료일을 선택해 주세요.' }]}
+              >
+                <DatePicker style={{ width: '100%' }} />
+              </Form.Item>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                픽업일 ≤ 반납 예정일 ≤ 가용 종료일 순서를 지켜야 합니다.
+              </Typography.Text>
+            </Form>
+          </Space>
+        )}
+      </Modal>
     </Space>
   );
 }

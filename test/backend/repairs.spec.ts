@@ -1,4 +1,6 @@
 import { randomUUID } from 'crypto';
+import { AuthUser } from '../../backend/src/common/decorators';
+import { JourneysService } from '../../backend/src/modules/journeys/journeys.service';
 import { RepairsModule } from '../../backend/src/modules/repairs/repairs.module';
 import { PrismaService } from '../../backend/src/prisma/prisma.service';
 import { api, auth, createTestContext, TestContext, truncateBusinessData } from './helpers';
@@ -214,6 +216,48 @@ describe('수선 (RepairsModule)', () => {
         .send({ customerId: customer.id, repairType: 'GENERAL', requestDate: '2026-07-21' })
         .expect(400);
       expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    });
+  });
+
+  describe('REPAIR 진행 자동생성 (설계서 02 §7.2·§9.2)', () => {
+    it('수선 접수 시 REPAIR 진행이 자동 생성되고 REPAIR_RECEIVED에서 시작한다', async () => {
+      const { customer } = await seedRepairTargets(ctx.prisma);
+      const repairId = await createGeneralRepair(customer.id);
+
+      const journeys = await ctx.prisma.customerJourney.findMany({
+        where: { sourceRepairRequestId: repairId },
+      });
+      expect(journeys).toHaveLength(1);
+      expect(journeys[0]).toMatchObject({
+        trackType: 'REPAIR',
+        // REPAIR_RECEIVED는 AUTO 단계 — 접수 등록이 곧 자동완료.
+        currentStageCode: 'REPAIR_RECEIVED',
+        status: 'ACTIVE',
+        customerId: customer.id,
+        orderId: null,
+      });
+    });
+
+    it('같은 수선요청으로 진행을 다시 만들어도 중복되지 않는다 (멱등)', async () => {
+      const { admin, customer } = await seedRepairTargets(ctx.prisma);
+      const repairId = await createGeneralRepair(customer.id);
+
+      const journeysService = ctx.app.get(JourneysService);
+      const actor: AuthUser = {
+        id: admin.id,
+        loginId: 'admin',
+        displayName: '관리자',
+        permissions: [],
+      };
+      const result = await ctx.prisma.$transaction((tx) =>
+        journeysService.createRepairJourney(tx, customer.id, repairId, actor),
+      );
+      expect(result.created).toBe(false);
+
+      const journeys = await ctx.prisma.customerJourney.findMany({
+        where: { sourceRepairRequestId: repairId },
+      });
+      expect(journeys).toHaveLength(1);
     });
   });
 

@@ -1067,6 +1067,8 @@ model RepairRequest {
   component           OrderItemComponent?  @relation(fields: [componentId], references: [id])
   rentalInventoryItem RentalInventoryItem? @relation(fields: [rentalInventoryItemId], references: [id])
   statusEvents        RepairStatusEvent[]
+  // 수선 접수 시 자동 생성되는 REPAIR 진행 트랙 (설계서 02 §7.2·§9.2). 접수 1건 = 진행 1건.
+  journey             CustomerJourney?     @relation("RepairJourney")
 
   @@index([requestDate])
   @@index([dueDate, status])
@@ -1272,25 +1274,31 @@ model JourneyStage {
  * 거래 1건의 진행. 계약 전에는 orderId가 비어 있다.
  */
 model CustomerJourney {
-  id               String    @id @db.Uuid
-  customerId       String    @map("customer_id") @db.Uuid
-  orderId          String?   @map("order_id") @db.Uuid
-  trackType        String    @map("track_type") @db.VarChar(20)
-  currentStageCode String    @map("current_stage_code") @db.VarChar(30)
+  id                    String    @id @db.Uuid
+  customerId            String    @map("customer_id") @db.Uuid
+  orderId               String?   @map("order_id") @db.Uuid
+  /**
+   * REPAIR 트랙의 원천 수선요청. 수선 접수 시 자동 생성되며, CUSTOM/RENTAL 진행에서는 비어 있다.
+   * (설계서 02 §7.2 — 수선 대상은 order가 아니라 RepairRequest이므로 orderId 대신 이 참조로 대상을 해석한다)
+   */
+  sourceRepairRequestId String?   @unique @map("source_repair_request_id") @db.Uuid
+  trackType             String    @map("track_type") @db.VarChar(20)
+  currentStageCode      String    @map("current_stage_code") @db.VarChar(30)
   /**
    * ACTIVE | COMPLETED | CANCELLED
    */
-  status           String    @default("ACTIVE") @map("status") @db.VarChar(20)
-  startedAt        DateTime  @map("started_at") @db.Timestamptz(6)
-  completedAt      DateTime? @map("completed_at") @db.Timestamptz(6)
-  rowVersion       Int       @default(0) @map("row_version")
-  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  status                String    @default("ACTIVE") @map("status") @db.VarChar(20)
+  startedAt             DateTime  @map("started_at") @db.Timestamptz(6)
+  completedAt           DateTime? @map("completed_at") @db.Timestamptz(6)
+  rowVersion            Int       @default(0) @map("row_version")
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  customer        Customer                     @relation(fields: [customerId], references: [id])
-  order           Order?                       @relation(fields: [orderId], references: [id])
-  events          JourneyEvent[]
-  itemCompletions JourneyStageItemCompletion[]
+  customer            Customer                     @relation(fields: [customerId], references: [id])
+  order               Order?                       @relation(fields: [orderId], references: [id])
+  sourceRepairRequest RepairRequest?               @relation("RepairJourney", fields: [sourceRepairRequestId], references: [id])
+  events              JourneyEvent[]
+  itemCompletions     JourneyStageItemCompletion[]
 
   @@index([customerId, startedAt(sort: Desc)])
   @@index([status, currentStageCode])

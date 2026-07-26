@@ -49,3 +49,9 @@ export const NOTIFICATION_OUTCOMES = ['NONE', 'SENT', 'DEFERRED', 'SKIPPED'] as 
 
 /** 진행 현황 보드에서 "정체"로 강조할 기본 일수 (설계서 05 §9-2) */
 export const DEFAULT_STALLED_DAYS = 7;
+
+/**
+ * 상담 예약(CONSULT_RESERVED) 자동종료 지연평가 임계 일수 (설계서 02 §9.2·§10.3).
+ * 스케줄러 없이 get()/list() 응답에 expired 힌트만 얹는다(실제 status 변경 없음, 화면 표기용).
+ */
+export const CONSULT_RESERVED_EXPIRE_DAYS = 14;
