@@ -8,6 +8,7 @@ import { renderWorksheetHtml } from './work-order-html';
 import {
   BODY_COLUMN,
   CELL,
+  FINISH_INCH_COLUMN,
   LOWER_MEASUREMENT_ROWS,
   LOWER_NOTE_MEASUREMENT_MAP,
   MEASUREMENT_ROW_MAP,
@@ -292,8 +293,7 @@ function applyOption(ws: ExcelJS.Worksheet, option: WorkOrderExcelOption): boole
  *  - lowerNotes: 앞마다/뒷마다처럼 하의 추가요청사항(AA75)에 "앞: n"으로 적을 라벨 값
  *    (설계서 05 §2.2)
  *
- * TODO(설계서 05 M1): cm↔inch 완성(인치) 열 매핑은 완성인치 열 좌표(FINISH_INCH_COLUMN)
- * 미확정이라 이번 범위에서 제외한다. 좌표 확정 후 신체열과 동일 행 다른 열에 round(cm/2.54,1) 기입.
+ * cm↔inch(설계서 05 §3): 신체(F)=cm 원값, 완성(인치)(P)=round(cm/2.54,1). 항목 행 동일.
  */
 function applyMeasurements(
   ws: ExcelJS.Worksheet,
@@ -319,6 +319,14 @@ function applyMeasurements(
     const text = printed ? `${printed} ${m.value}` : m.value;
     cell.value = text;
     fitFontSize(ws, address, text);
+
+    // 완성(인치) 열: 수치형이면 cm→inch(소수1자리) 기입 (설계서 05 §3)
+    const cm = Number(String(m.value).replace(/[^\d.-]/g, ''));
+    if (Number.isFinite(cm) && cm > 0) {
+      const inchAddress = `${FINISH_INCH_COLUMN}${row}`;
+      const inch = Math.round((cm / 2.54) * 10) / 10;
+      ws.getCell(inchAddress).value = inch;
+    }
   }
   return { unmapped, lowerNotes };
 }

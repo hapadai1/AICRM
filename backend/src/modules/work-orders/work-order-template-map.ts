@@ -81,6 +81,13 @@ export const CELL = {
 /** 채촌 표: 코드 → 행 번호. 값은 '신체' 열(F)에 쓴다(채촌=신체 치수). */
 export const BODY_COLUMN = 'F';
 
+/**
+ * '완성(인치)' 열 (설계서 05 §3, 요건 "완성(인치): inch 변환 출력").
+ * 양식 '작업지시서 (송파)'에서 완성(인치) 헤더는 P20/P60(P:T 병합), 값 셀은 각 항목 행의
+ * 병합 블록 좌상단 P{row}. 신체(F)=cm, 완성(인치)=P에 round(cm/2.54,1) 기입. (완성(센치)=U)
+ */
+export const FINISH_INCH_COLUMN = 'P';
+
 export const UPPER_MEASUREMENT_ROWS: ReadonlyArray<readonly [string, number]> = [
   ['JACKET_LENGTH', 21],
   ['SHOULDER', 23],

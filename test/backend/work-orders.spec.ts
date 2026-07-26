@@ -664,8 +664,9 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
       // 인쇄된 매장명은 그대로 두고 값 칸만 채운다
       expect(ws.getCell('L1').value).toBe('슈트에이전시(강남본점)');
       expect(String(ws.getCell('AP1').value)).toContain('테스트고객');
-      // 채촌 WAIST → 하의 '허리' 행의 신체 열(F61)
+      // 채촌 WAIST → 하의 '허리' 행의 신체 열(F61)=cm, 완성(인치) 열(P61)=round(84/2.54,1) (설계서 05 §3)
       expect(String(ws.getCell('F61').value)).toBe('84');
+      expect(Number(ws.getCell('P61').value)).toBeCloseTo(33.1, 1);
       // 양식에 칸이 없는 채촌 항목(CHEST·SLEEVE)은 버리지 않고 추가요청사항으로 옮긴다
       expect(String(ws.getCell('AA41').value)).toContain('[치수]');
     });
