@@ -34,7 +34,9 @@ export function ReauthModal({ open, onCancel, onSuccess, onLocked }: Props) {
   useEffect(() => {
     if (open) {
       form.resetFields();
-      form.setFieldsValue({ password: DEFAULT_ADMIN_PASSWORD });
+      if (import.meta.env.DEV) {
+        form.setFieldsValue({ password: DEFAULT_ADMIN_PASSWORD });
+      }
       setError(null);
     }
   }, [open, form]);
