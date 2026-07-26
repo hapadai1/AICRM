@@ -7,7 +7,7 @@ import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { NotificationSuggestionService } from '../notifications/notification-suggestion.service';
-import { DEFAULT_STALLED_DAYS } from './journeys.constants';
+import { CONSULT_RESERVED_EXPIRE_DAYS, DEFAULT_STALLED_DAYS } from './journeys.constants';
 import { computeGating, type GatingResult } from './journey-gating';
 import {
   ChangeStageDto,
@@ -23,6 +23,7 @@ const JOURNEY_SELECT = {
   id: true,
   customerId: true,
   orderId: true,
+  sourceRepairRequestId: true,
   trackType: true,
   currentStageCode: true,
   status: true,
@@ -34,6 +35,15 @@ const JOURNEY_SELECT = {
   customer: { select: { id: true, name: true, phone: true, customerStatus: true } },
   order: { select: { id: true, orderNo: true, transactionType: true } },
 } satisfies Prisma.CustomerJourneySelect;
+
+/** 수선 유형 라벨 — REPAIR 트랙 대상 품목 표시명에 쓴다 (repairs.dto REPAIR_TYPES와 대응). */
+const REPAIR_TYPE_LABELS: Record<string, string> = {
+  CUSTOM_DURING: '맞춤 수선',
+  AFTER_SALE: 'A/S 수선',
+  RENTAL_PRE: '렌탈 전 수선',
+  RENTAL_POST: '렌탈 후 수선',
+  GENERAL: '일반 수선',
+};
 
 const EVENT_SELECT = {
   id: true,
@@ -79,6 +89,21 @@ function toJourneyView(row: JourneyRow, stages: StageRow[]) {
     version: row.rowVersion,
     updatedAt: row.updatedAt,
   };
+}
+
+/**
+ * 상담 예약 자동종료 지연평가 (설계서 02 §9.2·§10.3).
+ * ACTIVE인 CONSULT_RESERVED 단계이고, 아직 계약(주문 연결)이 없으며, 예약 후 임계 일수가 지났으면
+ * 화면 표기용 expired 힌트를 준다. 실제 status는 바꾸지 않는다(스케줄러 없음, 플래그만).
+ */
+function isConsultReservedExpired(
+  row: Pick<JourneyRow, 'currentStageCode' | 'status' | 'orderId' | 'startedAt'>,
+  now: number = Date.now(),
+): boolean {
+  if (row.status !== 'ACTIVE' || row.currentStageCode !== 'CONSULT_RESERVED' || row.orderId != null)
+    return false;
+  const ageDays = (now - row.startedAt.getTime()) / (24 * 60 * 60 * 1000);
+  return ageDays > CONSULT_RESERVED_EXPIRE_DAYS;
 }
 
 @Injectable()
@@ -177,7 +202,7 @@ export class JourneysService {
    * - REPAIR_ITEMS: 수선요청(RepairRequest) — REPAIR 트랙(S6에서 연결)
    */
   private async resolveTargets(
-    journey: Pick<JourneyRow, 'orderId'>,
+    journey: Pick<JourneyRow, 'orderId' | 'sourceRepairRequestId'>,
     stage: Pick<StageRow, 'targetScope'>,
   ): Promise<{
     targetType: 'ORDER_ITEM' | 'REPAIR_ITEM' | null;
@@ -193,15 +218,46 @@ export class JourneysService {
       return { targetType: 'ORDER_ITEM', targets: items };
     }
     if (stage.targetScope === 'REPAIR_ITEMS') {
-      // REPAIR 트랙 대상 해석은 수선 모듈 연동(S6)에서 채운다. 그 전까지 게이팅 대상 없음.
-      return { targetType: 'REPAIR_ITEM', targets: [] };
+      // 기본안(설계서 02 §7.2): RepairRequest 1건 = journey 1건 → 대상 품목 = 그 수선요청 1건.
+      if (!journey.sourceRepairRequestId) return { targetType: 'REPAIR_ITEM', targets: [] };
+      const repair = await this.prisma.repairRequest.findUnique({
+        where: { id: journey.sourceRepairRequestId },
+        select: {
+          id: true,
+          repairType: true,
+          description: true,
+          status: true,
+          orderItem: { select: { displayName: true, productCategory: true } },
+          component: { select: { componentType: true } },
+          rentalInventoryItem: { select: { managementCode: true } },
+        },
+      });
+      if (!repair) return { targetType: 'REPAIR_ITEM', targets: [] };
+      const label = REPAIR_TYPE_LABELS[repair.repairType] ?? repair.repairType;
+      // 연결 대상명: 맞춤 품목 > 렌탈 실물 > 구성품 > 대상 설명 순으로 채운다.
+      const linkedName =
+        repair.orderItem?.displayName ??
+        repair.rentalInventoryItem?.managementCode ??
+        repair.component?.componentType ??
+        repair.description;
+      return {
+        targetType: 'REPAIR_ITEM',
+        targets: [
+          {
+            id: repair.id,
+            displayName: `${label} · ${linkedName}`,
+            productCategory: repair.orderItem?.productCategory ?? 'REPAIR',
+            status: repair.status,
+          },
+        ],
+      };
     }
     return { targetType: null, targets: [] };
   }
 
   /** 단계 게이팅 현황 계산 (대상 품목 vs 완료 기록). */
   private async gatingOf(
-    journey: Pick<JourneyRow, 'id' | 'orderId'>,
+    journey: Pick<JourneyRow, 'id' | 'orderId' | 'sourceRepairRequestId'>,
     stage: Pick<StageRow, 'code' | 'completionMode' | 'targetScope'>,
   ): Promise<GatingResult> {
     const mode = stage.completionMode === 'AUTO' ? 'AUTO' : 'GATED';
@@ -442,6 +498,55 @@ export class JourneysService {
     return toJourneyView(journey, stages);
   }
 
+  /**
+   * 수선 접수 시 REPAIR 진행을 자동 생성한다 (설계서 02 §7.2·§9.2).
+   * REPAIR_RECEIVED는 AUTO 단계 — 접수 등록이 곧 자동완료다(추가 품목완료 불필요).
+   * 같은 수선요청으로 이미 진행이 있으면 그대로 둔다(멱등).
+   * repairs.create 트랜잭션에서 호출되므로 그 tx 위에서 실행한다.
+   */
+  async createRepairJourney(
+    tx: Prisma.TransactionClient,
+    customerId: string,
+    repairRequestId: string,
+    actor: AuthUser,
+  ): Promise<{ id: string; created: boolean }> {
+    // sourceRepairRequestId는 unique이므로 상태 무관 1건만 존재 — 있으면 그대로 둔다(멱등).
+    const existing = await tx.customerJourney.findUnique({
+      where: { sourceRepairRequestId: repairRequestId },
+      select: { id: true },
+    });
+    if (existing) return { id: existing.id, created: false };
+
+    const journey = await tx.customerJourney.create({
+      data: {
+        id: randomUUID(),
+        customerId,
+        orderId: null,
+        sourceRepairRequestId: repairRequestId,
+        trackType: 'REPAIR',
+        currentStageCode: 'REPAIR_RECEIVED',
+        status: 'ACTIVE',
+        startedAt: new Date(),
+      },
+      select: { id: true },
+    });
+    await this.audit.log(
+      {
+        userId: actor.id,
+        action: 'CREATE',
+        entityType: 'CUSTOMER_JOURNEY',
+        entityId: journey.id,
+        after: {
+          trackType: 'REPAIR',
+          currentStageCode: 'REPAIR_RECEIVED',
+          sourceRepairRequestId: repairRequestId,
+        },
+      },
+      tx,
+    );
+    return { id: journey.id, created: true };
+  }
+
   async listByCustomer(customerId: string) {
     const rows = await this.prisma.customerJourney.findMany({
       where: { customerId },
@@ -480,7 +585,8 @@ export class JourneysService {
         ? await this.buildSuggestion(row, currentStage, enteringEvent.id)
         : null;
 
-    // 게이팅: 대상 품목은 트랙 내 GATED 단계가 공유(= 주문 활성 품목)하므로 한 번만 해석한다.
+    // 게이팅: 대상 품목은 트랙 내 GATED 단계가 공유하므로 한 번만 해석한다.
+    // CUSTOM/RENTAL = 주문 활성 품목, REPAIR = 원천 수선요청(설계서 02 §7.2).
     const orderTargets =
       row.orderId != null
         ? await this.prisma.orderItem.findMany({
@@ -489,6 +595,10 @@ export class JourneysService {
           })
         : [];
     const orderTargetIds = orderTargets.map((t) => t.id);
+    const repairTargetIds =
+      row.sourceRepairRequestId != null
+        ? (await this.resolveTargets(row, { targetScope: 'REPAIR_ITEMS' })).targets.map((t) => t.id)
+        : [];
     const completions = await this.prisma.journeyStageItemCompletion.findMany({
       where: { journeyId: id },
       select: { stageCode: true, targetId: true, revokedAt: true },
@@ -509,8 +619,12 @@ export class JourneysService {
     }
 
     const stagesView = stages.map((s) => {
-      // REPAIR_ITEMS 대상은 아직 미연동(S6) → 빈 대상. 그 외 GATED는 주문 품목 공유.
-      const targetIds = s.targetScope === 'ORDER_ITEMS' ? orderTargetIds : [];
+      const targetIds =
+        s.targetScope === 'ORDER_ITEMS'
+          ? orderTargetIds
+          : s.targetScope === 'REPAIR_ITEMS'
+            ? repairTargetIds
+            : [];
       const gating = computeGating(
         s.code,
         s.completionMode === 'AUTO' ? 'AUTO' : 'GATED',
@@ -535,6 +649,8 @@ export class JourneysService {
 
     return {
       ...toJourneyView(row, stages),
+      // 상담 예약 자동종료 지연평가 힌트(화면 표기용, status 변경 없음).
+      expired: isConsultReservedExpired(row),
       stages: stagesView,
       events,
       currentSuggestion,
@@ -772,6 +888,8 @@ export class JourneysService {
       ...toJourneyView(r, stagesByTrack.get(r.trackType) ?? []),
       /** 현재 단계에 머문 일수 — 보드에서 정체 강조에 쓴다 */
       daysInStage: Math.floor((now - r.updatedAt.getTime()) / (24 * 60 * 60 * 1000)),
+      /** 상담 예약 자동종료 지연평가 힌트(화면 표기용) */
+      expired: isConsultReservedExpired(r, now),
     }));
     return new Paginated(items, query.page, query.size, total, {
       stalledThresholdDays: query.stalledDays ?? DEFAULT_STALLED_DAYS,

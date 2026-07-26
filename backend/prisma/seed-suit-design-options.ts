@@ -37,6 +37,8 @@ interface ChoiceSeed {
 interface StageSeed {
   code: string;
   name: string;
+  /** 부위 그룹 (E9/D5): 자켓·라펠·안감류→JACKET, 바지류→TROUSERS, 베스트류→VEST */
+  componentGroup: 'JACKET' | 'TROUSERS' | 'VEST';
   choices: ChoiceSeed[];
 }
 
@@ -45,6 +47,7 @@ const STAGES: StageSeed[] = [
   {
     code: 'JACKET_BUTTON',
     name: '자켓 디자인',
+    componentGroup: 'JACKET',
     // 원본 PDF 3페이지는 사진과 라벨이 서로 바뀌어 있다(왼쪽이 더블인데 '싱글 버튼'으로 표기).
     // 옷 모양을 기준으로 바로잡아 연결한다.
     choices: [
@@ -55,36 +58,43 @@ const STAGES: StageSeed[] = [
   {
     code: 'LAPEL',
     name: '라펠 디자인',
+    componentGroup: 'JACKET',
     choices: [{ name: '노치드' }, { name: '피크드' }, { name: '숄카라' }],
   },
   {
     code: 'POCKET',
     name: '포켓 디자인',
+    componentGroup: 'JACKET',
     choices: [{ name: '플랩포켓' }, { name: '제티드포켓' }, { name: '아웃포켓' }],
   },
   {
     code: 'VENT',
     name: '뒷트임 디자인',
+    componentGroup: 'JACKET',
     choices: [{ name: '양쪽트임' }, { name: '중간트임' }, { name: '트임없음' }],
   },
   {
     code: 'SLEEVE_BUTTON',
     name: '소매 디자인',
+    componentGroup: 'JACKET',
     choices: [{ name: '기본버튼' }, { name: '페이크버튼' }, { name: '리얼버튼', extraPrice: 33000 }],
   },
   {
     code: 'LAPEL_HOLE',
     name: '라펠홀 디자인',
+    componentGroup: 'JACKET',
     choices: [{ name: '라펠홀 없음' }, { name: '페이크라펠홀' }, { name: '리얼라펠홀' }],
   },
   {
     code: 'STITCH',
     name: '스티치 디자인',
+    componentGroup: 'JACKET',
     choices: [{ name: '스티치', extraPrice: 33000 }, { name: '스티치 없음' }],
   },
   {
     code: 'LINING',
     name: '안감 디자인',
+    componentGroup: 'JACKET',
     choices: [
       { name: '전체안감' },
       { name: '반안감' },
@@ -94,16 +104,19 @@ const STAGES: StageSeed[] = [
   {
     code: 'TROUSER_PLEAT',
     name: '바지 디자인',
+    componentGroup: 'TROUSERS',
     choices: [{ name: '노턱' }, { name: '원턱' }, { name: '투턱' }],
   },
   {
     code: 'TROUSER_HEM',
     name: '바지 밑단 디자인',
+    componentGroup: 'TROUSERS',
     choices: [{ name: '기본' }, { name: '카브라(턴업)' }],
   },
   {
     code: 'TROUSER_WAIST',
     name: '바지 허리 디자인',
+    componentGroup: 'TROUSERS',
     choices: [{ name: '벨트고리' }, { name: '사이드어드저스트' }],
   },
 ];
@@ -239,6 +252,7 @@ async function main(): Promise<void> {
             stageName: seed.name,
             sequenceNo,
             required: true,
+            componentGroup: seed.componentGroup,
             active: true,
           },
         });
@@ -246,7 +260,13 @@ async function main(): Promise<void> {
       } else {
         await tx.optionStage.update({
           where: { id: stage.id },
-          data: { stageCode: seed.code, stageName: seed.name, required: true, active: true },
+          data: {
+            stageCode: seed.code,
+            stageName: seed.name,
+            required: true,
+            componentGroup: seed.componentGroup,
+            active: true,
+          },
         });
       }
 

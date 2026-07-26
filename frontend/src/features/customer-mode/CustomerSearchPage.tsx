@@ -15,6 +15,7 @@ import {
   createCustomer,
   fetchCustomers,
   findCustomerByPhone,
+  registerCustomer,
   type CustomerBase,
   type CustomerListItem,
 } from '../../api/customers';
@@ -54,12 +55,24 @@ export function CustomerSearchPage() {
   const searched = q.length > 0;
 
   const openRegister = () => {
-    // 검색어가 숫자 위주면 전화로, 아니면 이름으로 프리필한다.
-    const digits = keyword.replace(/\D/g, '');
-    const isPhone = digits.length >= 3 && digits.length >= keyword.trim().length - 3;
+    const kw = keyword.trim();
+    const digits = kw.replace(/\D/g, '');
+    // 검색 결과에 이름·전화가 맞는 예약(PROSPECT) 미등록 고객이 있으면 그 정보로 프리필한다.
+    const prospect = results.find(
+      (c) =>
+        c.customerStatus === 'PROSPECT' &&
+        (c.name === kw || (digits.length >= 3 && c.phone.replace(/\D/g, '').includes(digits))),
+    );
+    if (prospect) {
+      form.setFieldsValue({ name: prospect.name, phone: prospect.phone });
+      setRegisterOpen(true);
+      return;
+    }
+    // 예약 고객이 없으면 검색어가 숫자 위주면 전화로, 아니면 이름으로 프리필한다.
+    const isPhone = digits.length >= 3 && digits.length >= kw.length - 3;
     form.setFieldsValue({
-      name: isPhone ? '' : keyword.trim(),
-      phone: isPhone ? keyword.trim() : '',
+      name: isPhone ? '' : kw,
+      phone: isPhone ? kw : '',
     });
     setRegisterOpen(true);
   };
@@ -73,12 +86,24 @@ export function CustomerSearchPage() {
     }
     setRegisterLoading(true);
     try {
-      // 예약 등으로 이미 존재하는 고객이면 중복 생성 대신 그 고객을 선택한다.
+      // 같은 전화번호의 고객이 이미 있으면 중복 생성하지 않는다.
       const existing = await findCustomerByPhone(values.phone.trim());
       if (existing) {
-        message.info('이미 등록된 고객입니다. 해당 고객으로 이동합니다.');
+        if (existing.registeredAt) {
+          // 이미 정식 등록된 고객 → 해당 고객으로 이동
+          message.info('이미 등록된 고객입니다. 해당 고객으로 이동합니다.');
+          setRegisterOpen(false);
+          pick({ id: existing.id, name: existing.name, phone: existing.phone });
+          return;
+        }
+        // 예약(PROSPECT) 미등록 고객 → 정식 등록 경로로 승격
+        const registered = await registerCustomer(existing.id, {
+          name: values.name.trim(),
+          version: existing.version,
+        });
+        message.success('예약 고객을 정식 고객으로 등록했습니다.');
         setRegisterOpen(false);
-        pick({ id: existing.id, name: existing.name, phone: existing.phone });
+        pick({ id: registered.id, name: registered.name, phone: registered.phone });
         return;
       }
       const created: CustomerBase = await createCustomer({

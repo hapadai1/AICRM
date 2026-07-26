@@ -701,13 +701,13 @@ describe('렌탈 스타일 선택·기준정보 (v2 D3)', () => {
     await api(ctx)
       .post('/api/v1/rental-inventory')
       .set(auth(ctx))
-      .send({ componentType: 'JACKET', design: '렌탈클래식', color: 'NAVY', size: 'L', managementCode: 'RJ-NV-L', quantity: 2 })
+      .send({ componentType: 'JACKET', design: '렌탈클래식', color: 'NAVY', size: '100', managementCode: 'RJ-NV-L', quantity: 2 })
       .expect(201);
     // 다른 색은 후보에서 제외되어야 한다
     await api(ctx)
       .post('/api/v1/rental-inventory')
       .set(auth(ctx))
-      .send({ componentType: 'JACKET', design: '렌탈클래식', color: 'BLACK', size: 'L', managementCode: 'RJ-BK-L' })
+      .send({ componentType: 'JACKET', design: '렌탈클래식', color: 'BLACK', size: '100', managementCode: 'RJ-BK-L' })
       .expect(201);
   });
 
@@ -722,7 +722,7 @@ describe('렌탈 스타일 선택·기준정보 (v2 D3)', () => {
 
     const sizes = await api(ctx).get('/api/v1/admin/master/rental-sizes').set(auth(ctx)).expect(200);
     expect(sizes.body.data.map((s: { code: string }) => s.code)).toEqual(
-      expect.arrayContaining(['S', 'M', 'L', 'XL', 'XXL']),
+      expect.arrayContaining(['90', '100', '110', '120']),
     );
 
     // create → retire (마스터 테이블은 스위트 간 truncate되지 않으므로 코드는 매 실행 고유값)
@@ -763,12 +763,12 @@ describe('렌탈 스타일 선택·기준정보 (v2 D3)', () => {
     const res = await api(ctx)
       .put(`/api/v1/rental-selections/${sessionId}/lines/${jacketComponentId}`)
       .set(auth(ctx))
-      .send({ colorCode: 'NAVY', sizeCode: 'L', notes: '기장 -2cm', version: sessionVersion })
+      .send({ colorCode: 'NAVY', sizeCode: '100', notes: '기장 -2cm', version: sessionVersion })
       .expect(200);
     const jacket = res.body.data.components.find(
       (c: { orderItemComponentId: string }) => c.orderItemComponentId === jacketComponentId,
     );
-    expect(jacket).toMatchObject({ colorCode: 'NAVY', sizeCode: 'L', notes: '기장 -2cm' });
+    expect(jacket).toMatchObject({ colorCode: 'NAVY', sizeCode: '100', notes: '기장 -2cm' });
     sessionVersion = res.body.data.version;
 
     await api(ctx)
@@ -825,7 +825,7 @@ describe('렌탈 스타일 선택·기준정보 (v2 D3)', () => {
       .set(auth(ctx))
       .expect(200);
     const rJacket = review.body.data.components[0];
-    expect(rJacket).toMatchObject({ colorCode: 'NAVY', colorName: '네이비', sizeCode: 'L' });
+    expect(rJacket).toMatchObject({ colorCode: 'NAVY', colorName: '네이비', sizeCode: '100' });
     expect(rJacket.selectedItem.managementCode).toBe(pick.managementCode);
 
     // 감사로그

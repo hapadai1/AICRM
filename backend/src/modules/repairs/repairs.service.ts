@@ -6,6 +6,7 @@ import { AuthUser } from '../../common/decorators';
 import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { JourneysService } from '../journeys/journeys.service';
 import { NotificationSuggestionService } from '../notifications/notification-suggestion.service';
 import {
   CreateRepairDto,
@@ -89,6 +90,7 @@ export class RepairsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly suggestions: NotificationSuggestionService,
+    private readonly journeys: JourneysService,
   ) {}
 
   async list(query: ListRepairsQueryDto) {
@@ -238,6 +240,8 @@ export class RepairsService {
         { userId: actor.id, action: 'CREATE', entityType: 'REPAIR_REQUEST', entityId: created.id, after: created },
         tx,
       );
+      // 수선 접수 = REPAIR 진행 트랙 자동생성(REPAIR_RECEIVED 자동완료). 멱등(설계서 02 §7.2·§9.2).
+      await this.journeys.createRepairJourney(tx, dto.customerId, created.id, actor);
       return created;
     });
     return repair;
