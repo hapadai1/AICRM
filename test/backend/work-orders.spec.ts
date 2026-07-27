@@ -791,4 +791,82 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
       expect(found).toBe(true);
     });
   });
+
+  describe('고객 신체 정보 출력 (v2 A2 · 설계서 06 §2.5)', () => {
+    /** 출력본 xlsx를 내려받아 워크북으로 로드한다. */
+    async function downloadWorkbook(versionId: string): Promise<ExcelJS.Workbook> {
+      const res = await api(ctx)
+        .get(`/api/v1/work-order-versions/${versionId}/file`)
+        .set(auth(ctx))
+        .buffer(true)
+        .parse((response, callback) => {
+          const chunks: Buffer[] = [];
+          response.on('data', (chunk: Buffer) => chunks.push(chunk));
+          response.on('end', () => callback(null, Buffer.concat(chunks)));
+        })
+        .expect(200);
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(res.body as unknown as ArrayBuffer);
+      return wb;
+    }
+
+    it('정장 양식의 키/몸무게(J3)·연령대(Y3) 칸에 고객 신체 정보가 채워진다', async () => {
+      const fixture = await createFixture();
+      await ctx.prisma.customer.update({
+        where: { id: fixture.customerId },
+        data: { heightCm: 178, weightKg: 72.5, age: 34 },
+      });
+
+      const issued = await api(ctx)
+        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order-versions`)
+        .set(auth(ctx))
+        .send({ note: '신체 정보 확인' })
+        .expect(201);
+
+      const ws = (await downloadWorkbook(issued.body.data.workOrderVersionId)).getWorksheet(
+        '작업지시서 (송파)',
+      )!;
+      expect(String(ws.getCell('J3').value)).toBe('178cm / 72.5kg');
+      expect(String(ws.getCell('Y3').value)).toBe('34세');
+      // 채촌 신체열(F)은 신체 정보와 별개다 — 서로 덮어쓰지 않는다.
+      expect(String(ws.getCell('F61').value)).toBe('84');
+    });
+
+    it('신체 정보가 없으면 해당 칸을 비워 둔다(인쇄된 양식 그대로 손으로 적는다)', async () => {
+      const fixture = await createFixture();
+      const issued = await api(ctx)
+        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order-versions`)
+        .set(auth(ctx))
+        .send({ note: '신체 정보 미입력' })
+        .expect(201);
+
+      const ws = (await downloadWorkbook(issued.body.data.workOrderVersionId)).getWorksheet(
+        '작업지시서 (송파)',
+      )!;
+      expect(ws.getCell('J3').value).toBeNull();
+      expect(ws.getCell('Y3').value).toBeNull();
+    });
+
+    it('키만 있으면 키만, 구두 간이시트에도 동일하게 출력된다', async () => {
+      const fixture = await createFixture({ productCategory: 'SHOES' });
+      await ctx.prisma.customer.update({
+        where: { id: fixture.customerId },
+        data: { heightCm: 172, age: 41 },
+      });
+
+      const issued = await api(ctx)
+        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order-versions`)
+        .set(auth(ctx))
+        .send({ note: '구두 신체 정보' })
+        .expect(201);
+
+      const ws = (await downloadWorkbook(issued.body.data.workOrderVersionId)).getWorksheet(
+        '구두 작업지시서',
+      )!;
+      const cells: string[] = [];
+      ws.eachRow((row) => row.eachCell((cell) => cells.push(String(cell.value ?? ''))));
+      expect(cells).toContain('172cm');
+      expect(cells).toContain('41세');
+    });
+  });
 });

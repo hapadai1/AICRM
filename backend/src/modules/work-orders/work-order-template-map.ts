@@ -12,7 +12,9 @@
 export const CELL = {
   storeName: 'L1',
   customerName: 'AP1',
-  bodySpec: 'J3', // 키/몸무게
+  // 고객 신체 정보 (v2 A2 / 설계서 06 §2.5). 템플릿 실측 확인:
+  // 라벨 '키/몸무게'=B3:I4 → 값칸 J3:S4 · 라벨 '연령대'=T3:X4 → 값칸 Y3:AG4
+  bodySpec: 'J3',
   ageGroup: 'Y3',
   phone: 'AP3',
 
@@ -122,9 +124,6 @@ export const MEASUREMENT_ROW_MAP: ReadonlyMap<string, number> = new Map([
  * 신체열(F)에 넣지 않고 **하의 추가요청사항**(AA75=CELL.lowerNote)에 라벨과 함께 쓰는
  * 채촌 코드 (설계서 05 §2.2). 앞마다/뒷마다는 신체 치수 행이 아니라 하의 요청사항 칸에
  * "앞: n / 뒤: n" 형태로 명시 출력한다.
- *
- * TODO(설계서 05 M1): cm/inch 완성(인치) 열 좌표(FINISH_INCH_COLUMN)는 템플릿 실측 미확정이라
- * 이번 범위에서 제외한다. 완성인치 매핑은 좌표 확정 후 별도 반영.
  */
 export const LOWER_NOTE_MEASUREMENTS: ReadonlyArray<readonly [string, string]> = [
   ['FRONT_MADA', '앞'],
