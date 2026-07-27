@@ -1,6 +1,6 @@
 /**
  * DASH-001 대시보드
- * - 오늘 일정 타임테이블(10:00~20:00, 목적별 색 배지, 클릭 → 예약 상세)
+ * - 오늘 일정 타임테이블(10:00~20:00 1시간 단위, 목적별 색 배지, 클릭 → 예약 상세)
  * - 주간 미니 캘린더 (오늘 ±3일)
  * - 확인사항 카드 5종 + 목록 패널 (TaskBoard)
  * - 공유 메모 (SharedMemoCard)
@@ -26,16 +26,16 @@ const PURPOSE_COLOR: Record<string, string> = {
   RENTAL_RETURN: 'magenta',
 };
 
-// 업무시간 10:00~20:00을 30분 단위 20슬롯으로 분할한 타임테이블.
+// 업무시간 10:00~20:00을 1시간 단위 10슬롯으로 분할한 타임테이블.
 const DAY_START_MIN = 10 * 60; // 10:00
 const DAY_END_MIN = 20 * 60; // 20:00
-const SLOT_MIN = 30;
-const SLOT_COUNT = (DAY_END_MIN - DAY_START_MIN) / SLOT_MIN; // 20
+const SLOT_MIN = 60;
+const SLOT_COUNT = (DAY_END_MIN - DAY_START_MIN) / SLOT_MIN; // 10
 const SLOT_HEIGHT = 40; // 슬롯 1칸 픽셀 높이
 const TIME_GUTTER = 64; // 좌측 시간 라벨 폭(px)
 const BOX_WIDTH = 260; // 예약 박스 고정 폭(px)
 const BOX_GAP = 8; // 같은 슬롯 예약 사이 간격(px)
-// 각 슬롯의 시작 분(600, 630 … 1170)
+// 각 슬롯의 시작 분(600, 660 … 1140)
 const TIMETABLE_SLOTS = Array.from({ length: SLOT_COUNT }, (_, i) => DAY_START_MIN + i * SLOT_MIN);
 
 const STATUS_LABEL: Record<DashboardAppointment['status'], string> = {
@@ -59,8 +59,8 @@ interface LaidOutAppointment {
 }
 
 /**
- * 예약들을 30분 그리드 위 절대배치 좌표로 변환한다.
- * - 박스는 시작 슬롯 한 칸(30분)으로 균일 표시하며 종료시각만큼 늘리지 않는다.
+ * 예약들을 1시간 그리드 위 절대배치 좌표로 변환한다.
+ * - 박스는 시작 슬롯 한 칸(1시간)으로 균일 표시하며 종료시각만큼 늘리지 않는다.
  * - 업무시간(10:00~20:00) 밖 예약은 표시하지 않는다.
  * - 같은 슬롯에 여러 예약이 있으면 레인(열)을 나눠 나란히 배치한다.
  */
@@ -70,7 +70,7 @@ function layoutAppointments(appointments: DashboardAppointment[]): LaidOutAppoin
     const start = dayjs(apt.startAt);
     const startMin = start.hour() * 60 + start.minute();
     if (startMin < DAY_START_MIN || startMin >= DAY_END_MIN) continue;
-    // 30분 슬롯 시작으로 내림 (예: 11:45 → 11:30 슬롯)
+    // 1시간 슬롯 시작으로 내림 (예: 11:45 → 11:00 슬롯)
     const slotStart =
       Math.floor((startMin - DAY_START_MIN) / SLOT_MIN) * SLOT_MIN + DAY_START_MIN;
     bySlot.set(slotStart, [...(bySlot.get(slotStart) ?? []), apt]);
@@ -151,7 +151,7 @@ export function DashboardPage() {
               <Empty description={`${isTodaySelected ? '오늘' : '해당 날짜'} 예약이 없습니다.`} />
             ) : (
               <div style={{ position: 'relative', height: SLOT_COUNT * SLOT_HEIGHT }}>
-                {/* 30분 단위 눈금 + 좌측 시간 라벨 (배경) */}
+                {/* 1시간 단위 눈금 + 좌측 시간 라벨 (배경) */}
                 {TIMETABLE_SLOTS.map((min, i) => (
                   <div
                     key={min}
@@ -161,8 +161,8 @@ export function DashboardPage() {
                       left: 0,
                       right: 0,
                       height: SLOT_HEIGHT,
-                      // 정시(00분)는 실선, 반시(30분)는 연한 점선으로 구분
-                      borderTop: min % 60 === 0 ? '1px solid #f0f0f0' : '1px dashed #f5f5f5',
+                      // 정시(00분) 실선 눈금
+                      borderTop: '1px solid #f0f0f0',
                     }}
                   >
                     <Typography.Text
