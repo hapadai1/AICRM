@@ -306,7 +306,7 @@ export function OrderDetailPage() {
                   pagination={false}
                   columns={componentColumns(item)}
                   dataSource={item.components}
-                  scroll={{ x: 760 }}
+                  scroll={{ x: 'max-content' }}
                 />
               </div>
             </Flex>

@@ -459,7 +459,6 @@ export function AdminOptionsPage() {
     0,
     Math.min(MAX_CHOICES, Math.max(MIN_CHOICES, maxChoices) + (isDraft ? 1 : 0)),
   );
-  const choiceColumnCount = wrapChoices ? CHOICES_PER_ROW : visibleSlots.length;
 
   const stageColumns: ColumnsType<EditableStage> = [
     {
@@ -558,7 +557,7 @@ export function AdminOptionsPage() {
       dataSource={rows}
       columns={stageColumns}
       pagination={false}
-      scroll={{ x: 400 + CHOICE_COL_WIDTH * choiceColumnCount }}
+      scroll={{ x: 'max-content' }}
       locale={{ emptyText: '단계가 없습니다. 단계를 추가해 주세요.' }}
     />
   );

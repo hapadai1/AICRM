@@ -1,4 +1,4 @@
-import { ArrowLeftOutlined, EditOutlined, SwapOutlined, ToolOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, EditOutlined, SwapOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   App,
@@ -34,23 +34,13 @@ import {
   patchRentalItem,
   postRentalItemStatusEvent,
   type RentalAllocation,
-  type RentalItemEvent,
   type RentalItemStatus,
 } from '../../api/rentals';
-import { createRepair } from '../../api/repairs';
 import { BackButton } from '../../shared/BackButton';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { COLOR_OPTIONS, DESIGN_OPTIONS, statusOptions } from './rental-constants';
 import { metaOf } from '../../shared/status-meta';
-
-const EVENT_TYPE_META: Record<RentalItemEvent['type'], { label: string; color: string }> = {
-  REGISTER: { label: '등록', color: 'default' },
-  STATUS: { label: '상태', color: 'blue' },
-  RENTAL: { label: '대여', color: 'geekblue' },
-  ID_CHANGE: { label: 'ID 변경', color: 'orange' },
-  REPAIR: { label: '수선', color: 'purple' },
-};
 
 /** RENT-002 렌탈 실물 상세: 속성·상태·배정·이력 */
 export function RentalItemDetailPage() {
@@ -61,10 +51,8 @@ export function RentalItemDetailPage() {
 
   const [statusOpen, setStatusOpen] = useState(false);
   const [attrOpen, setAttrOpen] = useState(false);
-  const [repairOpen, setRepairOpen] = useState(false);
   const [statusForm] = Form.useForm<{ newStatus: RentalItemStatus; availableFrom?: Dayjs; reason?: string }>();
   const [attrForm] = Form.useForm<{ design: string; color: string; size: string; notes?: string }>();
-  const [repairForm] = Form.useForm<{ notes?: string; description: string; dueDate?: Dayjs }>();
 
   const detailQuery = useQuery({
     queryKey: ['rentals', 'inventory', id],
@@ -72,10 +60,7 @@ export function RentalItemDetailPage() {
     enabled: !!id,
   });
 
-  /** 수선 접수 시 사용할 고객 — 최근 배정 이력 기준 */
-  const repairCustomer = (detailQuery.data?.allocations ?? []).find((a) => a.customerId);
-
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['rentals'] });
+  const invalidate =() => queryClient.invalidateQueries({ queryKey: ['rentals'] });
 
   const statusMutation = useMutation({
     mutationFn: (v: { newStatus: RentalItemStatus; availableFrom?: Dayjs; reason?: string }) =>
@@ -102,34 +87,6 @@ export function RentalItemDetailPage() {
       void invalidate();
     },
     onError: (e) => message.error(e instanceof ApiError ? e.message : '속성 수정에 실패했습니다.'),
-  });
-
-  const repairMutation = useMutation({
-    mutationFn: (v: { notes?: string; description: string; dueDate?: Dayjs }) => {
-      // 백엔드는 수선 접수에 고객이 필수다 — 이 실물의 최근 배정 고객으로 접수한다.
-      const customerId = repairCustomer?.customerId;
-      if (!customerId) {
-        return Promise.reject(
-          new ApiError('REPAIR_CUSTOMER_REQUIRED', '배정 이력이 없는 실물은 수선 메뉴에서 고객을 지정해 접수해 주세요.'),
-        );
-      }
-      return createRepair({
-        customerId,
-        repairType: 'RENTAL_POST',
-        rentalInventoryItemId: id,
-        requestDate: dayjs().format('YYYY-MM-DD'),
-        dueDate: v.dueDate?.format('YYYY-MM-DD'),
-        description: v.description,
-        notes: v.notes,
-      });
-    },
-    onSuccess: () => {
-      message.success('수선이 접수되었습니다. 수선 메뉴에서 진행 상태를 관리하세요.');
-      setRepairOpen(false);
-      repairForm.resetFields();
-      void invalidate();
-    },
-    onError: (e) => message.error(e instanceof ApiError ? e.message : '수선 접수에 실패했습니다.'),
   });
 
   if (detailQuery.isLoading) {
@@ -223,11 +180,6 @@ export function RentalItemDetailPage() {
                 상태 변경
               </Button>
             </Can>
-            <Can permission="REPAIR_EDIT">
-              <Button icon={<ToolOutlined />} onClick={() => setRepairOpen(true)}>
-                수선 접수
-              </Button>
-            </Can>
           </Space>
         </Space>
 
@@ -270,7 +222,7 @@ export function RentalItemDetailPage() {
           </Card>
         </Col>
         <Col xs={24} lg={10}>
-          <Card title="대여·ID 변경·수선 이력" size="small">
+          <Card title="상태 이력" size="small">
             {events.length > 0 ? (
               <Timeline
                 items={events.map((ev) => ({
@@ -278,7 +230,7 @@ export function RentalItemDetailPage() {
                   children: (
                     <>
                       <Space size="small">
-                        <Tag color={metaOf(EVENT_TYPE_META, ev.type).color}>{metaOf(EVENT_TYPE_META, ev.type).label}</Tag>
+                        <Tag color="blue">상태</Tag>
                         <Typography.Text strong>{ev.label}</Typography.Text>
                       </Space>
                       <div>
@@ -368,46 +320,6 @@ export function RentalItemDetailPage() {
           </Form.Item>
           <Form.Item name="notes" label="메모">
             <Input.TextArea rows={2} />
-          </Form.Item>
-        </Form>
-      </Modal>
-
-      {/* 실물 연결 수선 접수 모달 */}
-      <Modal
-        title={`수선 접수 — ${item.managementCode}`}
-        open={repairOpen}
-        onCancel={() => setRepairOpen(false)}
-        onOk={() => repairForm.submit()}
-        okText="접수"
-        cancelText="취소"
-        confirmLoading={repairMutation.isPending}
-        destroyOnClose
-      >
-        <Form form={repairForm} layout="vertical" onFinish={(values) => repairMutation.mutate(values)}>
-          <Form.Item label="고객">
-            {repairCustomer ? (
-              <Typography.Text>
-                {repairCustomer.customerName}
-                <Typography.Text type="secondary"> · 최근 배정 기준</Typography.Text>
-              </Typography.Text>
-            ) : (
-              <Typography.Text type="warning">
-                배정 이력이 없어 이 화면에서 접수할 수 없습니다. 수선 메뉴에서 고객을 지정해 접수해 주세요.
-              </Typography.Text>
-            )}
-          </Form.Item>
-          <Form.Item
-            name="description"
-            label="수선 내용"
-            rules={[{ required: true, message: '수선 내용을 입력해 주세요.' }]}
-          >
-            <Input.TextArea rows={3} placeholder="예: 소매 안감 뜯어짐 수선" />
-          </Form.Item>
-          <Form.Item name="notes" label="비고">
-            <Input placeholder="예: 반납 검수 중 발견" />
-          </Form.Item>
-          <Form.Item name="dueDate" label="완료 예정일">
-            <DatePicker style={{ width: '100%' }} />
           </Form.Item>
         </Form>
       </Modal>

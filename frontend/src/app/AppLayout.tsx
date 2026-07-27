@@ -112,6 +112,7 @@ export function AppLayout() {
               { key: '/admin/master', label: '기준정보' },
               { key: '/admin/contract-types', label: '계약 구분' },
               { key: '/admin/options', label: '옵션 세트' },
+              { key: '/admin/notification-templates', label: '연락 문구' },
               { key: '/admin/users', label: '사용자·권한' },
               { key: '/admin/audit', label: '감사로그' },
             ],

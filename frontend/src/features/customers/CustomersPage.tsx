@@ -1,4 +1,4 @@
-import { CalendarOutlined, FilterOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
+import { FilterOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import { Button, Card, Empty, Input, Radio, Segmented, Space, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -7,10 +7,9 @@ import { useNavigate } from 'react-router-dom';
 import { fetchCustomers, type CustomerListItem } from '../../api/customers';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
-import { AppointmentCustomerModal } from './AppointmentCustomerModal';
+import { autoWidth } from '../../shared/table-width';
 import { CustomerRegisterModal } from './CustomerRegisterModal';
-import { CUSTOMER_STATUS_META, TRANSACTION_TYPE_LABEL, formatAmount } from './customer-constants';
-import { metaOf } from '../../shared/status-meta';
+import { TRANSACTION_TYPE_LABEL, formatAmount } from './customer-constants';
 
 /** 진행 journey 상태별 세부 단계 배지 색상 (진행상태 재정의 02) */
 const JOURNEY_STATUS_COLOR: Record<'ACTIVE' | 'COMPLETED' | 'CANCELLED', string> = {
@@ -19,22 +18,25 @@ const JOURNEY_STATUS_COLOR: Record<'ACTIVE' | 'COMPLETED' | 'CANCELLED', string>
   CANCELLED: 'default',
 };
 
-/** CUST-001 고객 목록: 계약 고객(CONTRACTED)만 조회, 통합 검색 */
+/**
+ * CUST-001 고객 목록 (설계서 07 §2).
+ * 기본은 계약을 한 건이라도 보유한 고객(작성중·취소 포함). [전체 고객]으로 계약 전 고객도 본다.
+ */
 export function CustomersPage() {
   const navigate = useNavigate();
 
   const [keyword, setKeyword] = useState('');
   const [q, setQ] = useState('');
+  const [scope, setScope] = useState<'CONTRACT' | 'ALL'>('CONTRACT');
   const [transactionType, setTransactionType] = useState<'CUSTOM' | 'RENTAL' | undefined>(undefined);
   const [progress, setProgress] = useState<'ACTIVE' | 'DONE' | 'ALL'>('ALL');
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(30);
   const [createOpen, setCreateOpen] = useState(false);
-  const [fromAppointmentOpen, setFromAppointmentOpen] = useState(false);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['customers', { q, transactionType: transactionType ?? '', progress, page, size }],
-    queryFn: () => fetchCustomers({ q, includeProspect: false, transactionType, progress, page, size }),
+    queryKey: ['customers', { q, scope, transactionType: transactionType ?? '', progress, page, size }],
+    queryFn: () => fetchCustomers({ q, scope, transactionType, progress, page, size }),
   });
 
   const runSearch = () => {
@@ -43,18 +45,18 @@ export function CustomersPage() {
   };
 
   const columns: ColumnsType<CustomerListItem> = [
-    { title: '고객명', dataIndex: 'name', width: 120 },
-    { title: '전화번호', dataIndex: 'phone', width: 140 },
+    { title: '고객명', dataIndex: 'name', ...autoWidth(100) },
+    { title: '전화번호', dataIndex: 'phone', ...autoWidth() },
     {
       title: '최근 방문일',
       dataIndex: 'lastVisitDate',
-      width: 120,
+      ...autoWidth(),
       render: (v?: string) => v ?? '-',
     },
     {
       title: '최근 거래 유형',
       dataIndex: 'lastTransactionType',
-      width: 140,
+      ...autoWidth(),
       // 필터 버튼을 제목 글자 바로 옆에 배치 (index.css의 tx-type-filter-col) — 서버(transactionType)로 필터링
       className: 'tx-type-filter-col',
       filteredValue: transactionType ? [transactionType] : null,
@@ -83,31 +85,29 @@ export function CustomersPage() {
     {
       title: '고객 상태',
       dataIndex: 'customerStatus',
-      width: 160,
-      // 계약상태 배지 + 진행 journey의 세부 단계(진행상태 재정의 02) 병기
-      render: (v: CustomerListItem['customerStatus'], row) => (
-        <Space direction="vertical" size={2}>
-          <StatusBadge label={metaOf(CUSTOMER_STATUS_META, v).label} color={metaOf(CUSTOMER_STATUS_META, v).color} />
-          {row.currentStage ? (
-            <StatusBadge
-              label={row.currentStage.name}
-              color={JOURNEY_STATUS_COLOR[row.currentStage.status] ?? 'default'}
-            />
-          ) : null}
-        </Space>
-      ),
+      ...autoWidth(120),
+      // 계약상태 배지는 제외하고 진행 journey의 세부 단계(진행상태)만 출력
+      render: (_v: CustomerListItem['customerStatus'], row) =>
+        row.currentStage ? (
+          <StatusBadge
+            label={row.currentStage.name}
+            color={JOURNEY_STATUS_COLOR[row.currentStage.status] ?? 'default'}
+          />
+        ) : (
+          '-'
+        ),
     },
     {
       title: '계약 건수',
       dataIndex: 'contractCount',
-      width: 100,
+      ...autoWidth(),
       align: 'right',
       render: (v: number) => `${v}건`,
     },
     {
       title: '잔금',
       dataIndex: 'balanceAmount',
-      width: 140,
+      ...autoWidth(),
       align: 'right',
       render: (v: number) => formatAmount(v),
     },
@@ -121,19 +121,10 @@ export function CustomersPage() {
             목록
           </Typography.Title>
           <Can permission="CUSTOMER_EDIT">
-            <Space>
-              {/* 대부분의 고객은 예약을 거쳐 들어오므로 예약 경로를 주 버튼으로 둔다 */}
-              <Button
-                type="primary"
-                icon={<CalendarOutlined />}
-                onClick={() => setFromAppointmentOpen(true)}
-              >
-                예약 고객 등록
-              </Button>
-              <Button icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-                고객 등록
-              </Button>
-            </Space>
+            {/* 예약 등록이 곧 고객 등록이므로(설계서 07 D2) 별도 [예약 고객 등록] 경로는 없앴다 */}
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+              고객 등록
+            </Button>
           </Can>
         </Space>
 
@@ -149,6 +140,18 @@ export function CustomersPage() {
           <Button icon={<SearchOutlined />} onClick={runSearch}>
             검색
           </Button>
+          {/* 조회 범위(설계서 07 D3): 계약 보유 고객 / 전 고객 */}
+          <Segmented<'CONTRACT' | 'ALL'>
+            value={scope}
+            onChange={(v) => {
+              setScope(v);
+              setPage(1);
+            }}
+            options={[
+              { label: '계약 고객', value: 'CONTRACT' },
+              { label: '전체 고객', value: 'ALL' },
+            ]}
+          />
           {/* 진행상태 검색(설계서 06 §2 / 02): 진행중/완료/전체 */}
           <Segmented<'ACTIVE' | 'DONE' | 'ALL'>
             value={progress}
@@ -188,16 +191,13 @@ export function CustomersPage() {
         />
       </Space>
 
-      <AppointmentCustomerModal
-        open={fromAppointmentOpen}
-        onClose={() => setFromAppointmentOpen(false)}
-        onGoDetail={(id) => navigate(`/customers/${id}`)}
-      />
-
       <CustomerRegisterModal
         open={createOpen}
         onClose={() => setCreateOpen(false)}
         onGoDetail={(id) => navigate(`/customers/${id}`)}
+        // 방금 등록한 고객은 계약이 없어 기본 범위(계약 고객)에서 보이지 않는다.
+        // 등록 직후 사라지는 것처럼 보이지 않게 범위를 전체로 넓혀 둔다(설계서 07 §2.3).
+        onRegistered={() => setScope('ALL')}
       />
     </Card>
   );

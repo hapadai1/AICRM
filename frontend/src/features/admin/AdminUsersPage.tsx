@@ -254,7 +254,7 @@ export function AdminUsersPage() {
               dataSource={permissionRows}
               columns={permissionColumns}
               pagination={false}
-              scroll={{ x: 900 }}
+              scroll={{ x: 'max-content' }}
             />
           </Col>
         </Row>

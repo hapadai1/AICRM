@@ -1,6 +1,5 @@
-import { Transform, Type } from 'class-transformer';
+import { Type } from 'class-transformer';
 import {
-  IsBoolean,
   IsEmail,
   IsIn,
   IsISO8601,
@@ -22,14 +21,16 @@ export class CustomerListQueryDto extends PageQueryDto {
   /** 이름 / 전화번호 / 주문번호 통합 검색어 */
   @IsOptional() @IsString() q?: string;
 
-  /** 기본 목록은 CONTRACTED만 조회 (설계서 5.3). ALL이면 전체 조회 */
-  @IsOptional() @IsIn([...CUSTOMER_STATUSES, 'ALL']) status: string = 'CONTRACTED';
+  /**
+   * 조회 범위 (설계서 07 D3).
+   * - CONTRACT: 계약을 한 건이라도 보유한 고객 (작성중·취소 계약 포함) — 고객 메뉴 기본
+   * - ALL:      계약 유무와 무관한 전 고객 (고객 검색 팝업·전체 고객 토글)
+   * 어느 쪽이든 INACTIVE(비활성) 고객은 제외한다.
+   */
+  @IsOptional() @IsIn(['CONTRACT', 'ALL']) scope?: string;
 
-  /** true면 status 필터에 PROSPECT를 추가로 포함한다 (연동정합화 계약 §2) */
-  @IsOptional()
-  @Transform(({ value }) => value === true || value === 'true')
-  @IsBoolean()
-  includeProspect?: boolean;
+  /** 고객 상태 명시 필터. 미지정이 기본이며 INACTIVE 제외는 scope가 담당한다 */
+  @IsOptional() @IsIn([...CUSTOMER_STATUSES, 'ALL']) status?: string;
 
   /** 해당 거래방식(CUSTOM/RENTAL) 주문 보유 고객만 조회 (연동정합화 계약 §2) */
   @IsOptional() @IsIn(['CUSTOM', 'RENTAL']) transactionType?: string;
@@ -64,18 +65,6 @@ export class CreateCustomerDto extends BodyInfoDto {
 export class UpdateCustomerDto extends BodyInfoDto {
   @IsOptional() @IsString() @IsNotEmpty() @MaxLength(80) name?: string;
   @IsOptional() @IsString() @IsNotEmpty() @MaxLength(30) phone?: string;
-  @IsOptional() @IsEmail() email?: string;
-  @IsOptional() @IsString() notes?: string;
-  /** 낙관적 잠금: 조회 시점의 rowVersion */
-  @Type(() => Number) @IsInt() @Min(0) version: number;
-}
-
-/**
- * 예약으로 생긴 미등록 고객을 정식 고객으로 등록한다 (CUST-001 [예약 고객 등록]).
- * 일반 수정(PATCH)과 분리해 등록 시각이 의도치 않게 찍히는 것을 막는다.
- */
-export class RegisterCustomerDto extends BodyInfoDto {
-  @IsString() @IsNotEmpty() @MaxLength(80) name: string;
   @IsOptional() @IsEmail() email?: string;
   @IsOptional() @IsString() notes?: string;
   /** 낙관적 잠금: 조회 시점의 rowVersion */

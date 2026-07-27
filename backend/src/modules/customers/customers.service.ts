@@ -10,7 +10,6 @@ import { toAppointmentView, toConsultationView } from '../appointments/appointme
 import {
   CreateCustomerDto,
   CustomerListQueryDto,
-  RegisterCustomerDto,
   UpdateCustomerDto,
 } from './customers.dto';
 import { normalizePhone } from './phone.util';
@@ -56,15 +55,19 @@ export class CustomersService {
     private readonly audit: AuditService,
   ) {}
 
-  /** 고객 목록. 기본은 CONTRACTED만 조회하고 PROSPECT는 필터로만 노출한다 (설계서 5.3). */
+  /**
+   * 고객 목록 (설계서 07 §2).
+   * 가망/계약 고객을 나눠 저장하던 방식은 폐기됐다 — 접점이 생긴 사람은 모두 고객이며,
+   * 화면이 필요한 범위(scope)만 골라 본다. 고객 메뉴 기본은 계약 보유 고객이다.
+   */
   async list(query: CustomerListQueryDto): Promise<Paginated<unknown>> {
-    // 예약으로 자동 생성된 미등록 고객은 고객 메뉴에 노출하지 않는다.
-    // 이들은 [예약 고객 등록]에서만 다루며, 등록되어야 이 목록에 들어온다.
-    const where: Prisma.CustomerWhereInput = { registeredAt: { not: null } };
-    if (query.status !== 'ALL') {
-      const statuses = [...new Set([query.status, ...(query.includeProspect ? ['PROSPECT'] : [])])];
-      where.customerStatus = statuses.length > 1 ? { in: statuses } : query.status;
-    }
+    // 비활성 고객은 어떤 범위에서도 노출하지 않는다 (D8 — INACTIVE만 남은 상태 필터).
+    const conditions: Prisma.CustomerWhereInput[] = [{ customerStatus: { not: 'INACTIVE' } }];
+    // 계약 상태는 가리지 않는다. 작성중(DRAFT)·취소(CANCELLED)도 "계약서를 연 고객"이다.
+    if ((query.scope ?? 'CONTRACT') === 'CONTRACT') conditions.push({ contracts: { some: {} } });
+    // status는 명시 지정할 때만 얹는다. INACTIVE 제외 조건과 AND로 함께 살아 있어야 한다.
+    if (query.status && query.status !== 'ALL') conditions.push({ customerStatus: query.status });
+    const where: Prisma.CustomerWhereInput = { AND: conditions };
     if (query.transactionType) {
       // 최근 거래 유형(가장 최근 주문의 거래방식)이 일치하는 고객만 — 목록 컬럼 표시값과 동일 기준.
       // 고객별 "최신 주문 1건"은 Prisma where로 표현 불가하여 raw SQL로 고객 ID를 선별한다.
@@ -81,24 +84,15 @@ export class CustomersService {
     }
 
     // 진행상태 검색 (설계서 06 §2 / 02): journey status 기준으로 진행중/완료 필터.
-    // 기존 where.OR(q)·where.id(transactionType)와 충돌하지 않도록 AND 절에 얹는다.
+    // conditions에 push한다 — where.AND에 재배정하면 scope·INACTIVE 조건이 통째로 날아간다.
     if (query.progress === 'ACTIVE') {
-      where.AND = [{ journeys: { some: { status: 'ACTIVE' } } }];
+      conditions.push({ journeys: { some: { status: 'ACTIVE' } } });
     } else if (query.progress === 'DONE') {
-      // 완료 = 계약 완료(CONTRACTED) 이거나, 진행중 journey 없이 완료 journey를 보유
-      where.AND = [
-        {
-          OR: [
-            { customerStatus: 'CONTRACTED' },
-            {
-              AND: [
-                { journeys: { some: { status: 'COMPLETED' } } },
-                { journeys: { none: { status: 'ACTIVE' } } },
-              ],
-            },
-          ],
-        },
-      ];
+      // 완료 = 진행중 journey 없이 완료 journey를 보유.
+      // 계약 확정(customerStatus='CONTRACTED')은 진행의 시작이지 완료가 아니다 — 설계서 07 §2에서
+      // OR 절을 제거했다. 예전에는 확정 고객 전원이 "완료"로 분류되는 오류가 있었다.
+      conditions.push({ journeys: { some: { status: 'COMPLETED' } } });
+      conditions.push({ journeys: { none: { status: 'ACTIVE' } } });
     }
 
     const q = query.q?.trim();
@@ -379,7 +373,6 @@ export class CustomersService {
           include: {
             orderItem: { select: { displayName: true } },
             component: { select: { componentType: true } },
-            rentalInventoryItem: { select: { managementCode: true } },
           },
         }),
       ]);
@@ -475,11 +468,7 @@ export class CustomersService {
       repairs: repairs.map((r) => ({
         id: r.id,
         receivedDate: toDateOnly(r.requestDate),
-        target:
-          r.orderItem?.displayName ??
-          r.rentalInventoryItem?.managementCode ??
-          r.component?.componentType ??
-          '-',
+        target: r.orderItem?.displayName ?? r.component?.componentType ?? '-',
         content: r.description,
         status: r.status,
         repairType: r.repairType,
@@ -548,60 +537,6 @@ export class CustomersService {
     return customer ? { ...customer, version: customer.rowVersion } : null;
   }
 
-  /**
-   * 예약으로 생긴 미등록 고객을 정식 고객으로 등록한다.
-   * 등록 시각을 찍어야 고객 목록에 나타나므로 일반 수정과 별도 액션으로 둔다.
-   */
-  async register(id: string, dto: RegisterCustomerDto, actor: AuthUser) {
-    const before = await this.prisma.customer.findUnique({ where: { id } });
-    if (!before) throw new BusinessException('CUSTOMER_NOT_FOUND', '고객이 없습니다.');
-    if (before.registeredAt) {
-      throw new BusinessException('CUSTOMER_ALREADY_REGISTERED', '이미 등록된 고객입니다.', undefined, {
-        registeredAt: before.registeredAt,
-      });
-    }
-    if (before.customerStatus === 'INACTIVE') {
-      throw new BusinessException('INVALID_STATUS_TRANSITION', '비활성 고객은 등록할 수 없습니다.');
-    }
-
-    const result = await this.prisma.customer.updateMany({
-      where: { id, rowVersion: dto.version },
-      data: {
-        name: dto.name.trim(),
-        ...(dto.email !== undefined ? { email: dto.email } : {}),
-        ...(dto.notes !== undefined ? { notes: dto.notes } : {}),
-        ...(dto.heightCm !== undefined ? { heightCm: dto.heightCm } : {}),
-        ...(dto.weightKg !== undefined ? { weightKg: dto.weightKg } : {}),
-        ...(dto.age !== undefined ? { age: dto.age } : {}),
-        registeredAt: new Date(),
-        rowVersion: { increment: 1 },
-      },
-    });
-    if (result.count === 0) {
-      throw new BusinessException(
-        'VERSION_CONFLICT',
-        '다른 사용자가 먼저 수정했습니다. 최신 정보를 다시 조회해 주세요.',
-        undefined,
-        { currentVersion: before.rowVersion },
-      );
-    }
-
-    const after = await this.prisma.customer.findUniqueOrThrow({
-      where: { id },
-      select: CUSTOMER_SELECT,
-    });
-    await this.audit.log({
-      userId: actor.id,
-      action: 'UPDATE',
-      entityType: 'CUSTOMER',
-      entityId: id,
-      before,
-      after,
-      reason: '예약 고객을 정식 고객으로 등록',
-    });
-    return { ...after, version: after.rowVersion };
-  }
-
   /** 물리 삭제 대신 비활성 처리 (설계서 19 — 계약 고객 물리 삭제 금지). */
   async deactivate(id: string, reason: string | undefined, actor: AuthUser) {
     const before = await this.prisma.customer.findUnique({ where: { id } });
@@ -633,8 +568,12 @@ export class CustomersService {
   }
 
   /**
-   * 예약 등록 흐름에서 전화번호로 기존 고객을 연결하거나 PROSPECT 신규 생성한다
+   * 예약 등록 흐름에서 전화번호로 기존 고객을 연결하거나 신규 생성한다
    * (데이터모델설계서 15.1). AppointmentsModule에서 사용.
+   *
+   * 예약 등록이 곧 고객 등록이다 — 별도 승격 절차 없이 registeredAt을 즉시 찍는다
+   * (설계서 07 D2). customerStatus는 계약 확정 전까지 PROSPECT로 남지만 조회 조건에
+   * 쓰이지 않는 이력값이다(D8).
    */
   async linkOrCreateProspectByPhone(
     input: { name?: string; phone: string; email?: string },
@@ -668,6 +607,7 @@ export class CustomersService {
         email: input.email,
         customerStatus: 'PROSPECT',
         firstReservedAt: reservedAt,
+        registeredAt: new Date(),
       },
     });
     await this.audit.log({
@@ -676,7 +616,7 @@ export class CustomersService {
       entityType: 'CUSTOMER',
       entityId: customer.id,
       after: customer,
-      reason: '예약 등록 시 PROSPECT 자동 생성',
+      reason: '예약 등록 시 고객 자동 생성',
     });
     return { customer, created: true };
   }

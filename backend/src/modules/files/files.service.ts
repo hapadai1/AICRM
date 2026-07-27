@@ -24,6 +24,16 @@ export interface UploadedMulterFile {
   buffer: Buffer;
 }
 
+/**
+ * multipart 파일명을 UTF-8로 되돌린다.
+ * multer(busboy)는 파일명 헤더를 latin1로 디코딩하므로 한글 파일명이 `ê³µì¥…` 처럼 깨져 저장된다.
+ * 원본이 이미 UTF-8이면 되돌린 값에 대체문자(U+FFFD)가 생기므로 그때는 그대로 둔다.
+ */
+function decodeMultipartName(name: string): string {
+  const restored = Buffer.from(name, 'latin1').toString('utf8');
+  return restored.includes('�') ? name : restored;
+}
+
 export interface FileView {
   id: string;
   originalName: string;
@@ -52,7 +62,8 @@ export class FilesService {
       throw new BusinessException('VALIDATION_ERROR', '업로드할 파일(file 필드)이 필요합니다.', [
         { field: 'file', reason: 'REQUIRED' },
       ]);
-    const ext = extname(file.originalname).slice(1).toLowerCase();
+    const originalName = decodeMultipartName(file.originalname);
+    const ext = extname(originalName).slice(1).toLowerCase();
     if (!ALLOWED_EXTENSIONS.includes(ext))
       throw new BusinessException(
         'FILE_TYPE_NOT_ALLOWED',
@@ -73,7 +84,7 @@ export class FilesService {
       data: {
         id,
         storageKey,
-        originalName: file.originalname,
+        originalName,
         mimeType: file.mimetype,
         sizeBytes: BigInt(file.size),
         checksumSha256: checksum,

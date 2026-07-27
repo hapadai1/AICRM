@@ -15,7 +15,6 @@ import {
   createCustomer,
   fetchCustomers,
   findCustomerByPhone,
-  registerCustomer,
   type CustomerBase,
   type CustomerListItem,
 } from '../../api/customers';
@@ -38,9 +37,9 @@ export function CustomerSearchPage() {
   const [form] = Form.useForm<NewCustomerForm>();
 
   const { data, isFetching } = useQuery({
-    // 예약으로 생긴 미등록 고객(PROSPECT)도 검색 대상에 포함한다.
+    // 계약 전 고객도 찾아야 한다 — 예약만 하고 온 고객이 여기서 빠지면 안 된다.
     queryKey: ['customer-mode', 'search', q],
-    queryFn: () => fetchCustomers({ q, includeProspect: true, size: 20 }),
+    queryFn: () => fetchCustomers({ q, scope: 'ALL', size: 20 }),
     enabled: q.length > 0,
   });
 
@@ -57,18 +56,16 @@ export function CustomerSearchPage() {
   const openRegister = () => {
     const kw = keyword.trim();
     const digits = kw.replace(/\D/g, '');
-    // 검색 결과에 이름·전화가 맞는 예약(PROSPECT) 미등록 고객이 있으면 그 정보로 프리필한다.
-    const prospect = results.find(
-      (c) =>
-        c.customerStatus === 'PROSPECT' &&
-        (c.name === kw || (digits.length >= 3 && c.phone.replace(/\D/g, '').includes(digits))),
+    // 검색 결과에 이름·전화가 맞는 고객이 있으면 그 정보로 프리필한다(오타로 못 찾은 경우 대비).
+    const matched = results.find(
+      (c) => c.name === kw || (digits.length >= 3 && c.phone.replace(/\D/g, '').includes(digits)),
     );
-    if (prospect) {
-      form.setFieldsValue({ name: prospect.name, phone: prospect.phone });
+    if (matched) {
+      form.setFieldsValue({ name: matched.name, phone: matched.phone });
       setRegisterOpen(true);
       return;
     }
-    // 예약 고객이 없으면 검색어가 숫자 위주면 전화로, 아니면 이름으로 프리필한다.
+    // 맞는 고객이 없으면 검색어가 숫자 위주면 전화로, 아니면 이름으로 프리필한다.
     const isPhone = digits.length >= 3 && digits.length >= kw.length - 3;
     form.setFieldsValue({
       name: isPhone ? '' : kw,
@@ -87,23 +84,13 @@ export function CustomerSearchPage() {
     setRegisterLoading(true);
     try {
       // 같은 전화번호의 고객이 이미 있으면 중복 생성하지 않는다.
+      // 예약으로 들어온 고객도 그 시점에 이미 고객으로 등록되므로(설계서 07 D2)
+      // 별도 승격 없이 해당 고객으로 이동하면 된다.
       const existing = await findCustomerByPhone(values.phone.trim());
       if (existing) {
-        if (existing.registeredAt) {
-          // 이미 정식 등록된 고객 → 해당 고객으로 이동
-          message.info('이미 등록된 고객입니다. 해당 고객으로 이동합니다.');
-          setRegisterOpen(false);
-          pick({ id: existing.id, name: existing.name, phone: existing.phone });
-          return;
-        }
-        // 예약(PROSPECT) 미등록 고객 → 정식 등록 경로로 승격
-        const registered = await registerCustomer(existing.id, {
-          name: values.name.trim(),
-          version: existing.version,
-        });
-        message.success('예약 고객을 정식 고객으로 등록했습니다.');
+        message.info('이미 등록된 고객입니다. 해당 고객으로 이동합니다.');
         setRegisterOpen(false);
-        pick({ id: registered.id, name: registered.name, phone: registered.phone });
+        pick({ id: existing.id, name: existing.name, phone: existing.phone });
         return;
       }
       const created: CustomerBase = await createCustomer({

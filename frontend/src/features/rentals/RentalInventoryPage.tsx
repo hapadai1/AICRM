@@ -34,6 +34,7 @@ import {
 } from '../../api/rentals';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
+import { autoWidth } from '../../shared/table-width';
 import { DESIGN_OPTIONS, COLOR_OPTIONS, componentTypeOptions, statusOptions } from './rental-constants';
 
 interface FilterValues {
@@ -129,34 +130,36 @@ export function RentalInventoryPage() {
       title: '구분',
       dataIndex: 'componentType',
       render: (c: RentalComponentType) => RENTAL_COMPONENT_TYPE_LABELS[c] ?? c,
-      width: 120,
+      ...autoWidth(),
     },
-    { title: '디자인', dataIndex: 'design', width: 100 },
-    { title: '컬러', dataIndex: 'color', width: 90 },
-    { title: '사이즈', dataIndex: 'size', width: 80 },
+    { title: '디자인', dataIndex: 'design', ...autoWidth() },
+    { title: '컬러', dataIndex: 'color', ...autoWidth() },
+    { title: '사이즈', dataIndex: 'size', ...autoWidth() },
     {
       title: '상태',
       dataIndex: 'status',
       render: (s: RentalItemStatus) => (
         <StatusBadge label={RENTAL_ITEM_STATUS_META[s]?.label ?? s} color={RENTAL_ITEM_STATUS_META[s]?.color} />
       ),
-      width: 110,
+      ...autoWidth(),
     },
-    { title: '대여 가능 예정일', dataIndex: 'availableFrom', render: (d?: string) => d ?? '-', width: 130 },
+    { title: '대여 가능 예정일', dataIndex: 'availableFrom', render: (d?: string) => d ?? '-', ...autoWidth() },
     {
       title: '현재 배정 / 고객',
       key: 'allocation',
-      render: (_, r) =>
-        r.currentAllocation ? (
-          <>
-            <Typography.Text>{r.currentAllocation.customerName}</Typography.Text>{' '}
-            <Typography.Text type="secondary">
-              ({r.currentAllocation.orderNo} · {r.currentAllocation.pickupDate} ~ {r.currentAllocation.returnDueDate})
-            </Typography.Text>
-          </>
-        ) : (
-          '-'
-        ),
+      ...autoWidth(),
+      // 배정 요약은 한 줄이 길어 이 열 하나가 표를 가로 스크롤로 밀어낸다(액션 열이 잘림).
+      // 셀 안에서 잘라 폭 상한을 두고, 전문은 툴팁으로 본다.
+      render: (_, r) => {
+        if (!r.currentAllocation) return '-';
+        const a = r.currentAllocation;
+        const detail = `(${a.orderNo} · ${a.pickupDate} ~ ${a.returnDueDate})`;
+        return (
+          <Typography.Text style={{ maxWidth: 300 }} ellipsis={{ tooltip: `${a.customerName} ${detail}` }}>
+            {a.customerName} <Typography.Text type="secondary">{detail}</Typography.Text>
+          </Typography.Text>
+        );
+      },
     },
     {
       title: '관리코드',
@@ -166,12 +169,12 @@ export function RentalInventoryPage() {
           <Typography.Text type="secondary">{code}</Typography.Text>
         </Link>
       ),
-      width: 170,
+      ...autoWidth(),
     },
     {
       title: '액션',
       key: 'actions',
-      width: 110,
+      ...autoWidth(),
       render: (_, r) => (
         <Can permission="RENTAL_EDIT">
           <Popconfirm

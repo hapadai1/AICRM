@@ -1,7 +1,7 @@
 /**
  * 고객 등록 모달 (CUST-001) — 예약 없이 방문한 고객을 직접 등록한다.
- * 예약으로 생긴 고객은 [예약 고객 등록]을 쓴다. 두 경로가 같은 필드를 채우도록
- * 예약 고객만 갖던 '최초 예약일'도 여기서 입력할 수 있게 두었다.
+ * 예약으로 들어온 고객은 예약 등록 시점에 이미 고객으로 만들어진다(설계서 07 D2).
+ * 두 경로가 같은 필드를 채우도록 '최초 예약일'도 여기서 입력할 수 있게 두었다.
  */
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { App, DatePicker, Form, Input, Modal } from 'antd';
@@ -14,6 +14,8 @@ interface Props {
   onClose: () => void;
   /** 전화번호 중복으로 막혔을 때 기존 고객 상세로 보낸다 */
   onGoDetail: (customerId: string) => void;
+  /** 등록 성공 알림 — 호출부가 목록 조회 범위를 넓히는 데 쓴다 */
+  onRegistered?: () => void;
 }
 
 interface FormValues {
@@ -24,7 +26,7 @@ interface FormValues {
   firstReservedAt?: Dayjs;
 }
 
-export function CustomerRegisterModal({ open, onClose, onGoDetail }: Props) {
+export function CustomerRegisterModal({ open, onClose, onGoDetail, onRegistered }: Props) {
   const { message, modal } = App.useApp();
   const queryClient = useQueryClient();
   const [form] = Form.useForm<FormValues>();
@@ -39,6 +41,7 @@ export function CustomerRegisterModal({ open, onClose, onGoDetail }: Props) {
     onSuccess: (created) => {
       message.success(`고객 "${created.name}"을(를) 등록했습니다.`);
       void queryClient.invalidateQueries({ queryKey: ['customers'] });
+      onRegistered?.();
       close();
     },
     onError: (e) => {

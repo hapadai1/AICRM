@@ -1187,11 +1187,11 @@ async function main(): Promise<void> {
           { previousStatus: 'RECEIVED', newStatus: 'IN_PROGRESS', eventDate: dateOnly(-5) },
         ],
       });
-      // 렌탈 실물 수선: JKT-BLK-100-003 (반납 후 수선 중)
+      // 일반 수선: 렌탈 실물(JKT-BLK-100-003) 관련 건이지만 수선구분은 일반 수선이다.
+      // (렌탈 수선 진행 자체는 렌탈 진행의 수선요청·입고·출고 단계에서 관리한다)
       await repair({
-        customerId: 정우성, repairType: 'RENTAL_POST', requestDate: dateOnly(-3), dueDate: dateOnly(7),
-        status: 'IN_PROGRESS', description: '자켓 소매 안감 뜯어짐 수선',
-        rentalInventoryItemId: inventoryItems['JKT-BLK-100-003'],
+        customerId: 정우성, repairType: 'GENERAL', requestDate: dateOnly(-3), dueDate: dateOnly(7),
+        status: 'IN_PROGRESS', description: 'JKT-BLK-100-003 자켓 소매 안감 뜯어짐 수선',
         notes: '반납 검수 중 발견',
         events: [
           { newStatus: 'RECEIVED', eventDate: dateOnly(-3) },

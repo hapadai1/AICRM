@@ -108,6 +108,36 @@ describe('예약·상담 (Phase 2 + 연동정합화 §1)', () => {
     }
   });
 
+  // 시드(seed.ts APPOINTMENT_PURPOSES)는 v2 진행상태 트랙 순서를 따르고, 폐지 목적은 은퇴시킨다.
+  // 목적을 추가·개명하면 이 테스트를 함께 갱신한다 (설계서 06 §1.7).
+  it('예약 목적 시드는 진행상태 트랙 순서를 따르고 폐지 목적은 노출되지 않는다', async () => {
+    const res = await api(ctx).get('/api/v1/appointment-purposes').set(auth(ctx)).expect(200);
+    const active = res.body.data as Array<{ code: string; name: string; sortOrder: number }>;
+
+    expect(active.map((p) => p.code)).toEqual([
+      // 맞춤
+      'INITIAL_CONSULTATION',
+      'STYLE_CONSULTING',
+      'MEASUREMENT',
+      'FITTING',
+      'PICKUP',
+      // 렌탈
+      'RENTAL_CONSULTATION',
+      'RENTAL_PICKUP',
+      'RENTAL_RETURN',
+      // 수선
+      'REPAIR_RECEIPT',
+      'REPAIR_PICKUP',
+    ]);
+    expect(active.map((p) => p.sortOrder)).toEqual([...active.keys()].map((i) => i + 1));
+
+    // 은퇴 목적(렌탈 채촌·수선 방문수거/배송)은 접수·출고 방식 필드나 공통 채촌으로 대체됐다.
+    const retired = await ctx.prisma.appointmentPurpose.findMany({
+      where: { code: { in: ['RENTAL_MEASUREMENT', 'REPAIR_PICKUP_VISIT', 'REPAIR_DELIVERY_VISIT'] } },
+    });
+    for (const purpose of retired) expect(purpose.active).toBe(false);
+  });
+
   it('예약 수정은 낙관적 잠금을 적용하고 평면 뷰(version/memo)로 응답한다', async () => {
     const list = await api(ctx).get('/api/v1/appointments?purpose=FITTING').set(auth(ctx)).expect(200);
     const appt = list.body.data[0];

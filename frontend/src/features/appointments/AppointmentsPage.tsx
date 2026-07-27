@@ -1,12 +1,18 @@
-import { LeftOutlined, PlusOutlined, PrinterOutlined, RightOutlined, SyncOutlined } from '@ant-design/icons';
+import {
+  LeftOutlined,
+  PlusOutlined,
+  PrinterOutlined,
+  RightOutlined,
+  SearchOutlined,
+  SyncOutlined,
+} from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App, Button, Card, DatePicker, Empty, Segmented, Select, Space, Spin, Table, Tag, Typography } from 'antd';
+import { App, Button, Card, DatePicker, Empty, Input, Segmented, Space, Spin, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs, { type Dayjs } from 'dayjs';
 import { useMemo, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  fetchAppointmentPurposes,
   fetchAppointments,
   syncNaverReservations,
   type Appointment,
@@ -16,7 +22,6 @@ import {
 import { ApiError } from '../../api/client';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
-import { CUSTOMER_STATUS_META } from '../customers/customer-constants';
 import {
   APPT_STATUS_META,
   SOURCE_META,
@@ -27,10 +32,18 @@ import {
 import { AppointmentFormModal } from './AppointmentFormModal';
 import { MonthCalendar } from './MonthCalendar';
 import { metaOf } from '../../shared/status-meta';
+import { autoWidth } from '../../shared/table-width';
 
 const { RangePicker } = DatePicker;
 
 type ViewMode = 'day' | 'week' | 'month' | 'list';
+
+/**
+ * 목록 뷰 기본 상태 필터 (설계서 07 D4) — 아직 맞이하지 않은 예약.
+ * 방문완료·취소·노쇼는 지나간 건이라 "앞으로 맞이할 손님" 목록에서 뺀다.
+ * 캘린더(일/주/월)와 인쇄는 이 필터를 쓰지 않는다 — 과거 이력 확인이 본래 목적이다(D5).
+ */
+const LIST_ALIVE_STATUSES: AppointmentStatus[] = ['RESERVED', 'CONFIRMED'];
 
 /** 일 뷰에서 같은 시간대 예약을 가로로 나열할 때 쓰는 카드 고정폭(px). 개수와 무관하게 동일. */
 const CARD_WIDTH = 200;
@@ -184,34 +197,35 @@ export function AppointmentsPage() {
 
   const [mode, setMode] = useState<ViewMode>('day');
   const [baseDate, setBaseDate] = useState<Dayjs>(() => dayjs());
-  const [listRange, setListRange] = useState<[Dayjs, Dayjs]>(() => [dayjs().subtract(7, 'day'), dayjs().add(7, 'day')]);
-  const [purposeCodes, setPurposeCodes] = useState<string[]>([]);
-  const [statuses, setStatuses] = useState<AppointmentStatus[]>([]);
-  const [source, setSource] = useState<AppointmentSource | undefined>(undefined);
+  // 목록 뷰 기본 기간은 "오늘 이후" — 종료일은 비워 둔다(설계서 07 D4).
+  const [listRange, setListRange] = useState<[Dayjs | null, Dayjs | null]>(() => [dayjs(), null]);
+  const [keyword, setKeyword] = useState('');
+  const [q, setQ] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
 
-  const [from, to] = useMemo<[Dayjs, Dayjs]>(() => {
-    if (mode === 'day') return [baseDate, baseDate];
-    if (mode === 'week') return [baseDate.startOf('week'), baseDate.endOf('week')];
+  const [fromStr, toStr] = useMemo<[string | undefined, string | undefined]>(() => {
+    const range = (a: Dayjs, b: Dayjs): [string, string] => [a.format('YYYY-MM-DD'), b.format('YYYY-MM-DD')];
+    if (mode === 'day') return range(baseDate, baseDate);
+    if (mode === 'week') return range(baseDate.startOf('week'), baseDate.endOf('week'));
     // 월간은 앞뒤 주가 캘린더에 걸쳐 보이므로 그 범위까지 함께 가져온다.
     if (mode === 'month')
-      return [baseDate.startOf('month').startOf('week'), baseDate.endOf('month').endOf('week')];
-    return listRange;
+      return range(baseDate.startOf('month').startOf('week'), baseDate.endOf('month').endOf('week'));
+    return [listRange[0]?.format('YYYY-MM-DD'), listRange[1]?.format('YYYY-MM-DD')];
   }, [mode, baseDate, listRange]);
-  const fromStr = from.format('YYYY-MM-DD');
-  const toStr = to.format('YYYY-MM-DD');
 
-  const { data: purposes } = useQuery({
-    queryKey: ['appointment-purposes'],
-    queryFn: fetchAppointmentPurposes,
-    staleTime: 5 * 60_000,
-  });
+  // 목록 뷰에서만 통합 검색어·살아있는 상태 필터를 건다. 캘린더는 선택 날짜의 예약을 그대로 보여준다(D5).
+  const isList = mode === 'list';
+  const listStatuses = isList ? LIST_ALIVE_STATUSES : undefined;
+  const listQ = isList ? q : '';
 
   const { data, isLoading } = useQuery({
-    queryKey: ['appointments', { fromStr, toStr, purposeCodes, statuses, source: source ?? '' }],
-    queryFn: () => fetchAppointments({ from: fromStr, to: toStr, purposeCodes, statuses, source, size: 100 }),
+    queryKey: ['appointments', { fromStr: fromStr ?? '', toStr: toStr ?? '', listQ, isList }],
+    queryFn: () =>
+      fetchAppointments({ q: listQ || undefined, from: fromStr, to: toStr, statuses: listStatuses, size: 100 }),
   });
   const appointments = data?.data ?? [];
+
+  const runSearch = () => setQ(keyword.trim());
 
   const syncMutation = useMutation({
     mutationFn: syncNaverReservations,
@@ -232,10 +246,11 @@ export function AppointmentsPage() {
     setBaseDate((d) => d.add(diff, unit));
   };
 
-  /** 현재 필터·기간 그대로 인쇄 페이지를 새 탭으로 연다 (개발설계서 05 G-02). */
+  /** 현재 기간 그대로 인쇄 페이지를 새 탭으로 연다 (개발설계서 05 G-02). */
   const openPrint = () => {
-    const query = new URLSearchParams({ from: fromStr, to: toStr });
-    if (purposeCodes.length > 0) query.set('purposeCodes', purposeCodes.join(','));
+    const query = new URLSearchParams();
+    if (fromStr) query.set('from', fromStr);
+    if (toStr) query.set('to', toStr);
     window.open(`/appointments/print?${query.toString()}`, '_blank');
   };
 
@@ -243,36 +258,23 @@ export function AppointmentsPage() {
     {
       title: '예약 일시',
       dataIndex: 'startAt',
-      width: 160,
+      ...autoWidth(),
       render: (v: string) => dayjs(v).format('YYYY-MM-DD (dd) HH:mm'),
     },
-    {
-      title: '고객명',
-      dataIndex: 'customerName',
-      width: 140,
-      render: (_, r) => (
-        <Space size={4}>
-          <span>{r.customerName}</span>
-          {r.customerStatus && (
-            <Tag color={metaOf(CUSTOMER_STATUS_META, r.customerStatus).color}>
-              {metaOf(CUSTOMER_STATUS_META, r.customerStatus).label}
-            </Tag>
-          )}
-        </Space>
-      ),
-    },
-    { title: '전화번호', dataIndex: 'phone', width: 130 },
-    { title: '예약 목적', dataIndex: 'purposeName', width: 110 },
+    // 미계약/계약 배지는 제거했다 — 가망/계약 고객 구분이 폐기되어 표시 의미가 없다(설계서 07 D8).
+    { title: '고객명', dataIndex: 'customerName', ...autoWidth(100) },
+    { title: '전화번호', dataIndex: 'phone', ...autoWidth() },
+    { title: '예약 목적', dataIndex: 'purposeName', ...autoWidth() },
     {
       title: '출처',
       dataIndex: 'source',
-      width: 90,
+      ...autoWidth(),
       render: (v: AppointmentSource) => <Tag color={metaOf(SOURCE_META, v).color}>{metaOf(SOURCE_META, v).label}</Tag>,
     },
     {
       title: '상태',
       dataIndex: 'status',
-      width: 100,
+      ...autoWidth(),
       render: (v: AppointmentStatus) => (
         <StatusBadge label={metaOf(APPT_STATUS_META, v).label} color={metaOf(APPT_STATUS_META, v).color} />
       ),
@@ -280,12 +282,24 @@ export function AppointmentsPage() {
     {
       title: '동기화',
       dataIndex: 'syncStatus',
-      width: 100,
+      ...autoWidth(),
       render: (v: Appointment['syncStatus']) => (
         <StatusBadge label={metaOf(SYNC_STATUS_META, v).label} color={metaOf(SYNC_STATUS_META, v).color} />
       ),
     },
-    { title: '메모', dataIndex: 'memo', ellipsis: true },
+    {
+      title: '메모',
+      dataIndex: 'memo',
+      // 열 ellipsis 옵션은 표 전체를 고정 레이아웃으로 되돌린다. 셀 안에서 잘라 자동 폭을 유지한다.
+      render: (v?: string) =>
+        v ? (
+          <Typography.Text ellipsis={{ tooltip: v }} style={{ maxWidth: 320 }}>
+            {v}
+          </Typography.Text>
+        ) : (
+          '-'
+        ),
+    },
   ];
 
   return (
@@ -325,13 +339,28 @@ export function AppointmentsPage() {
             ]}
           />
           {mode === 'list' ? (
-            <RangePicker
-              allowClear={false}
-              value={listRange}
-              onChange={(v) => {
-                if (v?.[0] && v?.[1]) setListRange([v[0], v[1]]);
-              }}
-            />
+            <>
+              {/* 통합 검색 1필드 — 예약자 이름·전화번호·예약 목적을 한 번에 찾는다(설계서 07 D4) */}
+              <Input
+                allowClear
+                style={{ width: 280 }}
+                placeholder="예약자 이름 / 전화번호 / 예약 목적"
+                prefix={<SearchOutlined />}
+                value={keyword}
+                onChange={(e) => setKeyword(e.target.value)}
+                onPressEnter={runSearch}
+              />
+              <Button icon={<SearchOutlined />} onClick={runSearch}>
+                검색
+              </Button>
+              {/* 종료일을 비우면 오늘 이후 전부. 과거를 보려면 시작일을 앞으로 당기면 된다. */}
+              <RangePicker
+                allowEmpty={[true, true]}
+                value={listRange}
+                onChange={(v) => setListRange([v?.[0] ?? null, v?.[1] ?? null])}
+              />
+              <Typography.Text type="secondary">예약접수·확정 건만</Typography.Text>
+            </>
           ) : (
             <Space size={4}>
               <Button icon={<LeftOutlined />} onClick={() => moveBase(-1)} aria-label="이전" />
@@ -340,37 +369,6 @@ export function AppointmentsPage() {
               <Button onClick={() => setBaseDate(dayjs())}>오늘</Button>
             </Space>
           )}
-          <Select
-            mode="multiple"
-            allowClear
-            placeholder="예약 목적"
-            style={{ minWidth: 180 }}
-            value={purposeCodes}
-            onChange={setPurposeCodes}
-            options={(purposes ?? []).map((p) => ({ value: p.code, label: p.name }))}
-            maxTagCount="responsive"
-          />
-          <Select
-            mode="multiple"
-            allowClear
-            placeholder="상태"
-            style={{ minWidth: 160 }}
-            value={statuses}
-            onChange={setStatuses}
-            options={Object.entries(APPT_STATUS_META).map(([value, meta]) => ({ value, label: meta.label }))}
-            maxTagCount="responsive"
-          />
-          <Select
-            allowClear
-            placeholder="출처"
-            style={{ minWidth: 110 }}
-            value={source}
-            onChange={(v) => setSource(v as AppointmentSource | undefined)}
-            options={[
-              { value: 'NAVER', label: '네이버' },
-              { value: 'CRM', label: 'CRM' },
-            ]}
-          />
         </Space>
 
         {mode === 'list' ? (

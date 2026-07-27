@@ -166,9 +166,19 @@ export class NotificationsService {
   /**
    * 메시지 발송. triggerKey가 있으면 idempotency_keys로 중복 발송을 방지하고
    * 최초 발송 결과를 그대로 반환한다.
+   *
+   * 템플릿 없이 `body`만으로도 보낼 수 있다(담당자가 문구를 직접 쓰는 경우).
    */
   async send(dto: SendNotificationDto, actor: AuthUser) {
-    const template = await this.resolveTemplate(dto.templateId, dto.templateCode);
+    const customBody = dto.body?.trim() ? dto.body : null;
+    const template =
+      dto.templateId || dto.templateCode
+        ? await this.resolveTemplate(dto.templateId, dto.templateCode)
+        : null;
+    if (!template && !customBody)
+      throw new BusinessException('VALIDATION_ERROR', '템플릿이나 보낼 문구가 필요합니다.', [
+        { field: 'body', reason: 'REQUIRED' },
+      ]);
     const customer = await this.prisma.customer.findUnique({ where: { id: dto.customerId } });
     if (!customer) throw new BusinessException('CUSTOMER_NOT_FOUND', '고객이 없습니다.');
 
@@ -180,19 +190,30 @@ export class NotificationsService {
     }
 
     const recipientPhone = dto.recipientPhone ?? customer.phone;
-    const renderedBody = renderTemplate(template.body, dto.variables ?? {});
+    const templateBody = template ? renderTemplate(template.body, dto.variables ?? {}) : null;
+    // 직접 쓴 문구에도 `#{변수}`를 그대로 쓸 수 있도록 같은 치환을 태운다.
+    const renderedBody = customBody
+      ? renderTemplate(customBody, dto.variables ?? {})
+      : (templateBody as string);
+
+    // 알림톡은 사전 승인된 템플릿 본문 그대로일 때만 나갈 수 있다.
+    // 문구를 직접 썼거나 고친 건, 미승인 템플릿은 SMS로 보낸다.
+    const sendChannel =
+      template && template.approvalStatus === 'APPROVED' && renderedBody === templateBody
+        ? template.channel
+        : 'SMS';
 
     const record = async (channel: string, retryOfId: string | null) => {
       const result = await this.vendor.send({
         channel,
         recipientPhone,
         body: renderedBody,
-        templateCode: template.code,
+        templateCode: template?.code,
       });
       return this.prisma.notificationHistory.create({
         data: {
           id: randomUUID(),
-          templateId: template.id,
+          templateId: template?.id ?? null,
           customerId: customer.id,
           orderId: dto.orderId ?? null,
           recipientPhone,
@@ -206,19 +227,19 @@ export class NotificationsService {
       });
     };
 
-    const history = await record(template.channel, null);
+    const history = await record(sendChannel, null);
 
     // 알림톡 실패 시 SMS 대체 발송(fallbackSms=false로 비활성화 가능).
     const fallback =
-      history.status === 'FAILED' && template.channel === 'ALIMTALK' && dto.fallbackSms !== false
+      history.status === 'FAILED' && sendChannel === 'ALIMTALK' && dto.fallbackSms !== false
         ? await record('SMS', history.id)
         : null;
 
     const toResult = (h: typeof history) => ({
       id: h.id,
-      templateId: template.id,
-      templateCode: template.code,
-      templateName: template.name,
+      templateId: template?.id ?? null,
+      templateCode: template?.code ?? null,
+      templateName: template?.name ?? null,
       channel: h.channel,
       customerId: customer.id,
       orderId: h.orderId,

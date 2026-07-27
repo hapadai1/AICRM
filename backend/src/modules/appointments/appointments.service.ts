@@ -36,7 +36,7 @@ const ALLOWED_TRANSITIONS: Record<string, string[]> = {
 
 const APPOINTMENT_INCLUDE = {
   customer: {
-    select: { id: true, name: true, phone: true, customerStatus: true, registeredAt: true },
+    select: { id: true, name: true, phone: true, customerStatus: true },
   },
   purpose: { select: { id: true, code: true, name: true } },
 } as const;
@@ -90,21 +90,21 @@ export class AppointmentsService {
     if (query.source) where.source = query.source;
     if (query.customerId) where.customerId = query.customerId;
 
-    const customerWhere: Prisma.CustomerWhereInput = {};
-    if (query.customerRegistered !== undefined) {
-      customerWhere.registeredAt = query.customerRegistered ? { not: null } : null;
-    }
-
+    // 통합 검색 (설계서 07 D4): 한 필드로 고객명·전화번호·예약 목적명을 함께 찾는다.
+    // 목적명은 customer가 아닌 purpose 관계라 고객 하위 OR에 넣을 수 없다 —
+    // where.OR 최상위에 두어야 기간·상태·customerId 조건과 AND로 결합된다.
     const keyword = query.q?.trim();
     if (keyword) {
-      // 고객명 부분일치 또는 전화번호 부분일치. 자릿수 검증 없이 숫자만 뽑아 비교한다
+      // 자릿수 검증 없이 숫자만 뽑아 비교한다
       // (검색어는 "010-12"처럼 불완전할 수 있어 normalizePhone을 쓰지 않는다).
       const digits = keyword.replace(/\D/g, '');
-      const or: Prisma.CustomerWhereInput[] = [{ name: { contains: keyword, mode: 'insensitive' } }];
-      if (digits) or.push({ phoneNormalized: { contains: digits } });
-      customerWhere.OR = or;
+      const or: Prisma.AppointmentWhereInput[] = [
+        { customer: { name: { contains: keyword, mode: 'insensitive' } } },
+        { purpose: { name: { contains: keyword, mode: 'insensitive' } } },
+      ];
+      if (digits) or.push({ customer: { phoneNormalized: { contains: digits } } });
+      where.OR = or;
     }
-    if (Object.keys(customerWhere).length > 0) where.customer = customerWhere;
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.appointment.findMany({

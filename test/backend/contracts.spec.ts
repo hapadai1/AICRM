@@ -303,6 +303,25 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
       expect(detail.body.data.currentVersion.versionStatus).toBe('CONFIRMED');
     });
 
+    it('계약 확정은 주문별 진행(journey)을 CONTRACT_CONFIRMED 단계로 시작시킨다 (설계서 07 §7.1)', async () => {
+      const orders = confirmBody.orders as Array<{ id: string; tradeType: string }>;
+      const journeys = await ctx.prisma.customerJourney.findMany({
+        where: { customerId, status: 'ACTIVE' },
+        orderBy: { trackType: 'asc' },
+      });
+      // 주문 1건당 진행 1건 — CUSTOM·RENTAL 각각
+      expect(journeys).toHaveLength(2);
+      expect(journeys.map((j) => j.trackType)).toEqual(['CUSTOM', 'RENTAL']);
+      for (const journey of journeys) {
+        expect(journey.currentStageCode).toBe('CONTRACT_CONFIRMED');
+        const order = orders.find((o) => o.tradeType === journey.trackType)!;
+        expect(journey.orderId).toBe(order.id);
+        // 시작 이력이 이벤트로 남는다
+        const events = await ctx.prisma.journeyEvent.findMany({ where: { journeyId: journey.id } });
+        expect(events.some((e) => e.toStageCode === 'CONTRACT_CONFIRMED')).toBe(true);
+      }
+    });
+
     it('동일 Idempotency-Key 재요청은 저장된 최초 응답을 그대로 반환한다', async () => {
       const res = await api(ctx)
         .post(`/api/v1/contracts/${contractId}/confirm`)
@@ -495,6 +514,24 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
       expect(doc.body.data.customer.name).toBeDefined();
       expect(doc.body.data.version.versionNo).toBe(3);
       expect(doc.body.data.lines.length).toBeGreaterThan(0);
+
+      // 라인은 주문품목(정장 #1 …) × 부위 계층을 함께 싣는다 (v2 계약관리)
+      const suitLine = doc.body.data.lines.find(
+        (l: { productCategory: string }) => l.productCategory === 'SUIT',
+      );
+      expect(suitLine.items.length).toBeGreaterThan(0);
+      const item = suitLine.items[0];
+      expect(item.displayName).toMatch(/#\d+$/);
+      expect(item.components.map((c: { groupLabel: string }) => c.groupLabel)).toEqual(
+        expect.arrayContaining(['상의(자켓)', '하의(바지)']),
+      );
+      // 옵션 미선택이면 부위 행은 남고 옵션은 비어 있다
+      expect(item.components.every((c: { options: unknown[] }) => Array.isArray(c.options))).toBe(true);
+      expect(item.optionTotal).toBe(0);
+      // 추가금액 0원 옵션은 계약서에 싣지 않는다
+      expect(
+        (doc.body.data.options as { extraPrice: number }[]).every((o) => Number(o.extraPrice) > 0),
+      ).toBe(true);
     });
 
     it('변경확정 body의 changeReason·금액·lines를 확정 직전 revision에 반영한다 (연동정합화 §3)', async () => {
@@ -594,6 +631,119 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
       });
       expect(logs).toHaveLength(1);
       expect(logs[0].reason).toBe('고객 단순 변심');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // 계약 삭제 (임시저장·취소 한정)
+  // ---------------------------------------------------------------------------
+
+  describe('계약 삭제', () => {
+    it('임시저장 계약은 버전·라인까지 삭제된다', async () => {
+      const customerId = await newCustomer();
+      const created = await api(ctx)
+        .post('/api/v1/contracts')
+        .set(auth(ctx))
+        .send({
+          customerId,
+          lines: [{ transactionType: 'CUSTOM', productCategory: 'SUIT', quantity: 1 }],
+        })
+        .expect(201);
+      const contractId = created.body.data.id as string;
+
+      await api(ctx).delete(`/api/v1/contracts/${contractId}`).set(auth(ctx)).expect(200);
+
+      expect(await ctx.prisma.contract.findUnique({ where: { id: contractId } })).toBeNull();
+      expect(await ctx.prisma.contractVersion.count({ where: { contractId } })).toBe(0);
+      const logs = await ctx.prisma.auditLog.findMany({
+        where: { entityType: 'CONTRACT', entityId: contractId, action: 'DELETE' },
+      });
+      expect(logs).toHaveLength(1);
+      await api(ctx).get(`/api/v1/contracts/${contractId}`).set(auth(ctx)).expect(404);
+    });
+
+    it('확정된 계약은 삭제할 수 없고, 취소하면 주문까지 함께 삭제된다', async () => {
+      const customerId = await newCustomer();
+      const created = await api(ctx)
+        .post('/api/v1/contracts')
+        .set(auth(ctx))
+        .send({
+          customerId,
+          lines: [{ transactionType: 'CUSTOM', productCategory: 'SUIT', quantity: 1 }],
+        })
+        .expect(201);
+      const contractId = created.body.data.id as string;
+      await signDraft(contractId);
+      await api(ctx)
+        .post(`/api/v1/contracts/${contractId}/confirm`)
+        .set(auth(ctx))
+        .send({ version: await currentRowVersion(contractId) })
+        .expect(200);
+
+      // 확정 상태 → 거부
+      const denied = await api(ctx).delete(`/api/v1/contracts/${contractId}`).set(auth(ctx)).expect(409);
+      expect(denied.body.error.code).toBe('CONTRACT_NOT_DELETABLE');
+
+      await api(ctx)
+        .post(`/api/v1/contracts/${contractId}/cancel`)
+        .set(auth(ctx))
+        .send({ reason: '중복 계약' })
+        .expect(200);
+
+      await api(ctx).delete(`/api/v1/contracts/${contractId}`).set(auth(ctx)).expect(200);
+      expect(await ctx.prisma.contract.findUnique({ where: { id: contractId } })).toBeNull();
+      expect(await ctx.prisma.order.count({ where: { contractId } })).toBe(0);
+    });
+
+    it('진행 이력(채촌 연결)이 있는 취소 계약은 삭제를 거부한다', async () => {
+      const customerId = await newCustomer();
+      const created = await api(ctx)
+        .post('/api/v1/contracts')
+        .set(auth(ctx))
+        .send({
+          customerId,
+          lines: [{ transactionType: 'CUSTOM', productCategory: 'SUIT', quantity: 1 }],
+        })
+        .expect(201);
+      const contractId = created.body.data.id as string;
+      await signDraft(contractId);
+      await api(ctx)
+        .post(`/api/v1/contracts/${contractId}/confirm`)
+        .set(auth(ctx))
+        .send({ version: await currentRowVersion(contractId) })
+        .expect(200);
+      await api(ctx)
+        .post(`/api/v1/contracts/${contractId}/cancel`)
+        .set(auth(ctx))
+        .send({ reason: '고객 변심' })
+        .expect(200);
+
+      // 채촌 세션을 품목에 연결해 '진행 이력'을 만든다.
+      const item = await ctx.prisma.orderItem.findFirstOrThrow({ where: { order: { contractId } } });
+      const admin = await ctx.prisma.user.findUniqueOrThrow({ where: { loginId: 'admin' } });
+      const session = await ctx.prisma.measurementSession.create({
+        data: {
+          id: randomUUID(),
+          customerId,
+          versionNo: 1,
+          measurementDate: new Date(),
+          createdBy: admin.id,
+        },
+      });
+      await ctx.prisma.orderItemMeasurement.create({
+        data: {
+          id: randomUUID(),
+          orderItemId: item.id,
+          measurementSessionId: session.id,
+          linkedBy: admin.id,
+          linkedAt: new Date(),
+        },
+      });
+
+      const res = await api(ctx).delete(`/api/v1/contracts/${contractId}`).set(auth(ctx)).expect(409);
+      expect(res.body.error.code).toBe('CONTRACT_NOT_DELETABLE');
+      expect(res.body.error.message).toContain('채촌 연결');
+      expect(await ctx.prisma.contract.findUnique({ where: { id: contractId } })).not.toBeNull();
     });
   });
 });
@@ -893,6 +1043,52 @@ describe('계약 목록 검색 (GET /contracts 확장)', () => {
       'CTR-260610-001',
       'CTR-260715-003',
     ]);
+  });
+
+  it('임시저장 초안(계약일 없음)도 기간 조회에 작성일 기준으로 잡힌다', async () => {
+    const draftId = randomUUID();
+    await ctx.prisma.contract.create({
+      data: {
+        id: draftId,
+        contractNo: 'CTR-DRAFT-009',
+        customerId: hongId,
+        contractTypeId: suitTypeId,
+        status: 'DRAFT',
+        contractedAt: null,
+      },
+    });
+    const day = (offset: number) => {
+      const d = new Date();
+      d.setDate(d.getDate() + offset);
+      return d.toISOString().slice(0, 10);
+    };
+
+    try {
+      const res = await api(ctx)
+        .get('/api/v1/contracts')
+        .query({ dateFrom: day(-1), dateTo: day(1) })
+        .set(auth(ctx))
+        .expect(200);
+      expect(res.body.data.map((c: { id: string }) => c.id)).toContain(draftId);
+
+      // 기간 + 검색어를 함께 걸어도 조건이 서로 덮이지 않는다.
+      const withSearch = await api(ctx)
+        .get('/api/v1/contracts')
+        .query({ dateFrom: day(-1), dateTo: day(1), q: 'CTR-DRAFT-009' })
+        .set(auth(ctx))
+        .expect(200);
+      expect(withSearch.body.data.map((c: { id: string }) => c.id)).toEqual([draftId]);
+
+      // 작성일 밖의 기간에는 잡히지 않는다.
+      const outside = await api(ctx)
+        .get('/api/v1/contracts')
+        .query({ dateFrom: '2026-05-01', dateTo: '2026-05-02' })
+        .set(auth(ctx))
+        .expect(200);
+      expect(outside.body.data.map((c: { id: string }) => c.id)).not.toContain(draftId);
+    } finally {
+      await ctx.prisma.contract.delete({ where: { id: draftId } });
+    }
   });
 
   it('잘못된 기간 형식과 정렬 형식은 VALIDATION_ERROR를 반환한다', async () => {

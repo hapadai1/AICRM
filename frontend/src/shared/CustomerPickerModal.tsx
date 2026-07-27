@@ -5,14 +5,12 @@
  */
 import { SearchOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Input, Modal, Space, Switch, Table, Typography } from 'antd';
+import { Input, Modal, Space, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useState } from 'react';
 import { fetchCustomers } from '../api/customers';
 import type { CustomerListItem } from '../api/customers';
-import { CUSTOMER_STATUS_META, formatAmount } from '../features/customers/customer-constants';
-import { StatusBadge } from './StatusBadge';
-import { metaOf } from './status-meta';
+import { formatAmount } from '../features/customers/customer-constants';
 
 /** 호출부가 필요한 최소 정보 */
 export interface PickedCustomer {
@@ -39,7 +37,6 @@ export function CustomerPickerModal({
 }: Props) {
   const [keyword, setKeyword] = useState(initialKeyword);
   const [q, setQ] = useState(initialKeyword);
-  const [includeProspect, setIncludeProspect] = useState(true);
   const [page, setPage] = useState(1);
 
   // 팝업을 다시 열 때는 호출부의 현재 키워드로 초기화한다.
@@ -52,8 +49,9 @@ export function CustomerPickerModal({
   }, [open, initialKeyword]);
 
   const { data, isFetching } = useQuery({
-    queryKey: ['customers', 'picker', { q, includeProspect, page }],
-    queryFn: () => fetchCustomers({ q, includeProspect, page, size: 10 }),
+    // 계약 유무와 무관한 전 고객이 검색 대상이다 — 첫 계약을 쓰려는 고객이 여기서 빠지면 안 된다.
+    queryKey: ['customers', 'picker', { q, page }],
+    queryFn: () => fetchCustomers({ q, scope: 'ALL', page, size: 10 }),
     enabled: open,
   });
 
@@ -65,14 +63,7 @@ export function CustomerPickerModal({
   const columns: ColumnsType<CustomerListItem> = [
     { title: '고객명', dataIndex: 'name', width: 110 },
     { title: '전화번호', dataIndex: 'phone', width: 140 },
-    {
-      title: '상태',
-      dataIndex: 'customerStatus',
-      width: 100,
-      render: (v: CustomerListItem['customerStatus']) => (
-        <StatusBadge label={metaOf(CUSTOMER_STATUS_META, v).label} color={metaOf(CUSTOMER_STATUS_META, v).color} />
-      ),
-    },
+    // 미계약/계약 상태 열은 제거했다 — 가망/계약 고객 구분 폐기(설계서 07 D8).
     { title: '최근 방문일', dataIndex: 'lastVisitDate', width: 110, render: (v?: string) => v ?? '-' },
     { title: '계약', dataIndex: 'contractCount', width: 70, align: 'right', render: (v: number) => `${v}건` },
     {
@@ -89,22 +80,16 @@ export function CustomerPickerModal({
   return (
     <Modal title={title} open={open} onCancel={onCancel} footer={null} width={880} destroyOnClose>
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
-        <Space wrap>
-          <Input
-            allowClear
-            autoFocus
-            style={{ width: 320 }}
-            placeholder="고객명 또는 전화번호"
-            prefix={<SearchOutlined />}
-            value={keyword}
-            onChange={(e) => setKeyword(e.target.value)}
-            onPressEnter={runSearch}
-          />
-          <Space size={4}>
-            <Switch size="small" checked={includeProspect} onChange={setIncludeProspect} />
-            <Typography.Text type="secondary">미계약 고객 포함</Typography.Text>
-          </Space>
-        </Space>
+        <Input
+          allowClear
+          autoFocus
+          style={{ width: 320 }}
+          placeholder="고객명 또는 전화번호"
+          prefix={<SearchOutlined />}
+          value={keyword}
+          onChange={(e) => setKeyword(e.target.value)}
+          onPressEnter={runSearch}
+        />
         <Table<CustomerListItem>
           rowKey="id"
           scroll={{ x: 'max-content' }}

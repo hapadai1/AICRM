@@ -132,7 +132,7 @@ export function CustomerDetailPage() {
   };
 
   const updateMutation = useMutation({
-    mutationFn: (body: CustomerSaveBody) => updateCustomer(id, body),
+    mutationFn: (body: CustomerSaveBody & { version: number }) => updateCustomer(id, body),
     onSuccess: () => {
       message.success('고객 정보를 수정했습니다.');
       setEditOpen(false);
@@ -509,7 +509,7 @@ export function CustomerDetailPage() {
                     rowKey="id"
                     columns={contractColumns}
                     dataSource={data.contracts}
-                    scroll={{ x: 1000 }}
+                    scroll={{ x: 'max-content' }}
                     locale={{ emptyText: <Empty description="계약 이력이 없습니다." /> }}
                   />
                 </>
@@ -526,7 +526,7 @@ export function CustomerDetailPage() {
                     rowKey="id"
                     columns={orderColumns}
                     dataSource={data.orders}
-                    scroll={{ x: 900 }}
+                    scroll={{ x: 'max-content' }}
                     locale={{ emptyText: <Empty description="주문 이력이 없습니다." /> }}
                   />
                 </>
@@ -573,7 +573,7 @@ export function CustomerDetailPage() {
                     rowKey="id"
                     columns={componentColumns}
                     dataSource={data.components}
-                    scroll={{ x: 900 }}
+                    scroll={{ x: 'max-content' }}
                     locale={{ emptyText: <Empty description="제작 구성품이 없습니다." /> }}
                   />
                 </>

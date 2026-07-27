@@ -32,6 +32,11 @@ interface ChoiceSeed {
    * 원본 PDF의 사진·라벨이 어긋난 단계에서만 지정한다.
    */
   imageSlot?: 'A' | 'B' | 'C';
+  /**
+   * 사진을 빌려올 자산 파일 접두. 기본은 단계 코드.
+   * 베스트처럼 전용 촬영본이 아직 없는 단계에서 모양이 가장 가까운 자켓 사진을 임시로 쓴다.
+   */
+  imageFrom?: string;
 }
 
 interface StageSeed {
@@ -39,6 +44,11 @@ interface StageSeed {
   name: string;
   /** 부위 그룹 (E9/D5): 자켓·라펠·안감류→JACKET, 바지류→TROUSERS, 베스트류→VEST */
   componentGroup: 'JACKET' | 'TROUSERS' | 'VEST';
+  /**
+   * 미지정이면 필수. 베스트는 구성품이 없는 주문(대부분의 2피스)이 많아 선택 단계로 둔다 —
+   * 필수로 두면 confirm()의 필수 단계 검증에 걸려 베스트 없는 정장까지 확정이 막힌다.
+   */
+  required?: boolean;
   choices: ChoiceSeed[];
 }
 
@@ -119,6 +129,30 @@ const STAGES: StageSeed[] = [
     componentGroup: 'TROUSERS',
     choices: [{ name: '벨트고리' }, { name: '사이드어드저스트' }],
   },
+  // 베스트(스리피스) 옵션 — plan_v2 "베스트: 스티치, 카라".
+  // 전용 촬영본이 없어 모양이 가장 가까운 자켓 사진을 임시로 빌려 쓴다.
+  // 베스트 사진을 받으면 assets/suit-design/VEST_*.jpg로 넣고 imageFrom을 지우면 된다.
+  {
+    code: 'VEST_STITCH',
+    name: '베스트 스티치 디자인',
+    componentGroup: 'VEST',
+    required: false,
+    choices: [
+      { name: '스티치', extraPrice: 22000, imageFrom: 'STITCH', imageSlot: 'A' },
+      { name: '스티치 없음', imageFrom: 'STITCH', imageSlot: 'B' },
+    ],
+  },
+  {
+    code: 'VEST_COLLAR',
+    name: '베스트 카라 디자인',
+    componentGroup: 'VEST',
+    required: false,
+    choices: [
+      { name: '노치드 카라', imageFrom: 'LAPEL', imageSlot: 'A' },
+      { name: '피크드 카라', extraPrice: 22000, imageFrom: 'LAPEL', imageSlot: 'B' },
+      { name: '숄카라', extraPrice: 22000, imageFrom: 'LAPEL', imageSlot: 'C' },
+    ],
+  },
 ];
 
 const CODES = ['A', 'B', 'C'] as const;
@@ -184,7 +218,7 @@ async function main(): Promise<void> {
     let n = 0;
     for (const stage of STAGES) {
       for (const [i, choice] of stage.choices.entries()) {
-        await ensureFile(stage.code, choice.imageSlot ?? CODES[i]);
+        await ensureFile(choice.imageFrom ?? stage.code, choice.imageSlot ?? CODES[i]);
         n += 1;
       }
     }
@@ -199,7 +233,10 @@ async function main(): Promise<void> {
   const imageIds = new Map<string, string>();
   for (const stage of STAGES) {
     for (const [i, choice] of stage.choices.entries()) {
-      imageIds.set(`${stage.code}_${CODES[i]}`, await ensureFile(stage.code, choice.imageSlot ?? CODES[i]));
+      imageIds.set(
+        `${stage.code}_${CODES[i]}`,
+        await ensureFile(choice.imageFrom ?? stage.code, choice.imageSlot ?? CODES[i]),
+      );
     }
   }
 
@@ -251,7 +288,7 @@ async function main(): Promise<void> {
             stageCode: seed.code,
             stageName: seed.name,
             sequenceNo,
-            required: true,
+            required: seed.required ?? true,
             componentGroup: seed.componentGroup,
             active: true,
           },
@@ -263,7 +300,7 @@ async function main(): Promise<void> {
           data: {
             stageCode: seed.code,
             stageName: seed.name,
-            required: true,
+            required: seed.required ?? true,
             componentGroup: seed.componentGroup,
             active: true,
           },

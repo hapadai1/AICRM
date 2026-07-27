@@ -28,7 +28,6 @@ export const REPAIR_STATUS_FLOW = [
 const CANCELLED = 'CANCELLED';
 
 const CUSTOM_TYPES = ['CUSTOM_DURING', 'AFTER_SALE'];
-const RENTAL_TYPES = ['RENTAL_PRE', 'RENTAL_POST'];
 
 const REPAIR_SUMMARY_SELECT = {
   id: true,
@@ -48,7 +47,6 @@ const REPAIR_SUMMARY_SELECT = {
   order: { select: { id: true, orderNo: true } },
   orderItem: { select: { id: true, displayName: true, productCategory: true } },
   component: { select: { id: true, componentType: true, sequenceNo: true } },
-  rentalInventoryItem: { select: { id: true, managementCode: true } },
 } as const;
 
 const REPAIR_DETAIL_SELECT = {
@@ -104,7 +102,7 @@ export class RepairsService {
   /**
    * 수선 접수 모달 연결 대상 후보 (연동정합화 계약 §8):
    * - orderItems: 고객의 맞춤(CUSTOM) 주문 품목(취소 제외) + 활성 구성품
-   * - rentalItems: 고객 렌탈 배정(취소 제외)에 연결된 실물 요약(최근 배정 기준 중복 제거)
+   * 렌탈 실물은 후보가 아니다 — 렌탈 수선은 렌탈 진행에서 관리한다.
    */
   async linkTargets(query: LinkTargetsQueryDto) {
     const customer = await this.prisma.customer.findUnique({ where: { id: query.customerId } });
@@ -113,62 +111,26 @@ export class RepairsService {
         { field: 'customerId', reason: 'NOT_FOUND' },
       ]);
 
-    const [items, allocations] = await Promise.all([
-      this.prisma.orderItem.findMany({
-        where: {
-          status: { not: 'CANCELLED' },
-          order: { transactionType: 'CUSTOM', contract: { customerId: query.customerId } },
+    const items = await this.prisma.orderItem.findMany({
+      where: {
+        status: { not: 'CANCELLED' },
+        order: { transactionType: 'CUSTOM', contract: { customerId: query.customerId } },
+      },
+      select: {
+        id: true,
+        displayName: true,
+        productCategory: true,
+        sequenceNo: true,
+        status: true,
+        order: { select: { id: true, orderNo: true } },
+        components: {
+          where: { active: true },
+          select: { id: true, componentType: true, sequenceNo: true, status: true },
+          orderBy: [{ componentType: 'asc' }, { sequenceNo: 'asc' }],
         },
-        select: {
-          id: true,
-          displayName: true,
-          productCategory: true,
-          sequenceNo: true,
-          status: true,
-          order: { select: { id: true, orderNo: true } },
-          components: {
-            where: { active: true },
-            select: { id: true, componentType: true, sequenceNo: true, status: true },
-            orderBy: [{ componentType: 'asc' }, { sequenceNo: 'asc' }],
-          },
-        },
-        orderBy: [{ createdAt: 'desc' }, { sequenceNo: 'asc' }],
-      }),
-      this.prisma.rentalAllocation.findMany({
-        where: {
-          status: { not: 'CANCELLED' },
-          orderItemComponent: { orderItem: { order: { contract: { customerId: query.customerId } } } },
-        },
-        orderBy: [{ pickupDate: 'desc' }, { createdAt: 'desc' }],
-        select: {
-          id: true,
-          status: true,
-          pickupDate: true,
-          returnDueDate: true,
-          rentalInventoryItem: { include: { rentalSku: true } },
-        },
-      }),
-    ]);
-
-    // 동일 실물이 여러 배정에 걸치면 최근 배정 하나로 요약한다.
-    const rentalItems = new Map<string, Record<string, unknown>>();
-    for (const allocation of allocations) {
-      const item = allocation.rentalInventoryItem;
-      if (rentalItems.has(item.id)) continue;
-      rentalItems.set(item.id, {
-        id: item.id,
-        managementCode: item.managementCode,
-        componentType: item.rentalSku.componentType,
-        design: item.rentalSku.design,
-        color: item.rentalSku.color,
-        size: item.rentalSku.size,
-        status: item.status,
-        allocationId: allocation.id,
-        allocationStatus: allocation.status,
-        pickupDate: allocation.pickupDate,
-        returnDueDate: allocation.returnDueDate,
-      });
-    }
+      },
+      orderBy: [{ createdAt: 'desc' }, { sequenceNo: 'asc' }],
+    });
 
     return {
       orderItems: items.map((item) => ({
@@ -181,7 +143,6 @@ export class RepairsService {
         orderNo: item.order.orderNo,
         components: item.components,
       })),
-      rentalItems: [...rentalItems.values()],
     };
   }
 
@@ -205,7 +166,6 @@ export class RepairsService {
           orderId: links.orderId,
           orderItemId: links.orderItemId,
           componentId: links.componentId,
-          rentalInventoryItemId: links.rentalInventoryItemId,
           repairType: dto.repairType,
           requestDate,
           dueDate: toDate(dto.dueDate),
@@ -391,15 +351,14 @@ export class RepairsService {
 
   /**
    * 수선 유형별 연결 검증 (통합설계서 §12.1 수선 대상·연결 방식):
-   * - CUSTOM_DURING / AFTER_SALE → orderItemId 또는 componentId 필수, 렌탈 연결 불가
-   * - RENTAL_PRE / RENTAL_POST → rentalInventoryItemId 필수, 맞춤 연결 불가
+   * - CUSTOM_DURING / AFTER_SALE → orderItemId 또는 componentId 필수
    * - GENERAL → 고객만 연결(대상 설명은 description), 다른 연결 불가
+   * 렌탈 실물 수선은 이 도메인에서 접수하지 않는다(렌탈 진행에서 관리).
    */
   private async resolveLinks(dto: CreateRepairDto): Promise<{
     orderId?: string;
     orderItemId?: string;
     componentId?: string;
-    rentalInventoryItemId?: string;
   }> {
     const invalid = (message: string, fieldErrors?: FieldError[]) =>
       new BusinessException('VALIDATION_ERROR', message, fieldErrors);
@@ -408,10 +367,6 @@ export class RepairsService {
       if (!dto.orderItemId && !dto.componentId)
         throw invalid('맞춤 수선은 주문 품목 또는 구성품 연결이 필요합니다.', [
           { field: 'orderItemId', reason: 'REQUIRED_FOR_CUSTOM' },
-        ]);
-      if (dto.rentalInventoryItemId)
-        throw invalid('맞춤 수선에는 렌탈 실물을 연결할 수 없습니다.', [
-          { field: 'rentalInventoryItemId', reason: 'NOT_ALLOWED_FOR_CUSTOM' },
         ]);
 
       if (dto.componentId) {
@@ -438,27 +393,8 @@ export class RepairsService {
       return { orderItemId: item.id, orderId: item.orderId };
     }
 
-    if (RENTAL_TYPES.includes(dto.repairType)) {
-      if (!dto.rentalInventoryItemId)
-        throw invalid('렌탈 수선은 렌탈 실물 연결이 필요합니다.', [
-          { field: 'rentalInventoryItemId', reason: 'REQUIRED_FOR_RENTAL' },
-        ]);
-      if (dto.orderItemId || dto.componentId)
-        throw invalid('렌탈 수선에는 맞춤 품목·구성품을 연결할 수 없습니다.', [
-          { field: 'orderItemId', reason: 'NOT_ALLOWED_FOR_RENTAL' },
-        ]);
-      const rentalItem = await this.prisma.rentalInventoryItem.findUnique({
-        where: { id: dto.rentalInventoryItemId },
-      });
-      if (!rentalItem)
-        throw invalid('연결할 렌탈 실물이 없습니다.', [
-          { field: 'rentalInventoryItemId', reason: 'NOT_FOUND' },
-        ]);
-      return { rentalInventoryItemId: rentalItem.id };
-    }
-
     // GENERAL: 고객만 연결하고 대상 설명(description)을 입력한다.
-    if (dto.orderItemId || dto.componentId || dto.rentalInventoryItemId)
+    if (dto.orderItemId || dto.componentId)
       throw invalid('일반 수선은 고객 외 대상을 연결할 수 없습니다.', [
         { field: 'repairType', reason: 'GENERAL_MUST_NOT_LINK' },
       ]);
