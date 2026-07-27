@@ -8,14 +8,14 @@ import type { ListResult } from './client';
 
 /**
  * 기준정보 slug — 예약 목적은 'appointment-purposes'(복수)로 통일 (계약 문서 04 §11).
- * appointment-purposes/payment-method 만 DB 마스터 테이블로 편집 가능하다.
+ * appointment-purposes 만 DB 마스터 테이블로 편집 가능하다.
  * product-category/component-type/repair-type 은 코드 상수로 정의돼 있어 읽기 전용이다.
+ * (결제수단은 v2 D6 결제 기능 제거와 함께 삭제됐다.)
  */
 export type MasterType =
   | 'appointment-purposes'
   | 'product-category'
   | 'component-type'
-  | 'payment-method'
   | 'repair-type';
 
 export interface MasterItem {
@@ -494,21 +494,49 @@ export function saveRolePermissions(roleId: string, permissions: string[]): Prom
 export interface AuditLogItem {
   id: string;
   occurredAt: string;
-  userId: string;
+  userId: string | null;
   userName: string;
   action: string;
   entityType: string;
   entityId: string;
-  entityLabel?: string;
   reason?: string;
-  ip: string;
-  requestId: string;
-  userAgent?: string;
-}
-
-export interface AuditLogDetail extends AuditLogItem {
+  /** audit_logs.ip_address — 현재 서비스 계층에서 채우지 않아 대부분 null 이다. */
+  ip?: string;
   before: Record<string, unknown> | null;
   after: Record<string, unknown> | null;
+}
+
+export type AuditLogDetail = AuditLogItem;
+
+/** 백엔드는 Prisma 행을 그대로 반환한다 (createdAt·beforeJson·user 중첩). */
+interface AuditLogApiRow {
+  id: string;
+  createdAt: string;
+  userId: string | null;
+  action: string;
+  entityType: string;
+  entityId: string;
+  beforeJson: Record<string, unknown> | null;
+  afterJson: Record<string, unknown> | null;
+  reason: string | null;
+  ipAddress: string | null;
+  user?: { loginId: string; displayName: string } | null;
+}
+
+function toAuditLog(row: AuditLogApiRow): AuditLogItem {
+  return {
+    id: row.id,
+    occurredAt: row.createdAt,
+    userId: row.userId,
+    userName: row.user ? `${row.user.displayName}(${row.user.loginId})` : '시스템',
+    action: row.action,
+    entityType: row.entityType,
+    entityId: row.entityId,
+    reason: row.reason ?? undefined,
+    ip: row.ipAddress ?? undefined,
+    before: row.beforeJson ?? null,
+    after: row.afterJson ?? null,
+  };
 }
 
 export interface AuditLogSearchParams {
@@ -522,9 +550,12 @@ export interface AuditLogSearchParams {
 }
 
 export function searchAuditLogs(params: AuditLogSearchParams): Promise<ListResult<AuditLogItem>> {
-  return request<ListResult<AuditLogItem>>({ url: '/audit-logs', params });
+  return request<ListResult<AuditLogApiRow>>({ url: '/audit-logs', params }).then((res) => ({
+    ...res,
+    data: (res.data ?? []).map(toAuditLog),
+  }));
 }
 
 export function fetchAuditLog(id: string): Promise<AuditLogDetail> {
-  return request<AuditLogDetail>({ url: `/audit-logs/${id}` });
+  return request<AuditLogApiRow>({ url: `/audit-logs/${id}` }).then(toAuditLog);
 }
