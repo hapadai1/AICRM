@@ -6,7 +6,7 @@ import { AuthUser } from '../../common/decorators';
 import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
-import { NotificationSuggestionService } from '../notifications/notification-suggestion.service';
+import { FilesService, UploadedMulterFile } from '../files/files.service';
 import { buildWorkOrderView, workOrderStatusSelect } from '../work-orders/work-order-status';
 import {
   AGGREGATE_ONLY_STATUSES,
@@ -71,7 +71,7 @@ export class ProductionService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
-    private readonly suggestions: NotificationSuggestionService,
+    private readonly files: FilesService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -248,39 +248,10 @@ export class ProductionService {
       const itemStatus = await this.aggregateItemStatus(tx, component.orderItemId, change.eventDate, actor);
       return { event, component: updated, orderItemStatus: itemStatus };
     });
-    // 전체 입고(완성복)면 고객 연락 문구를 함께 준비한다 — 발송은 화면 확인창에서 별도로.
-    // 기존 응답 필드는 유지하고 suggestedNotification만 덧붙인다(하위호환, repairs와 동일).
-    const suggestedNotification = await this.buildReceivedSuggestion(
-      component.orderItemId,
-      result.orderItemStatus,
-    );
-    return { ...result, suggestedNotification };
-  }
-
-  /** 맞춤 품목이 전체 입고(RECEIVED)되면 '완성복 입고 안내' 연락 제안을 만든다. */
-  private async buildReceivedSuggestion(orderItemId: string, itemStatus: string) {
-    if (itemStatus !== 'RECEIVED') return null;
-    const item = await this.prisma.orderItem.findUnique({
-      where: { id: orderItemId },
-      select: {
-        order: {
-          select: { id: true, transactionType: true, contract: { select: { customerId: true } } },
-        },
-      },
-    });
-    if (!item || item.order.transactionType !== 'CUSTOM') return null;
-    const template = await this.prisma.notificationTemplate.findUnique({
-      where: { code: 'JOURNEY_PRODUCT_RECEIVED' },
-      select: { id: true },
-    });
-    if (!template) return null;
-    return this.suggestions.build({
-      templateId: template.id,
-      customerId: item.order.contract.customerId,
-      orderId: item.order.id,
-      // 같은 품목의 전체 입고 연락은 한 번만 발송된다.
-      triggerKey: `production:${orderItemId}:RECEIVED`,
-    });
+    // D7 일원화(설계서 02 §8·§10.3 #4): 완성복 입고 고객 연락 제안은 진행(journey)
+    // PRODUCT_RECEIVED 단계 진입에서만 만든다. production 쪽 자동 제안은 제거해 이중 노출을 없앤다.
+    // 응답 필드는 하위호환을 위해 유지하되 항상 null(연락은 진행 카드에서).
+    return { ...result, suggestedNotification: null };
   }
 
   /** 구성품 상태를 집계해 품목 상태를 갱신하고, 변경 시 집계 이벤트를 남긴다. */
@@ -522,6 +493,81 @@ export class ProductionService {
       .toISOString()
       .slice(0, 10)}.xlsx`;
     return { buffer, fileName };
+  }
+
+  // ---------------------------------------------------------------------------
+  // 가봉 첨부 파일 (설계서 06 §5.4) — 공장 회신/마킹본 보관용. EntityFile 재사용.
+  // ---------------------------------------------------------------------------
+
+  /** 가봉 세션에 파일 첨부. File 저장(FilesService 재사용) + EntityFile(FITTING_SESSION/FACTORY_REPLY) 연결. */
+  async uploadFittingFile(fittingId: string, file: UploadedMulterFile | undefined, actor: AuthUser) {
+    await this.assertFittingExists(fittingId);
+    const uploaded = await this.files.upload(file, actor);
+    await this.prisma.entityFile.create({
+      data: {
+        id: randomUUID(),
+        fileId: uploaded.id,
+        entityType: 'FITTING_SESSION',
+        entityId: fittingId,
+        purpose: 'FACTORY_REPLY',
+      },
+    });
+    await this.audit.log({
+      userId: actor.id,
+      action: 'CREATE',
+      entityType: 'FITTING_SESSION',
+      entityId: fittingId,
+      after: { fileId: uploaded.id, purpose: 'FACTORY_REPLY', originalName: uploaded.originalName },
+    });
+    return { ...uploaded, purpose: 'FACTORY_REPLY' };
+  }
+
+  /** 가봉 세션 첨부 목록. */
+  async listFittingFiles(fittingId: string) {
+    await this.assertFittingExists(fittingId);
+    const entityFiles = await this.prisma.entityFile.findMany({
+      where: { entityType: 'FITTING_SESSION', entityId: fittingId },
+      orderBy: { createdAt: 'asc' },
+      include: { file: true },
+    });
+    return entityFiles.map((ef) => ({
+      id: ef.file.id,
+      entityFileId: ef.id,
+      purpose: ef.purpose,
+      originalName: ef.file.originalName,
+      mimeType: ef.file.mimeType,
+      sizeBytes: Number(ef.file.sizeBytes),
+      checksumSha256: ef.file.checksumSha256,
+      downloadUrl: `/api/v1/files/${ef.file.id}`,
+      createdAt: ef.createdAt,
+    }));
+  }
+
+  /** 가봉 세션 첨부 제거. EntityFile 링크를 먼저 끊고 미참조 File을 삭제한다(FilesService.remove). */
+  async removeFittingFile(fittingId: string, fileId: string, actor: AuthUser) {
+    const link = await this.prisma.entityFile.findFirst({
+      where: { entityType: 'FITTING_SESSION', entityId: fittingId, fileId },
+    });
+    if (!link) throw new NotFoundException('가봉 첨부 파일이 없습니다.');
+    // 참조 중인 File은 삭제되지 않으므로(FilesService.remove 규칙) 링크를 먼저 제거한다.
+    await this.prisma.entityFile.delete({ where: { id: link.id } });
+    await this.files.remove(fileId, actor);
+    await this.audit.log({
+      userId: actor.id,
+      action: 'DELETE',
+      entityType: 'FITTING_SESSION',
+      entityId: fittingId,
+      before: { fileId, purpose: link.purpose },
+    });
+    return { id: fileId, deleted: true };
+  }
+
+  private async assertFittingExists(fittingId: string): Promise<void> {
+    const session = await this.prisma.fittingSession.findUnique({
+      where: { id: fittingId },
+      select: { id: true },
+    });
+    if (!session) throw new NotFoundException('가봉 기록이 없습니다.');
   }
 
   private async findComponent(componentId: string) {

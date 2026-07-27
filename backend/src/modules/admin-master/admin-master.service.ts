@@ -11,6 +11,8 @@ import { CreateMasterItemDto, UpdateMasterItemDto } from './admin-master.dto';
  * type별로 전용 테이블에 위임한다. 코드/표시명/정렬/사용여부만 다루며 스키마가 동일하다.
  * - appointment-purposes → appointment_purposes
  * - payment-method       → payment_methods
+ * - rental-colors        → rental_colors (v2 D3)
+ * - rental-sizes         → rental_sizes  (v2 D3)
  */
 interface MasterRow {
   id: string;
@@ -47,6 +49,16 @@ export class AdminMasterService {
         return {
           delegate: this.prisma.paymentMethod as unknown as MasterDelegate,
           entityType: 'PAYMENT_METHOD',
+        };
+      case 'rental-colors':
+        return {
+          delegate: this.prisma.rentalColor as unknown as MasterDelegate,
+          entityType: 'RENTAL_COLOR',
+        };
+      case 'rental-sizes':
+        return {
+          delegate: this.prisma.rentalSize as unknown as MasterDelegate,
+          entityType: 'RENTAL_SIZE',
         };
       default:
         throw new BusinessException('VALIDATION_ERROR', `지원하지 않는 기준정보 유형입니다: ${type}`, [

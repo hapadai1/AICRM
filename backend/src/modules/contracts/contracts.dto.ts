@@ -1,7 +1,6 @@
-import { Transform, Type } from 'class-transformer';
+import { Type } from 'class-transformer';
 import {
   IsArray,
-  IsBoolean,
   IsDateString,
   IsInt,
   IsIn,
@@ -130,14 +129,12 @@ export class UpdateContractDto extends ContractAmountsDto {
 export const CONTRACT_STATUSES = ['DRAFT', 'CONFIRMED', 'CHANGED', 'CANCELLED'] as const;
 
 /** 목록 기간 필터 기준 (개편계획 06 §2.1) */
-export const CONTRACT_DATE_FIELDS = ['contractedAt', 'paymentDate', 'completionDueDate'] as const;
+export const CONTRACT_DATE_FIELDS = ['contractedAt', 'completionDueDate'] as const;
 
 /** 목록 정렬 허용 필드 (개편계획 06 §2.2) */
 export const CONTRACT_SORT_FIELDS = [
   'contractedAt',
   'totalAmount',
-  'paidAmount',
-  'unpaidAmount',
   'completionDueDate',
 ] as const;
 
@@ -178,12 +175,6 @@ export class ContractListQueryDto extends PageQueryDto {
   @IsOptional()
   @IsUUID()
   contractTypeId?: string;
-
-  /** 미수금(계약금액 − 실수납액)이 남은 계약만 */
-  @IsOptional()
-  @Transform(({ value }) => value === true || value === 'true')
-  @IsBoolean()
-  unpaidOnly?: boolean;
 
   /** `필드,방향` (예: `contractedAt,desc`) */
   @IsOptional()
@@ -256,6 +247,25 @@ export class ConfirmRevisionDto {
   @IsOptional()
   @IsString()
   idempotencyKey?: string;
+}
+
+/** 전자서명 저장 (설계서 03 §3.2) */
+export class SaveSignatureDto {
+  /** data:image/png;base64,... 형식 */
+  @IsString()
+  @Matches(/^data:image\/png;base64,/, { message: 'imageDataUrl은 PNG dataURL이어야 합니다.' })
+  imageDataUrl: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(80)
+  signerName: string;
+
+  /** 낙관적 잠금: contracts.row_version */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  version?: number;
 }
 
 export class CancelContractDto {

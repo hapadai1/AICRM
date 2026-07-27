@@ -58,19 +58,15 @@ export function LoginPage() {
             AICRM
           </Typography.Title>
           <Typography.Text type="secondary">맞춤 정장·렌탈 매장 CRM</Typography.Text>
-          {/* 개발 편의: 시드 계정을 화면에 노출하고 폼에 기본 입력해 둔다. 운영 배포 전 제거할 것. */}
-          <div style={{ marginTop: 12 }}>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              개발용 계정 — 아이디 <Typography.Text code>admin</Typography.Text> / 비밀번호{' '}
-              <Typography.Text code>admin1234!</Typography.Text>
-            </Typography.Text>
-          </div>
         </div>
         <Form<LoginForm>
           layout="vertical"
           onFinish={onFinish}
           requiredMark={false}
-          initialValues={{ loginId: 'admin', password: 'admin1234!' }}
+          // 개발 편의: 개발 모드에서만 시드 계정을 폼에 기본 입력해 둔다.
+          initialValues={
+            import.meta.env.DEV ? { loginId: 'admin', password: 'admin1234!' } : undefined
+          }
         >
           <Form.Item
             name="loginId"

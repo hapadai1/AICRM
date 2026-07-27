@@ -120,7 +120,7 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
 
   it('import는 dryRun 미리보기와 오류 행 분리를 지원한다', async () => {
     const items = [
-      { componentType: 'TROUSERS', design: '클래식', color: 'BLACK', size: '32', managementCode: 'PNT-BK-32-001' },
+      { componentType: 'TROUSERS', design: '클래식', color: 'BLACK', size: '95', managementCode: 'PNT-BK-32-001' },
       { componentType: 'JACKET', design: '클래식', color: 'BLACK', size: '100', managementCode: 'JKT-BK-100-002' }, // DB 중복
       { componentType: 'HAT', design: '모자', color: 'GRAY', size: 'F', managementCode: 'HAT-001' }, // 허용되지 않은 품목
       { componentType: 'SHOES', design: '더비', color: 'BROWN' }, // 필수값 누락
@@ -147,6 +147,63 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
     const errorRows = real.body.data.errors.map((e: { row: number }) => e.row).sort();
     expect(errorRows).toEqual([2, 3, 4]);
     expect(await ctx.prisma.rentalInventoryItem.count({ where: { managementCode: 'PNT-BK-32-001' } })).toBe(1);
+  });
+
+  // ---------------------------------------------------------------------------
+  // 1-b. E10 — 컬러·사이즈 기준정보 코드 검증
+  // ---------------------------------------------------------------------------
+
+  it('E10: 활성 기준정보 코드(color/size)면 실물 등록이 통과한다', async () => {
+    await api(ctx)
+      .post('/api/v1/rental-inventory')
+      .set(auth(ctx))
+      .send({ componentType: 'JACKET', design: 'E10', color: 'CHARCOAL', size: '110', managementCode: 'E10-OK-001' })
+      .expect(201);
+  });
+
+  it('E10: 미등록 color/size 코드는 VALIDATION_ERROR fieldErrors로 차단한다', async () => {
+    // 미등록 컬러
+    const badColor = await api(ctx)
+      .post('/api/v1/rental-inventory')
+      .set(auth(ctx))
+      .send({ componentType: 'JACKET', design: 'E10', color: 'RAINBOW', size: '100', managementCode: 'E10-BADC-001' })
+      .expect(400);
+    expect(badColor.body.error.code).toBe('VALIDATION_ERROR');
+    expect(badColor.body.error.fieldErrors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ field: 'color', reason: 'INVALID_COLOR_CODE' })]),
+    );
+    expect(await ctx.prisma.rentalInventoryItem.count({ where: { managementCode: 'E10-BADC-001' } })).toBe(0);
+
+    // 미등록 사이즈 (호수 체계 밖: '32')
+    const badSize = await api(ctx)
+      .post('/api/v1/rental-inventory')
+      .set(auth(ctx))
+      .send({ componentType: 'TROUSERS', design: 'E10', color: 'BLACK', size: '32', managementCode: 'E10-BADS-001' })
+      .expect(400);
+    expect(badSize.body.error.code).toBe('VALIDATION_ERROR');
+    expect(badSize.body.error.fieldErrors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ field: 'size', reason: 'INVALID_SIZE_CODE' })]),
+    );
+    expect(await ctx.prisma.rentalInventoryItem.count({ where: { managementCode: 'E10-BADS-001' } })).toBe(0);
+  });
+
+  it('E10: import은 미등록 color/size 행을 오류로 분리한다', async () => {
+    const res = await api(ctx)
+      .post('/api/v1/rental-inventory/import')
+      .set(auth(ctx))
+      .send({
+        dryRun: true,
+        items: [
+          { componentType: 'JACKET', design: 'E10', color: 'NAVY', size: '100', managementCode: 'E10-IMP-OK' },
+          { componentType: 'JACKET', design: 'E10', color: 'RAINBOW', size: '999', managementCode: 'E10-IMP-BAD' },
+        ],
+      })
+      .expect(201);
+    expect(res.body.data.successCount).toBe(1);
+    expect(res.body.data.errorCount).toBe(1);
+    const badRow = res.body.data.errors.find((e: { managementCode: string }) => e.managementCode === 'E10-IMP-BAD');
+    expect(badRow.errors.join(' ')).toMatch(/color/);
+    expect(badRow.errors.join(' ')).toMatch(/size/);
   });
 
   // ---------------------------------------------------------------------------
@@ -376,7 +433,7 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
     const created = await api(ctx)
       .post('/api/v1/rental-inventory')
       .set(auth(ctx))
-      .send({ componentType: 'SHOES', design: '더비', color: 'BLACK', size: '270', managementCode: 'SHO-RET-001' })
+      .send({ componentType: 'SHOES', design: '더비', color: 'BLACK', size: '100', managementCode: 'SHO-RET-001' })
       .expect(201);
     const shoesId = created.body.data[0].id;
     const retired = await api(ctx)
@@ -580,5 +637,285 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
       .set(auth(ctx))
       .query({ orderId: randomUUID() })
       .expect(404);
+  });
+
+  // ---------------------------------------------------------------------------
+  // 8. 렌탈예약 달력 — 일자별 가용 집계 (설계서 06 §4)
+  // ---------------------------------------------------------------------------
+
+  it('availability-calendar는 일자별 가용 수를 집계하고 배정 기간엔 가용이 줄어든다', async () => {
+    // 달력 전용 격리 재고: 고유 디자인 'CAL달력'으로 다른 테스트 데이터와 분리
+    const created = await api(ctx)
+      .post('/api/v1/rental-inventory')
+      .set(auth(ctx))
+      .send({ componentType: 'JACKET', design: 'CAL달력', color: 'NAVY', size: '100', managementCode: 'CAL-J', quantity: 2 })
+      .expect(201);
+    const [cal1] = created.body.data;
+
+    // 배정 전: 3일 모두 가용 2건
+    const before = await api(ctx)
+      .get('/api/v1/rental-inventory/availability-calendar')
+      .set(auth(ctx))
+      .query({ from: '2027-01-10', to: '2027-01-12', design: 'CAL달력' })
+      .expect(200);
+    expect(before.body.data.map((d: { date: string }) => d.date)).toEqual([
+      '2027-01-10',
+      '2027-01-11',
+      '2027-01-12',
+    ]);
+    expect(before.body.data.every((d: { availableCount: number }) => d.availableCount === 2)).toBe(true);
+    expect(before.body.data[0].items.length).toBe(2);
+
+    // CAL-J-001을 2027-01-10 ~ 01-11(가용종료) 배정
+    await api(ctx)
+      .post(`/api/v1/rental-orders/${orderId}/allocations`)
+      .set(auth(ctx))
+      .send({
+        componentId: jacketComponentId,
+        inventoryItemId: cal1.id,
+        pickupDate: '2027-01-10',
+        returnDueDate: '2027-01-11',
+        availabilityEndDate: '2027-01-11',
+      })
+      .expect(201);
+
+    // 배정 후: 01-10·01-11은 가용 1건(배정된 실물 제외), 01-12는 다시 2건
+    const after = await api(ctx)
+      .get('/api/v1/rental-inventory/availability-calendar')
+      .set(auth(ctx))
+      .query({ from: '2027-01-10', to: '2027-01-12', design: 'CAL달력' })
+      .expect(200);
+    const byDate = Object.fromEntries(
+      after.body.data.map((d: { date: string; availableCount: number }) => [d.date, d.availableCount]),
+    );
+    expect(byDate['2027-01-10']).toBe(1);
+    expect(byDate['2027-01-11']).toBe(1);
+    expect(byDate['2027-01-12']).toBe(2);
+
+    // q 검색어(관리코드 부분일치)와 잘못된 기간(from>to) 방어
+    const q = await api(ctx)
+      .get('/api/v1/rental-inventory/availability-calendar')
+      .set(auth(ctx))
+      .query({ from: '2027-01-12', to: '2027-01-12', q: 'CAL-J' })
+      .expect(200);
+    expect(q.body.data[0].items.every((i: { managementCode: string }) => i.managementCode.includes('CAL-J'))).toBe(true);
+
+    await api(ctx)
+      .get('/api/v1/rental-inventory/availability-calendar')
+      .set(auth(ctx))
+      .query({ from: '2027-01-12', to: '2027-01-10' })
+      .expect(400);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 렌탈 스타일 선택 + 기준정보(컬러/사이즈) (v2 D3 / 설계서 04 §4·§5)
+// ---------------------------------------------------------------------------
+
+describe('렌탈 스타일 선택·기준정보 (v2 D3)', () => {
+  let ctx: TestContext;
+  let orderItemId: string;
+  let jacketComponentId: string;
+  let sessionId: string;
+  let sessionVersion = 0;
+
+  beforeAll(async () => {
+    ctx = await createTestContext();
+    await truncateBusinessData(ctx.prisma);
+
+    const admin = await ctx.prisma.user.findUniqueOrThrow({ where: { loginId: 'admin' } });
+    const customer = await ctx.prisma.customer.create({
+      data: {
+        id: randomUUID(),
+        name: '렌탈선택 고객',
+        phone: '010-9100-0001',
+        phoneNormalized: '01091000001',
+        customerStatus: 'CONTRACTED',
+      },
+    });
+    const contract = await ctx.prisma.contract.create({
+      data: { id: randomUUID(), contractNo: 'CTR-260721-950', customerId: customer.id, status: 'CONFIRMED' },
+    });
+    const version = await ctx.prisma.contractVersion.create({
+      data: { id: randomUUID(), contractId: contract.id, versionNo: 1, versionStatus: 'CONFIRMED', createdBy: admin.id },
+    });
+    const line = await ctx.prisma.contractLine.create({
+      data: { id: randomUUID(), contractVersionId: version.id, transactionType: 'RENTAL', productCategory: 'SUIT', quantity: 1 },
+    });
+    const order = await ctx.prisma.order.create({
+      data: { id: randomUUID(), orderNo: 'ORD-260721-950', contractId: contract.id, transactionType: 'RENTAL' },
+    });
+    const orderItem = await ctx.prisma.orderItem.create({
+      data: { id: randomUUID(), orderId: order.id, sourceContractLineId: line.id, productCategory: 'SUIT', sequenceNo: 1, displayName: '렌탈 정장' },
+    });
+    orderItemId = orderItem.id;
+    const jacket = await ctx.prisma.orderItemComponent.create({
+      data: { id: randomUUID(), orderItemId: orderItem.id, componentType: 'JACKET' },
+    });
+    jacketComponentId = jacket.id;
+
+    // 후보가 될 AVAILABLE 실물 2건 (JACKET / NAVY / L)
+    await api(ctx)
+      .post('/api/v1/rental-inventory')
+      .set(auth(ctx))
+      .send({ componentType: 'JACKET', design: '렌탈클래식', color: 'NAVY', size: '100', managementCode: 'RJ-NV-L', quantity: 2 })
+      .expect(201);
+    // 다른 색은 후보에서 제외되어야 한다
+    await api(ctx)
+      .post('/api/v1/rental-inventory')
+      .set(auth(ctx))
+      .send({ componentType: 'JACKET', design: '렌탈클래식', color: 'BLACK', size: '100', managementCode: 'RJ-BK-L' })
+      .expect(201);
+  });
+
+  afterAll(async () => {
+    await ctx.app.close();
+  });
+
+  it('rental-colors/rental-sizes 기준정보가 시드되어 있고 CRUD가 동작한다', async () => {
+    const colors = await api(ctx).get('/api/v1/admin/master/rental-colors').set(auth(ctx)).expect(200);
+    expect(colors.body.data.length).toBeGreaterThanOrEqual(12);
+    expect(colors.body.data.map((c: { code: string }) => c.code)).toContain('NAVY');
+
+    const sizes = await api(ctx).get('/api/v1/admin/master/rental-sizes').set(auth(ctx)).expect(200);
+    expect(sizes.body.data.map((s: { code: string }) => s.code)).toEqual(
+      expect.arrayContaining(['90', '100', '110', '120']),
+    );
+
+    // create → retire (마스터 테이블은 스위트 간 truncate되지 않으므로 코드는 매 실행 고유값)
+    const newCode = `TEAL_${randomUUID().slice(0, 6).toUpperCase()}`;
+    const created = await api(ctx)
+      .post('/api/v1/admin/master/rental-colors')
+      .set(auth(ctx))
+      .send({ code: newCode, name: '틸', sortOrder: 99 })
+      .expect(201);
+    expect(created.body.data.code).toBe(newCode);
+    const retired = await api(ctx)
+      .post(`/api/v1/admin/master/rental-colors/${created.body.data.id}/retire`)
+      .set(auth(ctx))
+      .expect(201);
+    expect(retired.body.data.active).toBe(false);
+  });
+
+  it('RENTAL 품목의 렌탈 선택 세션을 시작하고 부위 슬롯을 반환한다', async () => {
+    const res = await api(ctx)
+      .post(`/api/v1/order-items/${orderItemId}/rental-selection`)
+      .set(auth(ctx))
+      .expect(201);
+    expect(res.body.data.status).toBe('IN_PROGRESS');
+    expect(res.body.data.components).toHaveLength(1);
+    expect(res.body.data.components[0].componentType).toBe('JACKET');
+    sessionId = res.body.data.sessionId;
+    sessionVersion = res.body.data.version;
+
+    // 재호출 시 동일 현재 세션 반환
+    const again = await api(ctx)
+      .post(`/api/v1/order-items/${orderItemId}/rental-selection`)
+      .set(auth(ctx))
+      .expect(201);
+    expect(again.body.data.sessionId).toBe(sessionId);
+  });
+
+  it('부위별 컬러·사이즈·비고를 저장하고 잘못된 코드는 거부한다', async () => {
+    const res = await api(ctx)
+      .put(`/api/v1/rental-selections/${sessionId}/lines/${jacketComponentId}`)
+      .set(auth(ctx))
+      .send({ colorCode: 'NAVY', sizeCode: '100', notes: '기장 -2cm', version: sessionVersion })
+      .expect(200);
+    const jacket = res.body.data.components.find(
+      (c: { orderItemComponentId: string }) => c.orderItemComponentId === jacketComponentId,
+    );
+    expect(jacket).toMatchObject({ colorCode: 'NAVY', sizeCode: '100', notes: '기장 -2cm' });
+    sessionVersion = res.body.data.version;
+
+    await api(ctx)
+      .put(`/api/v1/rental-selections/${sessionId}/lines/${jacketComponentId}`)
+      .set(auth(ctx))
+      .send({ colorCode: 'NOPE', version: sessionVersion })
+      .expect(400);
+  });
+
+  it('후보 조회는 재고상태 AVAILABLE을 부위×컬러×사이즈로 필터한다', async () => {
+    const res = await api(ctx)
+      .get(`/api/v1/rental-selections/${sessionId}/lines/${jacketComponentId}/candidates`)
+      .set(auth(ctx))
+      .expect(200);
+    const codes = res.body.data.candidates.map((c: { managementCode: string }) => c.managementCode);
+    // NAVY 2건만, BLACK 제외
+    expect(codes.sort()).toEqual(['RJ-NV-L-001', 'RJ-NV-L-002']);
+  });
+
+  it('후보 실물 선택 → 확정 → 확인서(코드→표시명) 흐름', async () => {
+    const cand = await api(ctx)
+      .get(`/api/v1/rental-selections/${sessionId}/lines/${jacketComponentId}/candidates`)
+      .set(auth(ctx))
+      .expect(200);
+    const pick = cand.body.data.candidates[0];
+
+    const selected = await api(ctx)
+      .put(`/api/v1/rental-selections/${sessionId}/lines/${jacketComponentId}/item`)
+      .set(auth(ctx))
+      .send({ inventoryItemId: pick.id, version: sessionVersion })
+      .expect(200);
+    const jacket = selected.body.data.components.find(
+      (c: { orderItemComponentId: string }) => c.orderItemComponentId === jacketComponentId,
+    );
+    expect(jacket.selectedInventoryItemId).toBe(pick.id);
+    sessionVersion = selected.body.data.version;
+
+    const confirmed = await api(ctx)
+      .post(`/api/v1/rental-selections/${sessionId}/confirm`)
+      .set(auth(ctx))
+      .send({ version: sessionVersion })
+      .expect(200);
+    expect(confirmed.body.data.status).toBe('CONFIRMED');
+
+    // 확정 후 수정 차단
+    await api(ctx)
+      .put(`/api/v1/rental-selections/${sessionId}/lines/${jacketComponentId}`)
+      .set(auth(ctx))
+      .send({ colorCode: 'BLACK' })
+      .expect(409);
+
+    const review = await api(ctx)
+      .get(`/api/v1/rental-selections/${sessionId}/review`)
+      .set(auth(ctx))
+      .expect(200);
+    const rJacket = review.body.data.components[0];
+    expect(rJacket).toMatchObject({ colorCode: 'NAVY', colorName: '네이비', sizeCode: '100' });
+    expect(rJacket.selectedItem.managementCode).toBe(pick.managementCode);
+
+    // 감사로그
+    const audits = await ctx.prisma.auditLog.count({
+      where: { entityType: 'RENTAL_SELECTION_SESSION', entityId: sessionId, action: 'CONFIRM' },
+    });
+    expect(audits).toBe(1);
+  });
+
+  it('CUSTOM 품목은 렌탈 선택 시작이 거부된다', async () => {
+    const admin = await ctx.prisma.user.findUniqueOrThrow({ where: { loginId: 'admin' } });
+    const customer = await ctx.prisma.customer.create({
+      data: { id: randomUUID(), name: '맞춤고객', phone: '010-9100-0002', phoneNormalized: '01091000002' },
+    });
+    const contract = await ctx.prisma.contract.create({
+      data: { id: randomUUID(), contractNo: 'CTR-260721-951', customerId: customer.id, status: 'CONFIRMED' },
+    });
+    const cv = await ctx.prisma.contractVersion.create({
+      data: { id: randomUUID(), contractId: contract.id, versionNo: 1, versionStatus: 'CONFIRMED', createdBy: admin.id },
+    });
+    const cl = await ctx.prisma.contractLine.create({
+      data: { id: randomUUID(), contractVersionId: cv.id, transactionType: 'CUSTOM', productCategory: 'SUIT', quantity: 1 },
+    });
+    const order = await ctx.prisma.order.create({
+      data: { id: randomUUID(), orderNo: 'ORD-260721-951', contractId: contract.id, transactionType: 'CUSTOM' },
+    });
+    const item = await ctx.prisma.orderItem.create({
+      data: { id: randomUUID(), orderId: order.id, sourceContractLineId: cl.id, productCategory: 'SUIT', sequenceNo: 1, displayName: '맞춤 정장' },
+    });
+    const res = await api(ctx)
+      .post(`/api/v1/order-items/${item.id}/rental-selection`)
+      .set(auth(ctx))
+      .expect(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
   });
 });

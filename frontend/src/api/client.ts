@@ -5,12 +5,20 @@ import { useAuthStore } from '../app/auth-store';
 export class ApiError extends Error {
   code: string;
   fieldErrors?: Record<string, string>;
+  /** 오류 envelope의 부가 정보 (예: CUSTOMER_PHONE_DUPLICATE의 existingCustomer) */
+  details?: Record<string, unknown>;
 
-  constructor(code: string, message: string, fieldErrors?: Record<string, string>) {
+  constructor(
+    code: string,
+    message: string,
+    fieldErrors?: Record<string, string>,
+    details?: Record<string, unknown>,
+  ) {
     super(message);
     this.name = 'ApiError';
     this.code = code;
     this.fieldErrors = fieldErrors;
+    this.details = details;
   }
 }
 
@@ -31,6 +39,7 @@ interface ErrorEnvelope {
     code?: string;
     message?: string;
     fieldErrors?: Record<string, string>;
+    details?: Record<string, unknown>;
   };
 }
 
@@ -120,6 +129,7 @@ api.interceptors.response.use(
           envelope.code ?? 'UNKNOWN_ERROR',
           envelope.message ?? '알 수 없는 오류가 발생했습니다.',
           envelope.fieldErrors,
+          envelope.details,
         ),
       );
     }
@@ -145,4 +155,25 @@ export async function request<T>(config: AxiosRequestConfig): Promise<T> {
 export async function fetchFileObjectUrl(path: string): Promise<string> {
   const response = await api.request({ url: path, responseType: 'blob' });
   return URL.createObjectURL(response as unknown as Blob);
+}
+
+/**
+ * 인증이 필요한 파일을 내려받아 브라우저 다운로드를 띄운다.
+ * <a href>로는 Authorization 헤더를 보낼 수 없어 blob으로 받은 뒤 임시 링크를 클릭한다.
+ * 응답 인터셉터가 헤더를 걷어내므로 파일명은 호출부가 넘긴다(백엔드 originalName).
+ */
+export async function downloadFile(path: string, fileName: string): Promise<void> {
+  const response = await api.request({ url: path, responseType: 'blob' });
+  const url = URL.createObjectURL(response as unknown as Blob);
+  try {
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  } finally {
+    // 클릭 직후 해제하면 일부 브라우저가 저장을 취소해 한 틱 미뤄 정리한다.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
 }

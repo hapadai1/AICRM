@@ -70,6 +70,9 @@ export const MEASUREMENT_FIELDS: MeasurementFieldDef[] = [
   { key: 'KNEE', label: '무릎둘레', group: 'LOWER', kind: 'number' },
   { key: 'PANTS_OPENING', label: '바지부리', group: 'LOWER', kind: 'number' },
   { key: 'PANTS_LENGTH', label: '바지기장', group: 'LOWER', kind: 'number' },
+  // 앞마다/뒷마다(股) — 백엔드 measurement-catalog.ts FRONT_MADA/BACK_MADA와 코드·순서 일치 (설계서 v2 05 §2.1)
+  { key: 'FRONT_MADA', label: '앞마다', group: 'LOWER', kind: 'number' },
+  { key: 'BACK_MADA', label: '뒷마다', group: 'LOWER', kind: 'number' },
   { key: 'SHIRT_NECK', label: '목', group: 'SHIRT', kind: 'number' },
   { key: 'SHIRT_SHOULDER', label: '어깨', group: 'SHIRT', kind: 'number' },
   { key: 'SHIRT_CHEST_UPPER', label: '상동', group: 'SHIRT', kind: 'number' },
@@ -598,6 +601,69 @@ export async function fetchMeasurementCompare(
     customerId: left.customerId,
     customerName: left.customerName,
   };
+}
+
+// ---------------------------------------------------------------------------
+// cm ↔ inch (설계서 v2 05 §3) — 저장은 CM 고정, inch는 화면 파생 표시 전용
+// ---------------------------------------------------------------------------
+
+function round1(n: number): number {
+  return Math.round(n * 10) / 10;
+}
+
+/** cm → inch (소수 1자리 반올림). 예: 96 → 37.8 */
+export function cmToInch(cm: number): number {
+  return round1(cm / 2.54);
+}
+
+/** inch → cm (소수 1자리 반올림). 편집한 항목만 저장 직전 역환산에 쓴다. */
+export function inchToCm(inch: number): number {
+  return round1(inch * 2.54);
+}
+
+// ---------------------------------------------------------------------------
+// 채촌 이미지 (설계서 v2 05 §4·§5) — 세션당 ≤50장, EntityFile 연동
+// ---------------------------------------------------------------------------
+
+/** 세션 첨부 이미지 (백엔드 toImageView 응답) */
+export interface MeasurementImage {
+  /** EntityFile id */
+  id: string;
+  /** File id — 다운로드/삭제 키 */
+  fileId: string;
+  originalName: string;
+  mimeType: string;
+  sizeBytes: number;
+  /** `/api/v1/files/:fileId` (인증 필요 — <img> 직접 로드 불가, blob 변환 필요) */
+  downloadUrl: string;
+  createdAt: string;
+}
+
+/** 세션 이미지 목록 (정렬: createdAt 오름차순) */
+export function fetchMeasurementImages(sessionId: string): Promise<MeasurementImage[]> {
+  return request<MeasurementImage[]>({ url: `/measurements/${sessionId}/images` }).then((r) => r ?? []);
+}
+
+/** 이미지 업로드 (multipart, 필드명 `file`). 50장 초과 시 백엔드가 400(VALIDATION_ERROR). */
+export function uploadMeasurementImage(sessionId: string, file: File): Promise<MeasurementImage> {
+  const form = new FormData();
+  form.append('file', file);
+  return request<MeasurementImage>({
+    url: `/measurements/${sessionId}/images`,
+    method: 'POST',
+    data: form,
+  });
+}
+
+/** 이미지 삭제 — 경로 파라미터는 File id(fileId)다(백엔드가 fileId로 연결을 찾음). */
+export function deleteMeasurementImage(
+  sessionId: string,
+  fileId: string,
+): Promise<{ fileId: string; deleted: boolean }> {
+  return request<{ fileId: string; deleted: boolean }>({
+    url: `/measurements/${sessionId}/images/${fileId}`,
+    method: 'DELETE',
+  });
 }
 
 /** 주문 품목에 사용 채촌 버전 지정 (§14.4) */

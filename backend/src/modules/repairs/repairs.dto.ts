@@ -2,12 +2,10 @@ import {
   IsDateString,
   IsIn,
   IsNotEmpty,
-  IsNumber,
   IsOptional,
   IsString,
   IsUUID,
   MaxLength,
-  Min,
 } from 'class-validator';
 import { PageQueryDto } from '../../common/pagination';
 
@@ -54,7 +52,6 @@ export class CreateRepairDto extends RepairMethodDto {
   @IsDateString() requestDate: string;
   @IsOptional() @IsDateString() dueDate?: string;
   @IsString() @IsNotEmpty() description: string;
-  @IsOptional() @IsNumber() @Min(0) cost?: number;
   @IsOptional() @IsString() notes?: string;
   /** CUSTOM_DURING / AFTER_SALE: 품목 또는 구성품 연결 필수 */
   @IsOptional() @IsUUID() orderItemId?: string;
@@ -66,7 +63,6 @@ export class CreateRepairDto extends RepairMethodDto {
 export class UpdateRepairDto extends RepairMethodDto {
   @IsOptional() @IsDateString() dueDate?: string;
   @IsOptional() @IsString() @IsNotEmpty() description?: string;
-  @IsOptional() @IsNumber() @Min(0) cost?: number;
   @IsOptional() @IsString() notes?: string;
 }
 

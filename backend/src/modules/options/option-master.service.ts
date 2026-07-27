@@ -7,6 +7,7 @@ import { BusinessException, FieldError } from '../../common/business.exception';
 import { AuthUser } from '../../common/decorators';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { CHOICE_CODES, MAX_CHOICES, MIN_CHOICES, compareChoiceCodes } from './choice-codes';
 import {
   ActivateOptionSetVersionDto,
   CreateOptionSetVersionDto,
@@ -30,10 +31,7 @@ const CHOICE_SELECT = {
   active: true,
 } as const;
 
-/** 한 단계에 허용하는 선택지 코드. 앞에서부터 개수만큼 쓴다(2개면 A·B, 3개면 A·B·C). */
-export const CHOICE_CODES = ['A', 'B', 'C'] as const;
-const MIN_CHOICES = 2;
-const MAX_CHOICES = CHOICE_CODES.length;
+export { CHOICE_CODES };
 
 const STAGE_INCLUDE = {
   choices: { select: CHOICE_SELECT, orderBy: { choiceCode: 'asc' } },
@@ -138,6 +136,7 @@ export class OptionMasterService {
               stageName: stage.stageName,
               sequenceNo: stage.sequenceNo,
               required: stage.required,
+              componentGroup: stage.componentGroup,
               active: stage.active,
               choices: {
                 create: stage.choices.map((c) => ({
@@ -202,6 +201,7 @@ export class OptionMasterService {
             stageName: stage.stageName,
             sequenceNo: stage.sequenceNo,
             required: stage.required ?? true,
+            componentGroup: stage.componentGroup ?? null,
             active: stage.active ?? true,
             choices: { create: choices },
           },
@@ -320,6 +320,7 @@ export class OptionMasterService {
       stageName: string;
       sequenceNo: number;
       required: boolean;
+      componentGroup: string | null;
       active: boolean;
       choices: Array<{
         id: string;
@@ -345,14 +346,17 @@ export class OptionMasterService {
         stageName: s.stageName,
         sequenceNo: s.sequenceNo,
         required: s.required,
+        componentGroup: s.componentGroup,
         active: s.active,
         // Decimal은 JSON에서 문자열이 되므로 화면이 바로 쓰도록 숫자로 낮춘다.
-        choices: s.choices.map((c) => ({ ...c, extraPrice: Number(c.extraPrice) })),
+        choices: [...s.choices]
+          .sort((a, b) => compareChoiceCodes(a.choiceCode, b.choiceCode))
+          .map((c) => ({ ...c, extraPrice: Number(c.extraPrice) })),
       })),
     };
   }
 
-  /** 단계 코드·순서 중복, 활성 단계 선택지 2~3개(A부터 순서대로) 규칙 검증 (위반 시 OPTION_SET_INVALID) */
+  /** 단계 코드·순서 중복, 활성 단계 선택지 2~10개(A부터 순서대로) 규칙 검증 (위반 시 OPTION_SET_INVALID) */
   private validateStageStructure(dto: SaveOptionStagesDto): void {
     const errors: FieldError[] = [];
     const codes = new Set<string>();
@@ -425,10 +429,12 @@ export class OptionMasterService {
   }
 }
 
-/** 선택지 코드 집합이 A부터 빈칸 없이 2~3개인지 (A,B / A,B,C 만 통과) */
+/** 선택지 코드 집합이 A부터 빈칸 없이 2~40개인지 (A,B / A,B,C / … / A~Z,AA~AN 만 통과) */
 function isValidChoiceSet(codes: string[]): boolean {
   if (codes.length < MIN_CHOICES || codes.length > MAX_CHOICES) return false;
-  return [...codes].sort().join(',') === CHOICE_CODES.slice(0, codes.length).join(',');
+  // 두 자리 코드가 섞이면 사전순 정렬이 어긋난다(AA < B). 집합으로 비교한다.
+  const expected = new Set(CHOICE_CODES.slice(0, codes.length));
+  return new Set(codes).size === codes.length && codes.every((c) => expected.has(c));
 }
 
 interface SourceStage {
@@ -436,6 +442,7 @@ interface SourceStage {
   stageName: string;
   sequenceNo: number;
   required: boolean;
+  componentGroup: string | null;
   active: boolean;
   choices: Array<{
     choiceCode: string;

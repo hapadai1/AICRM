@@ -1,5 +1,5 @@
 /** WO-002 작업지시서 미리보기·Excel 출력 — 확정 옵션·연결 채촌 검토, 출력 시 버전 생성 */
-import { FileExcelOutlined } from '@ant-design/icons';
+import { DownloadOutlined, EyeOutlined, FileExcelOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Card, Col, Input, Modal, Row, Select, Space, Spin, Table, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -11,11 +11,13 @@ import type {
   WorkOrderVersionRow,
 } from '../../api/workorders';
 import {
+  downloadWorkOrderVersionFile,
   fetchWorkOrderPreview,
   fetchWorkOrderVersions,
   issueWorkOrderVersion,
 } from '../../api/workorders';
 import { BackButton } from '../../shared/BackButton';
+import { WorkOrderFormPreviewModal } from './WorkOrderFormPreviewModal';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { metaOf } from '../../shared/status-meta';
 import { MEASUREMENT_TYPE_META, WORK_ORDER_STATUS_META } from './wo-meta';
@@ -28,6 +30,8 @@ export function WorkOrderPreviewPage() {
   const [note, setNote] = useState('');
   /** 미리보기용으로 골라본 채촌 세션. undefined면 품목에 연결된 채촌을 쓴다. */
   const [pickedMeasurementId, setPickedMeasurementId] = useState<string | undefined>(undefined);
+  /** 양식 미리보기 대상 — 'draft'는 출력 전 현재 값, 그 외는 저장된 버전 id */
+  const [formPreviewTarget, setFormPreviewTarget] = useState<'draft' | string | null>(null);
 
   const previewQuery = useQuery({
     queryKey: ['workorders', 'preview', orderItemId, pickedMeasurementId ?? null],
@@ -44,27 +48,43 @@ export function WorkOrderPreviewPage() {
     enabled: !!workOrderId,
   });
 
+  /** 이미 만들어진 파일을 그대로 받는다 — 새 버전이 생기지 않는다. */
+  const downloadMutation = useMutation({
+    mutationFn: (v: { versionId: string; fileName: string }) =>
+      downloadWorkOrderVersionFile(v.versionId, v.fileName),
+    onError: (e: Error) => message.error(`파일을 내려받지 못했습니다: ${e.message}`),
+  });
+
   const issueMutation = useMutation({
     mutationFn: () =>
       issueWorkOrderVersion(orderItemId ?? '', {
         measurementSessionId: preview?.measurement?.measurementSessionId,
         note: note.trim() || undefined,
       }),
-    onSuccess: (res) => {
+    onSuccess: async (res) => {
+      setNote('');
+      void queryClient.invalidateQueries({ queryKey: ['workorders'] });
+      void queryClient.invalidateQueries({ queryKey: ['production'] });
+      // 출력 = 버전 생성 + 파일 내려받기. 실패해도 버전은 남으므로 이력에서 다시 받을 수 있다.
+      try {
+        await downloadWorkOrderVersionFile(res.workOrderVersionId, res.file.fileName);
+      } catch {
+        message.warning('버전은 생성됐지만 자동 내려받기에 실패했습니다. 출력 이력에서 내려받아 주세요.');
+      }
       modal.success({
         title: 'Excel 출력 완료',
         content: (
           <Space direction="vertical" size={4}>
             <Typography.Text strong>V{res.versionNo} 버전이 생성되었습니다.</Typography.Text>
             <Typography.Text code>{res.file.fileName}</Typography.Text>
-            <Typography.Text type="secondary">출력 시점의 옵션·채촌값이 스냅샷으로 보존됩니다.</Typography.Text>
+            <Typography.Text type="secondary">
+              파일이 내려받기 폴더에 저장됩니다. 출력 시점의 옵션·채촌값은 스냅샷으로 보존됩니다.
+            </Typography.Text>
           </Space>
         ),
         okText: '확인',
         okButtonProps: { size: 'large' },
       });
-      setNote('');
-      void queryClient.invalidateQueries({ queryKey: ['workorders'] });
     },
     onError: (e: Error) => message.error(e.message),
   });
@@ -135,7 +155,32 @@ export function WorkOrderPreviewPage() {
       key: 'changeReason',
       render: (v?: string) => v ?? <Typography.Text type="secondary">-</Typography.Text>,
     },
+    {
+      title: '파일',
+      key: 'download',
+      width: 200,
+      render: (_: unknown, row: WorkOrderVersionRow) => (
+        <Space size={6}>
+          <Button size="large" icon={<EyeOutlined />} onClick={() => setFormPreviewTarget(row.id)}>
+            보기
+          </Button>
+          <Button
+            size="large"
+            icon={<DownloadOutlined />}
+            loading={downloadMutation.isPending && downloadMutation.variables?.versionId === row.id}
+            onClick={() => downloadMutation.mutate({ versionId: row.id, fileName: row.fileName })}
+          >
+            받기
+          </Button>
+        </Space>
+      ),
+    },
   ];
+
+  // 최신 출력본 — 재출력(새 버전) 없이 그대로 다시 받으려는 경우에 쓴다.
+  const versions = versionsQuery.data ?? [];
+  const latestVersion =
+    versions.find((v) => v.id === preview.currentVersionId) ?? versions[0] ?? undefined;
 
   const measurementSummary = measurement
     ? `V${measurement.versionNo} · ${measurement.measurementDate} · ${metaOf(MEASUREMENT_TYPE_META, measurement.measurementType).label}`
@@ -150,7 +195,14 @@ export function WorkOrderPreviewPage() {
             사용 채촌 버전: <Typography.Text strong>{measurementSummary}</Typography.Text>
           </Typography.Text>
           <Typography.Text>비고: {note.trim() || '(없음)'}</Typography.Text>
-          <Typography.Text type="secondary">출력 시 새 버전 번호가 생성되고 이전 파일은 보존됩니다.</Typography.Text>
+          <Typography.Text type="secondary">
+            출력 시 새 버전 번호가 생성되고 Excel 파일이 바로 내려받아집니다. 이전 파일은 보존됩니다.
+          </Typography.Text>
+          {latestVersion && (
+            <Typography.Text type="secondary">
+              같은 내용을 다시 받기만 하려면 [최신본 받기]를 쓰세요 (버전이 늘지 않습니다).
+            </Typography.Text>
+          )}
         </Space>
       ),
       okText: '출력',
@@ -271,17 +323,47 @@ export function WorkOrderPreviewPage() {
           </div>
           <Space style={{ width: '100%', justifyContent: 'space-between' }}>
             <BackButton />
-            <Button
-              type="primary"
-              size="large"
-              style={{ height: 56, minWidth: 220, fontSize: 18 }}
-              icon={<FileExcelOutlined />}
-              disabled={!printable}
-              loading={issueMutation.isPending}
-              onClick={openIssueDialog}
-            >
-              Excel 출력
-            </Button>
+            <Space>
+              <Button
+                size="large"
+                style={{ height: 56, minWidth: 200, fontSize: 18 }}
+                icon={<EyeOutlined />}
+                disabled={!printable}
+                onClick={() => setFormPreviewTarget('draft')}
+              >
+                양식 미리보기
+              </Button>
+              {latestVersion && (
+                <Button
+                  size="large"
+                  style={{ height: 56, minWidth: 200, fontSize: 18 }}
+                  icon={<DownloadOutlined />}
+                  loading={
+                    downloadMutation.isPending &&
+                    downloadMutation.variables?.versionId === latestVersion.id
+                  }
+                  onClick={() =>
+                    downloadMutation.mutate({
+                      versionId: latestVersion.id,
+                      fileName: latestVersion.fileName,
+                    })
+                  }
+                >
+                  최신본 받기 (V{latestVersion.versionNo})
+                </Button>
+              )}
+              <Button
+                type="primary"
+                size="large"
+                style={{ height: 56, minWidth: 220, fontSize: 18 }}
+                icon={<FileExcelOutlined />}
+                disabled={!printable}
+                loading={issueMutation.isPending}
+                onClick={openIssueDialog}
+              >
+                Excel 출력
+              </Button>
+            </Space>
           </Space>
         </Space>
       </Card>
@@ -302,6 +384,31 @@ export function WorkOrderPreviewPage() {
           <Typography.Text type="secondary">출력 이력이 없습니다. 첫 출력 시 V1이 생성됩니다.</Typography.Text>
         )}
       </Card>
+
+      <WorkOrderFormPreviewModal
+        open={formPreviewTarget != null}
+        onClose={() => setFormPreviewTarget(null)}
+        orderItemId={formPreviewTarget === 'draft' ? orderItemId : undefined}
+        measurementSessionId={
+          formPreviewTarget === 'draft' ? measurement?.measurementSessionId : undefined
+        }
+        versionId={formPreviewTarget && formPreviewTarget !== 'draft' ? formPreviewTarget : undefined}
+        title={
+          formPreviewTarget === 'draft'
+            ? `작업지시서 양식 미리보기 — ${preview.customerName} · ${preview.itemLabel}`
+            : '저장된 출력본 보기'
+        }
+        downloading={downloadMutation.isPending}
+        onDownload={
+          // 출력 전 초안은 아직 파일이 없어 내려받을 수 없다(먼저 [Excel 출력]).
+          formPreviewTarget && formPreviewTarget !== 'draft'
+            ? () => {
+                const row = versions.find((v) => v.id === formPreviewTarget);
+                if (row) downloadMutation.mutate({ versionId: row.id, fileName: row.fileName });
+              }
+            : undefined
+        }
+      />
     </Space>
   );
 }

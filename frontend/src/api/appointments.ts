@@ -16,6 +16,8 @@ export interface Appointment {
   phone: string;
   /** 연결된 고객의 상태 (미연결 시 undefined) */
   customerStatus?: CustomerStatus;
+  /** 연결된 고객이 정식 등록되었는지 */
+  customerRegistered?: boolean | null;
   purposeCode: string;
   purposeName: string;
   startAt: string; // ISO-8601
@@ -93,8 +95,12 @@ export interface Paged<T> {
 }
 
 export interface AppointmentListParams {
-  from: string; // YYYY-MM-DD
-  to: string; // YYYY-MM-DD
+  /** 고객명 / 전화번호 검색어 */
+  q?: string;
+  /** false면 아직 고객으로 등록되지 않은 예약만 조회 */
+  customerRegistered?: boolean;
+  from?: string; // YYYY-MM-DD
+  to?: string; // YYYY-MM-DD
   purposeCodes?: string[];
   statuses?: AppointmentStatus[];
   source?: AppointmentSource;
@@ -129,6 +135,9 @@ export function fetchAppointments(params: AppointmentListParams): Promise<Paged<
     url: '/appointments',
     method: 'GET',
     params: {
+      q: params.q || undefined,
+      customerRegistered:
+        params.customerRegistered === undefined ? undefined : String(params.customerRegistered),
       from: params.from,
       to: params.to,
       purposeCodes: params.purposeCodes?.length ? params.purposeCodes.join(',') : undefined,

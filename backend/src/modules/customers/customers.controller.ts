@@ -4,6 +4,7 @@ import {
   CreateCustomerDto,
   CustomerListQueryDto,
   DeactivateCustomerDto,
+  RegisterCustomerDto,
   UpdateCustomerDto,
 } from './customers.dto';
 import { CustomersService } from './customers.service';
@@ -41,6 +42,17 @@ export class CustomersController {
   @RequirePermission('CUSTOMER_EDIT')
   update(@Param('id') id: string, @Body() dto: UpdateCustomerDto, @CurrentUser() actor: AuthUser) {
     return this.customersService.update(id, dto, actor);
+  }
+
+  /** 예약으로 생긴 미등록 고객을 정식 고객으로 등록 (CUST-001 [예약 고객 등록]) */
+  @Post('customers/:id/register')
+  @RequirePermission('CUSTOMER_EDIT')
+  register(
+    @Param('id') id: string,
+    @Body() dto: RegisterCustomerDto,
+    @CurrentUser() actor: AuthUser,
+  ) {
+    return this.customersService.register(id, dto, actor);
   }
 
   @Post('customers/:id/deactivate')

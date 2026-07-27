@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common
 import { AuthUser, CurrentUser, RequirePermission } from '../../common/decorators';
 import { RentalInventoryService } from './rental-inventory.service';
 import {
+  AvailabilityCalendarQueryDto,
   AvailabilityQueryDto,
   CreateInventoryDto,
   CreateStatusEventDto,
@@ -20,6 +21,13 @@ export class RentalInventoryController {
   @RequirePermission('RENTAL_ALLOCATE')
   availability(@Query() query: AvailabilityQueryDto) {
     return this.service.availability(query);
+  }
+
+  /** 렌탈예약 달력 — 기간 내 일자별 가용 집계 (설계서 06 §4). :id 라우트보다 먼저 선언. */
+  @Get('availability-calendar')
+  @RequirePermission('RENTAL_VIEW')
+  availabilityCalendar(@Query() query: AvailabilityCalendarQueryDto) {
+    return this.service.availabilityCalendar(query);
   }
 
   @Get()

@@ -10,8 +10,8 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
   let orderItemId: string;
 
   // 세션 상태 (테스트 순서 의존)
-  let sessionV1: string; // CHEST 98.0 / SLEEVE 61.0 / UPPER_SIZE 105
-  let sessionV2: string; // CHEST 99.5 / SLEEVE 60.5 / UPPER_SIZE 106
+  let sessionV1: string; // CHEST_UPPER 98.0 / SLEEVE_LEFT 61.0 / SHOE_SIZE 270
+  let sessionV2: string; // CHEST_UPPER 99.5 / SLEEVE_LEFT 60.5 / SHOE_SIZE 275
   let emptySession: string;
 
   beforeAll(async () => {
@@ -80,9 +80,9 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
         relatedOrderId: orderId,
         bodyNotes: '어깨 왼쪽 처짐',
         values: [
-          { measurementCode: 'CHEST', numericValue: 98.0 },
-          { measurementCode: 'SLEEVE', numericValue: 61.0 },
-          { measurementCode: 'UPPER_SIZE', textValue: '105' },
+          { measurementCode: 'CHEST_UPPER', numericValue: 98.0 },
+          { measurementCode: 'SLEEVE_LEFT', numericValue: 61.0 },
+          { measurementCode: 'SHOE_SIZE', textValue: '270' },
         ],
       })
       .expect(201);
@@ -91,7 +91,7 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
     sessionV1 = res1.body.data.id;
 
     // 알려진 코드는 분류가 자동 보완된다
-    const chest = res1.body.data.values.find((v: any) => v.measurementCode === 'CHEST');
+    const chest = res1.body.data.values.find((v: any) => v.measurementCode === 'CHEST_UPPER');
     expect(chest.bodySection).toBe('UPPER');
     expect(chest.numericValue).toBe(98);
     expect(chest.unit).toBe('CM');
@@ -104,9 +104,9 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
         measurementType: 'FITTING',
         bodyNotes: '가봉 후 보정',
         values: [
-          { measurementCode: 'CHEST', numericValue: 99.5 },
-          { measurementCode: 'SLEEVE', numericValue: 60.5 },
-          { measurementCode: 'UPPER_SIZE', textValue: '106' },
+          { measurementCode: 'CHEST_UPPER', numericValue: 99.5 },
+          { measurementCode: 'SLEEVE_LEFT', numericValue: 60.5 },
+          { measurementCode: 'SHOE_SIZE', textValue: '275' },
         ],
       })
       .expect(201);
@@ -147,14 +147,14 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
       .send({
         fitPreference: '슬림',
         values: [
-          { measurementCode: 'SLEEVE', numericValue: 60.5 }, // 기존 upsert
+          { measurementCode: 'SLEEVE_LEFT', numericValue: 60.5 }, // 기존 upsert
           { measurementCode: 'WAIST', numericValue: 84.0 }, // 신규
         ],
       })
       .expect(200);
     expect(res.body.data.fitPreference).toBe('슬림');
     const codes = res.body.data.values.map((v: any) => v.measurementCode);
-    expect(codes).toEqual(expect.arrayContaining(['CHEST', 'SLEEVE', 'UPPER_SIZE', 'WAIST']));
+    expect(codes).toEqual(expect.arrayContaining(['CHEST_UPPER', 'SLEEVE_LEFT', 'SHOE_SIZE', 'WAIST']));
     expect(res.body.data.values).toHaveLength(4);
     const waist = res.body.data.values.find((v: any) => v.measurementCode === 'WAIST');
     expect(waist.bodySection).toBe('LOWER');
@@ -169,18 +169,18 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
       .expect(200);
 
     const items = res.body.data.items;
-    const chest = items.find((i: any) => i.measurementCode === 'CHEST');
+    const chest = items.find((i: any) => i.measurementCode === 'CHEST_UPPER');
     expect(chest.previous.numericValue).toBe(98);
     expect(chest.current.numericValue).toBe(99.5);
     expect(chest.diff).toBe(1.5); // +1.5
     expect(chest.changed).toBe(true);
 
-    const sleeve = items.find((i: any) => i.measurementCode === 'SLEEVE');
+    const sleeve = items.find((i: any) => i.measurementCode === 'SLEEVE_LEFT');
     expect(sleeve.diff).toBe(-0.5); // -0.5
 
-    const upperSize = items.find((i: any) => i.measurementCode === 'UPPER_SIZE');
-    expect(upperSize.diff).toBeNull();
-    expect(upperSize.changed).toBe(true);
+    const shoeSize = items.find((i: any) => i.measurementCode === 'SHOE_SIZE');
+    expect(shoeSize.diff).toBeNull();
+    expect(shoeSize.changed).toBe(true);
 
     // 한쪽에만 있는 항목(WAIST)은 차이를 계산하지 않는다
     const waist = items.find((i: any) => i.measurementCode === 'WAIST');
@@ -244,11 +244,11 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
     await api(ctx)
       .patch(`/api/v1/measurements/${sessionV1}`)
       .set(auth(ctx))
-      .send({ values: [{ measurementCode: 'CHEST', numericValue: 100 }] })
+      .send({ values: [{ measurementCode: 'CHEST_UPPER', numericValue: 100 }] })
       .expect(200);
 
     const detail = await api(ctx).get(`/api/v1/measurements/${sessionV1}`).set(auth(ctx)).expect(200);
-    const chest = detail.body.data.values.find((v: any) => v.measurementCode === 'CHEST');
+    const chest = detail.body.data.values.find((v: any) => v.measurementCode === 'CHEST_UPPER');
     expect(chest.numericValue).toBe(100);
     expect(detail.body.data.completed).toBe(true);
     expect(detail.body.data.completedAt).toBeTruthy();
@@ -266,7 +266,7 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
     await api(ctx)
       .patch(`/api/v1/measurements/${sessionV1}`)
       .set(auth(ctx))
-      .send({ values: [{ measurementCode: 'CHEST', numericValue: 98 }] })
+      .send({ values: [{ measurementCode: 'CHEST_UPPER', numericValue: 98 }] })
       .expect(200);
   });
 
@@ -278,7 +278,7 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
         customerId,
         measurementDate: '2026-07-13',
         values: [
-          { measurementCode: 'CHEST', numericValue: 90 },
+          { measurementCode: 'CHEST_UPPER', numericValue: 90 },
           { measurementCode: 'WAIST', numericValue: 80 },
         ],
       })
@@ -290,7 +290,7 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
       .send({ values: [{ measurementCode: 'WAIST' }] })
       .expect(200);
     const codes = updated.body.data.values.map((v: any) => v.measurementCode);
-    expect(codes).toEqual(['CHEST']);
+    expect(codes).toEqual(['CHEST_UPPER']);
 
     // 정리
     await api(ctx).delete(`/api/v1/measurements/${target.body.data.id}`).set(auth(ctx)).expect(200);
@@ -319,15 +319,15 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
     expect(cloned.measurementType).toBe('REMEASURE');
     expect(cloned.completed).toBe(false);
     expect(cloned.values).toHaveLength(3);
-    const chest = cloned.values.find((v: any) => v.measurementCode === 'CHEST');
+    const chest = cloned.values.find((v: any) => v.measurementCode === 'CHEST_UPPER');
     expect(chest.numericValue).toBe(98);
-    const size = cloned.values.find((v: any) => v.measurementCode === 'UPPER_SIZE');
-    expect(size.textValue).toBe('105');
+    const size = cloned.values.find((v: any) => v.measurementCode === 'SHOE_SIZE');
+    expect(size.textValue).toBe('270');
     // 복사본은 완료 전이므로 편집 가능
     await api(ctx)
       .patch(`/api/v1/measurements/${cloned.id}`)
       .set(auth(ctx))
-      .send({ values: [{ measurementCode: 'CHEST', numericValue: 98.5 }] })
+      .send({ values: [{ measurementCode: 'CHEST_UPPER', numericValue: 98.5 }] })
       .expect(200);
   });
 
@@ -398,7 +398,7 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
       .set(auth(ctx))
       .send({
         measurementDate: '2026-07-15',
-        values: [{ measurementCode: 'CHEST', numericValue: 90 }],
+        values: [{ measurementCode: 'CHEST_UPPER', numericValue: 90 }],
       })
       .expect(201);
     expect(other.body.data.versionNo).toBe(1); // 버전은 고객별로 독립
@@ -468,7 +468,7 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
       .send({
         customerId,
         measurementDate: '2026-07-16',
-        values: [{ measurementCode: 'CHEST', numericValue: 95 }],
+        values: [{ measurementCode: 'CHEST_UPPER', numericValue: 95 }],
       })
       .expect(201);
     const targetId = created.body.data.id;
@@ -539,7 +539,7 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
     const patch = await api(ctx)
       .patch(`/api/v1/measurements/${sessionV2}`)
       .set(auth(ctx))
-      .send({ values: [{ measurementCode: 'CHEST', numericValue: 111 }] })
+      .send({ values: [{ measurementCode: 'CHEST_UPPER', numericValue: 111 }] })
       .expect(409);
     expect(patch.body.error.code).toBe('MEASUREMENT_LOCKED');
 
@@ -555,6 +555,115 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
     const detail = await api(ctx).get(`/api/v1/measurements/${sessionV2}`).set(auth(ctx)).expect(200);
     expect(detail.body.data.locked).toBe(true);
     expect(detail.body.data.workOrderVersionCount).toBe(1);
+  });
+
+  it('앞마다/뒷마다는 카탈로그로 하의(LOWER)·정렬·라벨이 보완된다 (설계서 05 §2.1)', async () => {
+    const res = await api(ctx)
+      .post('/api/v1/measurements')
+      .set(auth(ctx))
+      .send({
+        customerId,
+        measurementDate: '2026-07-25',
+        values: [
+          { measurementCode: 'FRONT_MADA', numericValue: 3 },
+          { measurementCode: 'BACK_MADA', numericValue: 5 },
+        ],
+      })
+      .expect(201);
+    const front = res.body.data.values.find((v: any) => v.measurementCode === 'FRONT_MADA');
+    expect(front.bodySection).toBe('LOWER');
+    expect(front.label).toBe('앞마다');
+    expect(front.sortOrder).toBe(290);
+    const back = res.body.data.values.find((v: any) => v.measurementCode === 'BACK_MADA');
+    expect(back.label).toBe('뒷마다');
+    expect(back.sortOrder).toBe(300);
+    await api(ctx).delete(`/api/v1/measurements/${res.body.data.id}`).set(auth(ctx)).expect(200);
+  });
+
+  it('채촌 이미지는 업로드·목록·삭제되고 감사로그(LINK/UNLINK)를 남긴다 (설계서 05 §4)', async () => {
+    const created = await api(ctx)
+      .post('/api/v1/measurements')
+      .set(auth(ctx))
+      .send({
+        customerId,
+        measurementDate: '2026-07-26',
+        values: [{ measurementCode: 'CHEST_UPPER', numericValue: 90 }],
+      })
+      .expect(201);
+    const sid = created.body.data.id;
+    const png = Buffer.from('89504e470d0a1a0a', 'hex'); // PNG 시그니처
+
+    const up = await api(ctx)
+      .post(`/api/v1/measurements/${sid}/images`)
+      .set(auth(ctx))
+      .attach('file', png, 'photo.png')
+      .expect(201);
+    expect(up.body.data.fileId).toBeDefined();
+    expect(up.body.data.downloadUrl).toContain('/api/v1/files/');
+
+    const list = await api(ctx).get(`/api/v1/measurements/${sid}/images`).set(auth(ctx)).expect(200);
+    expect(list.body.data).toHaveLength(1);
+
+    const linkAudit = await ctx.prisma.auditLog.findFirst({
+      where: { entityType: 'MEASUREMENT_SESSION_IMAGE', action: 'LINK', entityId: sid },
+    });
+    expect(linkAudit).not.toBeNull();
+
+    await api(ctx)
+      .delete(`/api/v1/measurements/${sid}/images/${up.body.data.fileId}`)
+      .set(auth(ctx))
+      .expect(200);
+    const after = await api(ctx).get(`/api/v1/measurements/${sid}/images`).set(auth(ctx)).expect(200);
+    expect(after.body.data).toHaveLength(0);
+
+    const unlinkAudit = await ctx.prisma.auditLog.findFirst({
+      where: { entityType: 'MEASUREMENT_SESSION_IMAGE', action: 'UNLINK', entityId: sid },
+    });
+    expect(unlinkAudit).not.toBeNull();
+
+    await api(ctx).delete(`/api/v1/measurements/${sid}`).set(auth(ctx)).expect(200);
+  });
+
+  it('이미지는 세션당 최대 50장까지만 첨부된다 (51번째 거부)', async () => {
+    const created = await api(ctx)
+      .post('/api/v1/measurements')
+      .set(auth(ctx))
+      .send({
+        customerId,
+        measurementDate: '2026-07-27',
+        values: [{ measurementCode: 'CHEST_UPPER', numericValue: 90 }],
+      })
+      .expect(201);
+    const sid = created.body.data.id;
+
+    // 50장을 직접 선점(File 1건 + EntityFile 50건)해 경계를 만든다.
+    const file = await ctx.prisma.file.create({
+      data: {
+        id: randomUUID(),
+        storageKey: `meas-images/${randomUUID()}.png`,
+        originalName: 'seed.png',
+        mimeType: 'image/png',
+        sizeBytes: BigInt(10),
+      },
+    });
+    await ctx.prisma.entityFile.createMany({
+      data: Array.from({ length: 50 }, () => ({
+        id: randomUUID(),
+        fileId: file.id,
+        entityType: 'MEASUREMENT_SESSION',
+        entityId: sid,
+        purpose: 'PHOTO',
+      })),
+    });
+
+    const png = Buffer.from('89504e470d0a1a0a', 'hex');
+    const res = await api(ctx)
+      .post(`/api/v1/measurements/${sid}/images`)
+      .set(auth(ctx))
+      .attach('file', png, 'over.png')
+      .expect(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(res.body.error.fieldErrors[0].reason).toBe('MAX_50_EXCEEDED');
   });
 
   it('인증 없이 접근하면 401을 반환한다', async () => {

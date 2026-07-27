@@ -14,8 +14,11 @@
     "seed:journey-spread": "ts-node prisma/seed-journey-spread.ts",
     "seed:option-images": "ts-node prisma/seed-option-images.ts",
     "seed:suit-design": "ts-node prisma/seed-suit-design-options.ts",
+    "seed:shirt-design": "ts-node prisma/seed-shirt-design-options.ts",
+    "seed:shoes-design": "ts-node prisma/seed-shoes-design-options.ts",
     "seed:option-demo": "ts-node prisma/seed-option-surcharge-demo.ts",
-    "seed:all": "npm run prisma:seed && npm run seed:demo && npm run seed:more && npm run seed:journeys && npm run seed:suit-design && npm run seed:option-demo",
+    "seed:shoes-custom": "ts-node prisma/seed-shoes-custom-demo.ts",
+    "seed:all": "npm run prisma:seed && npm run seed:demo && npm run seed:more && npm run seed:journeys && npm run seed:suit-design && npm run seed:shirt-design && npm run seed:shoes-design && npm run seed:option-demo && npm run seed:shoes-custom",
     "test": "jest --config jest.config.js"
   },
   "prisma": {
@@ -33,6 +36,7 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "exceljs": "^4.4.0",
+    "jszip": "^3.10.1",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "reflect-metadata": "^0.2.2",

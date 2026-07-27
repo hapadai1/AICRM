@@ -16,7 +16,6 @@ import {
 const TASK_ENTITY_TYPE: Record<DashboardTaskType, string> = {
   LATE_RETURN: 'RENTAL_ALLOCATION',
   INBOUND_DELAY: 'ORDER_ITEM_COMPONENT',
-  PAYMENT_DELAY: 'CONTRACT',
   UNORDERED: 'ORDER_ITEM',
   REPRINT_NEEDED: 'ORDER_ITEM',
 };
@@ -168,8 +167,6 @@ export class DashboardService {
         return this.findLateReturns();
       case 'INBOUND_DELAY':
         return this.findInboundDelays();
-      case 'PAYMENT_DELAY':
-        return this.findPaymentDelays();
       case 'UNORDERED':
         return this.findUnordered();
       case 'REPRINT_NEEDED':
@@ -241,62 +238,6 @@ export class DashboardService {
         }),
       ),
     );
-  }
-
-  /**
-   * 결제 지연 (연동정합화 계약 §4·§10):
-   * contracts.balance_due_date < 오늘 AND 미수 잔액 > 0. 예정일이 없으면 판정에서 제외한다.
-   */
-  private async findPaymentDelays(): Promise<DashboardTaskRow[]> {
-    const contracts = await this.prisma.contract.findMany({
-      where: {
-        status: { notIn: ['CANCELLED'] },
-        balanceDueDate: { lt: todayAsDbDate() },
-      },
-      include: {
-        customer: true,
-        currentVersion: { select: { totalAmount: true } },
-        // 품목은 계약구분(ContractType) 명칭으로 표기한다.
-        contractType: { select: { name: true } },
-        // 계약:주문은 1:N(거래유형별). 해당 계약의 주문번호를 모두 노출한다.
-        orders: {
-          where: { status: { not: 'CANCELLED' } },
-          orderBy: { orderNo: 'asc' },
-          select: { orderNo: true },
-        },
-      },
-    });
-    if (contracts.length === 0) return [];
-
-    const sums = await this.prisma.payment.groupBy({
-      by: ['contractId'],
-      where: { contractId: { in: contracts.map((c) => c.id) }, status: 'COMPLETED' },
-      _sum: { amount: true },
-    });
-    const collectedBy = new Map(sums.map((s) => [s.contractId, Number(s._sum.amount ?? 0)]));
-
-    const rows = contracts
-      .map((c) => ({
-        contract: c,
-        contractAmount: Number(c.currentVersion?.totalAmount ?? 0),
-        collected: collectedBy.get(c.id) ?? 0,
-      }))
-      .filter((x) => x.contractAmount - x.collected > 0)
-      .map((x) => {
-        // 계약에 속한 주문번호를 줄바꿈으로 모두 나열한다.
-        const orderNos = x.contract.orders.map((o) => o.orderNo);
-        return this.row('PAYMENT_DELAY', x.contract.id, x.contract.customer, {
-          contractId: x.contract.id,
-          orderNo: orderNos.join('\n') || null,
-          // 품목 자리에는 계약구분 명칭을 표기한다(없으면 계약번호로 폴백).
-          itemLabel: x.contract.contractType?.name ?? x.contract.contractNo,
-          reason: `잔금 결제 예정일(${toDateString(x.contract.balanceDueDate)}) 경과, 미수 잔액 ${
-            x.contractAmount - x.collected
-          }원`,
-          dueDate: toDateString(x.contract.balanceDueDate),
-        });
-      });
-    return this.withAcknowledged('PAYMENT_DELAY', rows);
   }
 
   /** 미주문: 옵션 세션 CONFIRMED + 현재 채촌 연결 + 작업지시서 버전 0건. */

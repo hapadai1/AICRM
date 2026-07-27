@@ -2,6 +2,8 @@ import {
   CheckOutlined,
   DiffOutlined,
   EditOutlined,
+  FileExcelOutlined,
+  HighlightOutlined,
   SkinOutlined,
   StopOutlined,
   ToolOutlined,
@@ -31,8 +33,11 @@ import {
   cancelContract,
   confirmContractRevision,
   createContractRevision,
+  downloadContractExcel,
   fetchContract,
   fetchContractVersions,
+  getSignature,
+  saveSignature,
   type ContractLine,
   type ContractVersion,
   type ProductCategory,
@@ -42,7 +47,9 @@ import {
 import { BackButton } from '../../shared/BackButton';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
+import { ContractDocumentView } from './ContractDocumentView';
 import { ContractLineEditor, createLine, linesTotal, type EditableLine } from './ContractLineEditor';
+import { ContractSignPad } from './ContractSignPad';
 import {
   CONTRACT_STATUS_META,
   CONTRACT_VERSION_STATUS_META,
@@ -177,10 +184,35 @@ export function ContractDetailPage() {
   const [cancelModalOpen, setCancelModalOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
   const [revisionResult, setRevisionResult] = useState<RevisionConfirmResult | null>(null);
+  const [signOpen, setSignOpen] = useState(false);
 
   const onApiError = (e: unknown) => {
     message.error(e instanceof ApiError ? e.message : '처리 중 오류가 발생했습니다.');
   };
+
+  // 변경계약도 서명이 확정 전제조건이다 (설계서 v2 03 §2.5). 변경 초안 버전의 서명 상태를 추적한다.
+  const signatureQuery = useQuery({
+    queryKey: ['contracts', id, 'signature', draftRevision?.id],
+    queryFn: () => getSignature(id, draftRevision!.id),
+    enabled: !!draftRevision?.id,
+  });
+  const revSigned = !!signatureQuery.data?.signed;
+
+  const signMutation = useMutation({
+    mutationFn: (input: { imageDataUrl: string; signerName: string }) =>
+      saveSignature(id, draftRevision!.id, { ...input, version: detail?.version }),
+    onSuccess: () => {
+      setSignOpen(false);
+      message.success('서명이 저장되었습니다. 변경 확정이 가능합니다.');
+      void queryClient.invalidateQueries({ queryKey: ['contracts', id, 'signature'] });
+    },
+    onError: onApiError,
+  });
+
+  const excelMutation = useMutation({
+    mutationFn: () => downloadContractExcel(id, detail!.contractNo),
+    onError: onApiError,
+  });
 
   const invalidateAll = () => {
     void queryClient.invalidateQueries({ queryKey: ['contracts'] });
@@ -238,6 +270,10 @@ export function ContractDetailPage() {
     if (!draftRevision) return;
     if (revLines.length === 0) {
       message.error('품목을 1개 이상 입력해 주세요.');
+      return;
+    }
+    if (!revSigned) {
+      message.error('먼저 [서명하기]로 서명을 완료해 주세요. 변경계약도 재서명이 필요합니다.');
       return;
     }
     modal.confirm({
@@ -402,6 +438,14 @@ export function ContractDetailPage() {
             <StatusBadge label={statusMeta.label} color={statusMeta.color} />
           </Space>
           <Space wrap>
+            <Button
+              icon={<FileExcelOutlined />}
+              loading={excelMutation.isPending}
+              disabled={!detail}
+              onClick={() => excelMutation.mutate()}
+            >
+              Excel 출력
+            </Button>
             {detail?.status === 'DRAFT' && (
               <Can permission="CONTRACT_EDIT">
                 <Button
@@ -458,6 +502,9 @@ export function ContractDetailPage() {
         </Descriptions>
       </Card>
 
+      {/* 계약서 웹 표시 — 세부품목 상세 토글·옵션·서명 상태 (설계서 v2 03 §6) */}
+      {id && <ContractDocumentView contractId={id} />}
+
       {draftRevision && (
         <Card
           title={
@@ -468,20 +515,40 @@ export function ContractDetailPage() {
             </Space>
           }
           extra={
-            <Can permission="CONTRACT_REVISE">
-              <Button
-                type="primary"
-                icon={<CheckOutlined />}
-                loading={confirmRevisionMutation.isPending}
-                onClick={handleConfirmRevision}
-              >
-                변경 확정
-              </Button>
-            </Can>
+            <Space wrap>
+              {revSigned ? (
+                <StatusBadge label="서명 완료" color="green" />
+              ) : (
+                <StatusBadge label="미서명" color="gold" />
+              )}
+              <Can permission="CONTRACT_SIGN">
+                <Button icon={<HighlightOutlined />} onClick={() => setSignOpen(true)}>
+                  {revSigned ? '다시 서명' : '서명하기'}
+                </Button>
+              </Can>
+              <Can permission="CONTRACT_REVISE">
+                <Button
+                  type="primary"
+                  icon={<CheckOutlined />}
+                  loading={confirmRevisionMutation.isPending}
+                  disabled={!revSigned}
+                  onClick={handleConfirmRevision}
+                >
+                  변경 확정
+                </Button>
+              </Can>
+            </Space>
           }
         >
           <Flex vertical gap={16}>
             <Alert type="info" showIcon message={`변경 사유: ${draftRevision.changeReason ?? '-'}`} />
+            {revSigned && revDirty && (
+              <Alert
+                type="warning"
+                showIcon
+                message="품목을 변경했습니다. 확정 전 다시 서명하는 것을 권장합니다."
+              />
+            )}
             <div>
               <Typography.Title level={5}>품목 편집</Typography.Title>
               <ContractLineEditor
@@ -769,6 +836,26 @@ export function ContractDetailPage() {
             )}
           />
         </Flex>
+      </Modal>
+
+      {/* 변경계약 서명 캔버스 — 열 때마다 새로 마운트 */}
+      <Modal
+        open={signOpen}
+        title="변경계약 서명"
+        footer={null}
+        width={680}
+        destroyOnClose
+        maskClosable={false}
+        onCancel={() => setSignOpen(false)}
+      >
+        {draftRevision && (
+          <ContractSignPad
+            defaultSignerName={detail?.customerName}
+            saving={signMutation.isPending}
+            onCancel={() => setSignOpen(false)}
+            onSave={(imageDataUrl, signerName) => signMutation.mutate({ imageDataUrl, signerName })}
+          />
+        )}
       </Modal>
     </Flex>
   );

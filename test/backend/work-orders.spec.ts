@@ -1,5 +1,7 @@
 import { randomUUID } from 'crypto';
+import ExcelJS from 'exceljs';
 import * as fs from 'fs';
+import JSZip from 'jszip';
 import * as path from 'path';
 import { WorkOrdersModule } from '../../backend/src/modules/work-orders/work-orders.module';
 import { api, auth, createTestContext, TestContext, truncateBusinessData } from './helpers';
@@ -87,9 +89,9 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
 
   /** 고객→계약→주문→품목→옵션 세션→채촌 세션·연결 전체 데이터 구성 */
   async function createFixture(
-    opts: { confirmOption?: boolean; linkMeasurement?: boolean } = {},
+    opts: { confirmOption?: boolean; linkMeasurement?: boolean; productCategory?: string } = {},
   ): Promise<Fixture> {
-    const { confirmOption = true, linkMeasurement = true } = opts;
+    const { confirmOption = true, linkMeasurement = true, productCategory = 'SUIT' } = opts;
     seq += 1;
     const n = String(seq).padStart(3, '0');
 
@@ -125,7 +127,7 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
         id: randomUUID(),
         contractVersionId: contractVersion.id,
         transactionType: 'CUSTOM',
-        productCategory: 'SUIT',
+        productCategory,
         quantity: 1,
       },
     });
@@ -142,9 +144,9 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
         id: randomUUID(),
         orderId: order.id,
         sourceContractLineId: contractLine.id,
-        productCategory: 'SUIT',
+        productCategory,
         sequenceNo: 1,
-        displayName: '정장 #1',
+        displayName: productCategory === 'SHOES' ? '구두 #1' : '정장 #1',
       },
     });
 
@@ -330,6 +332,26 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
           expect.objectContaining({ measurementCode: 'WAIST', value: 84 }),
         ]),
       );
+    });
+
+    it('양식 미리보기는 출력 전 값이 채워진 HTML을 주고 버전을 만들지 않는다', async () => {
+      const res = await api(ctx)
+        .get(`/api/v1/order-items/${fixture.orderItemId}/work-order/form-preview`)
+        .set(auth(ctx))
+        .expect(200);
+      const { html, versionNo } = res.body.data;
+      // 아직 출력 전이므로 "다음에 붙을 버전"을 알려준다
+      expect(versionNo).toBe(1);
+      expect(html).toContain('테스트고객');
+      expect(html).toContain('Zegna Navy 1201');
+
+      // 미리보기만으로는 작업지시서·버전이 생기지 않는다
+      const after = await api(ctx)
+        .get(`/api/v1/order-items/${fixture.orderItemId}/work-order/preview`)
+        .set(auth(ctx))
+        .expect(200);
+      expect(after.body.data.workOrderId).toBeNull();
+      expect(after.body.data.currentVersionNo).toBeNull();
     });
 
     it('미리보기는 채촌 후보 목록을 함께 주고, measurementSessionId로 다른 버전을 미리볼 수 있다', async () => {
@@ -569,6 +591,85 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
       // xlsx(zip) 시그니처 PK
       expect(body.subarray(0, 2).toString('utf8')).toBe('PK');
     });
+
+    it('출력물의 도식(도형·이미지)은 템플릿 원본 바이트 그대로다', async () => {
+      // ExcelJS는 도형(xdr:sp — 빨간 동그라미·지시선)을 못 다뤄 다시 쓰면 도식이 깨진다.
+      // 드로잉·이미지 부품은 템플릿에서 그대로 옮겨 붙이므로 바이트가 같아야 한다.
+      const templatePath = path.resolve(
+        __dirname,
+        '../../backend/src/modules/work-orders/templates/suit-work-order.xlsx',
+      );
+      const version = await ctx.prisma.workOrderVersion.findUniqueOrThrow({
+        where: { id: v2Id },
+        include: { outputFile: true },
+      });
+      const [template, produced] = await Promise.all([
+        JSZip.loadAsync(fs.readFileSync(templatePath)),
+        JSZip.loadAsync(fs.readFileSync(storagePath(version.outputFile.storageKey))),
+      ]);
+      const drawingParts = Object.keys(template.files).filter(
+        (name) => name.startsWith('xl/drawings/') || name.startsWith('xl/media/'),
+      );
+      expect(drawingParts.length).toBeGreaterThan(0);
+      for (const name of drawingParts) {
+        if (template.files[name].dir) continue;
+        const [expected, actual] = await Promise.all([
+          template.files[name].async('nodebuffer'),
+          produced.file(name)!.async('nodebuffer'),
+        ]);
+        expect({ name, equal: expected.equals(actual) }).toEqual({ name, equal: true });
+      }
+    });
+
+    it('저장된 출력본을 양식 HTML로 미리본다', async () => {
+      const res = await api(ctx)
+        .get(`/api/v1/work-order-versions/${v2Id}/form-preview`)
+        .set(auth(ctx))
+        .expect(200);
+      const { html, versionNo } = res.body.data;
+      expect(versionNo).toBe(2);
+      expect(html).toContain('<table');
+      // 인쇄값·채운 값이 모두 표에 나타난다
+      expect(html).toContain('슈트에이전시(강남본점)');
+      expect(html).toContain('테스트고객');
+      // 병합은 colspan/rowspan으로 옮긴다
+      expect(html).toContain('colspan=');
+      // 도식도 함께 그린다 — 그림(data URI) · 지시선(svg line) · 빨간 동그라미
+      expect(html).toContain('<img src="data:image/');
+      expect(html).toContain('<line ');
+      expect(html).toContain('border-radius:50%');
+    });
+
+    it('출력물은 실물 공장 양식(송파) 템플릿에 값이 채워져 있다', async () => {
+      const res = await api(ctx)
+        .get(`/api/v1/work-order-versions/${v2Id}/file`)
+        .set(auth(ctx))
+        .buffer(true)
+        .parse((response, callback) => {
+          const chunks: Buffer[] = [];
+          response.on('data', (chunk: Buffer) => chunks.push(chunk));
+          response.on('end', () => callback(null, Buffer.concat(chunks)));
+        })
+        .expect(200);
+
+      const wb = new ExcelJS.Workbook();
+      // exceljs 타입이 요구하는 Buffer와 supertest가 주는 Buffer 정의가 달라 우회한다.
+      await wb.xlsx.load(res.body as unknown as ArrayBuffer);
+      // 템플릿은 매장 원본 그대로라 치수 대조표 시트가 함께 있고, 출력 시 숨긴다.
+      const ws = wb.getWorksheet('작업지시서 (송파)')!;
+      expect(ws.state).toBe('visible');
+      expect(wb.worksheets.filter((sheet) => sheet.state === 'visible')).toHaveLength(1);
+      // 양식 서식이 살아 있어야 한다 (병합)
+      expect(ws.model.merges.length).toBeGreaterThan(200);
+      // 인쇄된 매장명은 그대로 두고 값 칸만 채운다
+      expect(ws.getCell('L1').value).toBe('슈트에이전시(강남본점)');
+      expect(String(ws.getCell('AP1').value)).toContain('테스트고객');
+      // 채촌 WAIST → 하의 '허리' 행의 신체 열(F61)=cm, 완성(인치) 열(P61)=round(84/2.54,1) (설계서 05 §3)
+      expect(String(ws.getCell('F61').value)).toBe('84');
+      expect(Number(ws.getCell('P61').value)).toBeCloseTo(33.1, 1);
+      // 양식에 칸이 없는 채촌 항목(CHEST·SLEEVE)은 버리지 않고 추가요청사항으로 옮긴다
+      expect(String(ws.getCell('AA41').value)).toContain('[치수]');
+    });
   });
 
   describe('동시성·멱등성', () => {
@@ -603,6 +704,91 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
         where: { workOrder: { orderItemId: fixture.orderItemId } },
       });
       expect(count).toBe(1);
+    });
+  });
+
+  describe('앞마다/뒷마다 하의 요청사항 매핑 · 구두 간이 작업지시서 (설계서 05·06)', () => {
+    /** 출력본 xlsx를 내려받아 워크북으로 로드한다. */
+    async function downloadWorkbook(versionId: string): Promise<ExcelJS.Workbook> {
+      const res = await api(ctx)
+        .get(`/api/v1/work-order-versions/${versionId}/file`)
+        .set(auth(ctx))
+        .buffer(true)
+        .parse((response, callback) => {
+          const chunks: Buffer[] = [];
+          response.on('data', (chunk: Buffer) => chunks.push(chunk));
+          response.on('end', () => callback(null, Buffer.concat(chunks)));
+        })
+        .expect(200);
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(res.body as unknown as ArrayBuffer);
+      return wb;
+    }
+
+    it('FRONT_MADA/BACK_MADA는 신체열이 아니라 하의 추가요청사항(AA75)에 앞/뒤로 기입된다', async () => {
+      const fixture = await createFixture();
+      // 연결된 채촌 세션에 앞마다/뒷마다 값을 추가한다.
+      await ctx.prisma.measurementValue.createMany({
+        data: [
+          {
+            id: randomUUID(),
+            measurementSessionId: fixture.measurementSessionId!,
+            bodySection: 'LOWER',
+            measurementCode: 'FRONT_MADA',
+            numericValue: 3,
+            unit: 'CM',
+            sortOrder: 290,
+          },
+          {
+            id: randomUUID(),
+            measurementSessionId: fixture.measurementSessionId!,
+            bodySection: 'LOWER',
+            measurementCode: 'BACK_MADA',
+            numericValue: 5,
+            unit: 'CM',
+            sortOrder: 300,
+          },
+        ],
+      });
+
+      const issued = await api(ctx)
+        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order-versions`)
+        .set(auth(ctx))
+        .send({ note: '하의 요청 확인' })
+        .expect(201);
+
+      const wb = await downloadWorkbook(issued.body.data.workOrderVersionId);
+      const ws = wb.getWorksheet('작업지시서 (송파)')!;
+      const lowerNote = String(ws.getCell('AA75').value);
+      expect(lowerNote).toContain('[마다]');
+      expect(lowerNote).toContain('앞: 3');
+      expect(lowerNote).toContain('뒤: 5');
+      // 하의 요청사항으로 나가므로 상의 비고 [치수]에는 앞마다/뒷마다가 들어가지 않는다.
+      expect(String(ws.getCell('AA41').value)).not.toContain('마다');
+    });
+
+    it('구두(SHOES) 품목은 정장 템플릿이 아닌 간이 메모형 시트로 출력된다', async () => {
+      const fixture = await createFixture({ productCategory: 'SHOES' });
+      const issued = await api(ctx)
+        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order-versions`)
+        .set(auth(ctx))
+        .send({ note: '구두 간이 출력' })
+        .expect(201);
+      expect(issued.body.data.file.fileName).toBe(`${fixture.orderNo}_SHOES-01_V1.xlsx`);
+
+      const wb = await downloadWorkbook(issued.body.data.workOrderVersionId);
+      // 정장 송파 템플릿 시트는 없고, 간이 시트만 있다.
+      expect(wb.getWorksheet('작업지시서 (송파)')).toBeUndefined();
+      const ws = wb.getWorksheet('구두 작업지시서');
+      expect(ws).toBeDefined();
+      // 고객명이 메모형 시트에 나타난다.
+      let found = false;
+      ws!.eachRow((row) => {
+        row.eachCell((cell) => {
+          if (String(cell.value ?? '').includes('테스트고객')) found = true;
+        });
+      });
+      expect(found).toBe(true);
     });
   });
 });

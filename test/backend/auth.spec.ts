@@ -37,6 +37,38 @@ describe('인증·권한 (Phase 1)', () => {
     expect(res.body.data.some((u: { loginId: string }) => u.loginId === 'admin')).toBe(true);
   });
 
+  it('재인증: 올바른 비밀번호는 verified=true를 반환하고 토큰을 재발급하지 않는다', async () => {
+    const res = await api(ctx)
+      .post('/api/v1/auth/verify-password')
+      .set(auth(ctx))
+      .send({ password: 'admin1234!' })
+      .expect(200);
+    expect(res.body.data.verified).toBe(true);
+    // 토큰은 발급/회전하지 않는다 (세션 유지)
+    expect(res.body.data.accessToken).toBeUndefined();
+    expect(res.body.data.refreshToken).toBeUndefined();
+
+    // 성공 재인증이 REAUTH 감사로그로 남는다
+    const admin = await ctx.prisma.user.findUniqueOrThrow({ where: { loginId: 'admin' } });
+    const logs = await ctx.prisma.auditLog.findMany({
+      where: { action: 'REAUTH', entityType: 'USER', entityId: admin.id },
+    });
+    expect(logs.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('재인증: 틀린 비밀번호는 AUTH_INVALID_CREDENTIALS 401을 반환한다', async () => {
+    const res = await api(ctx)
+      .post('/api/v1/auth/verify-password')
+      .set(auth(ctx))
+      .send({ password: 'wrong-password' })
+      .expect(401);
+    expect(res.body.error.code).toBe('AUTH_INVALID_CREDENTIALS');
+  });
+
+  it('재인증: 인증 없이 호출하면 401을 반환한다 (@Public 아님)', async () => {
+    await api(ctx).post('/api/v1/auth/verify-password').send({ password: 'admin1234!' }).expect(401);
+  });
+
   it('refresh 토큰 회전이 동작한다', async () => {
     const login = await api(ctx)
       .post('/api/v1/auth/login')

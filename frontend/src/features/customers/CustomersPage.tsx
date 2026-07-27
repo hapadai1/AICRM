@@ -1,33 +1,40 @@
-import { FilterOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
+import { CalendarOutlined, FilterOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Button, Card, Empty, Input, Radio, Space, Switch, Table, Typography } from 'antd';
+import { Button, Card, Empty, Input, Radio, Segmented, Space, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { fetchCustomers, type CustomerListItem } from '../../api/customers';
-import { useAuthStore } from '../../app/auth-store';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
+import { AppointmentCustomerModal } from './AppointmentCustomerModal';
 import { CustomerRegisterModal } from './CustomerRegisterModal';
 import { CUSTOMER_STATUS_META, TRANSACTION_TYPE_LABEL, formatAmount } from './customer-constants';
 import { metaOf } from '../../shared/status-meta';
 
-/** CUST-001 고객 목록: 기본 CONTRACTED만, 미계약 포함 토글, 통합 검색 */
+/** 진행 journey 상태별 세부 단계 배지 색상 (진행상태 재정의 02) */
+const JOURNEY_STATUS_COLOR: Record<'ACTIVE' | 'COMPLETED' | 'CANCELLED', string> = {
+  ACTIVE: 'processing',
+  COMPLETED: 'green',
+  CANCELLED: 'default',
+};
+
+/** CUST-001 고객 목록: 계약 고객(CONTRACTED)만 조회, 통합 검색 */
 export function CustomersPage() {
   const navigate = useNavigate();
-  const canViewPayment = useAuthStore((s) => s.user?.permissions.includes('PAYMENT_VIEW') ?? false);
 
   const [keyword, setKeyword] = useState('');
   const [q, setQ] = useState('');
-  const [includeProspect, setIncludeProspect] = useState(false);
   const [transactionType, setTransactionType] = useState<'CUSTOM' | 'RENTAL' | undefined>(undefined);
+  const [progress, setProgress] = useState<'ACTIVE' | 'DONE' | 'ALL'>('ALL');
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(30);
   const [createOpen, setCreateOpen] = useState(false);
+  const [fromAppointmentOpen, setFromAppointmentOpen] = useState(false);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['customers', { q, includeProspect, transactionType: transactionType ?? '', page, size }],
-    queryFn: () => fetchCustomers({ q, includeProspect, transactionType, page, size }),
+    queryKey: ['customers', { q, transactionType: transactionType ?? '', progress, page, size }],
+    queryFn: () => fetchCustomers({ q, includeProspect: false, transactionType, progress, page, size }),
   });
 
   const runSearch = () => {
@@ -76,9 +83,18 @@ export function CustomersPage() {
     {
       title: '고객 상태',
       dataIndex: 'customerStatus',
-      width: 100,
-      render: (v: CustomerListItem['customerStatus']) => (
-        <StatusBadge label={metaOf(CUSTOMER_STATUS_META, v).label} color={metaOf(CUSTOMER_STATUS_META, v).color} />
+      width: 160,
+      // 계약상태 배지 + 진행 journey의 세부 단계(진행상태 재정의 02) 병기
+      render: (v: CustomerListItem['customerStatus'], row) => (
+        <Space direction="vertical" size={2}>
+          <StatusBadge label={metaOf(CUSTOMER_STATUS_META, v).label} color={metaOf(CUSTOMER_STATUS_META, v).color} />
+          {row.currentStage ? (
+            <StatusBadge
+              label={row.currentStage.name}
+              color={JOURNEY_STATUS_COLOR[row.currentStage.status] ?? 'default'}
+            />
+          ) : null}
+        </Space>
       ),
     },
     {
@@ -93,8 +109,7 @@ export function CustomersPage() {
       dataIndex: 'balanceAmount',
       width: 140,
       align: 'right',
-      // 결제 금액은 PAYMENT_VIEW 권한이 없으면 마스킹 (문서 03 §5.1)
-      render: (v: number) => (canViewPayment ? formatAmount(v) : '***'),
+      render: (v: number) => formatAmount(v),
     },
   ];
 
@@ -106,9 +121,19 @@ export function CustomersPage() {
             목록
           </Typography.Title>
           <Can permission="CUSTOMER_EDIT">
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-              고객 등록
-            </Button>
+            <Space>
+              {/* 대부분의 고객은 예약을 거쳐 들어오므로 예약 경로를 주 버튼으로 둔다 */}
+              <Button
+                type="primary"
+                icon={<CalendarOutlined />}
+                onClick={() => setFromAppointmentOpen(true)}
+              >
+                예약 고객 등록
+              </Button>
+              <Button icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+                고객 등록
+              </Button>
+            </Space>
           </Can>
         </Space>
 
@@ -124,16 +149,19 @@ export function CustomersPage() {
           <Button icon={<SearchOutlined />} onClick={runSearch}>
             검색
           </Button>
-          <Space size={6}>
-            <Switch
-              checked={includeProspect}
-              onChange={(v) => {
-                setIncludeProspect(v);
-                setPage(1);
-              }}
-            />
-            <Typography.Text>미계약 포함</Typography.Text>
-          </Space>
+          {/* 진행상태 검색(설계서 06 §2 / 02): 진행중/완료/전체 */}
+          <Segmented<'ACTIVE' | 'DONE' | 'ALL'>
+            value={progress}
+            onChange={(v) => {
+              setProgress(v);
+              setPage(1);
+            }}
+            options={[
+              { label: '전체', value: 'ALL' },
+              { label: '진행중', value: 'ACTIVE' },
+              { label: '완료', value: 'DONE' },
+            ]}
+          />
         </Space>
 
         <Table<CustomerListItem>
@@ -156,17 +184,15 @@ export function CustomersPage() {
             showTotal: (total) => `총 ${total}명`,
           }}
           onRow={(r) => ({ onClick: () => navigate(`/customers/${r.id}`), style: { cursor: 'pointer' } })}
-          locale={{
-            emptyText: (
-              <Empty
-                description={
-                  includeProspect ? '조건에 해당하는 고객이 없습니다.' : '계약 고객이 없습니다. 미계약 포함을 켜면 예약 고객도 조회됩니다.'
-                }
-              />
-            ),
-          }}
+          locale={{ emptyText: <Empty description="조건에 해당하는 고객이 없습니다." /> }}
         />
       </Space>
+
+      <AppointmentCustomerModal
+        open={fromAppointmentOpen}
+        onClose={() => setFromAppointmentOpen(false)}
+        onGoDetail={(id) => navigate(`/customers/${id}`)}
+      />
 
       <CustomerRegisterModal
         open={createOpen}

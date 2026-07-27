@@ -98,6 +98,23 @@ export class AvailabilityQueryDto {
   @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) availabilityEndDate: string;
 }
 
+/**
+ * 렌탈예약 달력 — 기간 내 일자별 가용 실물 집계 (설계서 06 §4.4).
+ * 단일창 availability와 동일한 검색 축을 재사용하고, 자유 검색어 q·sku 필터를 추가한다.
+ */
+export class AvailabilityCalendarQueryDto {
+  @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) from: string;
+  @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) to: string;
+  @IsOptional() @IsIn(RENTAL_COMPONENT_TYPES) componentType?: string;
+  @IsOptional() @IsString() design?: string;
+  @IsOptional() @IsString() color?: string;
+  @IsOptional() @IsString() size?: string;
+  /** 자유 검색어(관리코드·디자인·컬러 부분일치) */
+  @IsOptional() @IsString() q?: string;
+  /** SKU 설명(코드) 부분일치 */
+  @IsOptional() @IsString() sku?: string;
+}
+
 export class CreateAllocationDto {
   @IsUUID() componentId: string;
   /** 실물 UUID — itemCode와 둘 중 하나 필수 */
@@ -149,4 +166,34 @@ export class ReturnDto {
   @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) availableFrom: string;
   @IsOptional() @IsIn(RETURN_NEXT_ITEM_STATUSES) nextStatus?: string;
   @IsOptional() @IsInt() version?: number;
+}
+
+// ---------------------------------------------------------------------------
+// 렌탈 스타일 선택 (v2 D3 / 설계서 04 §4)
+// ---------------------------------------------------------------------------
+
+/** PUT /rental-selections/:id/lines/:componentId — 부위별 컬러·사이즈·비고 upsert */
+export class SaveRentalLineDto {
+  /** 기준정보 rental_colors.code */
+  @IsOptional() @IsString() @MaxLength(30) colorCode?: string;
+  /** 기준정보 rental_sizes.code */
+  @IsOptional() @IsString() @MaxLength(30) sizeCode?: string;
+  /** 수선명령(수치 등) 수기 — 비고 */
+  @IsOptional() @IsString() notes?: string;
+  /** 낙관적 잠금: rental_selection_sessions.row_version */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) version?: number;
+}
+
+/** PUT /rental-selections/:id/lines/:componentId/item — 후보 실물 선택 */
+export class SelectRentalItemDto {
+  /** 선택 실물 UUID — itemCode와 둘 중 하나 필수. null이면 선택 해제 */
+  @IsOptional() @IsUUID() inventoryItemId?: string | null;
+  /** 선택 실물 관리코드 — inventoryItemId 대신 허용(코드→id 해석) */
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(60) itemCode?: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) version?: number;
+}
+
+/** POST /rental-selections/:id/confirm */
+export class ConfirmRentalSelectionDto {
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) version?: number;
 }

@@ -3,15 +3,23 @@
  * 신규는 고객·채촌일·구분을 먼저 입력해 저장할 때 생성한다(유령 세션 방지).
  * 태블릿 가상 숫자 키패드로 치수를 입력하며, 현재 필드를 강조한다.
  */
-import { DeleteOutlined, DiffOutlined, SaveOutlined } from '@ant-design/icons';
+import {
+  DeleteOutlined,
+  DiffOutlined,
+  PrinterOutlined,
+  SaveOutlined,
+  UploadOutlined,
+} from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
   App,
   Button,
   Card,
+  Checkbox,
   Col,
   DatePicker,
+  Empty,
   Input,
   Row,
   Segmented,
@@ -20,25 +28,37 @@ import {
   Spin,
   Tag,
   Typography,
+  Upload,
 } from 'antd';
+import type { RcFile } from 'antd/es/upload';
 import dayjs from 'dayjs';
 import type { CSSProperties } from 'react';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ApiError } from '../../api/client';
+import { ApiError, fetchFileObjectUrl } from '../../api/client';
 import { fetchCustomers } from '../../api/customers';
-import type { MeasurementFieldDef, MeasurementType, MeasurementValues } from '../../api/measurements';
+import type {
+  MeasurementFieldDef,
+  MeasurementImage,
+  MeasurementType,
+  MeasurementValues,
+} from '../../api/measurements';
 import {
   MEASUREMENT_FIELDS,
   MEASUREMENT_GROUP_LABELS,
   MEASUREMENT_TYPE_LABELS,
+  cmToInch,
   completeMeasurement,
   createMeasurement,
   deleteMeasurement,
+  deleteMeasurementImage,
   fetchMeasurement,
+  fetchMeasurementImages,
   fetchMeasurements,
+  inchToCm,
   reopenMeasurement,
   updateMeasurement,
+  uploadMeasurementImage,
 } from '../../api/measurements';
 import { BackButton } from '../../shared/BackButton';
 import { Can } from '../../shared/Can';
@@ -69,18 +89,61 @@ const FIELD_LABELS: Record<string, string> = Object.fromEntries(
   MEASUREMENT_FIELDS.map((f) => [f.key, f.label]),
 );
 
-/** 저장 payload: 빈 값은 null로 보내 해당 항목을 삭제한다 (설계서 09 §3.3) */
-function toPayloadValues(values: Record<string, string>): MeasurementValues {
+/** 화면 표시 단위 (저장은 항상 CM). */
+type Unit = 'CM' | 'INCH';
+
+/** 단위 전환 시 숫자 항목 표시값을 변환한다. 문자 항목은 그대로 둔다. */
+function convertValues(values: Record<string, string>, from: Unit, to: Unit): Record<string, string> {
+  if (from === to) return values;
+  const out = { ...values };
+  MEASUREMENT_FIELDS.forEach((f) => {
+    if (f.kind !== 'number') return;
+    const raw = (values[f.key] ?? '').trim();
+    if (raw === '' || raw === '.') return;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    out[f.key] = String(to === 'INCH' ? cmToInch(n) : inchToCm(n));
+  });
+  return out;
+}
+
+/**
+ * 저장 payload: 빈 값은 null로 보내 해당 항목을 삭제한다 (설계서 09 §3.3).
+ * 서버는 항상 CM로 받는다. inch 표시 중이면:
+ *  - 사용자가 실제로 편집한 항목만 inch→cm 역환산해 보낸다.
+ *  - 편집하지 않은 항목은 원본 cm를 그대로 보내 반올림 왕복 오차를 막는다 (설계서 v2 05 §3.2).
+ */
+function toPayloadValues(
+  values: Record<string, string>,
+  unit: Unit,
+  editedKeys: Set<string>,
+  originalCm: MeasurementValues,
+): MeasurementValues {
   const out: MeasurementValues = {};
   MEASUREMENT_FIELDS.forEach((f) => {
     const raw = (values[f.key] ?? '').trim();
     if (raw === '' || raw === '.') {
       out[f.key] = null;
-    } else if (f.kind === 'number') {
-      const n = Number(raw);
-      out[f.key] = Number.isFinite(n) ? n : null;
-    } else {
+      return;
+    }
+    if (f.kind !== 'number') {
       out[f.key] = raw;
+      return;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n)) {
+      out[f.key] = null;
+      return;
+    }
+    if (unit === 'INCH') {
+      if (editedKeys.has(f.key)) {
+        out[f.key] = inchToCm(n);
+      } else {
+        const orig = originalCm[f.key];
+        out[f.key] = typeof orig === 'number' ? orig : inchToCm(n);
+      }
+    } else {
+      out[f.key] = n;
     }
   });
   return out;
@@ -112,6 +175,12 @@ export function MeasurementEditPage() {
   const [form, setForm] = useState<FormState | null>(isNew ? emptyForm() : null);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
+  // 화면 표시 단위 — 저장은 항상 CM. 단위 상태는 세션에 저장하지 않는다 (설계서 v2 05 §3.1).
+  const [unit, setUnit] = useState<Unit>('CM');
+  // 사용자가 실제 편집한 항목 — inch 저장 시 편집분만 역환산한다.
+  const [editedKeys, setEditedKeys] = useState<Set<string>>(() => new Set());
+  // 사진 인쇄 선택 (fileId 집합)
+  const [selectedImages, setSelectedImages] = useState<Set<string>>(() => new Set());
 
   const sessionQuery = useQuery({
     queryKey: ['measurements', 'detail', id],
@@ -167,6 +236,67 @@ export function MeasurementEditPage() {
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['measurements'] });
 
+  const markEdited = (key: string) => setEditedKeys((s) => (s.has(key) ? s : new Set(s).add(key)));
+
+  /** 단위 토글 — 표시값만 환산한다. 편집으로 치지 않아 dirty·editedKeys를 건드리지 않는다. */
+  const changeUnit = (next: Unit) => {
+    if (next === unit) return;
+    setForm((f) => (f ? { ...f, values: convertValues(f.values, unit, next) } : f));
+    setUnit(next);
+  };
+
+  /** 문자 항목·직접 입력용 값 갱신 (편집 표시 포함) */
+  const setValue = (key: string, val: string) => {
+    setForm((f) => (f ? { ...f, values: { ...f.values, [key]: val } } : f));
+    markEdited(key);
+    setDirty(true);
+  };
+
+  // 채촌 사진 (기존 세션만 — 신규는 저장 후 첨부 가능)
+  const imagesQuery = useQuery({
+    queryKey: ['measurements', 'images', id],
+    queryFn: () => fetchMeasurementImages(id as string),
+    enabled: !isNew && !!id,
+  });
+  const images = imagesQuery.data ?? [];
+
+  const uploadMutation = useMutation({
+    mutationFn: (file: File) => uploadMeasurementImage(id as string, file),
+    onSuccess: () => {
+      message.success('사진을 첨부했습니다.');
+      void queryClient.invalidateQueries({ queryKey: ['measurements', 'images', id] });
+    },
+    onError: (e) => message.error(e instanceof ApiError ? e.message : '사진 첨부에 실패했습니다.'),
+  });
+
+  const deleteImageMutation = useMutation({
+    mutationFn: (fileId: string) => deleteMeasurementImage(id as string, fileId),
+    onSuccess: (_res, fileId) => {
+      message.success('사진을 삭제했습니다.');
+      setSelectedImages((s) => {
+        const n = new Set(s);
+        n.delete(fileId);
+        return n;
+      });
+      void queryClient.invalidateQueries({ queryKey: ['measurements', 'images', id] });
+    },
+    onError: (e) => message.error(e instanceof ApiError ? e.message : '사진 삭제에 실패했습니다.'),
+  });
+
+  /** AntD Upload — image/* 제한·50장 선검증 후 직접 업로드한다(자동 업로드 차단). */
+  const beforeUpload = (file: RcFile) => {
+    if (!file.type.startsWith('image/')) {
+      message.error('이미지 파일만 첨부할 수 있습니다.');
+      return Upload.LIST_IGNORE;
+    }
+    if (images.length >= 50) {
+      message.error('첨부 사진은 최대 50장까지 등록할 수 있습니다.');
+      return Upload.LIST_IGNORE;
+    }
+    uploadMutation.mutate(file);
+    return false;
+  };
+
   const createMutation = useMutation({
     mutationFn: async () => {
       if (!form) throw new Error('입력값이 없습니다.');
@@ -178,7 +308,7 @@ export function MeasurementEditPage() {
       });
       // 값은 생성 직후 저장한다 — 생성 API는 값이 빈 항목을 거부한다.
       return updateMeasurement(created.id, {
-        values: toPayloadValues(form.values),
+        values: toPayloadValues(form.values, unit, editedKeys, {}),
         fitPreference: form.fitPreference.trim() || null,
         bodyNotes: form.bodyNotes.trim() || null,
         notes: form.notes.trim() || null,
@@ -199,7 +329,7 @@ export function MeasurementEditPage() {
       return updateMeasurement(session.id, {
         measurementDate: form.measurementDate,
         measurementType: form.measurementType,
-        values: toPayloadValues(form.values),
+        values: toPayloadValues(form.values, unit, editedKeys, session.values),
         fitPreference: form.fitPreference.trim() || null,
         bodyNotes: form.bodyNotes.trim() || null,
         notes: form.notes.trim() || null,
@@ -207,6 +337,8 @@ export function MeasurementEditPage() {
     },
     onSuccess: (updated) => {
       queryClient.setQueryData(['measurements', 'detail', id], updated);
+      // 저장된 값(CM)이 새 기준선이 되므로 편집 표시를 비운다 (inch 왕복 오차 방지).
+      setEditedKeys(new Set());
       void invalidate();
       setDirty(false);
     },
@@ -276,6 +408,7 @@ export function MeasurementEditPage() {
       if (next === cur) return f;
       return { ...f, values: { ...f.values, [activeKey]: next } };
     });
+    markEdited(activeKey);
     setDirty(true);
   };
 
@@ -287,6 +420,7 @@ export function MeasurementEditPage() {
       if (cur === '') return f;
       return { ...f, values: { ...f.values, [activeKey]: cur.slice(0, -1) } };
     });
+    markEdited(activeKey);
     setDirty(true);
   };
 
@@ -380,12 +514,12 @@ export function MeasurementEditPage() {
             value={value}
             placeholder="입력"
             onFocus={() => setActiveKey(null)}
-            onChange={(e) => patch({ values: { ...form.values, [def.key]: e.target.value } })}
+            onChange={(e) => setValue(def.key, e.target.value)}
           />
         ) : value ? (
           <Typography.Text strong style={{ fontSize: 17 }}>
             {value}
-            {def.kind === 'number' ? ' cm' : ''}
+            {def.kind === 'number' ? (unit === 'INCH' ? ' in' : ' cm') : ''}
           </Typography.Text>
         ) : (
           <Typography.Text style={{ fontSize: 16, color: '#bfbfbf' }}>입력</Typography.Text>
@@ -499,6 +633,45 @@ export function MeasurementEditPage() {
               )}
             </Space>
 
+            {/* 기능 버튼 줄 — 단위 전환·사진 업로드 (설계서 v2 05 §3.2·§4.3) */}
+            <Space wrap size="middle" align="center">
+              <Space direction="vertical" size={4}>
+                <Typography.Text type="secondary">표시 단위</Typography.Text>
+                <Segmented
+                  size="large"
+                  value={unit}
+                  onChange={(v) => changeUnit(v as Unit)}
+                  options={[
+                    { label: 'cm로 보기', value: 'CM' },
+                    { label: '인치로 보기', value: 'INCH' },
+                  ]}
+                />
+              </Space>
+              {!isNew && (
+                <Space direction="vertical" size={4}>
+                  <Typography.Text type="secondary">사진</Typography.Text>
+                  <Can permission="MEASUREMENT_EDIT">
+                    <Upload
+                      accept="image/*"
+                      showUploadList={false}
+                      multiple
+                      beforeUpload={beforeUpload}
+                      disabled={images.length >= 50}
+                    >
+                      <Button
+                        size="large"
+                        icon={<UploadOutlined />}
+                        loading={uploadMutation.isPending}
+                        disabled={images.length >= 50}
+                      >
+                        사진 업로드 ({images.length}/50)
+                      </Button>
+                    </Upload>
+                  </Can>
+                </Space>
+              )}
+            </Space>
+
             {readOnly && (
               <Alert
                 type="warning"
@@ -527,7 +700,8 @@ export function MeasurementEditPage() {
             )}
 
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              단위: cm (소수 허용) · 값이 없는 항목은 비워 둡니다.
+              표시 단위: {unit === 'INCH' ? 'inch(파생 표시 · 저장은 cm)' : 'cm'} (소수 허용) · 값이 없는
+              항목은 비워 둡니다.
             </Typography.Text>
           </Space>
         </Card>
@@ -572,6 +746,78 @@ export function MeasurementEditPage() {
             </div>
           </Space>
         </Card>
+
+        {/* 최하단 사진 갤러리 (설계서 v2 05 §4.3·§5) — 썸네일·선택·삭제·A4 인쇄 */}
+        {!isNew && (
+          <Card
+            size="small"
+            title={`사진 (${images.length}/50)`}
+            style={{ marginBottom: 16 }}
+            extra={
+              images.length > 0 && (
+                <Space wrap>
+                  <Checkbox
+                    checked={selectedImages.size === images.length}
+                    indeterminate={selectedImages.size > 0 && selectedImages.size < images.length}
+                    onChange={(e) =>
+                      setSelectedImages(
+                        e.target.checked ? new Set(images.map((im) => im.fileId)) : new Set(),
+                      )
+                    }
+                  >
+                    전체 선택
+                  </Checkbox>
+                  <Button
+                    icon={<PrinterOutlined />}
+                    disabled={selectedImages.size === 0}
+                    onClick={() =>
+                      navigate(
+                        `/measurements/${session?.id}/print?ids=${[...selectedImages].join(',')}`,
+                      )
+                    }
+                  >
+                    선택 인쇄 ({selectedImages.size})
+                  </Button>
+                </Space>
+              )
+            }
+          >
+            {imagesQuery.isLoading ? (
+              <Spin />
+            ) : images.length === 0 ? (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="첨부된 사진이 없습니다." />
+            ) : (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
+                  gap: 12,
+                }}
+              >
+                {images.map((im) => (
+                  <MeasurementImageThumb
+                    key={im.fileId}
+                    image={im}
+                    checked={selectedImages.has(im.fileId)}
+                    onToggle={() =>
+                      setSelectedImages((s) => {
+                        const n = new Set(s);
+                        if (n.has(im.fileId)) n.delete(im.fileId);
+                        else n.add(im.fileId);
+                        return n;
+                      })
+                    }
+                    onDelete={() => deleteImageMutation.mutate(im.fileId)}
+                    deleting={deleteImageMutation.isPending && deleteImageMutation.variables === im.fileId}
+                  />
+                ))}
+              </div>
+            )}
+            <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
+              최대 50장까지 첨부할 수 있습니다. 인쇄할 사진을 선택해 A4 한 장으로 출력하세요.
+            </Typography.Text>
+          </Card>
+        )}
 
         {/* 목록·계약 상세 등 여러 경로로 들어오므로 하단에도 이전화면 복귀 버튼을 둔다 */}
         <Card>
@@ -670,5 +916,69 @@ export function MeasurementEditPage() {
         </div>
       </Col>
     </Row>
+  );
+}
+
+/**
+ * 갤러리 썸네일 — 선택 체크박스·삭제 버튼.
+ * 인증이 필요한 파일이라 <img>가 헤더를 못 보내므로 blob(objectURL)로 로드한다.
+ */
+function MeasurementImageThumb({
+  image,
+  checked,
+  onToggle,
+  onDelete,
+  deleting,
+}: {
+  image: MeasurementImage;
+  checked: boolean;
+  onToggle: () => void;
+  onDelete: () => void;
+  deleting: boolean;
+}) {
+  const { data: src } = useQuery({
+    queryKey: ['file-object-url', image.fileId],
+    queryFn: () => fetchFileObjectUrl(`/files/${image.fileId}`),
+    staleTime: Infinity,
+    gcTime: 30 * 60 * 1000,
+  });
+  return (
+    <div
+      style={{
+        position: 'relative',
+        border: checked ? '2px solid #1677ff' : '1px solid #d9d9d9',
+        borderRadius: 8,
+        height: 120,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: '#fafafa',
+        overflow: 'hidden',
+      }}
+    >
+      <Checkbox
+        checked={checked}
+        onChange={onToggle}
+        style={{ position: 'absolute', top: 6, left: 6, zIndex: 1 }}
+      />
+      <Button
+        size="small"
+        danger
+        icon={<DeleteOutlined />}
+        loading={deleting}
+        onClick={onDelete}
+        style={{ position: 'absolute', top: 4, right: 4, zIndex: 1 }}
+      />
+      {src ? (
+        <img
+          src={src}
+          alt={image.originalName}
+          onClick={onToggle}
+          style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', cursor: 'pointer' }}
+        />
+      ) : (
+        <Spin size="small" />
+      )}
+    </div>
   );
 }

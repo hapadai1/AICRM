@@ -509,25 +509,6 @@ async function main(): Promise<void> {
         });
       };
 
-      const payment = async (args: {
-        contractId: string; paymentType: string; amount: number; paymentDate: Date;
-        paymentMethod: string; status?: string; memo?: string;
-      }): Promise<void> => {
-        await tx.payment.create({
-          data: {
-            id: uuid(),
-            contractId: args.contractId,
-            paymentType: args.paymentType,
-            amount: args.amount,
-            paymentDate: args.paymentDate,
-            paymentMethod: args.paymentMethod,
-            status: args.status ?? 'COMPLETED',
-            memo: args.memo ?? null,
-            createdBy: adminId,
-          },
-        });
-      };
-
       const appointment = async (args: {
         customerId: string; purposeCode: string; start: Date; end: Date; status: string;
         source?: 'CRM' | 'NAVER'; externalId?: string; notes?: string;
@@ -570,7 +551,7 @@ async function main(): Promise<void> {
 
       const repair = async (args: {
         customerId: string; repairType: string; requestDate: Date; dueDate?: Date; status: string;
-        description: string; cost?: number; orderId?: string; orderItemId?: string; componentId?: string;
+        description: string; orderId?: string; orderItemId?: string; componentId?: string;
         rentalInventoryItemId?: string; notes?: string;
         events: Array<{ previousStatus?: string; newStatus: string; eventDate: Date }>;
       }): Promise<void> => {
@@ -588,7 +569,6 @@ async function main(): Promise<void> {
             dueDate: args.dueDate ?? null,
             status: args.status,
             description: args.description,
-            cost: args.cost ?? null,
             notes: args.notes ?? null,
           },
         });
@@ -850,9 +830,6 @@ async function main(): Promise<void> {
       await allocation({ componentId: hjmRentalVest, managementCode: 'VST-GRY-100-001', pickupDate: dateOnly(2), returnDueDate: dateOnly(6), availabilityEndDate: dateOnly(8), status: 'RESERVED', assignedAt: at(-5, 11) });
       void hjmRentalShoesCmp; // 구두는 미배정(배정 대기 데모)
 
-      await payment({ contractId: hjm.contractId, paymentType: 'DEPOSIT', amount: 1500000, paymentDate: dateOnly(-24), paymentMethod: 'CARD', memo: '입금자: 한지민' });
-      await payment({ contractId: hjm.contractId, paymentType: 'INTERIM', amount: 1000000, paymentDate: dateOnly(-10), paymentMethod: 'TRANSFER', memo: '중도금' });
-
       const hjmAp1 = await appointment({ customerId: 한지민, purposeCode: 'INITIAL_CONSULTATION', start: at(-28, 11), end: at(-28, 12), status: 'VISITED', notes: '웨딩 패키지 상담' });
       await appointment({ customerId: 한지민, purposeCode: 'FITTING', start: at(-4, 15), end: at(-4, 16), status: 'VISITED', notes: '1차 가봉 완료' });
       await appointment({ customerId: 한지민, purposeCode: 'RENTAL_PICKUP', start: at(2, 11), end: at(2, 11, 30), status: 'CONFIRMED', notes: '촬영용 렌탈 픽업' });
@@ -921,7 +898,6 @@ async function main(): Promise<void> {
       await productionEvent({ orderItemId: oshSuit, componentId: oshSuitTrousers, eventType: 'PRODUCTION_IN_PROGRESS', previousStatus: 'PRODUCTION_REQUESTED', newStatus: 'PRODUCTION_IN_PROGRESS', expectedDate: dateOnly(-1), eventDate: dateOnly(-12), notes: '입고 예정일 경과 — 지연' });
       await productionEvent({ orderItemId: oshSuit, eventType: 'ITEM_STATUS_AGGREGATED', previousStatus: 'PRODUCTION_IN_PROGRESS', newStatus: 'PARTIALLY_RECEIVED', eventDate: dateOnly(-3), notes: '자켓만 입고' });
 
-      await payment({ contractId: osh.contractId, paymentType: 'DEPOSIT', amount: 700000, paymentDate: dateOnly(-16), paymentMethod: 'CARD', memo: '입금자: 오세훈' });
       const oshAp = await appointment({ customerId: 오세훈, purposeCode: 'INITIAL_CONSULTATION', start: at(-18, 10), end: at(-18, 11), status: 'VISITED' });
       await appointment({ customerId: 오세훈, purposeCode: 'FITTING', start: at(1, 19), end: at(1, 20), status: 'RESERVED', notes: '퇴근 후 가봉 요청' });
       await appointment({ customerId: 오세훈, purposeCode: 'PICKUP', start: at(6, 12), end: at(6, 12, 30), status: 'RESERVED', notes: '셔츠 #1 픽업' });
@@ -964,9 +940,6 @@ async function main(): Promise<void> {
           reason: '반납 검수 대기', actorId: adminId, occurredAt: at(-42, 15, 30),
         },
       });
-      await payment({ contractId: sjw.contractId, paymentType: 'DEPOSIT', amount: 300000, paymentDate: dateOnly(-65), paymentMethod: 'TRANSFER' });
-      await payment({ contractId: sjw.contractId, paymentType: 'BALANCE', amount: 600000, paymentDate: dateOnly(-46), paymentMethod: 'CARD', memo: '픽업 시 잔금 완납' });
-      await payment({ contractId: sjw.contractId, paymentType: 'REPAIR_FEE', amount: 40000, paymentDate: dateOnly(-38), paymentMethod: 'CASH', memo: '반납 후 수선비' });
       await appointment({ customerId: 서지우, purposeCode: 'RENTAL_PICKUP', start: at(-46, 10), end: at(-46, 10, 30), status: 'VISITED' });
       await appointment({ customerId: 서지우, purposeCode: 'RENTAL_RETURN', start: at(-42, 15), end: at(-42, 15, 30), status: 'VISITED' });
       await consultation({
@@ -994,8 +967,6 @@ async function main(): Promise<void> {
       const bjhSuit = await orderItem({ orderId: bjhOrder, lineId: bjh.versionLineIds[0][0], productCategory: 'SUIT', sequenceNo: 1, displayName: '정장 #1', status: 'CANCELLED' });
       await component({ orderItemId: bjhSuit, componentType: 'JACKET', status: 'CANCELLED' });
       await component({ orderItemId: bjhSuit, componentType: 'TROUSERS', status: 'CANCELLED' });
-      await payment({ contractId: bjh.contractId, paymentType: 'DEPOSIT', amount: 400000, paymentDate: dateOnly(-40), paymentMethod: 'CARD' });
-      await payment({ contractId: bjh.contractId, paymentType: 'REFUND', amount: 400000, paymentDate: dateOnly(-33), paymentMethod: 'TRANSFER', memo: '고객 요청 취소 — 계약금 전액 환불' });
       await appointment({ customerId: 배정훈, purposeCode: 'INITIAL_CONSULTATION', start: at(-45, 16), end: at(-45, 17), status: 'VISITED' });
       await appointment({ customerId: 배정훈, purposeCode: 'FITTING', start: at(-30, 14), end: at(-30, 15), status: 'CANCELLED', notes: '계약 취소로 가봉 취소' });
       await consultation({
@@ -1028,7 +999,6 @@ async function main(): Promise<void> {
       const ydhShoesCmp = await component({ orderItemId: ydhShoes, componentType: 'SHOES', status: 'RELEASED', actualOutboundAt: at(-4, 11) });
       await allocation({ componentId: ydhJacket, managementCode: 'JKT-BLK-100-004', pickupDate: dateOnly(-4), returnDueDate: dateOnly(1), availabilityEndDate: dateOnly(3), status: 'CHECKED_OUT', assignedAt: at(-8, 10), actualPickupAt: at(-4, 11) });
       await allocation({ componentId: ydhShoesCmp, managementCode: 'SHO-BRN-270-002', pickupDate: dateOnly(-4), returnDueDate: dateOnly(1), availabilityEndDate: dateOnly(3), status: 'CHECKED_OUT', assignedAt: at(-8, 10), actualPickupAt: at(-4, 11) });
-      await payment({ contractId: ydh.contractId, paymentType: 'DEPOSIT', amount: 250000, paymentDate: dateOnly(-9), paymentMethod: 'CARD' });
       await appointment({ customerId: 윤도현, purposeCode: 'RENTAL_PICKUP', start: at(-4, 11), end: at(-4, 11, 30), status: 'VISITED' });
       await appointment({ customerId: 윤도현, purposeCode: 'RENTAL_RETURN', start: at(1, 10), end: at(1, 10, 30), status: 'CONFIRMED', notes: '반납 예정 — 검수 후 잔금 정산' });
       await consultation({
@@ -1059,7 +1029,7 @@ async function main(): Promise<void> {
       // =====================================================================
       await repair({
         customerId: 한지민, repairType: 'CUSTOM_DURING', requestDate: dateOnly(-4), dueDate: dateOnly(3),
-        status: 'IN_PROGRESS', description: '가봉 반영 — 자켓 소매 0.5cm 축소, 바지 기장 1cm 조정', cost: 0,
+        status: 'IN_PROGRESS', description: '가봉 반영 — 자켓 소매 0.5cm 축소, 바지 기장 1cm 조정',
         orderId: hjmCustomOrder, orderItemId: hjmSuit1, componentId: hjmSuit1Jacket,
         notes: '1차 가봉 결과 반영',
         events: [
@@ -1069,7 +1039,7 @@ async function main(): Promise<void> {
       });
       await repair({
         customerId: 서지우, repairType: 'RENTAL_POST', requestDate: dateOnly(-42), dueDate: dateOnly(-38),
-        status: 'RELEASED', description: '반납 턱시도 바지 밑단 풀림 수선', cost: 40000,
+        status: 'RELEASED', description: '반납 턱시도 바지 밑단 풀림 수선',
         rentalInventoryItemId: inventoryIds['PNT-BLK-34-003'], notes: '검수 시 발견, 수선 후 재고 복귀 예정',
         events: [
           { newStatus: 'RECEIVED', eventDate: dateOnly(-42) },
@@ -1082,13 +1052,13 @@ async function main(): Promise<void> {
       });
       await repair({
         customerId: 오세훈, repairType: 'AFTER_SALE', requestDate: dateOnly(-1), dueDate: dateOnly(6),
-        status: 'RECEIVED', description: '셔츠 #1 소매 기장 1cm 줄임', cost: 15000,
+        status: 'RECEIVED', description: '셔츠 #1 소매 기장 1cm 줄임',
         orderId: oshOrder, orderItemId: oshShirt1,
         events: [{ newStatus: 'RECEIVED', eventDate: dateOnly(-1) }],
       });
       await repair({
         customerId: 윤도현, repairType: 'GENERAL', requestDate: dateOnly(-2), dueDate: dateOnly(4),
-        status: 'IN_PROGRESS', description: '개인 소장 코트 단추 교체', cost: 12000,
+        status: 'IN_PROGRESS', description: '개인 소장 코트 단추 교체',
         events: [
           { newStatus: 'RECEIVED', eventDate: dateOnly(-2) },
           { previousStatus: 'RECEIVED', newStatus: 'IN_PROGRESS', eventDate: dateOnly(-1) },
@@ -1097,7 +1067,7 @@ async function main(): Promise<void> {
       if (정우성) {
         await repair({
           customerId: 정우성.id, repairType: 'AFTER_SALE', requestDate: dateOnly(-20), dueDate: dateOnly(-14),
-          status: 'RELEASED', description: '자켓 어깨 패드 조정', cost: 25000,
+          status: 'RELEASED', description: '자켓 어깨 패드 조정',
           events: [
             { newStatus: 'RECEIVED', eventDate: dateOnly(-20) },
             { previousStatus: 'RECEIVED', newStatus: 'REQUESTED', eventDate: dateOnly(-20) },
@@ -1114,7 +1084,6 @@ async function main(): Promise<void> {
       // 10) 기존 데모 고객 이력 보강 (정우성 중심)
       // =====================================================================
       if (정우성) {
-        const wsContract = await tx.contract.findFirst({ where: { customerId: 정우성.id } });
         const wsOrder = await tx.order.findFirst({
           where: { contract: { customerId: 정우성.id }, transactionType: 'CUSTOM' },
           include: { items: true },
@@ -1142,9 +1111,6 @@ async function main(): Promise<void> {
             }),
           });
           void wsMeasure;
-        }
-        if (wsContract) {
-          await payment({ contractId: wsContract.id, paymentType: 'REPAIR_FEE', amount: 30000, paymentDate: dateOnly(-14), paymentMethod: 'CASH', memo: '어깨 패드 조정 수선비' });
         }
       }
       if (김민준) {

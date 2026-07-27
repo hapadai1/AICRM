@@ -1,6 +1,7 @@
 /**
  * ADMIN-002 옵션 세트·단계 관리
- * - 품목 대분류 선택 → 버전 목록(DRAFT/ACTIVE/RETIRED) → 단계 표 + A/B 선택지
+ * - 품목 대분류 선택 → 버전 목록(DRAFT/ACTIVE/RETIRED) → 단계 표 + 선택지
+ * - 선택지는 5개까지 옆으로(정장·셔츠), 그보다 많으면 한 칸에서 3개씩 줄바꿈(구두)
  * - 새 버전(기존 복사), DRAFT만 편집, 활성화 시 기존 ACTIVE → RETIRED 확인
  */
 import { DeleteOutlined, PlusOutlined, SaveOutlined, ThunderboltOutlined } from '@ant-design/icons';
@@ -18,6 +19,7 @@ import {
   Radio,
   Space,
   Table,
+  Tabs,
   Tag,
   Typography,
 } from 'antd';
@@ -26,16 +28,17 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   activateOptionSetVersion,
   createOptionSetVersion,
-  fetchOptionSetVersion,
   fetchOptionSets,
-  saveOptionStages,
 } from '../../api/admin';
 import { CHOICE_SLOTS, MAX_CHOICES, MIN_CHOICES } from '../../api/admin';
-import type {
-  OptionSetVersionStatus,
-  OptionSetVersionSummary,
-  OptionStageInput,
-} from '../../api/admin';
+import type { OptionSetVersionStatus, OptionSetVersionSummary } from '../../api/admin';
+import {
+  componentGroupLabel,
+  fetchAdminOptionSetVersion,
+  OPTION_COMPONENT_GROUPS,
+  saveAdminOptionStages,
+} from '../../api/options';
+import type { AdminOptionStageInput } from '../../api/options';
 import { ApiError, fetchFileObjectUrl } from '../../api/client';
 import { PRODUCT_CATEGORY_LABEL } from '../contracts/labels';
 import { metaOf } from '../../shared/status-meta';
@@ -62,7 +65,9 @@ interface EditableStage {
   name: string;
   sortOrder: number;
   required: boolean;
-  /** 2~3개, 화면 순서가 곧 A/B/C 슬롯이다 */
+  /** 부위 그룹(JACKET/TROUSERS/VEST). 셔츠·구두 등 단일 부위 세트는 null. */
+  componentGroup: string | null;
+  /** 2~40개, 화면 순서가 곧 A~Z·AA~ 슬롯이다 */
   choices: EditableChoice[];
 }
 
@@ -75,23 +80,33 @@ const emptyChoice = (): EditableChoice => ({
   imageUrl: null,
 });
 
-/**
- * 선택지 사진이 세로로 긴 원본이라 잘리지 않게 contain으로 담고,
- * 인화물처럼 보이도록 둘레에 흰 여백을 둔다(썸네일이라 좁게).
- */
+/** 인화물처럼 보이도록 사진 둘레에 두르는 흰 여백 */
 const THUMB_MAT = 6;
+/**
+ * 등록된 사진을 원본 크기(100%)로 보여준다 — 줄이면 카라 벌림·커프스 모서리처럼
+ * 선택지를 가르는 미세한 차이가 화면에서 사라져 등록이 맞는지 확인할 수 없다.
+ * 대신 칸이 넓어 표는 가로로 스크롤한다(CHOICE_COL_WIDTH).
+ */
 const THUMB_STYLE = {
-  width: 88,
-  height: 124,
+  maxWidth: '100%',
+  height: 'auto' as const,
   padding: THUMB_MAT,
   borderRadius: 4,
   border: '1px solid #e8e8e8',
   background: '#ffffff',
   objectFit: 'contain' as const,
   boxSizing: 'border-box' as const,
-  flexShrink: 0,
   cursor: 'zoom-in' as const,
 };
+
+/** 사진(가장 큰 자산이 폭 392) + 여백이 들어가는 선택지 한 칸 너비 */
+const CHOICE_COL_WIDTH = 420;
+
+/** 선택지를 슬롯별 열로 펼치는 한계. 이보다 많으면 한 칸 안에서 줄바꿈한다(구두 29스타일). */
+const SLOT_COLUMN_LIMIT = 5;
+
+/** 줄바꿈 배치에서 한 줄에 놓는 선택지 수 */
+const CHOICES_PER_ROW = 3;
 
 /** 아직 이미지가 없는 선택지(신규 단계) 자리 표시 */
 function ImagePlaceholder() {
@@ -99,6 +114,8 @@ function ImagePlaceholder() {
     <div
       style={{
         ...THUMB_STYLE,
+        width: '100%',
+        height: 160,
         border: '1px dashed #d9d9d9',
         display: 'flex',
         alignItems: 'center',
@@ -139,6 +156,10 @@ export function AdminOptionsPage() {
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [draftStages, setDraftStages] = useState<EditableStage[]>([]);
   const [dirty, setDirty] = useState(false);
+  // 정장 세트는 부위(상의/하의/베스트) 탭으로 세분한다. 셔츠·구두는 단일 화면.
+  const componentGroups = OPTION_COMPONENT_GROUPS[category];
+  const hasGroups = componentGroups.length > 1;
+  const [activeGroup, setActiveGroup] = useState<string>(componentGroups[0] ?? '');
   const queryClient = useQueryClient();
   const { message, modal } = App.useApp();
 
@@ -159,9 +180,14 @@ export function AdminOptionsPage() {
     });
   }, [currentSet]);
 
+  // 대분류 변경 시 부위 탭을 그 카테고리의 첫 부위로 되돌린다.
+  useEffect(() => {
+    setActiveGroup(componentGroups[0] ?? '');
+  }, [componentGroups]);
+
   const versionQuery = useQuery({
     queryKey: ['option-set-versions', selectedVersionId],
-    queryFn: () => fetchOptionSetVersion(selectedVersionId!),
+    queryFn: () => fetchAdminOptionSetVersion(selectedVersionId!),
     enabled: !!selectedVersionId,
   });
   const version = versionQuery.data;
@@ -182,6 +208,7 @@ export function AdminOptionsPage() {
         name: s.name,
         sortOrder: s.sortOrder,
         required: s.required,
+        componentGroup: s.componentGroup,
         choices: CHOICE_SLOTS.map((slot) => s.choices.find((c) => c.slot === slot))
           .filter((c): c is NonNullable<typeof c> => !!c)
           .map((c) => ({
@@ -215,12 +242,13 @@ export function AdminOptionsPage() {
 
   const saveMutation = useMutation({
     mutationFn: () => {
-      const stages: OptionStageInput[] = draftStages.map((s, idx) => ({
+      const stages: AdminOptionStageInput[] = draftStages.map((s, idx) => ({
         id: s.id,
         code: s.code,
         name: s.name,
         sortOrder: s.sortOrder || idx + 1,
         required: s.required,
+        componentGroup: s.componentGroup,
         choices: s.choices.map((c, i) => ({
           slot: CHOICE_SLOTS[i],
           name: c.name,
@@ -229,7 +257,7 @@ export function AdminOptionsPage() {
           imageFileId: c.imageFileId,
         })),
       }));
-      return saveOptionStages(selectedVersionId!, stages);
+      return saveAdminOptionStages(selectedVersionId!, stages);
     },
     onSuccess: () => {
       message.success('단계가 저장되었습니다.');
@@ -292,38 +320,39 @@ export function AdminOptionsPage() {
     setDirty(true);
   };
 
-  const choiceCell = (stage: EditableStage, index: number) => {
+  const addChoiceButton = (stage: EditableStage) => (
+    <Button
+      size="small"
+      type="dashed"
+      style={{ height: '100%', minHeight: 120 }}
+      icon={<PlusOutlined />}
+      onClick={() => {
+        setDraftStages((prev) =>
+          prev.map((s) =>
+            s.key === stage.key ? { ...s, choices: [...s.choices, emptyChoice()] } : s,
+          ),
+        );
+        setDirty(true);
+      }}
+    >
+      선택지 추가
+    </Button>
+  );
+
+  const choiceCell = (stage: EditableStage, index: number, showLabel = false) => {
     const choice = stage.choices[index];
     const slot = CHOICE_SLOTS[index];
-
-    // 3번째 칸은 선택지가 2개인 단계에서 비어 있다 — 초안이면 추가 버튼을 놓는다.
-    if (!choice) {
-      if (!isDraft || index !== stage.choices.length || stage.choices.length >= MAX_CHOICES)
-        return <Typography.Text type="secondary">-</Typography.Text>;
-      return (
-        <Button
-          size="small"
-          type="dashed"
-          icon={<PlusOutlined />}
-          onClick={() => {
-            setDraftStages((prev) =>
-              prev.map((s) =>
-                s.key === stage.key ? { ...s, choices: [...s.choices, emptyChoice()] } : s,
-              ),
-            );
-            setDirty(true);
-          }}
-        >
-          선택지 추가
-        </Button>
-      );
-    }
-
     const removable = isDraft && stage.choices.length > MIN_CHOICES && index === stage.choices.length - 1;
     return (
-      <Space align="start">
+      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+        {/* 줄바꿈 배치에서는 열 머리글이 없으니 칸마다 슬롯을 적는다. */}
+        {showLabel && (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            선택지 #{index + 1} ({slot})
+          </Typography.Text>
+        )}
         <ChoiceImage path={choice.imageUrl} alt={`${stage.name} ${slot} ${choice.name}`} />
-        <Space direction="vertical" size={4} style={{ width: 168 }}>
+        <Space direction="vertical" size={4} style={{ width: '100%' }}>
           {isDraft ? (
             <>
               <Input
@@ -390,6 +419,48 @@ export function AdminOptionsPage() {
     );
   };
 
+  /**
+   * 선택지는 한 칸 안에서 3개씩 줄바꿈해 아래로 쌓는다.
+   * 슬롯마다 열을 두면 구두(스타일 29개)처럼 선택지가 많은 단계가 옆으로 한없이 늘어나
+   * 가로 스크롤로만 볼 수 있다.
+   */
+  const choicesGrid = (stage: EditableStage) => (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: `repeat(${CHOICES_PER_ROW}, minmax(0, 1fr))`,
+        gap: 12,
+        alignItems: 'start',
+      }}
+    >
+      {stage.choices.map((_, i) => (
+        <div key={i}>{choiceCell(stage, i, true)}</div>
+      ))}
+      {isDraft && stage.choices.length < MAX_CHOICES && <div>{addChoiceButton(stage)}</div>}
+    </div>
+  );
+
+  /** 슬롯 열 방식에서 쓰는 칸 — 아직 안 쓰는 슬롯 자리에는 추가 버튼(초안)이나 '-'를 놓는다. */
+  const slotCell = (stage: EditableStage, index: number) => {
+    if (stage.choices[index]) return choiceCell(stage, index);
+    if (!isDraft || index !== stage.choices.length || stage.choices.length >= MAX_CHOICES)
+      return <Typography.Text type="secondary">-</Typography.Text>;
+    return addChoiceButton(stage);
+  };
+
+  /**
+   * 선택지가 슬롯 열에 다 들어가는 세트(정장·셔츠: 단계당 2~5개)는 예전처럼 옆으로 편다 —
+   * 사진을 나란히 놓고 비교하는 화면이라 그게 보기 편하다.
+   * 구두(스타일 29개)처럼 넘치면 한 칸 안에서 3개씩 줄바꿈해 아래로 쌓는다.
+   */
+  const maxChoices = Math.max(0, ...draftStages.map((s) => s.choices.length));
+  const wrapChoices = maxChoices > SLOT_COLUMN_LIMIT;
+  const visibleSlots = CHOICE_SLOTS.slice(
+    0,
+    Math.min(MAX_CHOICES, Math.max(MIN_CHOICES, maxChoices) + (isDraft ? 1 : 0)),
+  );
+  const choiceColumnCount = wrapChoices ? CHOICES_PER_ROW : visibleSlots.length;
+
   const stageColumns: ColumnsType<EditableStage> = [
     {
       title: '순서',
@@ -436,15 +507,24 @@ export function AdminOptionsPage() {
         />
       ),
     },
-    ...CHOICE_SLOTS.map(
-      (slot, index) =>
-        ({
-          title: `선택지 #${index + 1} (${slot})`,
-          key: slot,
-          width: 280,
-          render: (_: unknown, s: EditableStage) => choiceCell(s, index),
-        }) as ColumnsType<EditableStage>[number],
-    ),
+    ...(wrapChoices
+      ? [
+          {
+            title: '선택지',
+            key: 'choices',
+            width: CHOICE_COL_WIDTH * CHOICES_PER_ROW,
+            render: (_: unknown, s: EditableStage) => choicesGrid(s),
+          } as ColumnsType<EditableStage>[number],
+        ]
+      : visibleSlots.map(
+          (slot, index) =>
+            ({
+              title: `선택지 #${index + 1} (${slot})`,
+              key: slot,
+              width: CHOICE_COL_WIDTH,
+              render: (_: unknown, s: EditableStage) => slotCell(s, index),
+            }) as ColumnsType<EditableStage>[number],
+        )),
     ...(isDraft
       ? [
           {
@@ -464,6 +544,43 @@ export function AdminOptionsPage() {
               />
             ),
           } as ColumnsType<EditableStage>[number],
+        ]
+      : []),
+  ];
+
+  const sortedStages = [...draftStages].sort((a, b) => a.sortOrder - b.sortOrder);
+
+  const stageTable = (rows: EditableStage[]) => (
+    <Table<EditableStage>
+      rowKey="key"
+      size="small"
+      loading={versionQuery.isLoading}
+      dataSource={rows}
+      columns={stageColumns}
+      pagination={false}
+      scroll={{ x: 400 + CHOICE_COL_WIDTH * choiceColumnCount }}
+      locale={{ emptyText: '단계가 없습니다. 단계를 추가해 주세요.' }}
+    />
+  );
+
+  // 정장 세트 부위 탭: 표준 부위(상의/하의/베스트) + 미지정(구 버전 백필 전) 단계가 있으면 마지막 탭.
+  const NONE_KEY = '__none__';
+  const ungroupedStages = sortedStages.filter(
+    (s) => !s.componentGroup || !componentGroups.includes(s.componentGroup),
+  );
+  const groupTabItems = [
+    ...componentGroups.map((g) => ({
+      key: g,
+      label: `${componentGroupLabel(g)} (${sortedStages.filter((s) => s.componentGroup === g).length})`,
+      children: stageTable(sortedStages.filter((s) => s.componentGroup === g)),
+    })),
+    ...(ungroupedStages.length > 0
+      ? [
+          {
+            key: NONE_KEY,
+            label: `미지정 (${ungroupedStages.length})`,
+            children: stageTable(ungroupedStages),
+          },
         ]
       : []),
   ];
@@ -548,13 +665,18 @@ export function AdminOptionsPage() {
                         name: '',
                         sortOrder: prev.length + 1,
                         required: true,
+                        // 정장 세트는 현재 부위 탭에 단계를 추가한다. 셔츠·구두는 부위 없음(null).
+                        componentGroup:
+                          hasGroups && componentGroups.includes(activeGroup) ? activeGroup : null,
                         choices: [emptyChoice(), emptyChoice()],
                       },
                     ]);
                     setDirty(true);
                   }}
                 >
-                  단계 추가
+                  {hasGroups && componentGroups.includes(activeGroup)
+                    ? `${componentGroupLabel(activeGroup)} 단계 추가`
+                    : '단계 추가'}
                 </Button>
                 <Button
                   size="small"
@@ -594,16 +716,15 @@ export function AdminOptionsPage() {
               message="저장되지 않은 변경이 있습니다."
             />
           )}
-          <Table<EditableStage>
-            rowKey="key"
-            size="small"
-            loading={versionQuery.isLoading}
-            dataSource={[...draftStages].sort((a, b) => a.sortOrder - b.sortOrder)}
-            columns={stageColumns}
-            pagination={false}
-            scroll={{ x: 1240 }}
-            locale={{ emptyText: '단계가 없습니다. 단계를 추가해 주세요.' }}
-          />
+          {hasGroups ? (
+            <Tabs
+              activeKey={activeGroup}
+              onChange={setActiveGroup}
+              items={groupTabItems}
+            />
+          ) : (
+            stageTable(sortedStages)
+          )}
         </Card>
       )}
     </Space>

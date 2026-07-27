@@ -1,7 +1,7 @@
 import { Body, Controller, Get, HttpCode, Post } from '@nestjs/common';
 import { AuthUser, CurrentUser, Public } from '../../common/decorators';
 import { AuthService } from './auth.service';
-import { LoginDto, RefreshDto } from './auth.dto';
+import { LoginDto, RefreshDto, VerifyPasswordDto } from './auth.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -22,6 +22,16 @@ export class AuthController {
   @Get('me')
   me(@CurrentUser() user: AuthUser) {
     return user;
+  }
+
+  /**
+   * 관리자 재인증 — 고객 모드에서 관리자 모드로 복귀할 때 현재 사용자의 비밀번호를 재확인한다.
+   * (설계서 01 §6) 토큰을 발급/회전하지 않고 세션을 그대로 유지한다. @Public 미부착(로그인 필요).
+   */
+  @Post('verify-password')
+  @HttpCode(200)
+  verifyPassword(@CurrentUser() user: AuthUser, @Body() dto: VerifyPasswordDto) {
+    return this.authService.verifyPassword(user, dto.password);
   }
 
   @Public()

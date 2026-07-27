@@ -314,33 +314,6 @@ describe('대시보드 (dashboard)', () => {
     expect(tasks.find((t) => t.entityId === componentId)).toBeUndefined();
   });
 
-  it('PAYMENT_DELAY: balance_due_date 경과 + 미수 잔액>0이면 포함되고, 예정일 없으면 제외·완납 시 제외된다', async () => {
-    let tasks = await getTasks('PAYMENT_DELAY');
-    expect(tasks.find((t) => t.entityId === contractId)).toBeDefined();
-
-    // 잔금 결제 예정일이 없으면 판정에서 제외한다 (연동정합화 §4)
-    await ctx.prisma.contract.update({ where: { id: contractId }, data: { balanceDueDate: null } });
-    tasks = await getTasks('PAYMENT_DELAY');
-    expect(tasks.find((t) => t.entityId === contractId)).toBeUndefined();
-    await ctx.prisma.contract.update({ where: { id: contractId }, data: { balanceDueDate: dbDate(-1) } });
-    tasks = await getTasks('PAYMENT_DELAY');
-    expect(tasks.find((t) => t.entityId === contractId)).toBeDefined();
-
-    await ctx.prisma.payment.create({
-      data: {
-        id: randomUUID(),
-        contractId,
-        paymentType: 'BALANCE',
-        amount: 1_000_000,
-        paymentDate: dbDate(0),
-        status: 'COMPLETED',
-        createdBy: adminId,
-      },
-    });
-    tasks = await getTasks('PAYMENT_DELAY');
-    expect(tasks.find((t) => t.entityId === contractId)).toBeUndefined();
-  });
-
   it('summary: { date, appointments(평면 뷰), week(오늘±3일), taskCounts }를 반환한다 (연동정합화 §10)', async () => {
     const purpose = await ctx.prisma.appointmentPurpose.findFirstOrThrow();
     await ctx.prisma.appointment.create({
@@ -397,7 +370,7 @@ describe('대시보드 (dashboard)', () => {
     expect(data.week.reduce((sum: number, w: { count: number }) => sum + w.count, 0)).toBe(1);
 
     expect(Object.keys(data.taskCounts).sort()).toEqual(
-      ['INBOUND_DELAY', 'LATE_RETURN', 'PAYMENT_DELAY', 'REPRINT_NEEDED', 'UNORDERED'].sort(),
+      ['INBOUND_DELAY', 'LATE_RETURN', 'REPRINT_NEEDED', 'UNORDERED'].sort(),
     );
     // 앞선 테스트에서 모든 판정이 해소된 상태
     expect(data.taskCounts.UNORDERED).toBe(0);
