@@ -66,7 +66,7 @@ interface FittingModalProps {
   onClose: () => void;
 }
 
-/** 백엔드 `FilesService.ALLOWED_EXTENSIONS`와 같은 목록 (공장 회신은 스캔본·엑셀이 대부분) */
+/** 백엔드 `FilesService.ALLOWED_EXTENSIONS`와 같은 목록 (공장 발송본은 엑셀·스캔본이 대부분) */
 const FITTING_FILE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'pdf', 'xlsx'];
 const FITTING_FILE_ACCEPT = FITTING_FILE_EXTENSIONS.map((e) => `.${e}`).join(',');
 
@@ -104,7 +104,7 @@ function FittingFiles({ fittingId }: { fittingId: string }) {
   return (
     <Space wrap size={4} style={{ marginTop: 4 }}>
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        <PaperClipOutlined /> 공장 회신
+        <PaperClipOutlined /> 공장 발송본
       </Typography.Text>
       {files.map((f) => (
         <Tag key={f.id} style={{ marginInlineEnd: 0 }}>
