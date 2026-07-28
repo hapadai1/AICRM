@@ -21,6 +21,7 @@ import { useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { useHydrateCodeLabels } from '../api/code-labels';
+import { usePageTitleStore } from '../shared/page-title-store';
 import { ReauthModal } from '../shared/ReauthModal';
 import { useAuthStore } from './auth-store';
 import { useModeStore } from './mode-store';
@@ -142,17 +143,31 @@ export function AppLayout() {
       .sort((a, b) => b.length - a.length)[0] ??
     '/';
 
-  // 헤더 왼쪽에 표시할 현재 페이지(메뉴) 이름. 하위 메뉴는 그 자식 라벨을 쓴다.
+  // 헤더 왼쪽에 표시할 현재 페이지(메뉴) 이름. 하위 메뉴는 그 자식 라벨을 쓰고,
+  // 상위 그룹명(예: "렌탈 관리")은 경로 표시용으로 따로 담아 둔다.
   const titleByKey = new Map<string, string>();
+  const groupByKey = new Map<string, string>();
   for (const item of menuItems) {
     const anyItem = item as { key?: unknown; label?: unknown; children?: { key?: unknown; label?: unknown }[] };
     if (anyItem.children) {
-      for (const child of anyItem.children) titleByKey.set(String(child.key ?? ''), String(child.label ?? ''));
+      for (const child of anyItem.children) {
+        titleByKey.set(String(child.key ?? ''), String(child.label ?? ''));
+        groupByKey.set(String(child.key ?? ''), String(anyItem.label ?? ''));
+      }
     } else {
       titleByKey.set(String(anyItem.key ?? ''), String(anyItem.label ?? ''));
     }
   }
-  const pageTitle = titleByKey.get(selectedKey) ?? '';
+  const menuTitle = titleByKey.get(selectedKey) ?? '';
+  const menuGroup = groupByKey.get(selectedKey);
+
+  // 상세 화면은 같은 메뉴에 속해 헤더가 목록과 똑같이 보였다("고객" 목록인지 상세인지 구분 불가).
+  // 상세 화면이 usePageTitle 로 제목을 지정하면 그 값이 메뉴명을 대신하고,
+  // 메뉴명은 그 앞의 경로로 밀려나 지금 어느 메뉴 안인지도 함께 보인다.
+  const overrideTitle = usePageTitleStore((s) => s.title);
+  const overrideSubtitle = usePageTitleStore((s) => s.subtitle);
+  const pageTitle = overrideTitle ?? menuTitle;
+  const trail = [menuGroup, overrideTitle ? menuTitle : undefined].filter(Boolean) as string[];
 
   const handleLogout = async () => {
     try {
@@ -233,10 +248,16 @@ export function AppLayout() {
             paddingInline: 24,
           }}
         >
-          <Space align="center">
+          <Space align="center" size={8}>
+            {trail.length > 0 && (
+              <Typography.Text type="secondary">{trail.join(' › ')} ›</Typography.Text>
+            )}
             <Typography.Title level={4} style={{ margin: 0 }}>
               {pageTitle}
             </Typography.Title>
+            {overrideSubtitle && (
+              <Typography.Text type="secondary">{overrideSubtitle}</Typography.Text>
+            )}
             {mode === 'CUSTOMER' && (
               <Tag color="processing">
                 고객 모드{selectedCustomerName ? ` · ${selectedCustomerName}` : ''}

@@ -69,6 +69,7 @@ import {
   TRANSACTION_TYPE_TAG_COLOR,
 } from './labels';
 import { useUnsavedWarning } from './use-unsaved-warning';
+import { usePageTitle } from '../../shared/page-title-store';
 
 /** CONT-003 계약 상세·변경 계약 — 버전 목록, 변경 초안·비교·영향 미리보기·확정, 계약 취소 */
 
@@ -409,6 +410,8 @@ export function ContractDetailPage() {
       },
     });
   };
+
+  usePageTitle(detail?.contractNo ? `계약 ${detail.contractNo}` : null);
 
   if (error) {
     return (

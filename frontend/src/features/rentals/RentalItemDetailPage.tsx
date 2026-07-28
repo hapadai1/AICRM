@@ -41,6 +41,7 @@ import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { COLOR_OPTIONS, DESIGN_OPTIONS, statusOptions } from './rental-constants';
 import { metaOf } from '../../shared/status-meta';
+import { usePageTitle } from '../../shared/page-title-store';
 
 /** RENT-002 렌탈 실물 상세: 속성·상태·배정·이력 */
 export function RentalItemDetailPage() {
@@ -88,6 +89,8 @@ export function RentalItemDetailPage() {
     },
     onError: (e) => message.error(e instanceof ApiError ? e.message : '속성 수정에 실패했습니다.'),
   });
+
+  usePageTitle(detailQuery.data?.item?.managementCode ?? null);
 
   if (detailQuery.isLoading) {
     return (

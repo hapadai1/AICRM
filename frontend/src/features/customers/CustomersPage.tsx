@@ -1,11 +1,14 @@
 import { FilterOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Button, Card, Empty, Input, Radio, Segmented, Space, Table, Typography } from 'antd';
+import { Button, Empty, Input, Radio, Segmented, Space } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { LAYOUT } from '../../app/theme';
 import { fetchCustomers, type CustomerListItem } from '../../api/customers';
 import { Can } from '../../shared/Can';
+import { DataTable, PAGE_SIZE_OPTIONS } from '../../shared/DataTable';
+import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { autoWidth } from '../../shared/table-width';
 import { CustomerRegisterModal } from './CustomerRegisterModal';
@@ -114,82 +117,83 @@ export function CustomersPage() {
   ];
 
   return (
-    <Card>
-      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-        <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
-          <Typography.Title level={4} style={{ margin: 0 }}>
-            목록
-          </Typography.Title>
-          <Can permission="CUSTOMER_EDIT">
-            {/* 예약 등록이 곧 고객 등록이므로(설계서 07 D2) 별도 [예약 고객 등록] 경로는 없앴다 */}
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-              고객 등록
-            </Button>
-          </Can>
-        </Space>
+    <PageShell>
+      <PageCard>
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <ListToolbar
+            filters={
+              <>
+                <Input
+                  style={{ width: LAYOUT.searchWidth }}
+                  placeholder="고객명 / 전화번호 / 주문번호 검색"
+                  prefix={<SearchOutlined />}
+                  value={keyword}
+                  onChange={(e) => setKeyword(e.target.value)}
+                  onPressEnter={runSearch}
+                  allowClear
+                />
+                <Button icon={<SearchOutlined />} onClick={runSearch}>
+                  검색
+                </Button>
+                {/* 조회 범위(설계서 07 D3): 계약 보유 고객 / 전 고객 */}
+                <Segmented<'CONTRACT' | 'ALL'>
+                  value={scope}
+                  onChange={(v) => {
+                    setScope(v);
+                    setPage(1);
+                  }}
+                  options={[
+                    { label: '계약 고객', value: 'CONTRACT' },
+                    { label: '전체 고객', value: 'ALL' },
+                  ]}
+                />
+                {/* 진행상태 검색(설계서 06 §2 / 02): 진행중/완료/전체 */}
+                <Segmented<'ACTIVE' | 'DONE' | 'ALL'>
+                  value={progress}
+                  onChange={(v) => {
+                    setProgress(v);
+                    setPage(1);
+                  }}
+                  options={[
+                    { label: '전체', value: 'ALL' },
+                    { label: '진행중', value: 'ACTIVE' },
+                    { label: '완료', value: 'DONE' },
+                  ]}
+                />
+              </>
+            }
+            actions={
+              <Can permission="CUSTOMER_EDIT">
+                {/* 예약 등록이 곧 고객 등록이므로(설계서 07 D2) 별도 [예약 고객 등록] 경로는 없앴다 */}
+                <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+                  고객 등록
+                </Button>
+              </Can>
+            }
+          />
 
-        <Space wrap>
-          <Input
-            style={{ width: 280 }}
-            placeholder="고객명 / 전화번호 / 주문번호 검색"
-            value={keyword}
-            onChange={(e) => setKeyword(e.target.value)}
-            onPressEnter={runSearch}
-            allowClear
-          />
-          <Button icon={<SearchOutlined />} onClick={runSearch}>
-            검색
-          </Button>
-          {/* 조회 범위(설계서 07 D3): 계약 보유 고객 / 전 고객 */}
-          <Segmented<'CONTRACT' | 'ALL'>
-            value={scope}
-            onChange={(v) => {
-              setScope(v);
-              setPage(1);
+          <DataTable<CustomerListItem>
+            rowKey="id"
+            loading={isLoading}
+            columns={columns}
+            dataSource={data?.data ?? []}
+            pagination={{
+              current: page,
+              pageSize: size,
+              total: data?.page.totalElements ?? 0,
+              showSizeChanger: true,
+              pageSizeOptions: PAGE_SIZE_OPTIONS,
+              onChange: (p, s) => {
+                setPage(p);
+                setSize(s);
+              },
+              showTotal: (total) => `총 ${total}명`,
             }}
-            options={[
-              { label: '계약 고객', value: 'CONTRACT' },
-              { label: '전체 고객', value: 'ALL' },
-            ]}
-          />
-          {/* 진행상태 검색(설계서 06 §2 / 02): 진행중/완료/전체 */}
-          <Segmented<'ACTIVE' | 'DONE' | 'ALL'>
-            value={progress}
-            onChange={(v) => {
-              setProgress(v);
-              setPage(1);
-            }}
-            options={[
-              { label: '전체', value: 'ALL' },
-              { label: '진행중', value: 'ACTIVE' },
-              { label: '완료', value: 'DONE' },
-            ]}
+            onRow={(r) => ({ onClick: () => navigate(`/customers/${r.id}`), style: { cursor: 'pointer' } })}
+            locale={{ emptyText: <Empty description="조건에 해당하는 고객이 없습니다." /> }}
           />
         </Space>
-
-        <Table<CustomerListItem>
-          rowKey="id"
-          scroll={{ x: 'max-content' }}
-          size="middle"
-          loading={isLoading}
-          columns={columns}
-          dataSource={data?.data ?? []}
-          pagination={{
-            current: page,
-            pageSize: size,
-            total: data?.page.totalElements ?? 0,
-            showSizeChanger: true,
-            pageSizeOptions: [30, 50, 100],
-            onChange: (p, s) => {
-              setPage(p);
-              setSize(s);
-            },
-            showTotal: (total) => `총 ${total}명`,
-          }}
-          onRow={(r) => ({ onClick: () => navigate(`/customers/${r.id}`), style: { cursor: 'pointer' } })}
-          locale={{ emptyText: <Empty description="조건에 해당하는 고객이 없습니다." /> }}
-        />
-      </Space>
+      </PageCard>
 
       <CustomerRegisterModal
         open={createOpen}
@@ -199,6 +203,6 @@ export function CustomersPage() {
         // 등록 직후 사라지는 것처럼 보이지 않게 범위를 전체로 넓혀 둔다(설계서 07 §2.3).
         onRegistered={() => setScope('ALL')}
       />
-    </Card>
+    </PageShell>
   );
 }

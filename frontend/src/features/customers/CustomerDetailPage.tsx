@@ -47,6 +47,7 @@ import { APPT_STATUS_META, SOURCE_META } from '../appointments/appointment-const
 import { JourneyCard } from '../journeys/JourneyCard';
 import { CUSTOMER_STATUS_META, TRANSACTION_TYPE_LABEL, formatAmount } from './customer-constants';
 import { metaOf } from '../../shared/status-meta';
+import { usePageTitle } from '../../shared/page-title-store';
 
 /** 업무 상태 코드의 한국어 표시명 (없는 코드는 원문 표기) */
 const STATUS_LABEL: Record<string, string> = {
@@ -151,6 +152,9 @@ export function CustomerDetailPage() {
     },
     onError: (e) => message.error(e instanceof ApiError ? e.message : '비활성화에 실패했습니다.'),
   });
+
+  // 헤더 제목을 이 고객으로 바꾼다 — 목록과 상세가 헤더에서 구분되지 않던 문제(UI 정리).
+  usePageTitle(data?.customer?.name, data?.customer?.phone);
 
   if (isLoading) {
     return (

@@ -1,9 +1,8 @@
-import { PlusOutlined, SearchOutlined, StopOutlined, SwapOutlined } from '@ant-design/icons';
+import { PlusOutlined, SearchOutlined, StopOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   App,
   Button,
-  Card,
   DatePicker,
   Form,
   Input,
@@ -12,7 +11,6 @@ import {
   Popconfirm,
   Select,
   Space,
-  Table,
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -33,6 +31,8 @@ import {
   type RentalItemStatus,
 } from '../../api/rentals';
 import { Can } from '../../shared/Can';
+import { DataTable, DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS } from '../../shared/DataTable';
+import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { autoWidth } from '../../shared/table-width';
 import { DESIGN_OPTIONS, COLOR_OPTIONS, componentTypeOptions, statusOptions } from './rental-constants';
@@ -200,63 +200,67 @@ export function RentalInventoryPage() {
   ];
 
   return (
-    <Card>
+    <PageShell>
+      <PageCard>
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-        <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
-          <Space wrap>
-            <Can permission="RENTAL_ALLOCATE">
-              <Button icon={<SwapOutlined />} onClick={() => navigate('/rentals/allocate')}>
-                가용 검색·배정
-              </Button>
-              <Button onClick={() => navigate('/rentals/handover')}>출고·반납</Button>
-            </Can>
+        <ListToolbar
+          filters={
+            /*
+              필터에 "구분 :", "디자인 :" 처럼 라벨을 달아 두면 렌탈 화면만 다른 시스템처럼 보였다.
+              다른 목록과 같이 라벨 없이 placeholder 로 뜻을 전달한다.
+              Form 은 값 관리·초기화 때문에 그대로 두고 라벨만 걷어낸다.
+            */
+            <Form<FilterValues>
+              form={filterForm}
+              layout="inline"
+              onFinish={(values) => setFilters({ ...values })}
+              style={{ rowGap: 8, columnGap: 0 }}
+            >
+              <Form.Item name="componentType">
+                <Select allowClear placeholder="구분 전체" style={{ width: 140 }} options={componentTypeOptions} />
+              </Form.Item>
+              <Form.Item name="design">
+                <Select allowClear placeholder="디자인 전체" style={{ width: 130 }} options={DESIGN_OPTIONS} />
+              </Form.Item>
+              <Form.Item name="color">
+                <Select allowClear placeholder="컬러 전체" style={{ width: 120 }} options={COLOR_OPTIONS} />
+              </Form.Item>
+              <Form.Item name="skuSize">
+                <Input allowClear placeholder="사이즈 (예: 100)" style={{ width: 130 }} />
+              </Form.Item>
+              <Form.Item name="status">
+                <Select allowClear placeholder="상태 전체" style={{ width: 130 }} options={statusOptions} />
+              </Form.Item>
+              <Form.Item name="availableOn">
+                <DatePicker placeholder="대여 가능일" />
+              </Form.Item>
+              <Form.Item>
+                <Button type="primary" htmlType="submit" icon={<SearchOutlined />}>
+                  검색
+                </Button>
+              </Form.Item>
+            </Form>
+          }
+          actions={
+            /*
+              화면끼리 서로를 잇던 [가용 검색·배정]·[출고·반납] 버튼은 뺐다.
+              좌측 메뉴 "렌탈 관리" 아래 같은 이동이 이미 있고, 세 화면이 그 버튼을
+              저마다 다른 자리(좌상단·우상단)에 두는 바람에 배치가 어긋나 있었다.
+            */
             <Can permission="RENTAL_EDIT">
               <Button type="primary" icon={<PlusOutlined />} onClick={() => setRegisterOpen(true)}>
                 실물 등록
               </Button>
             </Can>
-          </Space>
-        </Space>
+          }
+        />
 
-        <Form<FilterValues>
-          form={filterForm}
-          layout="inline"
-          onFinish={(values) => setFilters({ ...values })}
-          style={{ rowGap: 8 }}
-        >
-          <Form.Item name="componentType" label="구분">
-            <Select allowClear placeholder="전체" style={{ width: 140 }} options={componentTypeOptions} />
-          </Form.Item>
-          <Form.Item name="design" label="디자인">
-            <Select allowClear placeholder="전체" style={{ width: 120 }} options={DESIGN_OPTIONS} />
-          </Form.Item>
-          <Form.Item name="color" label="컬러">
-            <Select allowClear placeholder="전체" style={{ width: 110 }} options={COLOR_OPTIONS} />
-          </Form.Item>
-          <Form.Item name="skuSize" label="사이즈">
-            <Input allowClear placeholder="예: 100" style={{ width: 100 }} />
-          </Form.Item>
-          <Form.Item name="status" label="상태">
-            <Select allowClear placeholder="전체" style={{ width: 130 }} options={statusOptions} />
-          </Form.Item>
-          <Form.Item name="availableOn" label="대여 가능일">
-            <DatePicker placeholder="기준일" />
-          </Form.Item>
-          <Form.Item>
-            <Button type="primary" htmlType="submit" icon={<SearchOutlined />}>
-              검색
-            </Button>
-          </Form.Item>
-        </Form>
-
-        <Table<RentalItem>
+        <DataTable<RentalItem>
           rowKey="id"
-          scroll={{ x: 'max-content' }}
-          size="middle"
           loading={listQuery.isLoading}
           dataSource={listQuery.data?.data ?? []}
           columns={columns}
-          pagination={{ pageSize: 30, showSizeChanger: true, pageSizeOptions: [30, 50, 100] }}
+          pagination={{ pageSize: DEFAULT_PAGE_SIZE, showSizeChanger: true, pageSizeOptions: PAGE_SIZE_OPTIONS }}
           onRow={(r) => ({ onDoubleClick: () => navigate(`/rentals/${r.id}`) })}
         />
       </Space>
@@ -322,6 +326,7 @@ export function RentalInventoryPage() {
           </Form.Item>
         </Form>
       </Modal>
-    </Card>
+      </PageCard>
+    </PageShell>
   );
 }

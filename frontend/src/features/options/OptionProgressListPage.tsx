@@ -1,12 +1,15 @@
 /** OPT-001 스타일 컨설팅 목록 — 계약 단위로 묶어 고객명·전화로 식별, 행 클릭 시 계약 스타일 컨설팅 화면으로 진입 */
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Card, Input, Progress, Segmented, Space, Spin, Table, Tag, Typography } from 'antd';
+import { Alert, Input, Progress, Segmented, Space, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { OptionProgressItem, ProductCategory } from '../../api/options';
 import { fetchOptionProgress } from '../../api/options';
+import { DataTable } from '../../shared/DataTable';
+import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
+import { LAYOUT } from '../../app/theme';
 import { autoWidth } from '../../shared/table-width';
 import { PRODUCT_CATEGORY_LABEL } from '../contracts/labels';
 
@@ -193,18 +196,15 @@ export function OptionProgressListPage({
     );
   }
 
-  const tableEl = isLoading ? (
-    <Spin style={{ display: 'block', margin: '48px auto' }} />
-  ) : (
-    <Table<ContractRow>
+  const tableEl = (
+    <DataTable<ContractRow>
       rowKey="contractId"
+      loading={isLoading}
       dataSource={rows}
       columns={
         embedded ? columns.filter((c) => c.key !== 'customerName' && c.key !== 'customerPhone') : columns
       }
       pagination={false}
-      size="middle"
-      scroll={{ x: 'max-content' }}
       onRow={(row) => ({
         onClick: () => navigate(`/contracts/${row.contractId}/options`),
         style: { cursor: 'pointer' },
@@ -217,12 +217,15 @@ export function OptionProgressListPage({
   if (embedded) return tableEl;
 
   return (
-    <Card>
+    <PageShell>
+      <PageCard>
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-        <Space wrap>
+        <ListToolbar
+          filters={
+            <>
           <Input.Search
             allowClear
-            style={{ width: 320 }}
+            style={{ width: LAYOUT.searchWidth }}
             placeholder="고객명 · 전화번호 검색"
             defaultValue={keyword}
             onSearch={(v) => {
@@ -241,9 +244,12 @@ export function OptionProgressListPage({
               { label: '완료', value: 'COMPLETE' },
             ]}
           />
-        </Space>
+            </>
+          }
+        />
         {tableEl}
       </Space>
-    </Card>
+      </PageCard>
+    </PageShell>
   );
 }

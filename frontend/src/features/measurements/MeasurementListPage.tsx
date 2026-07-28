@@ -5,12 +5,15 @@
  */
 import { PlusOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Button, Card, Empty, Input, Segmented, Space, Table, Tag, Typography } from 'antd';
+import { Button, Empty, Input, Segmented, Space, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { fetchMeasurementTargets, type MeasurementTargetRow } from '../../api/measurements';
+import { LAYOUT } from '../../app/theme';
 import { Can } from '../../shared/Can';
+import { DataTable } from '../../shared/DataTable';
+import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { metaOf } from '../../shared/status-meta';
 import { autoWidth } from '../../shared/table-width';
@@ -178,14 +181,12 @@ export function MeasurementListPage({
   ];
 
   const tableEl = (
-    <Table<MeasurementTargetRow>
+    <DataTable<MeasurementTargetRow>
       rowKey="contractId"
-      size="small"
       loading={query.isLoading}
       dataSource={rows}
       columns={embedded ? columns.filter((c) => c.key !== 'customer') : columns}
       pagination={false}
-      scroll={{ x: 'max-content' }}
       onRow={(row) => ({
         onClick: () => {
           if (row.lastSessionId) navigate(`/measurements/${row.lastSessionId}`);
@@ -202,13 +203,15 @@ export function MeasurementListPage({
   if (embedded) return tableEl;
 
   return (
-    <Card>
+    <PageShell>
+      <PageCard>
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-        <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
-          <Space wrap>
+        <ListToolbar
+          filters={
+            <>
             <Input.Search
               allowClear
-              style={{ width: 280 }}
+              style={{ width: LAYOUT.searchWidth }}
               placeholder="고객명 · 전화번호 · 계약번호"
               onSearch={setKeyword}
               onChange={(e) => {
@@ -230,16 +233,20 @@ export function MeasurementListPage({
               </Tag>
             )}
             <Typography.Text type="secondary">총 {rows.length}건</Typography.Text>
-          </Space>
-          <Can permission="MEASUREMENT_EDIT">
-            <Button icon={<PlusOutlined />} onClick={() => navigate('/measurements/new')}>
-              신규 채촌
-            </Button>
-          </Can>
-        </Space>
+            </>
+          }
+          actions={
+            <Can permission="MEASUREMENT_EDIT">
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/measurements/new')}>
+                신규 채촌
+              </Button>
+            </Can>
+          }
+        />
 
         {tableEl}
       </Space>
-    </Card>
+      </PageCard>
+    </PageShell>
   );
 }

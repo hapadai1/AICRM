@@ -4,7 +4,6 @@ import {
   Alert,
   App,
   Button,
-  Card,
   DatePicker,
   Form,
   Input,
@@ -12,7 +11,6 @@ import {
   Select,
   Space,
   Steps,
-  Table,
   Tag,
   Typography,
 } from 'antd';
@@ -20,6 +18,9 @@ import type { ColumnsType } from 'antd/es/table';
 import dayjs, { type Dayjs } from 'dayjs';
 import { useState } from 'react';
 import { ApiError } from '../../api/client';
+import { LAYOUT } from '../../app/theme';
+import { DataTable, PAGE_SIZE_OPTIONS } from '../../shared/DataTable';
+import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { fetchCustomers } from '../../api/customers';
 import {
   REPAIR_COMPONENT_TYPE_LABELS,
@@ -258,46 +259,48 @@ export function RepairsPage() {
   const isCancel = statusTarget?.toStatus === 'CANCELLED';
 
   return (
-    <Card>
+    <PageShell>
+      <PageCard>
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-        <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
-          <Space wrap>
-            <Typography.Title level={4} style={{ margin: 0 }}>
-              접수·진행
-            </Typography.Title>
-            <Select
-              showSearch
-              allowClear
-              placeholder="고객 검색 (이름·전화)"
-              style={{ width: 220 }}
-              filterOption={false}
-              onSearch={setCustomerKeyword}
-              loading={customerQuery.isLoading}
-              options={customerOptions}
-              value={customerFilter}
-              onChange={(v: string | undefined) => {
-                setCustomerFilter(v);
-                setPage(1);
-              }}
-            />
-            <Select
-              allowClear
-              placeholder="상태 전체"
-              style={{ width: 150 }}
-              value={statusFilter}
-              onChange={(v: string | undefined) => {
-                setStatusFilter(v);
-                setPage(1);
-              }}
-              options={STATUS_FILTER_OPTIONS}
-            />
-          </Space>
-          <Can permission="REPAIR_EDIT">
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setReceiptOpen(true)}>
-              수선 접수
-            </Button>
-          </Can>
-        </Space>
+        <ListToolbar
+          filters={
+            <>
+              <Select
+                showSearch
+                allowClear
+                placeholder="고객 검색 (이름·전화)"
+                style={{ width: 220 }}
+                filterOption={false}
+                onSearch={setCustomerKeyword}
+                loading={customerQuery.isLoading}
+                options={customerOptions}
+                value={customerFilter}
+                onChange={(v: string | undefined) => {
+                  setCustomerFilter(v);
+                  setPage(1);
+                }}
+              />
+              <Select
+                allowClear
+                placeholder="상태 전체"
+                style={{ width: LAYOUT.filterWidth }}
+                value={statusFilter}
+                onChange={(v: string | undefined) => {
+                  setStatusFilter(v);
+                  setPage(1);
+                }}
+                options={STATUS_FILTER_OPTIONS}
+              />
+            </>
+          }
+          actions={
+            <Can permission="REPAIR_EDIT">
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => setReceiptOpen(true)}>
+                수선 접수
+              </Button>
+            </Can>
+          }
+        />
 
         <Alert
           type="info"
@@ -310,13 +313,11 @@ export function RepairsPage() {
           description="다음 단계로만 이동할 수 있고, 취소는 어느 단계에서든 가능합니다. 행을 누르면 상세가 펼쳐지며 상태 변경도 그곳에서 진행합니다."
         />
 
-        <Table<Repair>
+        <DataTable<Repair>
           rowKey="id"
-          size="middle"
           loading={listQuery.isLoading}
           dataSource={listQuery.data?.data ?? []}
           columns={columns}
-          scroll={{ x: 'max-content' }}
           onRow={(r) => ({
             onClick: () => setExpandedId((cur) => (cur === r.id ? null : r.id)),
             style: { cursor: 'pointer' },
@@ -326,7 +327,7 @@ export function RepairsPage() {
             pageSize: size,
             total: listQuery.data?.page.totalElements ?? 0,
             showSizeChanger: true,
-            pageSizeOptions: ['30', '50', '100'],
+            pageSizeOptions: PAGE_SIZE_OPTIONS,
             showTotal: (total) => `총 ${total}건`,
             onChange: (nextPage, nextSize) => {
               setPage(nextSize !== size ? 1 : nextPage);
@@ -653,6 +654,7 @@ export function RepairsPage() {
         onDone={() => setSuggestion(null)}
         onCancel={() => setSuggestion(null)}
       />
-    </Card>
+      </PageCard>
+    </PageShell>
   );
 }

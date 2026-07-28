@@ -5,7 +5,6 @@ import {
   Badge,
   Button,
   Calendar,
-  Card,
   DatePicker,
   Descriptions,
   Empty,
@@ -14,9 +13,10 @@ import {
   Modal,
   Select,
   Space,
-  Table,
   Typography,
 } from 'antd';
+import { DataTable } from '../../shared/DataTable';
+import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs, { type Dayjs } from 'dayjs';
 import { useEffect, useMemo, useState } from 'react';
@@ -193,54 +193,52 @@ export function RentalAllocatePage() {
   ];
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      <Card>
-        <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
-          <Typography.Title level={4} style={{ margin: 0 }}>
-            렌탈예약 — 가용 달력
-          </Typography.Title>
-          <Space>
-            <Button onClick={() => navigate('/rentals/handover')}>출고·반납으로</Button>
-            <Button onClick={() => navigate('/rentals')}>전체관리로</Button>
-          </Space>
-        </Space>
+    <PageShell>
+      <PageCard>
+        {/* 제목은 헤더가 이미 "렌탈 예약"으로 보여 준다 — 카드 안에서 반복하지 않는다.
+            화면끼리 잇던 [출고·반납으로]·[전체관리로] 버튼도 좌측 메뉴와 겹쳐 뺐다. */}
+        <ListToolbar
+          filters={
+            <Form<FilterValues>
+              form={form}
+              layout="inline"
+              style={{ rowGap: 8, columnGap: 0 }}
+              onFinish={onSearch}
+            >
+              <Form.Item name="q">
+                <Input allowClear placeholder="관리코드·디자인·컬러" style={{ width: 200 }} />
+              </Form.Item>
+              <Form.Item name="sku">
+                <Input allowClear placeholder="SKU 설명" style={{ width: 150 }} />
+              </Form.Item>
+              <Form.Item name="componentType">
+                <Select allowClear placeholder="구분 전체" style={{ width: 140 }} options={componentTypeOptions} />
+              </Form.Item>
+              <Form.Item name="design">
+                <Select allowClear placeholder="디자인 전체" style={{ width: 130 }} options={DESIGN_OPTIONS} />
+              </Form.Item>
+              <Form.Item name="color">
+                <Select allowClear placeholder="컬러 전체" style={{ width: 120 }} options={COLOR_OPTIONS} />
+              </Form.Item>
+              <Form.Item name="size">
+                <Input allowClear placeholder="사이즈 (예: 100)" style={{ width: 130 }} />
+              </Form.Item>
+              <Form.Item>
+                <Button type="primary" htmlType="submit" icon={<SearchOutlined />} loading={calendarQuery.isLoading}>
+                  조회
+                </Button>
+              </Form.Item>
+            </Form>
+          }
+          info={
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              조회 기간: {from} ~ {to} (달력의 월을 이동하면 자동 재조회됩니다)
+            </Typography.Text>
+          }
+        />
+      </PageCard>
 
-        <Form<FilterValues>
-          form={form}
-          layout="inline"
-          style={{ rowGap: 8, marginTop: 16 }}
-          onFinish={onSearch}
-        >
-          <Form.Item name="q" label="검색어">
-            <Input allowClear placeholder="관리코드·디자인·컬러" style={{ width: 180 }} />
-          </Form.Item>
-          <Form.Item name="sku" label="SKU">
-            <Input allowClear placeholder="SKU 설명" style={{ width: 140 }} />
-          </Form.Item>
-          <Form.Item name="componentType" label="구분">
-            <Select allowClear placeholder="전체" style={{ width: 130 }} options={componentTypeOptions} />
-          </Form.Item>
-          <Form.Item name="design" label="디자인">
-            <Select allowClear placeholder="전체" style={{ width: 120 }} options={DESIGN_OPTIONS} />
-          </Form.Item>
-          <Form.Item name="color" label="컬러">
-            <Select allowClear placeholder="전체" style={{ width: 110 }} options={COLOR_OPTIONS} />
-          </Form.Item>
-          <Form.Item name="size" label="사이즈">
-            <Input allowClear placeholder="예: 100" style={{ width: 100 }} />
-          </Form.Item>
-          <Form.Item>
-            <Button type="primary" htmlType="submit" icon={<SearchOutlined />} loading={calendarQuery.isLoading}>
-              조회
-            </Button>
-          </Form.Item>
-        </Form>
-        <Typography.Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
-          조회 기간: {from} ~ {to} (달력의 월을 이동하면 자동 재조회됩니다)
-        </Typography.Text>
-      </Card>
-
-      <Card styles={{ body: { paddingTop: 0 } }}>
+      <PageCard styles={{ body: { paddingTop: 0 } }}>
         <Calendar
           value={month}
           onPanelChange={(value) => {
@@ -263,14 +261,12 @@ export function RentalAllocatePage() {
             );
           }}
         />
-      </Card>
+      </PageCard>
 
-      <Card title={selectedDate ? `${selectedDate} 가용 실물 (${selectedItems.length}건)` : '가용 실물'}>
+      <PageCard title={selectedDate ? `${selectedDate} 가용 실물 (${selectedItems.length}건)` : '가용 실물'}>
         {selectedDate ? (
-          <Table<RentalCalendarItem>
+          <DataTable<RentalCalendarItem>
             rowKey="id"
-            size="middle"
-            scroll={{ x: 'max-content' }}
             dataSource={selectedItems}
             columns={columns}
             pagination={false}
@@ -279,7 +275,7 @@ export function RentalAllocatePage() {
         ) : (
           <Empty description="달력에서 날짜를 선택하면 그날 가용한 실물이 표시됩니다." image={Empty.PRESENTED_IMAGE_SIMPLE} />
         )}
-      </Card>
+      </PageCard>
 
       {/* 배정 실행 모달: 실물 → 렌탈 주문·구성품 선택 + 대여 기간 → 배정 생성 */}
       <Modal
@@ -356,6 +352,6 @@ export function RentalAllocatePage() {
           </Space>
         )}
       </Modal>
-    </Space>
+    </PageShell>
   );
 }

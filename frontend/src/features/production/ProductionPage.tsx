@@ -1,12 +1,15 @@
 /** PROD-001 계약별 제작 관리 목록 — 고객명·전화로 식별, 행 클릭 시 계약 제작 관리 화면으로 진입 */
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Card, Input, Progress, Space, Table, Tag, Typography } from 'antd';
+import { Alert, Input, Progress, Space, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { ProductCategory } from '../../api/contracts';
 import { fetchProductionItems, type ProductionItem } from '../../api/production';
+import { LAYOUT } from '../../app/theme';
+import { DataTable } from '../../shared/DataTable';
+import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { metaOf } from '../../shared/status-meta';
 import { autoWidth } from '../../shared/table-width';
 import { PRODUCT_CATEGORY_LABEL } from '../contracts/labels';
@@ -225,35 +228,39 @@ export function ProductionPage() {
   }
 
   return (
-    <Card>
-      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-        <Input.Search
-          allowClear
-          style={{ maxWidth: 320 }}
-          placeholder="고객명 · 전화번호 검색"
-          defaultValue={keyword}
-          onSearch={(v) => {
-            const next = new URLSearchParams(searchParams);
-            if (v.trim()) next.set('q', v.trim());
-            else next.delete('q');
-            setSearchParams(next, { replace: true });
-          }}
-        />
-        <Table<ContractRow>
-          rowKey="contractId"
-          size="middle"
-          loading={itemsQuery.isLoading}
-          dataSource={rows}
-          columns={columns}
-          pagination={false}
-          scroll={{ x: 'max-content' }}
-          onRow={(r) => ({
-            onClick: () => navigate(`/contracts/${r.contractId}/production`),
-            style: { cursor: 'pointer' },
-          })}
-          locale={{ emptyText: '제작 대상 품목이 있는 계약이 없습니다.' }}
-        />
-      </Space>
-    </Card>
+    <PageShell>
+      <PageCard>
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <ListToolbar
+            filters={
+              <Input.Search
+                allowClear
+                style={{ width: LAYOUT.searchWidth }}
+                placeholder="고객명 · 전화번호 검색"
+                defaultValue={keyword}
+                onSearch={(v) => {
+                  const next = new URLSearchParams(searchParams);
+                  if (v.trim()) next.set('q', v.trim());
+                  else next.delete('q');
+                  setSearchParams(next, { replace: true });
+                }}
+              />
+            }
+          />
+          <DataTable<ContractRow>
+            rowKey="contractId"
+            loading={itemsQuery.isLoading}
+            dataSource={rows}
+            columns={columns}
+            pagination={false}
+            onRow={(r) => ({
+              onClick: () => navigate(`/contracts/${r.contractId}/production`),
+              style: { cursor: 'pointer' },
+            })}
+            locale={{ emptyText: '제작 대상 품목이 있는 계약이 없습니다.' }}
+          />
+        </Space>
+      </PageCard>
+    </PageShell>
   );
 }

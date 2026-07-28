@@ -7,7 +7,6 @@ import { PlusOutlined, ReloadOutlined, SettingOutlined, UserOutlined } from '@an
 import { useQuery } from '@tanstack/react-query';
 import {
   Button,
-  Card,
   Col,
   DatePicker,
   Flex,
@@ -34,6 +33,8 @@ import {
   type ContractStatus,
 } from '../../api/contracts';
 import { Can } from '../../shared/Can';
+import { DataTable, PAGE_SIZE_OPTIONS } from '../../shared/DataTable';
+import { PageCard, PageShell } from '../../shared/PageShell';
 import { CustomerPickerModal } from '../../shared/CustomerPickerModal';
 import type { PickedCustomer } from '../../shared/CustomerPickerModal';
 import { StatusBadge } from '../../shared/StatusBadge';
@@ -280,24 +281,19 @@ export function ContractListPage({
   }
 
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Card size="small">
-        <Flex justify="space-between" align="center" wrap gap={12} style={{ marginBottom: 16 }}>
-          <Typography.Title level={4} style={{ margin: 0 }}>
-            목록
-          </Typography.Title>
-          <Space wrap>
-            <Can permission="CONTRACT_TYPE_EDIT">
-              <Button icon={<SettingOutlined />} onClick={() => navigate('/admin/contract-types')}>
-                계약 구분 관리
-              </Button>
-            </Can>
-            <Can permission="CONTRACT_CREATE">
-              <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/contracts/new')}>
-                신규 계약
-              </Button>
-            </Can>
-          </Space>
+    <PageShell>
+      <PageCard>
+        <Flex justify="flex-end" wrap gap={8} style={{ marginBottom: 16 }}>
+          <Can permission="CONTRACT_TYPE_EDIT">
+            <Button icon={<SettingOutlined />} onClick={() => navigate('/admin/contract-types')}>
+              계약 구분 관리
+            </Button>
+          </Can>
+          <Can permission="CONTRACT_CREATE">
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/contracts/new')}>
+              신규 계약
+            </Button>
+          </Can>
         </Flex>
 
         <Row gutter={[12, 12]} align="middle">
@@ -384,29 +380,29 @@ export function ContractListPage({
             </Space>
           </Col>
         </Row>
-      </Card>
+      </PageCard>
 
-      <Row gutter={16}>
-        <Col xs={12} md={6}>
-          <Card size="small">
+      {/*
+        건수·금액을 카드 두 장으로 나눠 두면 두 장이 왼쪽 절반에만 몰리고 오른쪽이 통째로 비었다.
+        같은 조회 결과의 요약이므로 한 장 안에 나란히 둔다.
+      */}
+      <PageCard>
+        <Row gutter={[16, 16]}>
+          <Col xs={12} md={6}>
             <Statistic title="계약 건수" value={totals?.count ?? 0} suffix="건" />
-          </Card>
-        </Col>
-        <Col xs={12} md={6}>
-          <Card size="small">
+          </Col>
+          <Col xs={12} md={6}>
             <Statistic title="계약금액 합계" value={totals?.totalAmount ?? 0} suffix="원" />
-          </Card>
-        </Col>
-      </Row>
+          </Col>
+        </Row>
+      </PageCard>
 
-      <Card size="small">
-        <Table<ContractListItem>
+      <PageCard>
+        <DataTable<ContractListItem>
           rowKey="id"
-          size="small"
           loading={isFetching}
           columns={columns}
           dataSource={data?.data ?? []}
-          scroll={{ x: 'max-content' }}
           onChange={handleTableChange}
           onRow={(record) => ({
             onClick: () => navigate(`/contracts/${record.id}`),
@@ -417,12 +413,12 @@ export function ContractListPage({
             pageSize: filters.size,
             total: data?.page.totalElements ?? 0,
             showSizeChanger: true,
-            pageSizeOptions: ['30', '50', '100'],
+            pageSizeOptions: PAGE_SIZE_OPTIONS,
             showTotal: (total) => `총 ${total}건`,
           }}
           locale={{ emptyText: '조회 조건에 해당하는 계약이 없습니다.' }}
         />
-      </Card>
+      </PageCard>
 
       <CustomerPickerModal
         open={pickerOpen}
@@ -431,6 +427,6 @@ export function ContractListPage({
         initialKeyword={keyword}
         title="고객 검색 — 계약 조회"
       />
-    </Space>
+    </PageShell>
   );
 }

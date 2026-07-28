@@ -7,7 +7,7 @@ import {
   SyncOutlined,
 } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App, Button, Card, DatePicker, Empty, Input, Segmented, Space, Spin, Table, Tag, Typography } from 'antd';
+import { App, Button, DatePicker, Empty, Input, Segmented, Space, Spin, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs, { type Dayjs } from 'dayjs';
 import { useMemo, useState, type CSSProperties } from 'react';
@@ -20,7 +20,10 @@ import {
   type AppointmentStatus,
 } from '../../api/appointments';
 import { ApiError } from '../../api/client';
+import { LAYOUT, SEMANTIC_COLOR } from '../../app/theme';
 import { Can } from '../../shared/Can';
+import { DataTable, DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS } from '../../shared/DataTable';
+import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
 import {
   APPT_STATUS_META,
@@ -147,7 +150,7 @@ function Timetable({
           return (
             <div
               key={d.format('YYYY-MM-DD')}
-              style={{ ...cellStyle, minHeight: 0, textAlign: 'center', fontWeight: 600, background: isToday ? '#e6f4ff' : '#fafafa' }}
+              style={{ ...cellStyle, minHeight: 0, textAlign: 'center', fontWeight: 600, background: isToday ? SEMANTIC_COLOR.todayBg : '#fafafa' }}
             >
               {d.format('M/D (dd)')}
             </div>
@@ -303,83 +306,82 @@ export function AppointmentsPage() {
   ];
 
   return (
-    <Card>
+    <PageShell>
+      <PageCard>
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-        <Space wrap style={{ justifyContent: 'space-between', width: '100%' }}>
-          <Typography.Title level={4} style={{ margin: 0 }}>
-            캘린더·목록
-          </Typography.Title>
-          <Space wrap>
-            {/* 설계 PDF 1페이지 "CRM 일정 달력 출력" */}
-            <Button icon={<PrinterOutlined />} onClick={openPrint}>
-              인쇄
-            </Button>
-            <Can permission="NAVER_SYNC">
-              <Button icon={<SyncOutlined />} loading={syncMutation.isPending} onClick={() => syncMutation.mutate()}>
-                네이버 동기화
-              </Button>
-            </Can>
-            <Can permission="APPOINTMENT_EDIT">
-              <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-                예약 추가
-              </Button>
-            </Can>
-          </Space>
-        </Space>
-
-        <Space wrap>
-          <Segmented
-            value={mode}
-            onChange={(v) => setMode(v as ViewMode)}
-            options={[
-              { label: '일', value: 'day' },
-              { label: '주', value: 'week' },
-              { label: '월', value: 'month' },
-              { label: '목록', value: 'list' },
-            ]}
-          />
-          {mode === 'list' ? (
+        <ListToolbar
+          filters={
             <>
-              {/* 통합 검색 1필드 — 예약자 이름·전화번호·예약 목적을 한 번에 찾는다(설계서 07 D4) */}
-              <Input
-                allowClear
-                style={{ width: 280 }}
-                placeholder="예약자 이름 / 전화번호 / 예약 목적"
-                prefix={<SearchOutlined />}
-                value={keyword}
-                onChange={(e) => setKeyword(e.target.value)}
-                onPressEnter={runSearch}
+              <Segmented
+                value={mode}
+                onChange={(v) => setMode(v as ViewMode)}
+                options={[
+                  { label: '일', value: 'day' },
+                  { label: '주', value: 'week' },
+                  { label: '월', value: 'month' },
+                  { label: '목록', value: 'list' },
+                ]}
               />
-              <Button icon={<SearchOutlined />} onClick={runSearch}>
-                검색
-              </Button>
-              {/* 종료일을 비우면 오늘 이후 전부. 과거를 보려면 시작일을 앞으로 당기면 된다. */}
-              <RangePicker
-                allowEmpty={[true, true]}
-                value={listRange}
-                onChange={(v) => setListRange([v?.[0] ?? null, v?.[1] ?? null])}
-              />
-              <Typography.Text type="secondary">예약접수·확정 건만</Typography.Text>
+              {mode === 'list' ? (
+                <>
+                  {/* 통합 검색 1필드 — 예약자 이름·전화번호·예약 목적을 한 번에 찾는다(설계서 07 D4) */}
+                  <Input
+                    allowClear
+                    style={{ width: LAYOUT.searchWidth }}
+                    placeholder="예약자 이름 / 전화번호 / 예약 목적"
+                    prefix={<SearchOutlined />}
+                    value={keyword}
+                    onChange={(e) => setKeyword(e.target.value)}
+                    onPressEnter={runSearch}
+                  />
+                  <Button icon={<SearchOutlined />} onClick={runSearch}>
+                    검색
+                  </Button>
+                  {/* 종료일을 비우면 오늘 이후 전부. 과거를 보려면 시작일을 앞으로 당기면 된다. */}
+                  <RangePicker
+                    allowEmpty={[true, true]}
+                    value={listRange}
+                    onChange={(v) => setListRange([v?.[0] ?? null, v?.[1] ?? null])}
+                  />
+                  <Typography.Text type="secondary">예약접수·확정 건만</Typography.Text>
+                </>
+              ) : (
+                <Space size={4}>
+                  <Button icon={<LeftOutlined />} onClick={() => moveBase(-1)} aria-label="이전" />
+                  <DatePicker allowClear={false} value={baseDate} onChange={(v) => v && setBaseDate(v)} />
+                  <Button icon={<RightOutlined />} onClick={() => moveBase(1)} aria-label="다음" />
+                  <Button onClick={() => setBaseDate(dayjs())}>오늘</Button>
+                </Space>
+              )}
             </>
-          ) : (
-            <Space size={4}>
-              <Button icon={<LeftOutlined />} onClick={() => moveBase(-1)} aria-label="이전" />
-              <DatePicker allowClear={false} value={baseDate} onChange={(v) => v && setBaseDate(v)} />
-              <Button icon={<RightOutlined />} onClick={() => moveBase(1)} aria-label="다음" />
-              <Button onClick={() => setBaseDate(dayjs())}>오늘</Button>
-            </Space>
-          )}
-        </Space>
+          }
+          actions={
+            <>
+              {/* 설계 PDF 1페이지 "CRM 일정 달력 출력" */}
+              <Button icon={<PrinterOutlined />} onClick={openPrint}>
+                인쇄
+              </Button>
+              <Can permission="NAVER_SYNC">
+                <Button icon={<SyncOutlined />} loading={syncMutation.isPending} onClick={() => syncMutation.mutate()}>
+                  네이버 동기화
+                </Button>
+              </Can>
+              <Can permission="APPOINTMENT_EDIT">
+                <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+                  예약 추가
+                </Button>
+              </Can>
+            </>
+          }
+        />
 
         {mode === 'list' ? (
-          <Table<Appointment>
+          <DataTable<Appointment>
             rowKey="id"
-            scroll={{ x: 'max-content' }}
-            size="middle"
             loading={isLoading}
             columns={columns}
             dataSource={appointments}
-            pagination={{ pageSize: 30, showSizeChanger: true, pageSizeOptions: [30, 50, 100] }}
+            pagination={{ pageSize: DEFAULT_PAGE_SIZE, showSizeChanger: true, pageSizeOptions: PAGE_SIZE_OPTIONS }}
             onRow={(r) => ({ onClick: () => openDetail(r.id), style: { cursor: 'pointer' } })}
             locale={{ emptyText: <Empty description="조건에 해당하는 예약이 없습니다." /> }}
           />
@@ -411,6 +413,7 @@ export function AppointmentsPage() {
       </Space>
 
       <AppointmentFormModal open={createOpen} defaultDate={baseDate} onClose={() => setCreateOpen(false)} />
-    </Card>
+      </PageCard>
+    </PageShell>
   );
 }

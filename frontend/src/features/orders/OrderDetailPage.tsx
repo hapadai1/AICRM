@@ -45,6 +45,7 @@ import {
   TRANSACTION_TYPE_LABEL,
   TRANSACTION_TYPE_TAG_COLOR,
 } from '../contracts/labels';
+import { usePageTitle } from '../../shared/page-title-store';
 
 /**
  * ORD-001 주문 상세 — 품목 카드, 구성품 부분 입출고
@@ -95,6 +96,8 @@ export function OrderDetailPage() {
       message.error(e instanceof ApiError ? e.message : '처리 중 오류가 발생했습니다.');
     },
   });
+
+  usePageTitle(order?.orderNo ? `주문 ${order.orderNo}` : null);
 
   if (error) {
     return (

@@ -10,7 +10,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   App,
   Button,
-  Card,
   Col,
   Empty,
   Form,
@@ -19,7 +18,6 @@ import {
   Select,
   Space,
   Switch,
-  Table,
   Tag,
   Typography,
 } from 'antd';
@@ -41,6 +39,8 @@ import type { NotificationRecord } from '../../api/notifications';
 import { Can } from '../../shared/Can';
 import { autoWidth } from '../../shared/table-width';
 import { metaOf } from '../../shared/status-meta';
+import { DataTable } from '../../shared/DataTable';
+import { PageCard, PageShell } from '../../shared/PageShell';
 import { StageTemplateMappingCard } from './StageTemplateMappingCard';
 
 export function NotificationsPage() {
@@ -222,11 +222,11 @@ export function NotificationsPage() {
   ];
 
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+    <PageShell>
       {/* 어느 시점에 어떤 문구를 제안할지 (개발설계서 05 G-06) */}
       <StageTemplateMappingCard />
 
-      <Card size="small" title="고객에게 직접 보내기">
+      <PageCard title="고객에게 직접 보내기">
         <Space wrap>
           <Typography.Text>고객 선택</Typography.Text>
           <Select
@@ -246,16 +246,16 @@ export function NotificationsPage() {
             notFoundContent={customersQuery.isFetching ? '검색 중…' : '검색 결과가 없습니다.'}
           />
         </Space>
-      </Card>
+      </PageCard>
 
       {!customerId ? (
-        <Card>
+        <PageCard>
           <Empty description="메시지를 발송할 고객을 선택해 주세요." />
-        </Card>
+        </PageCard>
       ) : (
         <Row gutter={[16, 16]}>
           <Col xs={24} lg={10}>
-            <Card size="small" title="문구 작성·발송">
+            <PageCard title="문구 작성·발송">
               <Form layout="vertical">
                 <Form.Item label="수신 전화번호" required>
                   <Input value={phone} onChange={(e) => setPhone(e.target.value)} />
@@ -353,12 +353,12 @@ export function NotificationsPage() {
                   </Button>
                 </Can>
               </Form>
-            </Card>
+            </PageCard>
           </Col>
 
           <Col xs={24} lg={14}>
-            <Card size="small" title={`발송 이력${selectedCustomer ? ` — ${selectedCustomer.name}` : ''}`}>
-              <Table<NotificationRecord>
+            <PageCard title={`발송 이력${selectedCustomer ? ` — ${selectedCustomer.name}` : ''}`}>
+              <DataTable<NotificationRecord>
                 rowKey="id"
                 size="small"
                 loading={historyQuery.isLoading}
@@ -366,12 +366,11 @@ export function NotificationsPage() {
                 columns={historyColumns}
                 pagination={{ pageSize: 10, showSizeChanger: false }}
                 locale={{ emptyText: '발송 이력이 없습니다.' }}
-                scroll={{ x: 'max-content' }}
               />
-            </Card>
+            </PageCard>
           </Col>
         </Row>
       )}
-    </Space>
+    </PageShell>
   );
 }
