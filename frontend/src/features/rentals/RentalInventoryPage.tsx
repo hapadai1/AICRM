@@ -114,12 +114,12 @@ export function RentalInventoryPage() {
   });
 
   const retireMutation = useMutation({
-    mutationFn: (id: string) => retireRentalItem(id, { reason: '재고 화면에서 사용 중지' }),
+    mutationFn: (id: string) => retireRentalItem(id, { reason: '재고 화면에서 폐기 처리' }),
     onSuccess: () => {
-      message.success('사용 중지 처리되었습니다.');
+      message.success('폐기 처리되었습니다.');
       void queryClient.invalidateQueries({ queryKey: ['rentals'] });
     },
-    onError: (e) => message.error(e instanceof ApiError ? e.message : '사용 중지에 실패했습니다.'),
+    onError: (e) => message.error(e instanceof ApiError ? e.message : '폐기 처리에 실패했습니다.'),
   });
 
   const quantity = Form.useWatch('quantity', registerForm) ?? 1;
@@ -178,9 +178,19 @@ export function RentalInventoryPage() {
       render: (_, r) => (
         <Can permission="RENTAL_EDIT">
           <Popconfirm
-            title="사용 중지"
-            description={`관리코드 ${r.managementCode}를 사용 중지하시겠습니까?`}
-            okText="사용 중지"
+            title="폐기 처리"
+            // 파손으로 잠시 빼두는 것과 혼동해 누르는 사고를 막는다 — 되돌릴 수 없다는 점을 확인창에 명시한다.
+            // 일시 제외는 상세 화면의 상태 변경(사용 불가·수선 중)을 쓴다.
+            description={
+              <>
+                관리코드 {r.managementCode}를 폐기 처리합니다.
+                <br />
+                재고에서 영구 제외되며 되돌릴 수 없습니다. (이력은 보존됩니다)
+                <br />
+                파손 등으로 잠시 빼두려면 상세 화면에서 &lsquo;사용 불가&rsquo;로 바꾸세요.
+              </>
+            }
+            okText="폐기 처리"
             cancelText="취소"
             onConfirm={() => retireMutation.mutate(r.id)}
             disabled={r.status === 'RETIRED' || !!r.currentAllocation}
@@ -191,7 +201,7 @@ export function RentalInventoryPage() {
               icon={<StopOutlined />}
               disabled={r.status === 'RETIRED' || !!r.currentAllocation}
             >
-              사용 중지
+              폐기 처리
             </Button>
           </Popconfirm>
         </Can>

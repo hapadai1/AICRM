@@ -99,7 +99,7 @@ export function AppLayout() {
       children: [
         { key: '/rentals/allocate', label: '렌탈 예약' },
         { key: '/rentals/handover', label: '출고·반납' },
-        { key: '/rentals', label: '전체 관리' },
+        { key: '/rentals', label: '렌탈 재고' },
       ],
     },
     { key: '/notifications', icon: <CalendarOutlined />, label: '고객 연락' },

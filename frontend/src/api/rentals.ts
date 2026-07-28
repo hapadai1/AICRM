@@ -19,11 +19,13 @@ export const RENTAL_CODE_PREFIX: Record<RentalComponentType, string> = {
   SHOES: 'SHO',
 };
 
-/** 렌탈 실물 상태 (02_데이터모델설계서 §13.3) */
+/**
+ * 렌탈 실물 상태 (02_데이터모델설계서 §13.3).
+ * PREPARING(준비 중)은 제거했다 — 전이시키는 흐름이 없어 필터가 항상 0건이었다.
+ */
 export type RentalItemStatus =
   | 'AVAILABLE'
   | 'RESERVED'
-  | 'PREPARING'
   | 'ALTERATION'
   | 'CHECKED_OUT'
   | 'RETURNED_HOLD'
@@ -33,7 +35,6 @@ export type RentalItemStatus =
 export const RENTAL_ITEM_STATUS_META: Record<RentalItemStatus, { label: string; color: string }> = {
   AVAILABLE: { label: '대여 가능', color: 'green' },
   RESERVED: { label: '예약됨', color: 'blue' },
-  PREPARING: { label: '준비 중', color: 'cyan' },
   ALTERATION: { label: '수선 중', color: 'purple' },
   CHECKED_OUT: { label: '대여 중', color: 'geekblue' },
   RETURNED_HOLD: { label: '반납 대기', color: 'orange' },
@@ -47,11 +48,10 @@ export function rentalItemStatusLabel(status: string): string {
 }
 
 /** 렌탈 배정 상태 (02_데이터모델설계서 §13.3) */
-export type AllocationStatus = 'RESERVED' | 'PREPARING' | 'CHECKED_OUT' | 'RETURNED' | 'CANCELLED';
+export type AllocationStatus = 'RESERVED' | 'CHECKED_OUT' | 'RETURNED' | 'CANCELLED';
 
 export const ALLOCATION_STATUS_META: Record<AllocationStatus, { label: string; color: string }> = {
   RESERVED: { label: '예약', color: 'blue' },
-  PREPARING: { label: '준비 중', color: 'cyan' },
   CHECKED_OUT: { label: '출고', color: 'geekblue' },
   RETURNED: { label: '반납', color: 'green' },
   CANCELLED: { label: '취소', color: 'default' },
@@ -199,7 +199,7 @@ const dateOnly = (v?: string | null): string | undefined => (v ? String(v).slice
 
 export function toRentalItem(raw: RawRentalItem): RentalItem {
   const sku = raw.rentalSku;
-  const active = raw.allocations?.find((a) => ['RESERVED', 'PREPARING', 'CHECKED_OUT'].includes(a.status));
+  const active = raw.allocations?.find((a) => ['RESERVED', 'CHECKED_OUT'].includes(a.status));
   const currentAllocation =
     raw.currentAllocation ??
     (active

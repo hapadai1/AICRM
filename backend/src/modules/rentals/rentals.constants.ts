@@ -6,11 +6,14 @@
 /** 렌탈 실물 품목 구분 */
 export const RENTAL_COMPONENT_TYPES = ['JACKET', 'TROUSERS', 'VEST', 'SHIRT', 'SHOES'];
 
-/** 실물 상태 */
+/**
+ * 실물 상태.
+ * PREPARING(준비 중)은 제거했다 — 어떤 흐름도 이 상태로 전이시키지 않아
+ * 필터 결과가 항상 0건이었다. 출고 전 준비 단계를 실제로 운영하게 되면 되살린다.
+ */
 export const RENTAL_ITEM_STATUSES = [
   'AVAILABLE',
   'RESERVED',
-  'PREPARING',
   'ALTERATION',
   'CHECKED_OUT',
   'RETURNED_HOLD',
@@ -21,11 +24,11 @@ export const RENTAL_ITEM_STATUSES = [
 /** 신규 배정 가능 실물 상태 (통합설계서 11.5 — 기간 미중복이면 예약 중 실물도 다른 기간에 배정 가능) */
 export const ASSIGNABLE_ITEM_STATUSES = ['AVAILABLE', 'RESERVED'];
 
-/** 배정 상태 */
-export const RENTAL_ALLOCATION_STATUSES = ['RESERVED', 'PREPARING', 'CHECKED_OUT', 'RETURNED', 'CANCELLED'];
+/** 배정 상태 (실물 상태와 같은 이유로 PREPARING 제거) */
+export const RENTAL_ALLOCATION_STATUSES = ['RESERVED', 'CHECKED_OUT', 'RETURNED', 'CANCELLED'];
 
 /** 기간 잠금·실물 점유가 살아 있는 배정 상태 (출고 전·중) */
-export const ACTIVE_ALLOCATION_STATUSES = ['RESERVED', 'PREPARING', 'CHECKED_OUT'];
+export const ACTIVE_ALLOCATION_STATUSES = ['RESERVED', 'CHECKED_OUT'];
 
 /** 반납 처리 시 실물이 가질 수 있는 다음 상태 (RENT-004) */
 export const RETURN_NEXT_ITEM_STATUSES = ['RETURNED_HOLD', 'ALTERATION', 'UNAVAILABLE', 'AVAILABLE'];

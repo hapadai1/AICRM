@@ -196,7 +196,7 @@ export function RentalAllocatePage() {
     <PageShell>
       <PageCard>
         {/* 제목은 헤더가 이미 "렌탈 예약"으로 보여 준다 — 카드 안에서 반복하지 않는다.
-            화면끼리 잇던 [출고·반납으로]·[전체관리로] 버튼도 좌측 메뉴와 겹쳐 뺐다. */}
+            화면끼리 잇던 [출고·반납으로]·[렌탈 재고로] 버튼도 좌측 메뉴와 겹쳐 뺐다. */}
         <ListToolbar
           filters={
             <Form<FilterValues>
