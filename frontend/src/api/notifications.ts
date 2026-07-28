@@ -271,11 +271,17 @@ export async function previewNotification(payload: {
   return { content: raw.renderedBody ?? raw.body ?? '', channel: toChannel(raw.channel) };
 }
 
-/** 알림톡 실패 → SMS 대체 발송 시 결과가 2건이므로 배열로 반환한다. */
+/**
+ * 알림톡 실패 → SMS 대체 발송 시 결과가 2건이므로 배열로 반환한다.
+ *
+ * `duplicated`: 같은 triggerKey로 이미 나간 건이라 서버가 발송하지 않고 지난 결과를 그대로
+ * 돌려준 경우다(단계를 되돌렸다 다시 전진하면 발생). 화면이 "발송했습니다"라고 잘못
+ * 알리지 않도록 그대로 넘긴다.
+ */
 export async function sendNotification(
   payload: SendNotificationInput,
-): Promise<{ results: NotificationRecord[] }> {
-  const raw = await request<RawSendResult & { results?: RawSendResult[] }>({
+): Promise<{ results: NotificationRecord[]; duplicated: boolean }> {
+  const raw = await request<RawSendResult & { results?: RawSendResult[]; duplicated?: boolean }>({
     url: '/notifications/send',
     method: 'POST',
     data: {
@@ -289,7 +295,7 @@ export async function sendNotification(
       triggerKey: payload.triggerKey,
     },
   });
-  return { results: (raw.results ?? [raw]).map(mapSendResult) };
+  return { results: (raw.results ?? [raw]).map(mapSendResult), duplicated: raw.duplicated === true };
 }
 
 export async function retryNotification(id: string): Promise<NotificationRecord> {

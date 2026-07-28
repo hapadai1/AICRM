@@ -404,7 +404,7 @@ describe('제작 상태·부분 입출고·가봉 (ProductionModule)', () => {
       expect(logs).toHaveLength(1);
     });
 
-    /** 설계서 06 §5.4 — 공장 회신/마킹본 파일 첨부(EntityFile 재사용) */
+    /** 설계서 06 §5.4 — 공장에 보낸 가봉 작업지시서 보관(EntityFile 재사용) */
     it('가봉 세션에 파일을 업로드→목록→다운로드→삭제한다', async () => {
       const { item } = await seedOrderItem(ctx.prisma, { itemStatus: 'BASTING_RECEIVED' });
       const created = await api(ctx)
@@ -414,21 +414,21 @@ describe('제작 상태·부분 입출고·가봉 (ProductionModule)', () => {
         .expect(201);
       const fittingId = created.body.data.id;
 
-      // 업로드 (multipart) — 공장 회신본 첨부
+      // 업로드 (multipart) — 공장 발송본 첨부
       const uploaded = await api(ctx)
         .post(`/api/v1/fittings/${fittingId}/files`)
         .set(auth(ctx))
-        .attach('file', Buffer.from('factory reply body'), 'reply.pdf')
+        .attach('file', Buffer.from('fitting sheet sent to factory'), 'fitting-sheet.pdf')
         .expect(201);
       const fileId = uploaded.body.data.id;
-      expect(uploaded.body.data.purpose).toBe('FACTORY_REPLY');
-      expect(uploaded.body.data.originalName).toBe('reply.pdf');
+      expect(uploaded.body.data.purpose).toBe('FACTORY_SENT');
+      expect(uploaded.body.data.originalName).toBe('fitting-sheet.pdf');
 
       // EntityFile purpose 태깅 확인
       const link = await ctx.prisma.entityFile.findFirstOrThrow({
         where: { entityType: 'FITTING_SESSION', entityId: fittingId, fileId },
       });
-      expect(link.purpose).toBe('FACTORY_REPLY');
+      expect(link.purpose).toBe('FACTORY_SENT');
 
       // 업로드 감사로그(CREATE)
       const createLogs = await ctx.prisma.auditLog.findMany({
@@ -453,7 +453,7 @@ describe('제작 상태·부분 입출고·가봉 (ProductionModule)', () => {
           r.on('end', () => cb(null, Buffer.concat(chunks)));
         })
         .expect(200);
-      expect((down.body as Buffer).toString()).toBe('factory reply body');
+      expect((down.body as Buffer).toString()).toBe('fitting sheet sent to factory');
 
       // 삭제
       await api(ctx).delete(`/api/v1/fittings/${fittingId}/files/${fileId}`).set(auth(ctx)).expect(200);

@@ -122,8 +122,8 @@ export class ProductionController {
   }
 
   /**
-   * 가봉 세션 파일 첨부 (설계서 06 §5.4) — 공장 회신/마킹본 보관.
-   * EntityFile(entityType='FITTING_SESSION', purpose='FACTORY_REPLY')로 연결한다.
+   * 가봉 세션 파일 첨부 (설계서 06 §5.4) — 공장에 보낸 가봉 작업지시서 보관.
+   * EntityFile(entityType='FITTING_SESSION', purpose='FACTORY_SENT')로 연결한다.
    */
   @Post('fittings/:id/files')
   @RequirePermission('FITTING_EDIT')
