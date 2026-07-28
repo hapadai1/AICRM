@@ -222,9 +222,7 @@ export function CustomerDetailPage() {
     { title: '버전', dataIndex: 'currentVersionNo', width: 70, render: (v: number) => `v${v}` },
     { title: '계약일', dataIndex: 'contractedAt', width: 110, render: (v?: string) => v ?? '-' },
     { title: '완료예정일', dataIndex: 'completionDueDate', width: 110, render: (v?: string) => v ?? '-' },
-    { title: '합계', dataIndex: 'totalAmount', align: 'right', width: 120, render: money },
-    { title: '계약금', dataIndex: 'depositAmount', align: 'right', width: 120, render: money },
-    { title: '잔금', dataIndex: 'balanceAmount', align: 'right', width: 120, render: money },
+    { title: '계약금액', dataIndex: 'totalAmount', align: 'right', width: 120, render: money },
   ];
 
   const orderColumns: ColumnsType<CustomerOrderRow> = [

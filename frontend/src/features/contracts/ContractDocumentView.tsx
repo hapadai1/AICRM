@@ -218,7 +218,7 @@ export function ContractDocumentView({ contractId }: { contractId: string }) {
           locale={{ emptyText: '품목이 없습니다.' }}
         />
 
-        {/* 금액 요약 — 품목 합계 · 옵션 추가 · 계약금/잔금(있을 때만) · 총 계약금액 */}
+        {/* 금액 요약 — 품목 합계 · 옵션 추가 · 총 계약금액 (거래는 전부 일시불이라 계약금·잔금은 없다) */}
         <Flex justify="flex-end">
           <Flex
             vertical
@@ -248,15 +248,6 @@ export function ContractDocumentView({ contractId }: { contractId: string }) {
                 {formatKrw(data?.totalAmount)}
               </Typography.Text>
             </Flex>
-            {/* 계약금 입력은 없앴지만, 예전에 입력된 계약은 잔금까지 함께 보여준다. */}
-            {!!data?.depositAmount && (
-              <Flex justify="space-between" gap={16}>
-                <Typography.Text type="secondary">계약금 / 잔금</Typography.Text>
-                <Typography.Text type="secondary">
-                  {formatKrw(data.depositAmount)} / {formatKrw(data.balanceAmount)}
-                </Typography.Text>
-              </Flex>
-            )}
           </Flex>
         </Flex>
       </Flex>

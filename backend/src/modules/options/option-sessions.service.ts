@@ -661,10 +661,7 @@ export class OptionSessionsService {
     await this.prisma.$transaction(async (tx) => {
       await tx.contractVersion.update({
         where: { id: versionId },
-        data: {
-          totalAmount: { increment: pending },
-          balanceAmount: { increment: pending },
-        },
+        data: { totalAmount: { increment: pending } },
       });
       await tx.optionSelectionSession.update({
         where: { id: sessionId },
@@ -676,10 +673,9 @@ export class OptionSessionsService {
           action: 'UPDATE',
           entityType: 'CONTRACT_VERSION',
           entityId: versionId,
-          before: { totalAmount: before.totalAmount, balanceAmount: before.balanceAmount },
+          before: { totalAmount: before.totalAmount },
           after: {
             totalAmount: before.totalAmount + pending,
-            balanceAmount: before.balanceAmount + pending,
             optionSurcharge: pending,
             optionSessionId: sessionId,
             orderItemId: session.orderItemId,
@@ -1009,7 +1005,7 @@ export class OptionSessionsService {
     const version = contract.currentVersionId
       ? await this.prisma.contractVersion.findUnique({
           where: { id: contract.currentVersionId },
-          select: { versionNo: true, totalAmount: true, depositAmount: true, balanceAmount: true },
+          select: { versionNo: true, totalAmount: true },
         })
       : null;
 
@@ -1033,11 +1029,8 @@ export class OptionSessionsService {
             contractNo: contract.contractNo,
             versionNo: version.versionNo,
             totalAmount: Number(version.totalAmount),
-            depositAmount: Number(version.depositAmount),
-            balanceAmount: Number(version.balanceAmount),
             /** 반영했을 때의 금액 (미리보기) */
             afterTotalAmount: Number(version.totalAmount) + pending,
-            afterBalanceAmount: Number(version.balanceAmount) + pending,
           }
         : null,
     };

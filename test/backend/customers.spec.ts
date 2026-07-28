@@ -242,8 +242,6 @@ describe('고객 관리 (Phase 2)', () => {
           versionNo: 1,
           versionStatus: 'CONFIRMED',
           totalAmount: 1_000_000,
-          depositAmount: 300_000,
-          balanceAmount: 700_000,
           createdBy: admin.id,
         },
       });
@@ -350,8 +348,6 @@ describe('고객 관리 (Phase 2)', () => {
         status: 'CONFIRMED',
         currentVersionNo: 1,
         totalAmount: 1_000_000,
-        depositAmount: 300_000,
-        balanceAmount: 700_000,
       });
 
       expect(data.orders).toHaveLength(1);

@@ -65,18 +65,6 @@ class ContractAmountsDto {
   totalAmount?: number;
 
   @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  @Min(0)
-  depositAmount?: number;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  @Min(0)
-  balanceAmount?: number;
-
-  @IsOptional()
   @IsDateString()
   completionDueDate?: string;
 
@@ -230,12 +218,6 @@ export class ConfirmRevisionDto {
   @IsNumber()
   @Min(0)
   totalAmount?: number;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  @Min(0)
-  depositAmount?: number;
 
   /** 제공 시 확정 직전 revision 라인 전체 교체 (연동정합화 계약 §3) */
   @IsOptional()

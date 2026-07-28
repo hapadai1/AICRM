@@ -199,8 +199,6 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
         .set(auth(ctx))
         .send({
           totalAmount: 3000000,
-          depositAmount: 1000000,
-          balanceAmount: 2000000,
           lines: [
             { transactionType: 'CUSTOM', productCategory: 'SUIT', quantity: 2, lineAmount: 2400000 },
             { transactionType: 'CUSTOM', productCategory: 'SHIRT', quantity: 1, lineAmount: 200000 },
@@ -549,7 +547,6 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
           version,
           changeReason: '금액·구성 최종 조정',
           totalAmount: 2500000,
-          depositAmount: 500000,
           lines: [
             { transactionType: 'CUSTOM', productCategory: 'SUIT', quantity: 2, lineAmount: 2000000 },
             { transactionType: 'CUSTOM', productCategory: 'SHIRT', quantity: 1, lineAmount: 200000 },
@@ -566,8 +563,6 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
       expect(current.versionNo).toBe(4);
       expect(current.versionStatus).toBe('CONFIRMED');
       expect(Number(current.totalAmount)).toBe(2500000);
-      expect(Number(current.depositAmount)).toBe(500000);
-      expect(Number(current.balanceAmount)).toBe(2000000);
       expect(current.lines).toHaveLength(3);
 
       // 라인 반영 결과로 품목이 동기화된다: 정장 2벌(#4 신규), 셔츠·렌탈 구두 유지

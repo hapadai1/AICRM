@@ -188,8 +188,7 @@ function SurchargePanel({ surcharge }: { surcharge: OptionSurcharge }) {
             }
             description={
               <Typography.Text type="secondary">
-                반영하면 계약금액 {won(contract.afterTotalAmount)} · 잔금{' '}
-                {won(contract.afterBalanceAmount)}이 됩니다. 계약 버전은 올라가지 않습니다.
+                반영하면 계약금액이 {won(contract.afterTotalAmount)}이 됩니다. 계약 버전은 올라가지 않습니다.
                 {surcharge.appliable
                   ? ' 위 [계약금액 반영]을 누르면 반영됩니다.'
                   : ' 옵션을 확정하면 위에서 반영할 수 있습니다.'}
@@ -290,8 +289,7 @@ export function OptionReviewPage() {
       icon: <ExclamationCircleOutlined />,
       content: c
         ? `옵션 추가금액 ${won(surcharge.pending)}을 계약 ${c.contractNo}에 반영합니다. ` +
-          `계약금액 ${won(c.totalAmount)} → ${won(c.afterTotalAmount)}, ` +
-          `잔금 ${won(c.balanceAmount)} → ${won(c.afterBalanceAmount)}. ` +
+          `계약금액 ${won(c.totalAmount)} → ${won(c.afterTotalAmount)}. ` +
           '변경계약(새 버전)은 만들지 않고 현재 버전 금액을 수정합니다. 적용할까요?'
         : '적용할까요?',
       okText: '적용',
