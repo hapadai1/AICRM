@@ -57,7 +57,16 @@ export function TaskBoard({ taskCounts }: TaskBoardProps) {
 
   const total = TASK_TYPES.reduce((sum, t) => sum + (taskCounts?.[t] ?? 0), 0);
   const tasks = tasksQuery.data ?? [];
-  const filteredTasks = selectedType ? tasks.filter((t) => t.taskType === selectedType) : tasks;
+  // 1순위 유형(카드 순서), 2순위 고객명 — 같은 유형 안의 동일 고객을 묶는다.
+  // Array.sort는 안정 정렬이라 같은 유형·고객 내에서는 기존 날짜순이 유지된다.
+  const sortedTasks = [...tasks].sort((a, b) => {
+    const typeDiff = TASK_TYPES.indexOf(a.taskType) - TASK_TYPES.indexOf(b.taskType);
+    if (typeDiff !== 0) return typeDiff;
+    return a.customerName.localeCompare(b.customerName, 'ko');
+  });
+  const filteredTasks = selectedType
+    ? sortedTasks.filter((t) => t.taskType === selectedType)
+    : sortedTasks;
 
   const acknowledgeMutation = useMutation({
     mutationFn: acknowledgeDashboardTask,
