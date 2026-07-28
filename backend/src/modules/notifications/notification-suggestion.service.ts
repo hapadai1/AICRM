@@ -16,6 +16,7 @@ export interface NotificationSuggestion {
   templateId: string;
   templateCode: string;
   templateName: string;
+  /** 실제로 나갈 채널. 알림톡은 승인된 템플릿에만 쓸 수 있어 미승인 건은 SMS다. */
   channel: string;
   recipientPhone: string;
   customerId: string;
@@ -53,7 +54,7 @@ export class NotificationSuggestionService {
     const [template, customer] = await Promise.all([
       this.prisma.notificationTemplate.findUnique({
         where: { id: ctx.templateId },
-        select: { id: true, code: true, name: true, channel: true, body: true },
+        select: { id: true, code: true, name: true, channel: true, body: true, approvalStatus: true },
       }),
       this.prisma.customer.findUnique({
         where: { id: ctx.customerId },
@@ -76,7 +77,7 @@ export class NotificationSuggestionService {
       templateId: template.id,
       templateCode: template.code,
       templateName: template.name,
-      channel: template.channel,
+      channel: template.approvalStatus === 'APPROVED' ? template.channel : 'SMS',
       recipientPhone: customer.phone,
       customerId: customer.id,
       orderId: ctx.orderId ?? null,

@@ -1,12 +1,19 @@
-/** 계약 1:1 스타일 컨설팅 화면 — 계약의 전 맞춤 품목을 한 리스트로: 원단 입력·옵션 선택 (보조: 가격표·동일 적용) */
+/**
+ * 계약 1:1 스타일 컨설팅 화면 — 계약의 맞춤·렌탈 품목을 부위(상의/하의/베스트) 단위 행으로 펼친다.
+ * (설계서 04 §2 맞춤 부위별 원단·컬러·패턴 / §4 렌탈 부위별 컬러·사이즈·비고)
+ *
+ * - 맞춤 부위 행: 원단·컬러·패턴 수기 입력 → 부위별 attr 저장(작업지시서 엑셀 부위 칸으로 연결)
+ * - 렌탈 부위 행: 컬러·사이즈(기준정보 코드) 선택 + 비고 수기 → [실물 검색] 팝업에서 후보 선택
+ * - 옵션 선택·실물 검색은 목록을 벗어나지 않도록 둘 다 팝업으로 띄운다.
+ */
 import {
-  ArrowLeftOutlined,
   CopyOutlined,
   EyeOutlined,
   FilePdfOutlined,
+  FileTextOutlined,
   MoreOutlined,
-  PlayCircleOutlined,
-  RightCircleOutlined,
+  RightOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -19,25 +26,100 @@ import {
   Modal,
   Progress,
   Radio,
+  Select,
   Space,
   Spin,
   Table,
+  Tooltip,
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { fetchContract } from '../../api/contracts';
-import type { OptionProgressItem, ProductCategory } from '../../api/options';
-import { copyOptionSession, fetchOptionProgress, startOptionSession } from '../../api/options';
+import type { OptionProgressItem } from '../../api/options';
+import {
+  componentGroupLabel,
+  copyOptionSession,
+  fetchOptionProgress,
+  startOptionSession,
+} from '../../api/options';
+import {
+  fetchRentalColors,
+  fetchRentalSelectionProgress,
+  fetchRentalSizes,
+  saveRentalLine,
+  startRentalSelection,
+} from '../../api/rentals';
+import { RentalCandidateModal } from '../rentals/RentalCandidateModal';
 import { BackButton } from '../../shared/BackButton';
 import { PdfViewerModal } from '../../shared/PdfViewerModal';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { metaOf } from '../../shared/status-meta';
-import { fabricFieldLabel, fabricFieldPlaceholder, OPTION_STATUS_META } from './option-meta';
+import { OptionStageModal } from './OptionStageModal';
+import { OPTION_STATUS_META } from './option-meta';
 
 /** 원단 가격표(플레이스홀더). 실제 문서 URL로 교체 가능. */
 const FABRIC_PRICE_PDF = '/sample-fabric-price.pdf';
+
+/** 맞춤 부위 행의 수기 입력 초안 (원단·컬러·패턴·비고를 한 벌로 들고 있다) */
+interface AttrDraft {
+  fabricName: string;
+  colorName: string;
+  patternName: string;
+  notes: string;
+}
+const EMPTY_ATTR: AttrDraft = { fabricName: '', colorName: '', patternName: '', notes: '' };
+
+/** 렌탈 부위 행의 초안 */
+interface RentalDraft {
+  colorCode: string | null;
+  sizeCode: string | null;
+  notes: string;
+}
+const EMPTY_RENTAL: RentalDraft = { colorCode: null, sizeCode: null, notes: '' };
+
+/** 목록의 한 행 = 품목 × 부위 하나. 품목 정보는 첫 행에만 rowSpan으로 붙인다. */
+interface ComponentRow {
+  key: string;
+  kind: 'CUSTOM' | 'RENTAL';
+  orderItemId: string;
+  displayName: string;
+  orderNo: string;
+  status: string;
+  /** 품목 셀 rowSpan — 그 품목의 첫 행만 부위 수, 나머지는 0 */
+  itemRowSpan: number;
+  /** 부위 코드 (맞춤 componentGroup / 렌탈 componentType) */
+  group: string;
+  // 맞춤
+  sessionId?: string | null;
+  completedStages?: number;
+  totalStages?: number;
+  // 렌탈
+  orderItemComponentId?: string;
+  colorName?: string | null;
+  sizeName?: string | null;
+  selectedItemCode?: string | null;
+  rentalVersion?: number;
+}
+
+/**
+ * 품목의 옵션 선택이 끝났는가 — 확인서 버튼 활성 기준.
+ * 백엔드는 모든 활성 단계가 채워지면 세션을 REVIEW(이후 CONFIRMED)로 올리므로
+ * 단계 수 비교와 상태 둘 중 하나만 맞아도 완료로 본다.
+ */
+function isOptionDone(item: OptionProgressItem): boolean {
+  if (!item.sessionId) return false;
+  if (item.status === 'REVIEW' || item.status === 'CONFIRMED') return true;
+  return item.totalStages > 0 && item.completedStages >= item.totalStages;
+}
+
+/** 렌탈 선택 상태 배지 메타 (맞춤 OPTION_STATUS_META와 같은 형태) */
+const RENTAL_ROW_STATUS_META: Record<string, { label: string; color: string }> = {
+  NOT_STARTED: { label: '미시작', color: 'default' },
+  IN_PROGRESS: { label: '작성 중', color: 'processing' },
+  CONFIRMED: { label: '확정', color: 'green' },
+};
 
 export function ContractOptionsPage() {
   const { id = '' } = useParams();
@@ -51,39 +133,127 @@ export function ContractOptionsPage() {
     enabled: !!id,
   });
 
-  const { data, isLoading, error } = useQuery({
+  const customQuery = useQuery({
     queryKey: ['options', 'progress', id],
     queryFn: () => fetchOptionProgress(id),
     enabled: !!id,
   });
 
-  // 원단 인라인 입력 초안 (orderItemId → 원단명)
-  const [fabricDraft, setFabricDraft] = useState<Record<string, string>>({});
-  useEffect(() => {
-    if (!data) return;
-    setFabricDraft((prev) => {
-      const next = { ...prev };
-      for (const row of data) if (!(row.orderItemId in next)) next[row.orderItemId] = row.fabric ?? '';
-      return next;
-    });
-  }, [data]);
+  const rentalQuery = useQuery({
+    queryKey: ['rental-selection', 'progress', id],
+    queryFn: () => fetchRentalSelectionProgress(id),
+    enabled: !!id,
+  });
+
+  const colorsQuery = useQuery({ queryKey: ['rental-colors'], queryFn: fetchRentalColors });
+  const sizesQuery = useQuery({ queryKey: ['rental-sizes'], queryFn: fetchRentalSizes });
+
+  // 부위별 입력 초안 — 키는 `${orderItemId}:${부위}`
+  const [attrDrafts, setAttrDrafts] = useState<Record<string, AttrDraft>>({});
+  const [rentalDrafts, setRentalDrafts] = useState<Record<string, RentalDraft>>({});
 
   const [pdfOpen, setPdfOpen] = useState(false);
   const [copySource, setCopySource] = useState<OptionProgressItem | null>(null);
   const [copyTargetId, setCopyTargetId] = useState<string | null>(null);
+  const [optionTarget, setOptionTarget] = useState<ComponentRow | null>(null);
+  const [rentalTarget, setRentalTarget] = useState<ComponentRow | null>(null);
 
-  const fabricMutation = useMutation({
+  const customItems = useMemo(() => customQuery.data ?? [], [customQuery.data]);
+  const rentalItems = useMemo(() => rentalQuery.data ?? [], [rentalQuery.data]);
+
+  // 서버 값이 들어오면 아직 손대지 않은 칸만 채운다(편집 중 값 덮어쓰기 방지).
+  useEffect(() => {
+    setAttrDrafts((prev) => {
+      const next = { ...prev };
+      for (const item of customItems)
+        for (const c of item.components) {
+          const key = `${item.orderItemId}:${c.componentGroup}`;
+          if (!(key in next))
+            next[key] = {
+              fabricName: c.fabricName ?? '',
+              colorName: c.colorName ?? '',
+              patternName: c.patternName ?? '',
+              notes: c.notes ?? '',
+            };
+        }
+      return next;
+    });
+  }, [customItems]);
+
+  useEffect(() => {
+    setRentalDrafts((prev) => {
+      const next = { ...prev };
+      for (const item of rentalItems)
+        for (const c of item.components) {
+          const key = `${item.orderItemId}:${c.orderItemComponentId}`;
+          if (!(key in next))
+            next[key] = {
+              colorCode: c.colorCode,
+              sizeCode: c.sizeCode,
+              notes: c.notes ?? '',
+            };
+        }
+      return next;
+    });
+  }, [rentalItems]);
+
+  /**
+   * 맞춤 부위 저장 — 세션 시작 API에 componentAttrs를 실어 보낸다.
+   * 세션이 없으면 만들고, 있으면 그 부위만 upsert한다(한 번의 호출로 두 경우 모두 처리).
+   * 서버는 부위 행 전체를 덮어쓰므로 초안 4개 필드를 함께 보낸다.
+   */
+  const attrMutation = useMutation({
     mutationFn: ({
       orderItemId,
-      fabric,
+      group,
+      draft,
     }: {
       orderItemId: string;
-      fabric: string;
-      productCategory: ProductCategory;
-    }) => startOptionSession(orderItemId, fabric),
+      group: string;
+      draft: AttrDraft;
+      label: string;
+    }) =>
+      startOptionSession(orderItemId, undefined, [
+        {
+          componentGroup: group,
+          fabricName: draft.fabricName.trim() || undefined,
+          colorName: draft.colorName.trim() || undefined,
+          patternName: draft.patternName.trim() || undefined,
+          notes: draft.notes.trim() || undefined,
+        },
+      ]),
     onSuccess: (_res, vars) => {
-      message.success(`${fabricFieldLabel(vars.productCategory)}을(를) 저장했습니다.`);
+      message.success(`${vars.label} 저장했습니다.`);
       void queryClient.invalidateQueries({ queryKey: ['options'] });
+    },
+    onError: (e: Error) => message.error(e.message),
+  });
+
+  /**
+   * 렌탈 부위 저장 — 세션이 없으면 먼저 시작한 뒤 라인을 upsert한다.
+   * 목록 인라인 편집은 낙관적 잠금 버전을 보내지 않는다(칸마다 저장돼 버전이 금방 낡는다).
+   * 버전 검증이 필요한 확정 흐름은 렌탈 선택 화면에서 처리한다.
+   */
+  const rentalMutation = useMutation({
+    mutationFn: async ({
+      row,
+      draft,
+    }: {
+      row: ComponentRow;
+      draft: RentalDraft;
+      label: string;
+    }) => {
+      let sessionId = row.sessionId ?? null;
+      if (!sessionId) sessionId = (await startRentalSelection(row.orderItemId)).sessionId;
+      return saveRentalLine(sessionId, row.orderItemComponentId!, {
+        colorCode: draft.colorCode ?? undefined,
+        sizeCode: draft.sizeCode ?? undefined,
+        notes: draft.notes.trim() || undefined,
+      });
+    },
+    onSuccess: (_res, vars) => {
+      message.success(`${vars.label} 저장했습니다.`);
+      void queryClient.invalidateQueries({ queryKey: ['rental-selection'] });
     },
     onError: (e: Error) => message.error(e.message),
   });
@@ -101,7 +271,7 @@ export function ContractOptionsPage() {
   });
 
   const copyTargets = (source: OptionProgressItem | null): OptionProgressItem[] =>
-    (data ?? []).filter(
+    customItems.filter(
       (row) =>
         source &&
         row.orderItemId !== source.orderItemId &&
@@ -109,105 +279,346 @@ export function ContractOptionsPage() {
         row.status !== 'CONFIRMED',
     );
 
-  const columns: ColumnsType<OptionProgressItem> = [
+  // 맞춤 → 렌탈 순서로 품목을 이어 붙이고, 품목마다 부위 행으로 펼친다.
+  const rows: ComponentRow[] = useMemo(() => {
+    const out: ComponentRow[] = [];
+    for (const item of customItems) {
+      // 부위 슬롯이 비는 카테고리라도 품목이 목록에서 사라지면 안 된다 — 부위 없는 한 행으로 둔다.
+      const groups =
+        item.components.length > 0
+          ? item.components
+          : [
+              {
+                componentGroup: '',
+                fabricName: null,
+                colorName: null,
+                patternName: null,
+                notes: null,
+                completedStages: item.completedStages,
+                totalStages: item.totalStages,
+              },
+            ];
+      groups.forEach((c, i) => {
+        out.push({
+          key: `${item.orderItemId}:${c.componentGroup}`,
+          kind: 'CUSTOM',
+          orderItemId: item.orderItemId,
+          displayName: item.displayName,
+          orderNo: item.orderNo,
+          status: item.status,
+          itemRowSpan: i === 0 ? groups.length : 0,
+          group: c.componentGroup,
+          sessionId: item.sessionId,
+          completedStages: c.completedStages,
+          totalStages: c.totalStages,
+        });
+      });
+    }
+    for (const item of rentalItems) {
+      // 구성품이 아직 없는 렌탈 품목도 목록에는 보여야 한다(주문에서 구성품을 추가하면 채워진다).
+      if (item.components.length === 0) {
+        out.push({
+          key: `${item.orderItemId}:none`,
+          kind: 'RENTAL',
+          orderItemId: item.orderItemId,
+          displayName: item.displayName,
+          orderNo: item.orderNo,
+          status: item.status,
+          itemRowSpan: 1,
+          group: '',
+          sessionId: item.sessionId,
+          rentalVersion: item.version,
+        });
+        continue;
+      }
+      item.components.forEach((c, i) => {
+        out.push({
+          key: `${item.orderItemId}:${c.orderItemComponentId}`,
+          kind: 'RENTAL',
+          orderItemId: item.orderItemId,
+          displayName: item.displayName,
+          orderNo: item.orderNo,
+          status: item.status,
+          itemRowSpan: i === 0 ? item.components.length : 0,
+          group: c.componentType,
+          sessionId: item.sessionId,
+          orderItemComponentId: c.orderItemComponentId,
+          colorName: c.colorName,
+          sizeName: c.sizeName,
+          selectedItemCode: c.selectedItemCode,
+          rentalVersion: item.version,
+        });
+      });
+    }
+    return out;
+  }, [customItems, rentalItems]);
+
+  const itemOf = (row: ComponentRow) =>
+    customItems.find((i) => i.orderItemId === row.orderItemId) ?? null;
+
+  const patchAttr = (key: string, field: keyof AttrDraft, value: string) =>
+    setAttrDrafts((prev) => ({ ...prev, [key]: { ...(prev[key] ?? EMPTY_ATTR), [field]: value } }));
+
+  const saveAttr = (row: ComponentRow) => {
+    const draft = attrDrafts[row.key] ?? EMPTY_ATTR;
+    const item = itemOf(row);
+    const saved = item?.components.find((c) => c.componentGroup === row.group);
+    const unchanged =
+      draft.fabricName.trim() === (saved?.fabricName ?? '') &&
+      draft.colorName.trim() === (saved?.colorName ?? '') &&
+      draft.patternName.trim() === (saved?.patternName ?? '') &&
+      draft.notes.trim() === (saved?.notes ?? '');
+    if (unchanged) return;
+    attrMutation.mutate({
+      orderItemId: row.orderItemId,
+      group: row.group,
+      draft,
+      label: `${row.displayName} ${componentGroupLabel(row.group)}`,
+    });
+  };
+
+  const saveRental = (row: ComponentRow, draft: RentalDraft) =>
+    rentalMutation.mutate({
+      row,
+      draft,
+      label: `${row.displayName} ${componentGroupLabel(row.group)}`,
+    });
+
+  /** 확정 세션은 열람 전용 — 여기서 값을 고치면 새 선택 버전이 조용히 열려버린다. */
+  const isLocked = (row: ComponentRow) => row.status === 'CONFIRMED';
+
+  const spanCell = (row: ComponentRow) => ({ rowSpan: row.itemRowSpan });
+
+  const columns: ColumnsType<ComponentRow> = [
     {
       title: '품목',
       key: 'item',
+      width: 220,
+      onCell: spanCell,
       render: (_, row) => (
-        <Space direction="vertical" size={0}>
+        <Space direction="vertical" size={2}>
           <Typography.Text strong style={{ fontSize: 15 }}>
             {row.displayName}
           </Typography.Text>
           <Typography.Text type="secondary">{row.orderNo}</Typography.Text>
+          <StatusBadge
+            label={
+              row.kind === 'CUSTOM'
+                ? metaOf(OPTION_STATUS_META, row.status).label
+                : (RENTAL_ROW_STATUS_META[row.status]?.label ?? row.status)
+            }
+            color={
+              row.kind === 'CUSTOM'
+                ? metaOf(OPTION_STATUS_META, row.status).color
+                : (RENTAL_ROW_STATUS_META[row.status]?.color ?? 'default')
+            }
+          />
         </Space>
       ),
     },
     {
-      // 정장·셔츠는 원단명, 구두는 컬러를 받는다 — 같은 컬럼이라 머리글은 둘 다 적는다.
-      title: '원단/컬러',
-      key: 'fabric',
-      width: 320,
+      title: '부위',
+      key: 'group',
+      width: 120,
+      render: (_, row) => (
+        <Typography.Text strong>{row.group ? componentGroupLabel(row.group) : '-'}</Typography.Text>
+      ),
+    },
+    {
+      // 맞춤은 원단(수기), 렌탈은 컬러(12색 코드 선택) — 부위 행의 첫 지정 항목이다.
+      title: '원단 · 컬러(렌탈)',
+      key: 'first',
+      width: 240,
       render: (_, row) => {
-        const draft = fabricDraft[row.orderItemId] ?? '';
-        // 별도 저장 버튼 없이 포커스 아웃/엔터 시 자동 저장 (변경분·비어있지 않을 때만)
-        const save = () => {
-          if (draft.trim() && draft.trim() !== (row.fabric ?? ''))
-            fabricMutation.mutate({
-              orderItemId: row.orderItemId,
-              fabric: draft.trim(),
-              productCategory: row.productCategory,
-            });
-        };
+        if (row.kind === 'RENTAL') {
+          const draft = rentalDrafts[row.key] ?? EMPTY_RENTAL;
+          return (
+            <Select
+              style={{ width: '100%' }}
+              placeholder="컬러 선택"
+              allowClear
+              disabled={isLocked(row)}
+              loading={colorsQuery.isLoading}
+              value={draft.colorCode}
+              options={(colorsQuery.data ?? []).map((c) => ({ value: c.code, label: c.name }))}
+              onChange={(value: string | undefined) => {
+                const next = { ...draft, colorCode: value ?? null };
+                setRentalDrafts((prev) => ({ ...prev, [row.key]: next }));
+                saveRental(row, next);
+              }}
+            />
+          );
+        }
+        const draft = attrDrafts[row.key] ?? EMPTY_ATTR;
+        if (isLocked(row)) return <Typography.Text>{draft.fabricName || '-'}</Typography.Text>;
         return (
           <Input
-            placeholder={fabricFieldPlaceholder(row.productCategory)}
-            value={draft}
-            onChange={(e) => setFabricDraft((prev) => ({ ...prev, [row.orderItemId]: e.target.value }))}
-            onBlur={save}
-            onPressEnter={save}
+            placeholder="원단명 (수기)"
+            value={draft.fabricName}
+            onChange={(e) => patchAttr(row.key, 'fabricName', e.target.value)}
+            onBlur={() => saveAttr(row)}
+            onPressEnter={() => saveAttr(row)}
           />
         );
       },
     },
     {
-      title: '진행상태',
-      dataIndex: 'status',
-      key: 'status',
-      width: 100,
-      render: (status: OptionProgressItem['status']) => (
-        <StatusBadge
-          label={metaOf(OPTION_STATUS_META, status).label}
-          color={metaOf(OPTION_STATUS_META, status).color}
-        />
-      ),
+      title: '컬러 · 사이즈(렌탈)',
+      key: 'second',
+      width: 200,
+      render: (_, row) => {
+        if (row.kind === 'RENTAL') {
+          const draft = rentalDrafts[row.key] ?? EMPTY_RENTAL;
+          return (
+            <Select
+              style={{ width: '100%' }}
+              placeholder="사이즈 선택"
+              allowClear
+              disabled={isLocked(row)}
+              loading={sizesQuery.isLoading}
+              value={draft.sizeCode}
+              options={(sizesQuery.data ?? []).map((s) => ({ value: s.code, label: s.name }))}
+              onChange={(value: string | undefined) => {
+                const next = { ...draft, sizeCode: value ?? null };
+                setRentalDrafts((prev) => ({ ...prev, [row.key]: next }));
+                saveRental(row, next);
+              }}
+            />
+          );
+        }
+        const draft = attrDrafts[row.key] ?? EMPTY_ATTR;
+        if (isLocked(row)) return <Typography.Text>{draft.colorName || '-'}</Typography.Text>;
+        return (
+          <Input
+            placeholder="컬러 (수기)"
+            value={draft.colorName}
+            onChange={(e) => patchAttr(row.key, 'colorName', e.target.value)}
+            onBlur={() => saveAttr(row)}
+            onPressEnter={() => saveAttr(row)}
+          />
+        );
+      },
     },
     {
-      title: '진행률',
+      // 렌탈 비고는 수선 명령(수치 등)을 적는 칸이다 (설계서 04 §4.2).
+      title: '패턴 · 비고(렌탈)',
+      key: 'third',
+      width: 220,
+      render: (_, row) => {
+        if (row.kind === 'RENTAL') {
+          const draft = rentalDrafts[row.key] ?? EMPTY_RENTAL;
+          const saved = rentalItems
+            .find((i) => i.orderItemId === row.orderItemId)
+            ?.components.find((c) => c.orderItemComponentId === row.orderItemComponentId);
+          if (isLocked(row)) return <Typography.Text>{draft.notes || '-'}</Typography.Text>;
+          return (
+            <Input
+              placeholder="비고 (수선 수치 등)"
+              value={draft.notes}
+              onChange={(e) =>
+                setRentalDrafts((prev) => ({
+                  ...prev,
+                  [row.key]: { ...(prev[row.key] ?? EMPTY_RENTAL), notes: e.target.value },
+                }))
+              }
+              onBlur={() => {
+                if (draft.notes.trim() !== (saved?.notes ?? '')) saveRental(row, draft);
+              }}
+              onPressEnter={() => saveRental(row, draft)}
+            />
+          );
+        }
+        const draft = attrDrafts[row.key] ?? EMPTY_ATTR;
+        if (isLocked(row)) return <Typography.Text>{draft.patternName || '-'}</Typography.Text>;
+        return (
+          <Input
+            placeholder="패턴 (수기)"
+            value={draft.patternName}
+            onChange={(e) => patchAttr(row.key, 'patternName', e.target.value)}
+            onBlur={() => saveAttr(row)}
+            onPressEnter={() => saveAttr(row)}
+          />
+        );
+      },
+    },
+    {
+      title: '진행 · 선택 실물',
       key: 'progress',
       width: 190,
-      render: (_, row) => (
-        <Space>
-          <Progress
-            percent={row.totalStages ? Math.round((row.completedStages / row.totalStages) * 100) : 0}
-            size="small"
-            style={{ width: 90 }}
-            showInfo={false}
-          />
-          <Typography.Text>
-            {row.completedStages}/{row.totalStages} 단계
-          </Typography.Text>
-        </Space>
-      ),
+      render: (_, row) => {
+        if (row.kind === 'RENTAL')
+          return row.selectedItemCode ? (
+            <Typography.Text strong>{row.selectedItemCode}</Typography.Text>
+          ) : (
+            <Typography.Text type="secondary">미선택</Typography.Text>
+          );
+        const total = row.totalStages ?? 0;
+        const done = row.completedStages ?? 0;
+        if (total === 0) return <Typography.Text type="secondary">단계 없음</Typography.Text>;
+        return (
+          <Space>
+            <Progress
+              percent={Math.round((done / total) * 100)}
+              size="small"
+              style={{ width: 80 }}
+              showInfo={false}
+            />
+            <Typography.Text>
+              {done}/{total} 단계
+            </Typography.Text>
+          </Space>
+        );
+      },
     },
     {
       title: '옵션',
-      key: 'optionAction',
+      key: 'action',
       width: 150,
-      render: (_, row) => {
-        if (row.status === 'NOT_STARTED')
-          return (
-            <Button
-              type="primary"
-              icon={<PlayCircleOutlined />}
-              onClick={() => navigate(`/options/${row.orderItemId}`)}
-            >
-              옵션 선택
-            </Button>
-          );
-        if (row.status === 'IN_PROGRESS')
-          return (
-            <Button
-              type="primary"
-              icon={<RightCircleOutlined />}
-              onClick={() => navigate(`/options/${row.orderItemId}`)}
-            >
-              옵션 선택
-            </Button>
-          );
-        return (
-          <Button icon={<EyeOutlined />} onClick={() => navigate(`/options/${row.orderItemId}/review`)}>
-            옵션 보기
+      render: (_, row) =>
+        row.kind === 'RENTAL' ? (
+          <Button
+            type={row.selectedItemCode ? 'default' : 'primary'}
+            icon={<SearchOutlined />}
+            disabled={!row.orderItemComponentId}
+            onClick={() => setRentalTarget(row)}
+          >
+            실물 검색
           </Button>
+        ) : (row.totalStages ?? 0) === 0 ? null : (
+          <Button
+            type={row.status === 'CONFIRMED' ? 'default' : 'primary'}
+            icon={row.status === 'CONFIRMED' ? <EyeOutlined /> : undefined}
+            onClick={() => setOptionTarget(row)}
+          >
+            {row.status === 'CONFIRMED' ? '옵션 보기' : '옵션 선택'}
+          </Button>
+        ),
+    },
+    {
+      // 확인서는 부위가 아니라 품목 단위다 — 품목 첫 행에 rowSpan으로 한 번만 붙인다.
+      // 렌탈 품목의 확인서는 렌탈 선택 화면이 담당하므로 여기서는 맞춤만 낸다.
+      title: '확인서',
+      key: 'review',
+      width: 130,
+      onCell: spanCell,
+      render: (_, row) => {
+        if (row.kind === 'RENTAL') return null;
+        const item = itemOf(row);
+        if (!item) return null;
+        const done = isOptionDone(item);
+        return (
+          // 비활성 버튼은 마우스 이벤트를 삼켜 툴팁이 안 뜬다 — span으로 감싸 안내를 살린다.
+          <Tooltip title={done ? '' : '모든 옵션 단계를 선택하면 확인서를 볼 수 있습니다.'}>
+            <span>
+              <Button
+                icon={<FileTextOutlined />}
+                disabled={!done}
+                onClick={() => navigate(`/options/${item.orderItemId}/review`)}
+              >
+                확인서 보기
+              </Button>
+            </span>
+          </Tooltip>
         );
       },
     },
@@ -215,8 +626,10 @@ export function ContractOptionsPage() {
       title: '',
       key: 'more',
       width: 56,
+      onCell: spanCell,
       render: (_, row) => {
-        const canCopy = !!row.sessionId && copyTargets(row).length > 0;
+        const item = itemOf(row);
+        const canCopy = !!item?.sessionId && copyTargets(item).length > 0;
         return (
           <Dropdown
             trigger={['click']}
@@ -227,7 +640,7 @@ export function ContractOptionsPage() {
                   icon: <CopyOutlined />,
                   label: '동일 옵션 적용',
                   disabled: !canCopy,
-                  onClick: () => setCopySource(row),
+                  onClick: () => item && setCopySource(item),
                 },
               ],
             }}
@@ -239,6 +652,7 @@ export function ContractOptionsPage() {
     },
   ];
 
+  const error = customQuery.error ?? rentalQuery.error;
   if (error) {
     return (
       <Alert
@@ -250,44 +664,54 @@ export function ContractOptionsPage() {
     );
   }
 
+  const isLoading = customQuery.isLoading || rentalQuery.isLoading;
+
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(`/contracts/${id}`)}>
-          계약으로
-        </Button>
-        <Button icon={<FilePdfOutlined />} onClick={() => setPdfOpen(true)}>
-          원단 가격표
-        </Button>
-      </div>
-
       <Card>
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          <div>
-            <Typography.Title level={4} style={{ marginBottom: 4 }}>
-              스타일 컨설팅 — {contract?.customerName ?? ''}
-            </Typography.Title>
-            <Typography.Text type="secondary">
-              {[contract?.customerPhone, contract?.contractNo].filter(Boolean).join(' · ')}
-            </Typography.Text>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <div>
+              <Typography.Title level={4} style={{ marginBottom: 4 }}>
+                스타일 컨설팅 — {contract?.customerName ?? ''}
+              </Typography.Title>
+              <Typography.Text type="secondary">
+                {[contract?.customerPhone, contract?.contractNo].filter(Boolean).join(' · ')}
+              </Typography.Text>
+            </div>
+            {/* 기능 버튼은 화면 우상단 한 곳에 모은다 — 화면 이동은 하단에 둔다. */}
+            <Button icon={<FilePdfOutlined />} onClick={() => setPdfOpen(true)}>
+              원단 가격표
+            </Button>
           </div>
           {isLoading ? (
             <Spin style={{ display: 'block', margin: '48px auto' }} />
           ) : (
-            <Table<OptionProgressItem>
-              rowKey="orderItemId"
+            <Table<ComponentRow>
+              rowKey="key"
               scroll={{ x: 'max-content' }}
-              dataSource={data ?? []}
+              dataSource={rows}
               columns={columns}
               pagination={false}
-              locale={{ emptyText: '이 계약에는 맞춤 품목이 없습니다.' }}
+              locale={{ emptyText: '이 계약에는 맞춤·렌탈 품목이 없습니다.' }}
             />
           )}
         </Space>
       </Card>
 
-      {/* 계약 상세 등 여러 경로로 들어오므로 뒤로가기로 통일 */}
-      <BackButton />
+      {/* 하단은 화면 이동 전용 — 왼쪽은 온 곳으로, 오른쪽은 다음 목적지(계약 상세). */}
+      <Card>
+        <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+          <BackButton />
+          <Button
+            size="large"
+            style={{ height: 56, minWidth: 140, fontSize: 18 }}
+            onClick={() => navigate(`/contracts/${id}`)}
+          >
+            계약으로 <RightOutlined />
+          </Button>
+        </Space>
+      </Card>
 
       <PdfViewerModal
         open={pdfOpen}
@@ -295,6 +719,35 @@ export function ContractOptionsPage() {
         title="원단 가격표"
         onClose={() => setPdfOpen(false)}
       />
+
+      {optionTarget && (
+        <OptionStageModal
+          open
+          orderItemId={optionTarget.orderItemId}
+          componentGroup={optionTarget.group}
+          title={`${optionTarget.displayName} · ${componentGroupLabel(optionTarget.group)} 옵션`}
+          onClose={() => setOptionTarget(null)}
+        />
+      )}
+
+      {rentalTarget && (
+        <RentalCandidateModal
+          open
+          orderItemId={rentalTarget.orderItemId}
+          orderItemComponentId={rentalTarget.orderItemComponentId!}
+          title={`${rentalTarget.displayName} · ${componentGroupLabel(rentalTarget.group)} 실물 검색`}
+          colorName={rentalTarget.colorName ?? null}
+          sizeName={rentalTarget.sizeName ?? null}
+          selectedInventoryItemId={
+            rentalItems
+              .find((i) => i.orderItemId === rentalTarget.orderItemId)
+              ?.components.find(
+                (c) => c.orderItemComponentId === rentalTarget.orderItemComponentId,
+              )?.selectedInventoryItemId ?? null
+          }
+          onClose={() => setRentalTarget(null)}
+        />
+      )}
 
       <Modal
         title={`동일 옵션 적용 — ${copySource?.displayName ?? ''}`}

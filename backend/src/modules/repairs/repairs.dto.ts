@@ -8,15 +8,14 @@ import {
   MaxLength,
 } from 'class-validator';
 import { PageQueryDto } from '../../common/pagination';
+import { codesOf } from '../admin-master/code-labels.constants';
 
-/** 수선 유형 (데이터모델 §12.1) */
-export const REPAIR_TYPES = [
-  'CUSTOM_DURING',
-  'AFTER_SALE',
-  'RENTAL_PRE',
-  'RENTAL_POST',
-  'GENERAL',
-] as const;
+/**
+ * 수선 유형 (데이터모델 §12.1) — 코드 집합은 기준정보 상수에서 파생한다(단일 출처).
+ * 렌탈 수선은 이 도메인에서 다루지 않는다 — 렌탈 진행(RENTAL 트랙)의
+ * 수선요청·수선입고·수선출고 단계와 렌탈 실물 상태(ALTERATION)로 관리한다.
+ */
+export const REPAIR_TYPES = codesOf('repair-type');
 
 /**
  * 접수·출고 방식 (개발설계서 05 G-07).
@@ -56,8 +55,6 @@ export class CreateRepairDto extends RepairMethodDto {
   /** CUSTOM_DURING / AFTER_SALE: 품목 또는 구성품 연결 필수 */
   @IsOptional() @IsUUID() orderItemId?: string;
   @IsOptional() @IsUUID() componentId?: string;
-  /** RENTAL_PRE / RENTAL_POST: 렌탈 실물 연결 필수 */
-  @IsOptional() @IsUUID() rentalInventoryItemId?: string;
 }
 
 export class UpdateRepairDto extends RepairMethodDto {

@@ -54,6 +54,14 @@ export class ContractsController {
     return this.contracts.update(id, dto, actor);
   }
 
+  /** 계약 삭제 (임시저장·취소 한정, 진행 이력 없을 때) */
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission('CONTRACT_DELETE')
+  remove(@Param('id') id: string, @CurrentUser() actor: AuthUser) {
+    return this.contracts.remove(id, actor);
+  }
+
   @Get(':id/versions')
   @RequirePermission('CONTRACT_VIEW')
   versions(@Param('id') id: string) {

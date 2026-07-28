@@ -34,10 +34,14 @@ export function CustomerModeGuard() {
 
   const routeCustomerId = customerIdFromPath(location.pathname);
 
-  // 1) 경로에 있으면 항상 고객모드로 맞춘다.
+  // 1) /c 서브트리에 진입(새로고침·딥링크)할 때 고객모드로 맞춘다.
+  //    감시 기준은 경로(pathname)다. mode를 계속 감시하면, 관리자 복귀로 mode=ADMIN이
+  //    되는 순간(아직 /c에서 언마운트 전) 이 가드가 다시 CUSTOMER로 되돌려, 화면은
+  //    대시보드인데 메뉴만 고객모드로 남는 버그가 생긴다.
   useEffect(() => {
     if (mode !== 'CUSTOMER') setMode('CUSTOMER');
-  }, [mode, setMode]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname, setMode]);
 
   // 2) URL의 :customerId가 스토어와 다르면 단건 조회로 컨텍스트를 채운다.
   const needsSync = !!routeCustomerId && routeCustomerId !== selectedCustomerId;

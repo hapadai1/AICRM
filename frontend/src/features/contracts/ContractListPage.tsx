@@ -7,7 +7,6 @@ import { PlusOutlined, ReloadOutlined, SettingOutlined, UserOutlined } from '@an
 import { useQuery } from '@tanstack/react-query';
 import {
   Button,
-  Card,
   Col,
   DatePicker,
   Flex,
@@ -21,7 +20,6 @@ import {
   Typography,
 } from 'antd';
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
-import type { SorterResult } from 'antd/es/table/interface';
 import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
 import { useMemo, useState } from 'react';
@@ -35,9 +33,12 @@ import {
   type ContractStatus,
 } from '../../api/contracts';
 import { Can } from '../../shared/Can';
+import { DataTable, PAGE_SIZE_OPTIONS } from '../../shared/DataTable';
+import { PageCard, PageShell } from '../../shared/PageShell';
 import { CustomerPickerModal } from '../../shared/CustomerPickerModal';
 import type { PickedCustomer } from '../../shared/CustomerPickerModal';
 import { StatusBadge } from '../../shared/StatusBadge';
+import { autoWidth } from '../../shared/table-width';
 import { CONTRACT_STATUS_META, formatKrw, metaOf } from './labels';
 
 const { RangePicker } = DatePicker;
@@ -52,6 +53,13 @@ const STATUS_OPTIONS = CONTRACT_FILTER_STATUSES.map((value) => ({
 }));
 
 type DateField = NonNullable<ContractSearchParams['dateField']>;
+
+/**
+ * 정렬은 계약일 최신순으로 고정한다(관리자·고객모드 동일).
+ * 표 헤더 정렬을 열어두면 antd 가 정렬 중인 열의 헤더·셀에 배경색을 입혀
+ * 그 열만 다른 색으로 보이는데, 계약 목록에는 필드별 정렬 요구가 없다.
+ */
+const FIXED_SORT = 'contractedAt,desc';
 
 const DATE_FIELD_OPTIONS: { value: DateField; label: string }[] = [
   { value: 'contractedAt', label: '계약일' },
@@ -71,7 +79,6 @@ interface Filters {
   contractTypeId?: string;
   customerId?: string;
   customerLabel?: string;
-  sort: string;
   page: number;
   size: number;
 }
@@ -87,7 +94,6 @@ function readFilters(params: URLSearchParams): Filters {
     contractTypeId: params.get('contractTypeId') ?? undefined,
     customerId: params.get('customerId') ?? undefined,
     customerLabel: params.get('customerLabel') ?? undefined,
-    sort: params.get('sort') ?? 'contractedAt,desc',
     page: Number(params.get('page') ?? 1),
     size: Number(params.get('size') ?? 30),
   };
@@ -103,7 +109,6 @@ function writeFilters(filters: Filters): Record<string, string> {
     ['contractTypeId', filters.contractTypeId],
     ['customerId', filters.customerId],
     ['customerLabel', filters.customerLabel],
-    ['sort', filters.sort],
     ['page', filters.page > 1 ? filters.page : undefined],
     ['size', filters.size !== 30 ? filters.size : undefined],
   ];
@@ -112,7 +117,17 @@ function writeFilters(filters: Filters): Record<string, string> {
   );
 }
 
-export function ContractListPage() {
+interface ContractListProps {
+  /** 지정 시 이 고객의 계약만 조회(고객모드 임베드용) */
+  customerId?: string;
+  /** 임베드 모드: 필터·통계·검색 크롬 없이 표만 렌더, 고객 열 숨김 */
+  embedded?: boolean;
+}
+
+export function ContractListPage({
+  customerId: embeddedCustomerId,
+  embedded = false,
+}: ContractListProps = {}) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const filters = useMemo(() => readFilters(searchParams), [searchParams]);
@@ -127,18 +142,21 @@ export function ContractListPage() {
     setSearchParams(writeFilters({ ...filters, ...patch, page: nextPage }));
   };
 
-  const params: ContractSearchParams = {
-    q: filters.customerId ? undefined : filters.q || undefined,
-    customerId: filters.customerId,
-    dateField: filters.dateField,
-    dateFrom: filters.dateFrom,
-    dateTo: filters.dateTo,
-    status: filters.status,
-    contractTypeId: filters.contractTypeId,
-    sort: filters.sort,
-    page: filters.page,
-    size: filters.size,
-  };
+  // 임베드(고객모드)에서는 기간·검색 필터 없이 해당 고객 전체 계약을 최신순으로.
+  const params: ContractSearchParams = embedded
+    ? { customerId: embeddedCustomerId, sort: FIXED_SORT, page: 1, size: 100 }
+    : {
+        q: filters.customerId ? undefined : filters.q || undefined,
+        customerId: filters.customerId,
+        dateField: filters.dateField,
+        dateFrom: filters.dateFrom,
+        dateTo: filters.dateTo,
+        status: filters.status,
+        contractTypeId: filters.contractTypeId,
+        sort: FIXED_SORT,
+        page: filters.page,
+        size: filters.size,
+      };
 
   const { data, isFetching } = useQuery({
     queryKey: ['contracts', 'list', params],
@@ -165,39 +183,33 @@ export function ContractListPage() {
         dateField: 'contractedAt',
         dateFrom: from.format('YYYY-MM-DD'),
         dateTo: to.format('YYYY-MM-DD'),
-        sort: 'contractedAt,desc',
         page: 1,
         size: 30,
       }),
     );
   };
 
-  /** 표 헤더 정렬 → `필드,방향` 파라미터 */
-  const handleTableChange = (
-    pagination: TablePaginationConfig,
-    _f: unknown,
-    sorter: SorterResult<ContractListItem> | SorterResult<ContractListItem>[],
-  ) => {
-    const single = Array.isArray(sorter) ? sorter[0] : sorter;
-    const field = single?.field as string | undefined;
-    const sort = field && single?.order ? `${field},${single.order === 'ascend' ? 'asc' : 'desc'}` : filters.sort;
+  /** 표 변경은 페이지 이동만 반영한다(정렬 고정 — FIXED_SORT). */
+  const handleTableChange = (pagination: TablePaginationConfig) => {
     update({
-      sort,
       page: pagination.current ?? 1,
       size: pagination.pageSize ?? filters.size,
     });
   };
 
-  const [sortField, sortDirection] = filters.sort.split(',');
-  const orderOf = (field: string) =>
-    sortField === field ? (sortDirection === 'asc' ? ('ascend' as const) : ('descend' as const)) : null;
-
+  /**
+   * 정렬 기준(스타일 컨설팅·채촌 목록과 동일):
+   * - 왼쪽이 기본. 금액만 오른쪽. 가운데는 폭이 좁게 고정된 숫자 열에만 쓴다
+   *   (넓은 열을 가운데 두면 값이 빈 칸 한가운데 떠서 시작 기준선이 어긋난다).
+   *
+   * 폭은 고정하지 않는다 — autoWidth() 참고.
+   */
   const columns: ColumnsType<ContractListItem> = [
     // 진입점은 사람이 아는 정보(고객·계약일). 계약번호는 참고용으로 맨 뒤에 둔다.
     {
       title: '고객',
       dataIndex: 'customerName',
-      width: 150,
+      ...autoWidth(140),
       render: (name: string, row) => (
         <Space direction="vertical" size={0}>
           <Typography.Text>{name}</Typography.Text>
@@ -210,16 +222,16 @@ export function ContractListPage() {
     {
       title: '계약일',
       dataIndex: 'contractedAt',
-      width: 110,
-      sorter: true,
-      sortOrder: orderOf('contractedAt'),
-      render: (v?: string) => v ?? '-',
+      ...autoWidth(),
+      // 확정 전 초안은 계약일이 없다. 빈 칸 대신 작성일을 보여 준다(목록 기간 필터·정렬 기준과 동일).
+      render: (v: string | undefined, row) =>
+        v ?? (row.createdAt ? <Typography.Text type="secondary">{row.createdAt} (작성)</Typography.Text> : '-'),
     },
-    { title: '계약 구분', dataIndex: 'contractTypeName', width: 150 },
+    { title: '계약 구분', dataIndex: 'contractTypeName', ...autoWidth(110) },
     {
       title: '상태',
       dataIndex: 'status',
-      width: 100,
+      ...autoWidth(),
       render: (v: string) => {
         const meta = metaOf(CONTRACT_STATUS_META, v);
         return <StatusBadge label={meta.label} color={meta.color} />;
@@ -228,49 +240,60 @@ export function ContractListPage() {
     {
       title: '계약금액',
       dataIndex: 'totalAmount',
-      width: 130,
+      ...autoWidth(),
       align: 'right',
-      sorter: true,
-      sortOrder: orderOf('totalAmount'),
       render: formatKrw,
     },
     {
       title: '완료 예정일',
       dataIndex: 'completionDueDate',
-      width: 110,
-      sorter: true,
-      sortOrder: orderOf('completionDueDate'),
+      ...autoWidth(),
       render: (v?: string) => v ?? '-',
     },
     {
       title: '계약번호',
       dataIndex: 'contractNo',
-      width: 165,
+      ...autoWidth(),
       render: (v: string) => <Typography.Text type="secondary">{v}</Typography.Text>,
     },
   ];
 
   const totals = data?.totals;
 
+  // 임베드(고객모드): 크롬 없이 표만. 고객 열은 숨긴다(단일 고객 컨텍스트).
+  if (embedded) {
+    return (
+      <Table<ContractListItem>
+        rowKey="id"
+        size="small"
+        loading={isFetching}
+        columns={columns.filter((c) => c.title !== '고객')}
+        dataSource={data?.data ?? []}
+        scroll={{ x: 'max-content' }}
+        onRow={(record) => ({
+          onClick: () => navigate(`/contracts/${record.id}`),
+          style: { cursor: 'pointer' },
+        })}
+        pagination={false}
+        locale={{ emptyText: '계약이 없습니다.' }}
+      />
+    );
+  }
+
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Card size="small">
-        <Flex justify="space-between" align="center" wrap gap={12} style={{ marginBottom: 16 }}>
-          <Typography.Title level={4} style={{ margin: 0 }}>
-            목록
-          </Typography.Title>
-          <Space wrap>
-            <Can permission="CONTRACT_TYPE_EDIT">
-              <Button icon={<SettingOutlined />} onClick={() => navigate('/admin/contract-types')}>
-                계약 구분 관리
-              </Button>
-            </Can>
-            <Can permission="CONTRACT_CREATE">
-              <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/contracts/new')}>
-                신규 계약
-              </Button>
-            </Can>
-          </Space>
+    <PageShell>
+      <PageCard>
+        <Flex justify="flex-end" wrap gap={8} style={{ marginBottom: 16 }}>
+          <Can permission="CONTRACT_TYPE_EDIT">
+            <Button icon={<SettingOutlined />} onClick={() => navigate('/admin/contract-types')}>
+              계약 구분 관리
+            </Button>
+          </Can>
+          <Can permission="CONTRACT_CREATE">
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/contracts/new')}>
+              신규 계약
+            </Button>
+          </Can>
         </Flex>
 
         <Row gutter={[12, 12]} align="middle">
@@ -357,29 +380,29 @@ export function ContractListPage() {
             </Space>
           </Col>
         </Row>
-      </Card>
+      </PageCard>
 
-      <Row gutter={16}>
-        <Col xs={12} md={6}>
-          <Card size="small">
+      {/*
+        건수·금액을 카드 두 장으로 나눠 두면 두 장이 왼쪽 절반에만 몰리고 오른쪽이 통째로 비었다.
+        같은 조회 결과의 요약이므로 한 장 안에 나란히 둔다.
+      */}
+      <PageCard>
+        <Row gutter={[16, 16]}>
+          <Col xs={12} md={6}>
             <Statistic title="계약 건수" value={totals?.count ?? 0} suffix="건" />
-          </Card>
-        </Col>
-        <Col xs={12} md={6}>
-          <Card size="small">
+          </Col>
+          <Col xs={12} md={6}>
             <Statistic title="계약금액 합계" value={totals?.totalAmount ?? 0} suffix="원" />
-          </Card>
-        </Col>
-      </Row>
+          </Col>
+        </Row>
+      </PageCard>
 
-      <Card size="small">
-        <Table<ContractListItem>
+      <PageCard>
+        <DataTable<ContractListItem>
           rowKey="id"
-          size="small"
           loading={isFetching}
           columns={columns}
           dataSource={data?.data ?? []}
-          scroll={{ x: 1400 }}
           onChange={handleTableChange}
           onRow={(record) => ({
             onClick: () => navigate(`/contracts/${record.id}`),
@@ -390,12 +413,12 @@ export function ContractListPage() {
             pageSize: filters.size,
             total: data?.page.totalElements ?? 0,
             showSizeChanger: true,
-            pageSizeOptions: ['30', '50', '100'],
+            pageSizeOptions: PAGE_SIZE_OPTIONS,
             showTotal: (total) => `총 ${total}건`,
           }}
           locale={{ emptyText: '조회 조건에 해당하는 계약이 없습니다.' }}
         />
-      </Card>
+      </PageCard>
 
       <CustomerPickerModal
         open={pickerOpen}
@@ -404,6 +427,6 @@ export function ContractListPage() {
         initialKeyword={keyword}
         title="고객 검색 — 계약 조회"
       />
-    </Space>
+    </PageShell>
   );
 }

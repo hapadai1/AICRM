@@ -5,6 +5,7 @@ import { BusinessException } from '../../common/business.exception';
 import { AuthUser } from '../../common/decorators';
 import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
+import { defaultLabelsOf } from '../admin-master/code-labels.constants';
 import { AuditService } from '../audit/audit.service';
 import { NotificationSuggestionService } from '../notifications/notification-suggestion.service';
 import { CONSULT_RESERVED_EXPIRE_DAYS, DEFAULT_STALLED_DAYS } from './journeys.constants';
@@ -36,14 +37,12 @@ const JOURNEY_SELECT = {
   order: { select: { id: true, orderNo: true, transactionType: true } },
 } satisfies Prisma.CustomerJourneySelect;
 
-/** 수선 유형 라벨 — REPAIR 트랙 대상 품목 표시명에 쓴다 (repairs.dto REPAIR_TYPES와 대응). */
-const REPAIR_TYPE_LABELS: Record<string, string> = {
-  CUSTOM_DURING: '맞춤 수선',
-  AFTER_SALE: 'A/S 수선',
-  RENTAL_PRE: '렌탈 전 수선',
-  RENTAL_POST: '렌탈 후 수선',
-  GENERAL: '일반 수선',
-};
+/**
+ * 수선 유형 라벨 — REPAIR 트랙 대상 품목 표시명에 쓴다.
+ * 기준정보 상수(단일 출처)의 기본 표시명을 그대로 쓴다. 관리자 오버라이드는 반영하지 않는다
+ * (진행 상세 조회마다 master_code_labels를 읽지 않기 위함).
+ */
+const REPAIR_TYPE_LABELS = defaultLabelsOf('repair-type');
 
 const EVENT_SELECT = {
   id: true,
@@ -229,17 +228,13 @@ export class JourneysService {
           status: true,
           orderItem: { select: { displayName: true, productCategory: true } },
           component: { select: { componentType: true } },
-          rentalInventoryItem: { select: { managementCode: true } },
         },
       });
       if (!repair) return { targetType: 'REPAIR_ITEM', targets: [] };
       const label = REPAIR_TYPE_LABELS[repair.repairType] ?? repair.repairType;
-      // 연결 대상명: 맞춤 품목 > 렌탈 실물 > 구성품 > 대상 설명 순으로 채운다.
+      // 연결 대상명: 맞춤 품목 > 구성품 > 대상 설명 순으로 채운다.
       const linkedName =
-        repair.orderItem?.displayName ??
-        repair.rentalInventoryItem?.managementCode ??
-        repair.component?.componentType ??
-        repair.description;
+        repair.orderItem?.displayName ?? repair.component?.componentType ?? repair.description;
       return {
         targetType: 'REPAIR_ITEM',
         targets: [
@@ -395,7 +390,13 @@ export class JourneysService {
       action: 'UPDATE',
       entityType: 'JOURNEY_STAGE_ITEM_COMPLETION',
       entityId: id,
-      after: { stageCode, targetId, completed: true },
+      before: {
+        stageCode,
+        targetId,
+        completed: !!existing && existing.revokedAt === null,
+        notes: existing?.notes ?? null,
+      },
+      after: { stageCode, targetId, completed: true, notes: dto.notes ?? null },
     });
 
     const gating = await this.gatingOf(journey, stage);
@@ -439,6 +440,7 @@ export class JourneysService {
         action: 'UPDATE',
         entityType: 'JOURNEY_STAGE_ITEM_COMPLETION',
         entityId: id,
+        before: { stageCode, targetId, completed: true, completedAt: existing.completedAt },
         after: { stageCode, targetId, completed: false },
       });
     }
@@ -807,7 +809,68 @@ export class JourneysService {
       before: { notificationOutcome: event.notificationOutcome },
       after: { notificationOutcome: dto.outcome },
     });
+    if (dto.outcome === 'SENT')
+      await this.syncRepairNotified(journeyId, event.toStageCode, actor);
     return updated;
+  }
+
+  /**
+   * 수선 입고 안내를 실제로 보냈으면 수선 건 상태도 '고객 연락'으로 옮긴다.
+   *
+   * 6단계 수선 상태(통합설계서 §12.1)와 4단계 REPAIR 진행 트랙(설계서 v2 02 §2.2)은
+   * 별개의 레이어지만 '고객 연락'은 같은 사실이다. 연락 경로가 진행 카드로 일원화된 뒤
+   * (설계서 v2 02 §8) 수선 상태의 CUSTOMER_NOTIFIED는 담당자가 손으로 한 번 더 눌러야
+   * 하는 껍데기 단계가 됐다. 발송에 맞춰 여기서 옮겨 이중 입력을 없앤다.
+   *
+   * 직전 상태가 '수선 입고'일 때만 옮긴다 — 수선 상태는 한 칸씩만 전진하므로
+   * (repairs.service.ts validateStatusTransition) 그 밖의 상태에서 밀어넣으면 순서가 깨진다.
+   * 어긋나면 조용히 건너뛴다: 연락은 이미 나갔고 되돌릴 수 없으므로 발송 결과 기록을
+   * 실패시켜서는 안 된다.
+   */
+  private async syncRepairNotified(journeyId: string, toStageCode: string, actor: AuthUser) {
+    if (toStageCode !== 'REPAIR_CHECKED_IN') return;
+    const journey = await this.prisma.customerJourney.findUnique({
+      where: { id: journeyId },
+      select: { trackType: true, sourceRepairRequestId: true },
+    });
+    const repairId = journey?.sourceRepairRequestId;
+    if (journey?.trackType !== 'REPAIR' || !repairId) return;
+
+    const repair = await this.prisma.repairRequest.findUnique({
+      where: { id: repairId },
+      select: { status: true },
+    });
+    if (repair?.status !== 'RETURNED_TO_SHOP') return;
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.repairStatusEvent.create({
+        data: {
+          id: randomUUID(),
+          repairRequestId: repairId,
+          previousStatus: repair.status,
+          newStatus: 'CUSTOMER_NOTIFIED',
+          eventDate: new Date(new Date().toISOString().slice(0, 10)),
+          notes: '진행 카드에서 수선 입고 안내 발송',
+          actorId: actor.id,
+        },
+      });
+      await tx.repairRequest.update({
+        where: { id: repairId },
+        data: { status: 'CUSTOMER_NOTIFIED' },
+      });
+      await this.audit.log(
+        {
+          userId: actor.id,
+          action: 'STATUS_CHANGE',
+          entityType: 'REPAIR_REQUEST',
+          entityId: repairId,
+          before: { status: repair.status },
+          after: { status: 'CUSTOMER_NOTIFIED' },
+          reason: '수선 입고 안내 발송(진행 카드)',
+        },
+        tx,
+      );
+    });
   }
 
   // ---------------------------------------------------------------------------

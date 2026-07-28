@@ -5,6 +5,8 @@
 ## 문서
 - 설계: [docs/plan/](docs/plan/) (통합개발설계서, 데이터모델설계서, 화면·API정의서)
 - 개발: [docs/dev/](docs/dev/) (개발실행계획서, 구현표준정의서, 개발체크리스트)
+- 잔여 개발 항목: [docs/dev/v2/08_잔여개발_항목_및_개발방안.md](docs/dev/v2/08_잔여개발_항목_및_개발방안.md)
+- 운영 배포·백업: [ops/README.md](ops/README.md)
 
 ## 사전 요구
 - Node.js 20 LTS
@@ -40,7 +42,16 @@ cd backend
 npm test        # test/backend/*.spec.ts — aicrm_test DB에 마이그레이션·시드 후 실행
 ```
 
+## 운영 배포 (온프레미스)
+systemd + nginx 구성, 배포·백업·복구 스크립트는 [ops/](ops/)에 있다.
+```bash
+sudo ops/deploy.sh                  # 백업 → 마이그레이션 → 빌드 → 재기동 → 헬스체크
+sudo -u aicrm ops/backup.sh         # DB + 업로드 파일 백업 (타이머로 매일 자동 실행)
+curl -s localhost:3000/api/v1/health/ready
+```
+
 ## 구조
 - `backend/` NestJS 10 + Prisma + PostgreSQL
 - `frontend/` React 18 + Vite + Ant Design 5
 - `test/backend/` 백엔드 통합·단위 테스트 (Jest + supertest)
+- `ops/` 온프레미스 배포·백업 구성 (systemd·nginx·스크립트)

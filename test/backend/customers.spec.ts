@@ -36,39 +36,43 @@ describe('고객 관리 (Phase 2)', () => {
     expect(res.body.error.details.existingCustomer.id).toBeDefined();
   });
 
-  it('고객 목록 기본 조회는 CONTRACTED만 반환하고 PROSPECT는 제외한다', async () => {
+  it('고객 목록 기본 조회는 계약 보유 고객만 반환하고 scope=ALL은 전 고객을 반환한다 (설계서 07 D3)', async () => {
     await api(ctx)
       .post('/api/v1/customers')
       .set(auth(ctx))
       .send({ name: '박계약', phone: '010-2222-0001', customerStatus: 'CONTRACTED' })
       .expect(201);
 
+    // 기본 범위는 계약을 한 건이라도 보유한 고객. 아직 아무도 계약이 없다 —
+    // customerStatus가 CONTRACTED여도 계약 행이 없으면 나오지 않는다.
     const base = await api(ctx).get('/api/v1/customers').set(auth(ctx)).expect(200);
-    const names = base.body.data.map((c: { name: string }) => c.name);
-    expect(names).toContain('박계약');
-    expect(names).not.toContain('김철수');
+    const baseNames = base.body.data.map((c: { name: string }) => c.name);
+    expect(baseNames).not.toContain('박계약');
+    expect(baseNames).not.toContain('김철수');
 
-    const all = await api(ctx).get('/api/v1/customers?status=ALL').set(auth(ctx)).expect(200);
-    expect(all.body.data.map((c: { name: string }) => c.name)).toContain('김철수');
+    const all = await api(ctx).get('/api/v1/customers?scope=ALL').set(auth(ctx)).expect(200);
+    const allNames = all.body.data.map((c: { name: string }) => c.name);
+    expect(allNames).toContain('김철수');
+    expect(allNames).toContain('박계약');
   });
 
   it('통합 검색 q는 이름과 전화번호 조각으로 고객을 찾는다', async () => {
     const byName = await api(ctx)
-      .get('/api/v1/customers?status=ALL&q=철수')
+      .get('/api/v1/customers?scope=ALL&q=철수')
       .set(auth(ctx))
       .expect(200);
     expect(byName.body.data).toHaveLength(1);
     expect(byName.body.data[0].name).toBe('김철수');
 
     const byPhone = await api(ctx)
-      .get('/api/v1/customers?status=ALL&q=010-1234')
+      .get('/api/v1/customers?scope=ALL&q=010-1234')
       .set(auth(ctx))
       .expect(200);
     expect(byPhone.body.data.map((c: { name: string }) => c.name)).toContain('김철수');
   });
 
   it('고객 상세는 { customer, summary, ...연관 목록 } 구조로 반환한다 (연동정합화 §2)', async () => {
-    const list = await api(ctx).get('/api/v1/customers?status=ALL&q=철수').set(auth(ctx)).expect(200);
+    const list = await api(ctx).get('/api/v1/customers?scope=ALL&q=철수').set(auth(ctx)).expect(200);
     const id = list.body.data[0].id;
     const res = await api(ctx).get(`/api/v1/customers/${id}`).set(auth(ctx)).expect(200);
     expect(res.body.data.customer.name).toBe('김철수');
@@ -87,7 +91,7 @@ describe('고객 관리 (Phase 2)', () => {
   });
 
   it('고객 수정은 낙관적 잠금을 적용하고 버전 불일치 시 VERSION_CONFLICT를 반환한다', async () => {
-    const list = await api(ctx).get('/api/v1/customers?q=박계약').set(auth(ctx)).expect(200);
+    const list = await api(ctx).get('/api/v1/customers?scope=ALL&q=박계약').set(auth(ctx)).expect(200);
     const customer = list.body.data[0];
 
     const conflict = await api(ctx)
@@ -107,7 +111,7 @@ describe('고객 관리 (Phase 2)', () => {
   });
 
   it('전화번호 변경 시 다른 고객과 중복이면 차단한다', async () => {
-    const list = await api(ctx).get('/api/v1/customers?q=박계약2').set(auth(ctx)).expect(200);
+    const list = await api(ctx).get('/api/v1/customers?scope=ALL&q=박계약2').set(auth(ctx)).expect(200);
     const customer = list.body.data[0];
     const res = await api(ctx)
       .patch(`/api/v1/customers/${customer.id}`)
@@ -131,66 +135,46 @@ describe('고객 관리 (Phase 2)', () => {
     expect(none.body.data).toBeNull();
   });
 
-  describe('예약 고객 등록 (registeredAt)', () => {
-    let prospectId: string;
+  describe('예약 고객도 처음부터 고객이다 (설계서 07 D2)', () => {
+    let reservedId: string;
 
     beforeAll(async () => {
-      // 예약 등록 흐름과 동일하게 미등록 PROSPECT 고객을 만든다
-      prospectId = randomUUID();
+      // 예약 등록 흐름(linkOrCreateProspectByPhone)과 동일하게 registeredAt이 즉시 찍힌 고객
+      reservedId = randomUUID();
       await ctx.prisma.customer.create({
         data: {
-          id: prospectId,
+          id: reservedId,
           name: '예약고객',
           phone: '010-5555-0001',
           phoneNormalized: '01055550001',
           customerStatus: 'PROSPECT',
           firstReservedAt: new Date(),
+          registeredAt: new Date(),
         },
       });
     });
 
-    it('미등록 고객은 includeProspect를 켜거나 status=ALL이어도 고객 목록에 나오지 않는다', async () => {
-      const withProspect = await api(ctx)
-        .get('/api/v1/customers?includeProspect=true')
-        .set(auth(ctx))
-        .expect(200);
-      expect(withProspect.body.data.map((c: { name: string }) => c.name)).not.toContain('예약고객');
-
-      const all = await api(ctx).get('/api/v1/customers?status=ALL').set(auth(ctx)).expect(200);
-      expect(all.body.data.map((c: { name: string }) => c.name)).not.toContain('예약고객');
+    it('예약으로 생긴 고객도 scope=ALL 목록에 곧바로 나온다', async () => {
+      const all = await api(ctx).get('/api/v1/customers?scope=ALL').set(auth(ctx)).expect(200);
+      expect(all.body.data.map((c: { name: string }) => c.name)).toContain('예약고객');
     });
 
-    it('등록하면 registeredAt이 찍히고 고객 목록에 나타난다', async () => {
-      const before = await ctx.prisma.customer.findUniqueOrThrow({ where: { id: prospectId } });
-      const res = await api(ctx)
-        .post(`/api/v1/customers/${prospectId}/register`)
-        .set(auth(ctx))
-        .send({ name: '예약고객', email: 'reserve@example.com', version: before.rowVersion })
-        .expect(201);
-      expect(res.body.data.registeredAt).toBeTruthy();
-      // 등록은 계약 전환이 아니다 — 상태는 PROSPECT 그대로
-      expect(res.body.data.customerStatus).toBe('PROSPECT');
-
-      const list = await api(ctx)
-        .get('/api/v1/customers?includeProspect=true')
-        .set(auth(ctx))
-        .expect(200);
-      expect(list.body.data.map((c: { name: string }) => c.name)).toContain('예약고객');
+    it('계약이 없으므로 기본(계약 고객) 목록에는 나오지 않는다', async () => {
+      const base = await api(ctx).get('/api/v1/customers').set(auth(ctx)).expect(200);
+      expect(base.body.data.map((c: { name: string }) => c.name)).not.toContain('예약고객');
     });
 
-    it('이미 등록된 고객을 다시 등록하면 CUSTOMER_ALREADY_REGISTERED', async () => {
-      const row = await ctx.prisma.customer.findUniqueOrThrow({ where: { id: prospectId } });
-      const res = await api(ctx)
-        .post(`/api/v1/customers/${prospectId}/register`)
+    it('별도 등록 승격 엔드포인트(POST /customers/:id/register)는 제거되었다', async () => {
+      await api(ctx)
+        .post(`/api/v1/customers/${reservedId}/register`)
         .set(auth(ctx))
-        .send({ name: '예약고객', version: row.rowVersion })
-        .expect(409);
-      expect(res.body.error.code).toBe('CUSTOMER_ALREADY_REGISTERED');
+        .send({ name: '예약고객', version: 0 })
+        .expect(404);
     });
   });
 
   it('고객 비활성 처리는 물리 삭제 없이 INACTIVE로 전환하고 감사로그를 남긴다', async () => {
-    const list = await api(ctx).get('/api/v1/customers?q=박계약2').set(auth(ctx)).expect(200);
+    const list = await api(ctx).get('/api/v1/customers?scope=ALL&q=박계약2').set(auth(ctx)).expect(200);
     const customer = list.body.data[0];
 
     const res = await api(ctx)
@@ -320,29 +304,28 @@ describe('고객 관리 (Phase 2)', () => {
       });
     });
 
-    it('includeProspect=true면 CONTRACTED 목록에 PROSPECT를 포함한다 (INACTIVE 제외)', async () => {
+    it('기본 범위는 계약 보유 고객만, scope=ALL은 INACTIVE만 제외한다 (설계서 07 D3·D8)', async () => {
       const base = await api(ctx).get('/api/v1/customers').set(auth(ctx)).expect(200);
-      expect(base.body.data.map((c: { name: string }) => c.name)).not.toContain('김철수');
+      const baseNames = base.body.data.map((c: { name: string }) => c.name);
+      expect(baseNames).toContain('조계약'); // 계약 보유
+      expect(baseNames).not.toContain('김철수'); // 계약 없음
 
-      const withProspect = await api(ctx)
-        .get('/api/v1/customers?includeProspect=true')
-        .set(auth(ctx))
-        .expect(200);
-      const names = withProspect.body.data.map((c: { name: string }) => c.name);
-      expect(names).toContain('김철수'); // PROSPECT
-      expect(names).toContain('조계약'); // CONTRACTED
-      expect(names).not.toContain('박계약2'); // INACTIVE
+      const all = await api(ctx).get('/api/v1/customers?scope=ALL').set(auth(ctx)).expect(200);
+      const names = all.body.data.map((c: { name: string }) => c.name);
+      expect(names).toContain('김철수'); // 계약 없어도 전 고객 범위에는 포함
+      expect(names).toContain('조계약');
+      expect(names).not.toContain('박계약2'); // INACTIVE는 어느 범위에서도 제외
     });
 
     it('transactionType 필터는 해당 거래방식 주문 보유 고객만 반환한다', async () => {
       const custom = await api(ctx)
-        .get('/api/v1/customers?status=ALL&transactionType=CUSTOM')
+        .get('/api/v1/customers?scope=ALL&transactionType=CUSTOM')
         .set(auth(ctx))
         .expect(200);
       expect(custom.body.data.map((c: { id: string }) => c.id)).toEqual([richCustomerId]);
 
       const rental = await api(ctx)
-        .get('/api/v1/customers?status=ALL&transactionType=RENTAL')
+        .get('/api/v1/customers?scope=ALL&transactionType=RENTAL')
         .set(auth(ctx))
         .expect(200);
       expect(rental.body.data).toHaveLength(0);
@@ -446,7 +429,7 @@ describe('고객 관리 (Phase 2)', () => {
     });
 
     it('목록은 진행 journey의 세부 진행상태(currentStage: 단계명·트랙·상태)를 함께 반환한다', async () => {
-      const res = await api(ctx).get('/api/v1/customers?status=ALL').set(auth(ctx)).expect(200);
+      const res = await api(ctx).get('/api/v1/customers?scope=ALL').set(auth(ctx)).expect(200);
       const active = res.body.data.find((c: { id: string }) => c.id === activeId);
       expect(active.currentStage).toEqual({
         code: 'STYLE_CONSULTING',
@@ -461,7 +444,7 @@ describe('고객 관리 (Phase 2)', () => {
 
     it('progress=ACTIVE는 진행중 journey 보유 고객만, DONE은 완료 고객만 반환한다', async () => {
       const activeList = await api(ctx)
-        .get('/api/v1/customers?status=ALL&progress=ACTIVE')
+        .get('/api/v1/customers?scope=ALL&progress=ACTIVE')
         .set(auth(ctx))
         .expect(200);
       const activeNames = activeList.body.data.map((c: { name: string }) => c.name);
@@ -469,12 +452,15 @@ describe('고객 관리 (Phase 2)', () => {
       expect(activeNames).not.toContain('완료고객');
 
       const doneList = await api(ctx)
-        .get('/api/v1/customers?status=ALL&progress=DONE')
+        .get('/api/v1/customers?scope=ALL&progress=DONE')
         .set(auth(ctx))
         .expect(200);
       const doneNames = doneList.body.data.map((c: { name: string }) => c.name);
       expect(doneNames).toContain('완료고객');
       expect(doneNames).not.toContain('진행중고객');
+      // 계약 확정(customerStatus=CONTRACTED)만으로는 완료가 아니다 — 계약은 진행의 시작이다.
+      // 예전 정의는 확정 고객 전원을 "완료"로 분류했다 (설계서 07 §2.2).
+      expect(doneNames).not.toContain('조계약');
     });
   });
 });

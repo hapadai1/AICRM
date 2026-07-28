@@ -178,7 +178,7 @@ model Customer {
   phoneNormalized String    @unique @map("phone_normalized") @db.VarChar(20)
   email           String?   @map("email") @db.VarChar(255)
   customerStatus  String    @default("PROSPECT") @map("customer_status") @db.VarChar(20)
-  /// 고객으로 정식 등록된 시각. 예약으로 자동 생성된 고객은 null(미등록)이며 고객 목록에 노출되지 않는다.
+  /// 고객으로 등록된 시각. 예약 자동생성분을 포함해 모든 고객 행에 채워진다 (v2 설계서 07 D2).
   registeredAt    DateTime? @map("registered_at") @db.Timestamptz(6)
   firstReservedAt DateTime? @map("first_reserved_at") @db.Timestamptz(6)
   contractedAt    DateTime? @map("contracted_at") @db.Timestamptz(6)
@@ -216,21 +216,6 @@ model AppointmentPurpose {
   appointments Appointment[]
 
   @@map("appointment_purposes")
-}
-
-/**
- * 결제수단 기준정보 (ADMIN-001, type=payment-method). 결제 등록 시 코드/표시명 소스.
- */
-model PaymentMethod {
-  id        String   @id @db.Uuid
-  code      String   @unique @map("code") @db.VarChar(40)
-  name      String   @map("name") @db.VarChar(80)
-  sortOrder Int      @default(0) @map("sort_order")
-  active    Boolean  @default(true) @map("active")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
-
-  @@map("payment_methods")
 }
 
 /**
@@ -886,7 +871,6 @@ model RentalInventoryItem {
   oldAllocationEvents  RentalAllocationEvent[]      @relation("RentalAllocationEventOldItem")
   newAllocationEvents  RentalAllocationEvent[]      @relation("RentalAllocationEventNewItem")
   rentalSelectionLines RentalSelectionLine[]
-  repairRequests       RepairRequest[]
 
   @@index([status, availableFrom])
   @@map("rental_inventory_items")
@@ -1041,7 +1025,6 @@ model RepairRequest {
   orderId               String?   @map("order_id") @db.Uuid
   orderItemId           String?   @map("order_item_id") @db.Uuid
   componentId           String?   @map("component_id") @db.Uuid
-  rentalInventoryItemId String?   @map("rental_inventory_item_id") @db.Uuid
   repairType            String    @map("repair_type") @db.VarChar(30)
   requestDate           DateTime  @map("request_date") @db.Date
   dueDate               DateTime? @map("due_date") @db.Date
@@ -1061,14 +1044,14 @@ model RepairRequest {
   createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  customer            Customer             @relation(fields: [customerId], references: [id])
-  order               Order?               @relation(fields: [orderId], references: [id])
-  orderItem           OrderItem?           @relation(fields: [orderItemId], references: [id])
-  component           OrderItemComponent?  @relation(fields: [componentId], references: [id])
-  rentalInventoryItem RentalInventoryItem? @relation(fields: [rentalInventoryItemId], references: [id])
-  statusEvents        RepairStatusEvent[]
+  // 렌탈 실물은 연결하지 않는다 — 렌탈 수선은 렌탈 진행(RENTAL 트랙)에서 관리한다.
+  customer     Customer            @relation(fields: [customerId], references: [id])
+  order        Order?              @relation(fields: [orderId], references: [id])
+  orderItem    OrderItem?          @relation(fields: [orderItemId], references: [id])
+  component    OrderItemComponent? @relation(fields: [componentId], references: [id])
+  statusEvents RepairStatusEvent[]
   // 수선 접수 시 자동 생성되는 REPAIR 진행 트랙 (설계서 02 §7.2·§9.2). 접수 1건 = 진행 1건.
-  journey             CustomerJourney?     @relation("RepairJourney")
+  journey      CustomerJourney?    @relation("RepairJourney")
 
   @@index([requestDate])
   @@index([dueDate, status])

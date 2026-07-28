@@ -1,5 +1,6 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { AdminMasterPage } from '../features/admin/AdminMasterPage';
+import { AdminNotificationTemplatesPage } from '../features/admin/AdminNotificationTemplatesPage';
 import { AdminOptionsPage } from '../features/admin/AdminOptionsPage';
 import { AdminUsersPage } from '../features/admin/AdminUsersPage';
 import { AuditLogPage } from '../features/admin/AuditLogPage';
@@ -103,6 +104,7 @@ export const router = createBrowserRouter([
       { path: 'admin/master', element: <AdminMasterPage /> },
       { path: 'admin/contract-types', element: <ContractTypeAdminPage /> },
       { path: 'admin/options', element: <AdminOptionsPage /> },
+      { path: 'admin/notification-templates', element: <AdminNotificationTemplatesPage /> },
       { path: 'admin/users', element: <AdminUsersPage /> },
       { path: 'admin/audit', element: <AuditLogPage /> },
       // ── 고객모드 서브트리 (설계서 01 §3.2) ──

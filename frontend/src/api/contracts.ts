@@ -96,6 +96,7 @@ interface ContractListApiRow {
   contractTypeId?: string | null;
   status: ContractStatus;
   contractedAt?: string | null;
+  createdAt?: string | null;
   balanceDueDate?: string | null;
   rowVersion: number;
   customer: { id: string; name: string; phone: string };
@@ -156,8 +157,10 @@ export interface ContractListItem {
   status: ContractStatus;
   currentVersionNo?: number;
   totalAmount?: number;
-  /** 계약일 (`YYYY-MM-DD`) */
+  /** 계약일 (`YYYY-MM-DD`). 확정 전 초안은 비어 있다. */
   contractedAt?: string;
+  /** 작성일 (`YYYY-MM-DD`). 계약일이 없는 초안의 목록 표시·정렬 기준. */
+  createdAt?: string;
   completionDueDate?: string;
 }
 
@@ -263,6 +266,7 @@ function toContractListItem(row: ContractListApiRow): ContractListItem {
     currentVersionNo: row.currentVersion?.versionNo,
     totalAmount: toNumber(row.currentVersion?.totalAmount),
     contractedAt: toDateOnly(row.contractedAt),
+    createdAt: toDateOnly(row.createdAt),
     completionDueDate: toDateOnly(row.currentVersion?.completionDueDate),
   };
 }
@@ -348,6 +352,15 @@ export interface CustomerSummary {
   name: string;
   phone: string;
   customerStatus: 'PROSPECT' | 'CONTRACTED' | 'INACTIVE';
+  /**
+   * 신체 정보 — 계약서 작성 전 보완 대상(설계서 07 D7).
+   * weightKg는 Prisma Decimal이라 JSON에서 문자열로 내려온다.
+   */
+  heightCm?: number | null;
+  weightKg?: number | string | null;
+  age?: number | null;
+  /** 낙관적 잠금 (보완 저장 시 필요) */
+  version: number;
 }
 
 export interface ContractSearchParams {
@@ -496,6 +509,14 @@ export function cancelContract(id: string, body: { reason: string; version: numb
   );
 }
 
+/**
+ * 계약 삭제 — 임시저장·취소 계약만. 진행 이력(작업지시서·렌탈 배정 등)이 있으면
+ * 백엔드가 CONTRACT_NOT_DELETABLE 로 거부한다.
+ */
+export function deleteContract(id: string): Promise<{ id: string; contractNo: string }> {
+  return request<{ id: string; contractNo: string }>({ url: `/contracts/${id}`, method: 'DELETE' });
+}
+
 // ---------- 고객 요약 (GET /customers/{id} — 계약 작성 화면의 자동 연결 표시용) ----------
 
 /** 고객 상세는 { customer, summary, ... } aggregate 응답이므로 customer 평면 필드만 꺼낸다 (계약 문서 04 §2). */
@@ -573,17 +594,44 @@ export function downloadContractExcel(contractId: string, contractNo: string): P
 // ---------- 계약서 웹 표시 (설계서 v2 03 §6·§7) ----------
 
 /** 웹 표시용 라인 — 세부품목(구성품)·세부가격을 노출한다(D7). */
+/** 부위 아래에 붙는 유료 옵션 한 건 (추가금액 0원 옵션은 서버에서 제외된다) */
+export interface ContractDocumentComponentOption {
+  /** 옵션 단계명 (스티치·카라 등) */
+  stageName: string;
+  optionName: string;
+  extraPrice: number;
+}
+
+/** 주문품목의 부위 한 칸 (상의·하의·베스트 …) */
+export interface ContractDocumentComponent {
+  group: string;
+  groupLabel: string;
+  options: ContractDocumentComponentOption[];
+}
+
+/** 계약 라인 아래의 주문품목 (정장 #1, 정장 #2 …) */
+export interface ContractDocumentItem {
+  orderItemId: string;
+  orderNo: string;
+  displayName: string;
+  sequenceNo: number;
+  components: ContractDocumentComponent[];
+  optionTotal: number;
+}
+
 export interface ContractDocumentLine {
   transactionType: TransactionType;
   productCategory: ProductCategory;
   categoryLabel: string;
   itemDescription?: string;
-  /** 상세 토글에서 펼칠 구성품 라벨(상의·하의·베스트 등) */
+  /** 주문 생성 전(계약 확정 전) 폴백용 구성품 라벨(상의·하의 등) */
   components: string[];
   quantity: number;
   unitPrice: number;
   lineAmount: number;
   notes?: string;
+  /** 주문품목 × 부위 × 유료옵션 계층 */
+  items: ContractDocumentItem[];
 }
 
 /** 웹 표시용 스타일 옵션 — 옵션명·추가금액을 노출한다(D7). */
@@ -628,6 +676,22 @@ interface ContractDocumentLineApiRow {
   unitPrice?: string | number | null;
   lineAmount?: string | number | null;
   notes?: string | null;
+  items?: ContractDocumentItemApiRow[] | null;
+}
+
+interface ContractDocumentItemApiRow {
+  orderItemId: string;
+  orderNo: string;
+  displayName: string;
+  sequenceNo: number;
+  components?:
+    | {
+        group: string;
+        groupLabel: string;
+        options?: { stageName: string; optionName: string; extraPrice?: string | number | null }[] | null;
+      }[]
+    | null;
+  optionTotal?: string | number | null;
 }
 
 interface ContractDocumentApiRow {
@@ -676,6 +740,22 @@ export function fetchContractDocument(id: string): Promise<ContractDocument> {
       unitPrice: toNumber(l.unitPrice) ?? 0,
       lineAmount: toNumber(l.lineAmount) ?? 0,
       notes: l.notes ?? undefined,
+      items: (l.items ?? []).map((it) => ({
+        orderItemId: it.orderItemId,
+        orderNo: it.orderNo,
+        displayName: it.displayName,
+        sequenceNo: it.sequenceNo,
+        components: (it.components ?? []).map((c) => ({
+          group: c.group,
+          groupLabel: c.groupLabel,
+          options: (c.options ?? []).map((o) => ({
+            stageName: o.stageName,
+            optionName: o.optionName,
+            extraPrice: toNumber(o.extraPrice) ?? 0,
+          })),
+        })),
+        optionTotal: toNumber(it.optionTotal) ?? 0,
+      })),
     })),
     options: (row.options ?? []).map((o) => ({
       optionName: o.optionName,

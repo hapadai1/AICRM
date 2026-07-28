@@ -1,8 +1,8 @@
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
-import { Button, Flex, Input, InputNumber, Select, Table, Typography } from 'antd';
+import { Button, Flex, Input, InputNumber, Select, Table } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { ProductCategory, TransactionType } from '../../api/contracts';
-import { formatKrw, PRODUCT_CATEGORY_LABEL, TRANSACTION_TYPE_LABEL } from './labels';
+import { PRODUCT_CATEGORY_LABEL, TRANSACTION_TYPE_LABEL } from './labels';
 
 /** 계약서 작성·변경 계약에서 함께 쓰는 품목 라인 편집 표 */
 
@@ -34,6 +34,10 @@ export function createLine(partial: Partial<EditableLine> = {}): EditableLine {
 export function linesTotal(lines: EditableLine[]): number {
   return lines.reduce((sum, l) => sum + (l.amount || 0), 0);
 }
+
+/** 금액 입력 천단위 구분 표시 */
+export const THOUSANDS = (v: string | number | undefined): string =>
+  `${v ?? ''}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 
 const TRANSACTION_OPTIONS = (Object.keys(TRANSACTION_TYPE_LABEL) as TransactionType[]).map((v) => ({
   value: v,
@@ -70,10 +74,11 @@ export function ContractLineEditor({ value, onChange, disabled }: ContractLineEd
     {
       title: '거래 방식',
       dataIndex: 'transactionType',
-      width: 110,
+      width: 108,
       render: (_, l) => (
         <Select
           style={{ width: '100%' }}
+          variant="filled"
           value={l.transactionType}
           options={TRANSACTION_OPTIONS}
           disabled={disabled}
@@ -84,10 +89,11 @@ export function ContractLineEditor({ value, onChange, disabled }: ContractLineEd
     {
       title: '품목',
       dataIndex: 'productCategory',
-      width: 110,
+      width: 108,
       render: (_, l) => (
         <Select
           style={{ width: '100%' }}
+          variant="filled"
           value={l.productCategory}
           options={CATEGORY_OPTIONS}
           disabled={disabled}
@@ -98,10 +104,14 @@ export function ContractLineEditor({ value, onChange, disabled }: ContractLineEd
     {
       title: '수량',
       dataIndex: 'quantity',
-      width: 90,
+      width: 84,
+      align: 'right',
       render: (_, l) => (
         <InputNumber
+          className="num-input"
           style={{ width: '100%' }}
+          variant="filled"
+          controls={false}
           min={1}
           value={l.quantity}
           disabled={disabled}
@@ -112,30 +122,39 @@ export function ContractLineEditor({ value, onChange, disabled }: ContractLineEd
     {
       title: '단가(원)',
       dataIndex: 'unitPrice',
-      width: 140,
+      width: 132,
+      align: 'right',
       render: (_, l) => (
         <InputNumber
+          className="num-input"
           style={{ width: '100%' }}
+          variant="filled"
+          controls={false}
           min={0}
           step={10000}
           value={l.unitPrice}
-          formatter={(v) => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+          formatter={THOUSANDS}
           disabled={disabled}
           onChange={(v) => update(l.key, { unitPrice: v ?? 0 })}
         />
       ),
     },
     {
+      // 금액 = 수량 × 단가 자동 계산. 조정이 필요하면 직접 고칠 수 있다.
       title: '금액(원)',
       dataIndex: 'amount',
       width: 140,
+      align: 'right',
       render: (_, l) => (
         <InputNumber
-          style={{ width: '100%' }}
+          className="num-input"
+          style={{ width: '100%', fontWeight: 600 }}
+          variant="filled"
+          controls={false}
           min={0}
           step={10000}
           value={l.amount}
-          formatter={(v) => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+          formatter={THOUSANDS}
           disabled={disabled}
           onChange={(v) => update(l.key, { amount: v ?? 0 })}
         />
@@ -147,6 +166,7 @@ export function ContractLineEditor({ value, onChange, disabled }: ContractLineEd
       render: (_, l) => (
         <Input
           value={l.note}
+          variant="filled"
           placeholder="비고"
           disabled={disabled}
           onChange={(e) => update(l.key, { note: e.target.value })}
@@ -156,7 +176,8 @@ export function ContractLineEditor({ value, onChange, disabled }: ContractLineEd
     {
       title: '',
       key: 'actions',
-      width: 48,
+      width: 44,
+      align: 'center',
       render: (_, l) => (
         <Button
           type="text"
@@ -171,7 +192,7 @@ export function ContractLineEditor({ value, onChange, disabled }: ContractLineEd
   ];
 
   return (
-    <Flex vertical gap={8}>
+    <Flex vertical gap={12}>
       <Table
         rowKey="key"
         size="small"
@@ -181,12 +202,16 @@ export function ContractLineEditor({ value, onChange, disabled }: ContractLineEd
         scroll={{ x: 760 }}
         locale={{ emptyText: '품목이 없습니다. 계약 구분을 선택하거나 행을 추가해 주세요.' }}
       />
-      <Flex justify="space-between" align="center" wrap>
-        <Button icon={<PlusOutlined />} disabled={disabled} onClick={() => onChange([...value, createLine()])}>
-          품목 행 추가
-        </Button>
-        <Typography.Text strong>품목 합계: {formatKrw(linesTotal(value))}</Typography.Text>
-      </Flex>
+      {/* 합계는 여기서 보여주지 않는다 — 화면 하단 [금액] 카드에서 자동 합산해 표시한다. */}
+      <Button
+        icon={<PlusOutlined />}
+        type="dashed"
+        block
+        disabled={disabled}
+        onClick={() => onChange([...value, createLine()])}
+      >
+        품목 행 추가
+      </Button>
     </Flex>
   );
 }

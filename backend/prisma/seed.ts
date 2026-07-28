@@ -31,6 +31,7 @@ const PERMISSIONS: Array<{ code: string; name: string; description: string }> = 
   { code: 'CONTRACT_SIGN', name: '계약 서명', description: '계약 버전 전자서명 저장·제거' },
   { code: 'CONTRACT_REVISE', name: '계약 변경', description: '변경계약 버전 작성·확정' },
   { code: 'CONTRACT_CANCEL', name: '계약 취소', description: '계약 취소 처리' },
+  { code: 'CONTRACT_DELETE', name: '계약 삭제', description: '임시저장·취소 계약 삭제 (진행 이력 없을 때)' },
   { code: 'ORDER_VIEW', name: '주문 조회', description: '주문·품목·구성품 조회' },
   { code: 'ORDER_EDIT', name: '주문 편집', description: '주문·품목·구성품 관리' },
   { code: 'OPTION_SELECT', name: '옵션 선택', description: '고객 옵션 선택·임시저장·확인서 확정' },
@@ -101,19 +102,35 @@ const ROLES: Array<{ code: string; name: string; description: string; permission
 // -----------------------------------------------------------------------------
 // 4) 예약 목적 초기값
 // -----------------------------------------------------------------------------
+/**
+ * 예약 목적 초기값 — v2 진행상태(journey-stage-seed `JOURNEY_STAGES`) 용어에 맞춘다.
+ * 정렬은 트랙 순서(맞춤 → 렌탈 → 수선), 트랙 안에서는 단계 순서를 따른다.
+ * 코드는 기존 예약이 참조하므로 바꾸지 않고 표시명·정렬만 맞춘다.
+ */
 const APPOINTMENT_PURPOSES: Array<{ code: string; name: string }> = [
-  { code: 'INITIAL_CONSULTATION', name: '초도상담' },
-  { code: 'FITTING', name: '가봉·피팅' },
-  { code: 'PICKUP', name: '완제품 픽업' },
-  { code: 'REPAIR_RECEIPT', name: '수선 접수' },
-  { code: 'REPAIR_PICKUP', name: '수선 픽업' },
-  { code: 'RENTAL_PICKUP', name: '렌탈 픽업' },
-  { code: 'RENTAL_RETURN', name: '렌탈 반납' },
-  // 설계 PDF 1페이지 고객 열 대응 (개발설계서 05 G-08)
-  { code: 'RENTAL_CONSULTATION', name: '렌탈 상담' },
-  { code: 'RENTAL_MEASUREMENT', name: '렌탈 채촌' },
-  { code: 'REPAIR_PICKUP_VISIT', name: '수선 방문수거' },
-  { code: 'REPAIR_DELIVERY_VISIT', name: '수선 방문배송' },
+  // 맞춤(CUSTOM 트랙)
+  { code: 'INITIAL_CONSULTATION', name: '맞춤 상담' }, // CONSULT_RESERVED 상담 예약
+  { code: 'STYLE_CONSULTING', name: '스타일 컨설팅' }, // STYLE_CONSULTING (맞춤·렌탈 공통 단계)
+  { code: 'MEASUREMENT', name: '채촌' }, // 스타일 컨설팅 단계의 채촌 방문 (맞춤·렌탈 공통)
+  { code: 'FITTING', name: '가봉 피팅' }, // FITTING_DONE
+  { code: 'PICKUP', name: '완성복 출고' }, // RELEASED 완성복 출고/완료
+  // 렌탈(RENTAL 트랙)
+  { code: 'RENTAL_CONSULTATION', name: '렌탈 상담' }, // CONSULT_RESERVED 렌탈 상담 예약
+  { code: 'RENTAL_PICKUP', name: '렌탈 수선 출고' }, // RENTAL_REPAIR_CHECKED_OUT
+  { code: 'RENTAL_RETURN', name: '렌탈 반납' }, // RENTAL_RETURNED 렌탈 수선 반납/완료
+  // 수선(REPAIR 트랙)
+  { code: 'REPAIR_RECEIPT', name: '수선 접수' }, // REPAIR_RECEIVED
+  { code: 'REPAIR_PICKUP', name: '수선 출고' }, // REPAIR_RELEASED 수선 출고/완료
+];
+
+/**
+ * v2 정리로 은퇴하는 예약 목적 (물리삭제 금지 → active:false).
+ * 기존 예약은 목적 관계를 그대로 두므로 화면 표시명도 유지된다.
+ */
+const RETIRED_APPOINTMENT_PURPOSES: Array<{ code: string; reason: string }> = [
+  { code: 'RENTAL_MEASUREMENT', reason: '맞춤·렌탈 공통 MEASUREMENT(채촌)로 통합' },
+  { code: 'REPAIR_PICKUP_VISIT', reason: '수선 접수 방식 receiptMethod=PICKUP과 중복' },
+  { code: 'REPAIR_DELIVERY_VISIT', reason: '수선 출고 방식 releaseMethod=DELIVERY와 중복' },
 ];
 
 // -----------------------------------------------------------------------------
@@ -246,26 +263,11 @@ async function seedAppointmentPurposes(): Promise<void> {
       create: { id: randomUUID(), code: p.code, name: p.name, sortOrder: i + 1, active: true },
     });
   }
-  console.log(`appointment_purposes: ${APPOINTMENT_PURPOSES.length}건`);
-}
-
-// 결제수단 초기값 (결제 데이터의 코드 CARD/CASH/TRANSFER와 일치)
-const PAYMENT_METHODS: Array<{ code: string; name: string }> = [
-  { code: 'CARD', name: '카드' },
-  { code: 'CASH', name: '현금' },
-  { code: 'TRANSFER', name: '계좌이체' },
-];
-
-async function seedPaymentMethods(): Promise<void> {
-  for (let i = 0; i < PAYMENT_METHODS.length; i += 1) {
-    const m = PAYMENT_METHODS[i];
-    await prisma.paymentMethod.upsert({
-      where: { code: m.code },
-      update: { name: m.name, sortOrder: i + 1, active: true },
-      create: { id: randomUUID(), code: m.code, name: m.name, sortOrder: i + 1, active: true },
-    });
-  }
-  console.log(`payment_methods: ${PAYMENT_METHODS.length}건`);
+  const retired = await prisma.appointmentPurpose.updateMany({
+    where: { code: { in: RETIRED_APPOINTMENT_PURPOSES.map((p) => p.code) }, active: true },
+    data: { active: false },
+  });
+  console.log(`appointment_purposes: ${APPOINTMENT_PURPOSES.length}건 (은퇴 ${retired.count}건)`);
 }
 
 // 렌탈 컬러 12색 (v2 D3 / 설계서 04 §5.2)
@@ -392,7 +394,6 @@ async function main(): Promise<void> {
   const roleIdsByCode = await seedRoles(permissionIdsByCode);
   await seedAdminUser(roleIdsByCode);
   await seedAppointmentPurposes();
-  await seedPaymentMethods();
   await seedRentalColors();
   await seedRentalSizes();
   await seedOptionSets();

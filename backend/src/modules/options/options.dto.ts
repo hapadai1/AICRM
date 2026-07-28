@@ -10,6 +10,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Max,
   MaxLength,
   Min,
   ValidateNested,
@@ -20,6 +21,9 @@ import { COMPONENT_GROUP_CODES } from './option-component-groups';
 // ---------------------------------------------------------------------------
 // 마스터 (ADMIN-002)
 // ---------------------------------------------------------------------------
+
+/** 선택지 추가금액 상한(원). 자릿수를 잘못 눌러 억대 금액이 들어가는 것만 막는다. */
+export const MAX_EXTRA_PRICE = 100_000_000;
 
 export class ActiveOptionSetQueryDto {
   @IsString() @IsNotEmpty() category: string;
@@ -68,6 +72,21 @@ export class SaveOptionStagesDto {
 
 export class ActivateOptionSetVersionDto {
   @IsOptional() @IsISO8601() effectiveFrom?: string;
+}
+
+/**
+ * 사용중 버전의 선택지 추가금액만 고치는 요청.
+ *
+ * 단계·선택지 구성을 바꾸려면 새 버전(DRAFT)을 만들어야 하지만, 가격은 같은 구성에서
+ * 값만 조정하는 일이라 새 버전을 강제하지 않는다. 이미 확정된 계약은
+ * option_selection_values.extra_price_snapshot(선택 시점 복사본)을 쓰므로 영향받지 않는다.
+ * 언제 무엇이 얼마에서 얼마로 바뀌었는지는 감사로그로만 남긴다.
+ */
+export class UpdateOptionChoicePriceDto {
+  /** 상한은 오타 방지용 — 옵션 하나의 추가금액이 1억을 넘는 경우는 없다. */
+  @IsInt() @Min(0) @Max(MAX_EXTRA_PRICE) extraPrice: number;
+  /** 바꾼 이유 — 감사로그에 함께 남는다. */
+  @IsOptional() @IsString() @MaxLength(200) reason?: string;
 }
 
 // ---------------------------------------------------------------------------

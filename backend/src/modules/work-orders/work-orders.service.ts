@@ -592,6 +592,13 @@ export class WorkOrdersService {
     return {
       customerName: item.order.contract.customer.name,
       customerPhone: item.order.contract.customer.phone,
+      // 신체 3필드는 선택 입력이라 없으면 null → 양식의 빈칸을 그대로 둔다 (설계서 06 §2.5)
+      customerHeightCm: item.order.contract.customer.heightCm,
+      customerWeightKg:
+        item.order.contract.customer.weightKg != null
+          ? Number(item.order.contract.customer.weightKg)
+          : null,
+      customerAge: item.order.contract.customer.age,
       orderNo: item.order.orderNo,
       itemLabel: item.displayName,
       productCategory: item.productCategory,

@@ -93,6 +93,46 @@ describe('알림 (notifications)', () => {
     expect(history.body.data[0].body).toBe('홍길동님, 2026-07-25에 매장 방문을 부탁드립니다.');
   });
 
+  it('템플릿 없이 직접 쓴 문구를 SMS로 보낸다', async () => {
+    const res = await api(ctx)
+      .post('/api/v1/notifications/send')
+      .set(auth(ctx))
+      .send({ customerId, body: '#{name}님, 오늘 매장 방문 가능하실까요?', variables: { name: '홍길동' } })
+      .expect(201);
+    expect(res.body.data.status).toBe('SENT');
+    expect(res.body.data.templateId).toBeNull();
+    // 직접 쓴 문구에도 변수 치환은 그대로 적용된다.
+    expect(res.body.data.renderedBody).toBe('홍길동님, 오늘 매장 방문 가능하실까요?');
+    // 알림톡은 승인 템플릿 전용이므로 직접 쓴 문구는 SMS로 나간다.
+    expect(res.body.data.channel).toBe('SMS');
+  });
+
+  it('템플릿 문구를 고쳐 보내면 알림톡 대신 SMS로 나간다', async () => {
+    const res = await api(ctx)
+      .post('/api/v1/notifications/send')
+      .set(auth(ctx))
+      .send({
+        templateId,
+        customerId,
+        variables: { name: '홍길동', date: '2026-07-25' },
+        body: '홍길동님, 매장 방문 일정을 앞당겼습니다.',
+      })
+      .expect(201);
+    expect(res.body.data.channel).toBe('SMS');
+    expect(res.body.data.renderedBody).toBe('홍길동님, 매장 방문 일정을 앞당겼습니다.');
+    // 어떤 템플릿에서 출발했는지는 이력에 남는다.
+    expect(res.body.data.templateId).toBe(templateId);
+  });
+
+  it('템플릿도 문구도 없으면 VALIDATION_ERROR를 반환한다', async () => {
+    const res = await api(ctx)
+      .post('/api/v1/notifications/send')
+      .set(auth(ctx))
+      .send({ customerId })
+      .expect(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+  });
+
   it('알림톡 발송이 실패하면 SMS로 대체 발송하고 두 건 모두 이력에 남는다', async () => {
     const fallbackCustomerId = randomUUID();
     await ctx.prisma.customer.create({
@@ -159,7 +199,7 @@ describe('알림 (notifications)', () => {
     expect(second.body.data.duplicated).toBe(true);
 
     const count = await ctx.prisma.notificationHistory.count({ where: { customerId } });
-    expect(count).toBe(2); // 직전 테스트 1건 + triggerKey 발송 1건
+    expect(count).toBe(4); // 앞선 발송 3건(템플릿·직접 입력·수정 문구) + triggerKey 발송 1건
   });
 
   it('실패 건 재시도는 기존 이력을 보존하며 새 SENT 이력을 만든다', async () => {

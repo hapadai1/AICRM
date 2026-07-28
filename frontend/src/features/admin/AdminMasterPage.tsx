@@ -372,11 +372,6 @@ export function AdminMasterPage() {
             ),
           },
           {
-            key: 'payment-method',
-            label: '결제수단',
-            children: <MasterTable type="payment-method" title="결제수단" />,
-          },
-          {
             key: 'repair-type',
             label: '수선 구분',
             children: <CodeLabelTable domain="repair-type" title="수선 구분" />,

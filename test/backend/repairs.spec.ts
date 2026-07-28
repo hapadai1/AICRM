@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { AuthUser } from '../../backend/src/common/decorators';
 import { JourneysService } from '../../backend/src/modules/journeys/journeys.service';
+import { REPAIR_TYPES } from '../../backend/src/modules/repairs/repairs.dto';
 import { RepairsModule } from '../../backend/src/modules/repairs/repairs.module';
 import { PrismaService } from '../../backend/src/prisma/prisma.service';
 import { api, auth, createTestContext, TestContext, truncateBusinessData } from './helpers';
@@ -92,6 +93,28 @@ describe('수선 (RepairsModule)', () => {
     return res.body.data.id;
   }
 
+  // 수선구분 코드 집합의 단일 출처는 기준정보 상수(admin-master/code-labels.constants)다.
+  // 화면 선택지는 GET /code-labels 응답에서 만들므로, 그 집합과 접수 검증 집합이 어긋나면
+  // "화면에는 보이는데 접수하면 400"이 된다. 그 계약을 여기서 고정한다.
+  it('수선구분 기준정보와 접수가 허용하는 코드 집합이 일치한다', async () => {
+    const labels = await api(ctx).get('/api/v1/code-labels').set(auth(ctx)).expect(200);
+    const codes = (labels.body.data['repair-type'] as Array<{ code: string }>).map((i) => i.code);
+    expect(codes).toEqual([...REPAIR_TYPES]);
+
+    const { customer } = await seedRepairTargets(ctx.prisma);
+    const rejected = await api(ctx)
+      .post('/api/v1/repairs')
+      .set(auth(ctx))
+      .send({
+        customerId: customer.id,
+        repairType: 'NOT_A_REPAIR_TYPE',
+        requestDate: '2026-07-21',
+        description: '허용되지 않는 유형',
+      })
+      .expect(400);
+    expect(rejected.body.error.code).toBe('VALIDATION_ERROR');
+  });
+
   describe('수선 접수 — 유형별 연결 검증', () => {
     it('CUSTOM 수선은 품목·구성품 연결 없이는 접수할 수 없다', async () => {
       const { customer } = await seedRepairTargets(ctx.prisma);
@@ -132,50 +155,20 @@ describe('수선 (RepairsModule)', () => {
       expect(res.body.data.statusEvents[0].newStatus).toBe('RECEIVED');
     });
 
-    it('CUSTOM 수선에 렌탈 실물을 연결하면 거부된다', async () => {
-      const { customer, item, rentalItem } = await seedRepairTargets(ctx.prisma);
+    // 렌탈 수선은 수선 도메인이 아니라 렌탈 진행에서 관리한다 — 수선구분에서 제거됐다.
+    it.each(['RENTAL_PRE', 'RENTAL_POST'])('폐지된 수선구분 %s는 거부된다', async (repairType) => {
+      const { customer } = await seedRepairTargets(ctx.prisma);
       const res = await api(ctx)
         .post('/api/v1/repairs')
         .set(auth(ctx))
         .send({
           customerId: customer.id,
-          repairType: 'CUSTOM_DURING',
+          repairType,
           requestDate: '2026-07-21',
-          description: '수선',
-          orderItemId: item.id,
-          rentalInventoryItemId: rentalItem.id,
+          description: '단추 교체',
         })
         .expect(400);
       expect(res.body.error.code).toBe('VALIDATION_ERROR');
-    });
-
-    it('RENTAL 수선은 렌탈 실물 연결이 필수다', async () => {
-      const { customer, rentalItem } = await seedRepairTargets(ctx.prisma);
-      const missing = await api(ctx)
-        .post('/api/v1/repairs')
-        .set(auth(ctx))
-        .send({
-          customerId: customer.id,
-          repairType: 'RENTAL_PRE',
-          requestDate: '2026-07-21',
-          description: '단추 교체',
-        })
-        .expect(400);
-      expect(missing.body.error.code).toBe('VALIDATION_ERROR');
-
-      const ok = await api(ctx)
-        .post('/api/v1/repairs')
-        .set(auth(ctx))
-        .send({
-          customerId: customer.id,
-          repairType: 'RENTAL_PRE',
-          requestDate: '2026-07-21',
-          description: '단추 교체',
-          rentalInventoryItemId: rentalItem.id,
-        })
-        .expect(201);
-      expect(ok.body.data.rentalInventoryItem.id).toBe(rentalItem.id);
-      expect(ok.body.data.orderItem).toBeNull();
     });
 
     it('GENERAL 수선은 고객만 연결하고 다른 대상 연결은 거부된다', async () => {
@@ -205,7 +198,8 @@ describe('수선 (RepairsModule)', () => {
         .expect(201);
       expect(ok.body.data.customer.id).toBe(customer.id);
       expect(ok.body.data.orderItem).toBeNull();
-      expect(ok.body.data.rentalInventoryItem).toBeNull();
+      // 수선 응답에는 렌탈 실물 연결 자체가 없다 (렌탈 수선은 렌탈 진행에서 관리)
+      expect(ok.body.data.rentalInventoryItem).toBeUndefined();
     });
 
     it('GENERAL 수선은 대상 설명(description)이 필수다', async () => {
@@ -335,16 +329,15 @@ describe('수선 (RepairsModule)', () => {
 
   describe('수선 목록·수정', () => {
     it('상태·고객 필터로 페이지네이션 목록을 조회한다', async () => {
-      const { customer, rentalItem } = await seedRepairTargets(ctx.prisma);
+      const { customer } = await seedRepairTargets(ctx.prisma);
       await api(ctx)
         .post('/api/v1/repairs')
         .set(auth(ctx))
         .send({
           customerId: customer.id,
-          repairType: 'RENTAL_POST',
+          repairType: 'GENERAL',
           requestDate: '2026-07-21',
-          description: '반납 후 얼룩 제거',
-          rentalInventoryItemId: rentalItem.id,
+          description: '외부 구입 자켓 얼룩 제거',
         })
         .expect(201);
 
@@ -388,7 +381,7 @@ describe('수선 (RepairsModule)', () => {
   });
 
   describe('연결 대상 조회 (link-targets, 연동정합화 계약 §8)', () => {
-    it('고객의 맞춤 품목(구성품 포함)과 렌탈 실물 요약을 반환한다', async () => {
+    it('고객의 맞춤 품목(구성품 포함)만 반환하고 렌탈 실물은 후보에 없다', async () => {
       const { admin, customer, line, order, item, component, rentalItem } = await seedRepairTargets(ctx.prisma);
 
       // 고객 렌탈 주문·구성품·배정 → 렌탈 실물 연결
@@ -440,15 +433,8 @@ describe('수선 (RepairsModule)', () => {
       expect(target.components.map((c: { id: string }) => c.id)).toEqual([component.id]);
       expect(target.components[0].componentType).toBe('JACKET');
 
-      // 고객 배정 이력이 있는 렌탈 실물 요약
-      expect(res.body.data.rentalItems.length).toBe(1);
-      expect(res.body.data.rentalItems[0]).toMatchObject({
-        id: rentalItem.id,
-        managementCode: rentalItem.managementCode,
-        componentType: 'JACKET',
-        design: '클래식',
-        allocationStatus: 'RESERVED',
-      });
+      // 배정 이력이 있어도 렌탈 실물은 수선 접수 후보가 아니다(렌탈 진행에서 관리)
+      expect(res.body.data.rentalItems).toBeUndefined();
     });
 
     it('다른 고객의 대상은 포함하지 않고, 없는 고객은 404', async () => {
@@ -458,7 +444,7 @@ describe('수선 (RepairsModule)', () => {
         .set(auth(ctx))
         .expect(200);
       expect(res.body.data.orderItems.map((i: { id: string }) => i.id)).toEqual([item.id]);
-      expect(res.body.data.rentalItems).toEqual([]); // 배정 이력 없는 렌탈 실물은 제외
+      expect(res.body.data.rentalItems).toBeUndefined(); // 렌탈 실물은 후보에서 제외
 
       const notFound = await api(ctx)
         .get(`/api/v1/repairs/link-targets?customerId=${randomUUID()}`)

@@ -63,6 +63,15 @@ export interface ComponentAttrInput {
   notes?: string;
 }
 
+/**
+ * 목록의 부위(구성품 그룹) 슬롯 — 부위별 원단·컬러·패턴 + 그 부위 단계의 진행 수.
+ * 스타일 컨설팅 목록이 품목 1행이 아니라 부위 1행으로 펼치기 위한 축이다.
+ */
+export interface OptionProgressComponent extends OptionComponentAttr {
+  totalStages: number;
+  completedStages: number;
+}
+
 /** OPT-001 목록 행 — 백엔드 progress()가 이미 평면 형태로 내려준다. */
 export interface OptionProgressItem {
   orderItemId: string;
@@ -81,6 +90,8 @@ export interface OptionProgressItem {
   completedStages: number;
   totalStages: number;
   sessionId: string | null;
+  /** 부위 슬롯 (설계서 04 §2.3). 카테고리 상수 기반이라 세션 이전에도 항상 내려온다. */
+  components: OptionProgressComponent[];
 }
 
 export interface OptionChoiceView {
@@ -132,6 +143,8 @@ export interface OptionStageView {
   required: boolean;
   choices: OptionChoiceView[];
   selectedChoiceId: string | null;
+  /** 이 단계가 속한 부위(JACKET/TROUSERS/VEST…). 부위별 옵션 팝업이 이 값으로 단계를 거른다. */
+  componentGroup: string | null;
 }
 
 /** 세션 상태 — 백엔드는 NOT_STARTED도 내려준다. */
@@ -184,6 +197,7 @@ interface OptionStageApiRow {
   required: boolean;
   choices: OptionChoiceApiRow[];
   selectedChoiceId: string | null;
+  componentGroup?: string | null;
 }
 
 interface OptionSessionApiRow {
@@ -225,6 +239,7 @@ function toStage(row: OptionStageApiRow): OptionStageView {
       imageUrl: c.imageFileId ? `/files/${c.imageFileId}` : null,
     })),
     selectedChoiceId: row.selectedChoiceId ?? null,
+    componentGroup: row.componentGroup ?? null,
   };
 }
 
@@ -286,8 +301,13 @@ export interface OptionReviewData {
   status: OptionSessionStatus;
   totalStages: number;
   completedStages: number;
-  /** 백엔드 missingStages 배열 길이에서 파생 */
+  /**
+   * 미선택 **필수** 단계 수. 확정 가능 여부의 기준이다(백엔드 confirm도 required만 검증한다).
+   * 선택 단계(예: 베스트)는 안 골라도 확정할 수 있으므로 여기 세지 않는다.
+   */
   missingCount: number;
+  /** 미선택 선택(비필수) 단계 수 — 안내용 */
+  missingOptionalCount: number;
   version: number;
   stages: OptionReviewStage[];
   /** 부위별 원단·컬러·패턴·비고 (설계서 04 §2). 확인서에 부위 선택·입력 출력용. */
@@ -323,6 +343,7 @@ interface OptionReviewApiRow {
 }
 
 function toOptionReview(row: OptionReviewApiRow): OptionReviewData {
+  const missing = row.missingStages ?? [];
   return {
     sessionId: row.sessionId,
     orderItemId: row.orderItemId,
@@ -330,7 +351,8 @@ function toOptionReview(row: OptionReviewApiRow): OptionReviewData {
     status: row.status,
     totalStages: row.totalStages,
     completedStages: row.completedStages,
-    missingCount: (row.missingStages ?? []).length,
+    missingCount: missing.filter((m) => m.required).length,
+    missingOptionalCount: missing.filter((m) => !m.required).length,
     version: row.version,
     stages: (row.stages ?? []).map((s) => ({
       stageId: s.stageId,

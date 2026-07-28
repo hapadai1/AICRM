@@ -8,14 +8,14 @@ import type { ListResult } from './client';
 
 /**
  * 기준정보 slug — 예약 목적은 'appointment-purposes'(복수)로 통일 (계약 문서 04 §11).
- * appointment-purposes/payment-method 만 DB 마스터 테이블로 편집 가능하다.
+ * appointment-purposes 만 DB 마스터 테이블로 편집 가능하다.
  * product-category/component-type/repair-type 은 코드 상수로 정의돼 있어 읽기 전용이다.
+ * (결제수단은 v2 D6 결제 기능 제거와 함께 삭제됐다.)
  */
 export type MasterType =
   | 'appointment-purposes'
   | 'product-category'
   | 'component-type'
-  | 'payment-method'
   | 'repair-type';
 
 export interface MasterItem {
@@ -307,6 +307,25 @@ export async function saveOptionStages(
   );
 }
 
+/**
+ * 선택지 추가금액만 수정한다 — 사용중 버전에서도 쓸 수 있다.
+ *
+ * 구성(단계·선택지)을 바꾸려면 새 버전이 필요하지만 가격은 값만 조정하는 일이라
+ * 백엔드가 사용중 버전에도 허용한다. 확정된 계약은 선택 시점 스냅샷을 쓰므로 소급되지 않고,
+ * 언제 얼마에서 얼마로 바뀌었는지는 감사로그(대상: 옵션 선택지)에 남는다.
+ */
+export async function updateOptionChoicePrice(
+  choiceId: string,
+  extraPrice: number,
+  reason?: string,
+): Promise<{ choiceId: string; extraPrice: number; changed: boolean }> {
+  return request({
+    url: `/option-choices/${choiceId}/price`,
+    method: 'PATCH',
+    data: { extraPrice, reason },
+  });
+}
+
 export async function activateOptionSetVersion(
   versionId: string,
 ): Promise<OptionSetVersionSummary> {
@@ -429,6 +448,13 @@ const PERMISSION_GROUP_LABELS: Record<string, string> = {
   ROLE: '역할',
   AUDIT: '감사로그',
   FILE: '파일',
+  // 아래 5개가 빠져 있어 권한 화면 '업무 영역'에 영문 코드가 그대로 보였다
+  // (CONSULTATION·FITTING·JOURNEY·NAVER·PAYMENT).
+  CONSULTATION: '상담',
+  FITTING: '가봉',
+  JOURNEY: '진행 단계',
+  NAVER: '네이버 연동',
+  PAYMENT: '결제',
 };
 
 function toPermission(row: PermissionApiRow): PermissionDef {
@@ -494,21 +520,49 @@ export function saveRolePermissions(roleId: string, permissions: string[]): Prom
 export interface AuditLogItem {
   id: string;
   occurredAt: string;
-  userId: string;
+  userId: string | null;
   userName: string;
   action: string;
   entityType: string;
   entityId: string;
-  entityLabel?: string;
   reason?: string;
-  ip: string;
-  requestId: string;
-  userAgent?: string;
-}
-
-export interface AuditLogDetail extends AuditLogItem {
+  /** audit_logs.ip_address — 현재 서비스 계층에서 채우지 않아 대부분 null 이다. */
+  ip?: string;
   before: Record<string, unknown> | null;
   after: Record<string, unknown> | null;
+}
+
+export type AuditLogDetail = AuditLogItem;
+
+/** 백엔드는 Prisma 행을 그대로 반환한다 (createdAt·beforeJson·user 중첩). */
+interface AuditLogApiRow {
+  id: string;
+  createdAt: string;
+  userId: string | null;
+  action: string;
+  entityType: string;
+  entityId: string;
+  beforeJson: Record<string, unknown> | null;
+  afterJson: Record<string, unknown> | null;
+  reason: string | null;
+  ipAddress: string | null;
+  user?: { loginId: string; displayName: string } | null;
+}
+
+function toAuditLog(row: AuditLogApiRow): AuditLogItem {
+  return {
+    id: row.id,
+    occurredAt: row.createdAt,
+    userId: row.userId,
+    userName: row.user ? `${row.user.displayName}(${row.user.loginId})` : '시스템',
+    action: row.action,
+    entityType: row.entityType,
+    entityId: row.entityId,
+    reason: row.reason ?? undefined,
+    ip: row.ipAddress ?? undefined,
+    before: row.beforeJson ?? null,
+    after: row.afterJson ?? null,
+  };
 }
 
 export interface AuditLogSearchParams {
@@ -522,9 +576,12 @@ export interface AuditLogSearchParams {
 }
 
 export function searchAuditLogs(params: AuditLogSearchParams): Promise<ListResult<AuditLogItem>> {
-  return request<ListResult<AuditLogItem>>({ url: '/audit-logs', params });
+  return request<ListResult<AuditLogApiRow>>({ url: '/audit-logs', params }).then((res) => ({
+    ...res,
+    data: (res.data ?? []).map(toAuditLog),
+  }));
 }
 
 export function fetchAuditLog(id: string): Promise<AuditLogDetail> {
-  return request<AuditLogDetail>({ url: `/audit-logs/${id}` });
+  return request<AuditLogApiRow>({ url: `/audit-logs/${id}` }).then(toAuditLog);
 }

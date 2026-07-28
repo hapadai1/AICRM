@@ -7,6 +7,7 @@ import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FilesService } from '../files/files.service';
+import { COMPONENT_GROUP_LABELS, componentGroupsFor } from '../options/option-component-groups';
 import { buildContractExcel, ContractExcelLine } from './contract-excel';
 import {
   CancelContractDto,
@@ -42,6 +43,20 @@ const COMPONENT_LABEL: Record<string, string> = {
   SHIRT: '셔츠',
   SHOES: '구두',
 };
+
+/** 계약서 웹 표시용 주문품목 계층 (품목 → 부위 → 유료 옵션) */
+interface ContractDocumentItem {
+  orderItemId: string;
+  orderNo: string;
+  displayName: string;
+  sequenceNo: number;
+  components: Array<{
+    group: string;
+    groupLabel: string;
+    options: Array<{ stageName: string; optionName: string; extraPrice: number }>;
+  }>;
+  optionTotal: number;
+}
 
 /** 서명 이미지 디코드 버퍼 상한 (설계서 03 §2.3) */
 const SIGNATURE_MAX_BYTES = 2 * 1024 * 1024;
@@ -179,7 +194,12 @@ export class ContractsService {
       action: 'CREATE',
       entityType: 'CONTRACT',
       entityId: contract.id,
-      after: { contractNo: contract.contractNo, customerId: contract.customerId },
+      after: {
+        contractNo: contract.contractNo,
+        customerId: contract.customerId,
+        totalAmount: dto.totalAmount ?? 0,
+        lines: lines.map(lineSummary),
+      },
     });
     return contract;
   }
@@ -233,7 +253,8 @@ export class ContractsService {
             ],
           }
         : {}),
-      ...(range ? this.buildDateFilter(query.dateField ?? 'contractedAt', range) : {}),
+      // 검색어 조건이 OR를 이미 쓰므로 기간 조건은 AND로 감싸 키 충돌을 피한다.
+      ...(range ? { AND: [this.buildDateFilter(query.dateField ?? 'contractedAt', range)] } : {}),
     };
   }
 
@@ -265,7 +286,10 @@ export class ContractsService {
     if (dateField === 'completionDueDate') {
       return { currentVersion: { completionDueDate: range } };
     }
-    return { contractedAt: range };
+    // 계약일이 없는 초안(임시저장)은 등록일로 갈음한다 — 정렬(sortList)과 같은 규칙.
+    return {
+      OR: [{ contractedAt: range }, { contractedAt: null, createdAt: range }],
+    };
   }
 
   /** `필드,방향` 정렬. 허용 밖 필드는 기본값(계약일 내림차순)으로 되돌린다. */
@@ -324,6 +348,12 @@ export class ContractsService {
     });
     if (!draft) throw new BusinessException('CONTRACT_NOT_DRAFT', '수정할 초안 버전이 없습니다.');
 
+    // 감사로그 전/후 비교용 — 초안 버전의 금액·일정·서명 상태와 품목 목록을 스냅샷으로 남긴다.
+    const beforeLines = await this.prisma.contractLine.findMany({
+      where: { contractVersionId: draft.id },
+      orderBy: { sortOrder: 'asc' },
+    });
+
     await this.prisma.$transaction(async (tx) => {
       if (dto.lines) {
         await tx.contractLine.deleteMany({ where: { contractVersionId: draft.id } });
@@ -331,7 +361,7 @@ export class ContractsService {
           data: dto.lines.map((l, i) => ({ ...this.toLineData(l, i), contractVersionId: draft.id })),
         });
       }
-      await tx.contractVersion.update({
+      const updatedDraft = await tx.contractVersion.update({
         where: { id: draft.id },
         data: {
           ...(dto.totalAmount !== undefined ? { totalAmount: dto.totalAmount } : {}),
@@ -346,16 +376,30 @@ export class ContractsService {
             : {}),
         },
       });
-      await tx.contract.update({
+      const updatedContract = await tx.contract.update({
         where: { id },
         data: {
           ...(dto.contractTypeId !== undefined ? { contractTypeId: dto.contractTypeId } : {}),
           rowVersion: { increment: 1 },
         },
       });
+      await this.audit.log(
+        {
+          userId: actor.id,
+          action: 'UPDATE',
+          entityType: 'CONTRACT',
+          entityId: id,
+          before: this.draftSnapshot(contract, draft, beforeLines),
+          after: this.draftSnapshot(
+            updatedContract,
+            updatedDraft,
+            dto.lines ?? beforeLines,
+          ),
+        },
+        asAuditClient(tx),
+      );
     });
 
-    await this.audit.log({ userId: actor.id, action: 'UPDATE', entityType: 'CONTRACT', entityId: id });
     return this.getDetail(id);
   }
 
@@ -413,7 +457,10 @@ export class ContractsService {
           cancelReason: null,
         });
 
-        // AUTO 진행단계 훅 (설계서 02 §9.2 / 03 §6): 계약완료 시 고객 진행을 CONTRACT_CONFIRMED로 전진.
+        // AUTO 진행단계 훅 (설계서 02 §9.2 / 03 §6 / 07 §7.1).
+        // (1) 주문별 진행을 보장하고 — 없으면 계약 확정 단계에서 시작시킨다.
+        // (2) 그 밖에 남은 ACTIVE 진행을 계약 확정 단계로 전진시킨다.
+        await this.ensureJourneysForOrders(tx, contract.customerId, orders, confirmedAt, actor.id);
         await this.advanceJourneysToContractConfirmed(tx, contract.customerId, confirmedAt, actor.id);
 
         const response = {
@@ -502,7 +549,19 @@ export class ContractsService {
       action: 'CREATE',
       entityType: 'CONTRACT_VERSION',
       entityId: revision.id,
-      after: { contractId: id, versionNo: revision.versionNo },
+      // 변경계약은 직전 확정본(base)과의 차이가 곧 "무엇이 바뀌었나"이므로 양쪽을 함께 남긴다.
+      before: {
+        contractId: id,
+        versionNo: base.versionNo,
+        totalAmount: base.totalAmount,
+        lines: base.lines.map(lineSummary),
+      },
+      after: {
+        contractId: id,
+        versionNo: revision.versionNo,
+        totalAmount: revision.totalAmount,
+        lines: revision.lines.map(lineSummary),
+      },
       reason: dto.changeReason,
     });
     return revision;
@@ -656,14 +715,144 @@ export class ContractsService {
   }
 
   /**
+   * 계약 삭제 — 임시저장(DRAFT)·취소(CANCELLED) 한정.
+   *
+   * 확정된 계약은 취소로만 정리한다(이력 보존). 취소된 계약이라도 작업지시서·렌탈 배정처럼
+   * 실제 진행 산출물이 남아 있으면 지우지 않고 거부한다. 지울 수 있는 건 계약이 만든 것들
+   * (버전·라인·주문·주문품목·구성품)뿐이고, 고객의 기록인 연락 이력·진행 단계는 링크만 끊고 남긴다.
+   */
+  async remove(id: string, actor: AuthUser) {
+    const contract = await this.getContractOrThrow(id);
+    if (contract.status !== 'DRAFT' && contract.status !== 'CANCELLED')
+      throw new BusinessException(
+        'CONTRACT_NOT_DELETABLE',
+        '임시저장·취소 상태의 계약만 삭제할 수 있습니다. 확정된 계약은 [계약 취소]로 처리해 주세요.',
+        undefined,
+        { status: contract.status },
+      );
+
+    const orders = await this.prisma.order.findMany({
+      where: { contractId: id },
+      select: { id: true },
+    });
+    const orderIds = orders.map((o) => o.id);
+    const items = orderIds.length
+      ? await this.prisma.orderItem.findMany({
+          where: { orderId: { in: orderIds } },
+          select: { id: true },
+        })
+      : [];
+    const itemIds = items.map((i) => i.id);
+
+    const blockers = await this.findDeleteBlockers(itemIds);
+    if (blockers.length > 0)
+      throw new BusinessException(
+        'CONTRACT_NOT_DELETABLE',
+        `진행 이력이 있어 삭제할 수 없습니다 (${blockers.join(' · ')}). 계약 취소로 정리해 주세요.`,
+        undefined,
+        { blockers },
+      );
+
+    await this.prisma.$transaction(async (tx) => {
+      if (itemIds.length > 0) {
+        await tx.orderItemComponent.deleteMany({ where: { orderItemId: { in: itemIds } } });
+        await tx.orderItem.deleteMany({ where: { id: { in: itemIds } } });
+      }
+      if (orderIds.length > 0) {
+        // 연락 이력·고객 진행은 계약이 아니라 고객의 기록이다. 참조만 끊고 남긴다.
+        await tx.notificationHistory.updateMany({
+          where: { orderId: { in: orderIds } },
+          data: { orderId: null },
+        });
+        await tx.customerJourney.updateMany({
+          where: { orderId: { in: orderIds } },
+          data: { orderId: null },
+        });
+        await tx.order.deleteMany({ where: { id: { in: orderIds } } });
+      }
+
+      const versions = await tx.contractVersion.findMany({
+        where: { contractId: id },
+        select: { id: true },
+      });
+      // 계약 → 현재 버전 FK를 먼저 끊어야 버전을 지울 수 있다.
+      await tx.contract.update({ where: { id }, data: { currentVersionId: null } });
+      await tx.contractLine.deleteMany({
+        where: { contractVersionId: { in: versions.map((v) => v.id) } },
+      });
+      await tx.contractVersion.deleteMany({ where: { contractId: id } });
+      await tx.contract.delete({ where: { id } });
+
+      await this.audit.log(
+        {
+          userId: actor.id,
+          action: 'DELETE',
+          entityType: 'CONTRACT',
+          entityId: id,
+          before: {
+            contractNo: contract.contractNo,
+            status: contract.status,
+            customerId: contract.customerId,
+            orderIds,
+          },
+        },
+        asAuditClient(tx),
+      );
+    });
+
+    return { id, contractNo: contract.contractNo, deleted: true };
+  }
+
+  /** 삭제를 막는 진행 산출물을 사람이 읽을 이름으로 모은다. 비어 있으면 삭제 가능. */
+  private async findDeleteBlockers(orderItemIds: string[]): Promise<string[]> {
+    if (orderItemIds.length === 0) return [];
+    const where = { orderItemId: { in: orderItemIds } };
+    const componentIds = (
+      await this.prisma.orderItemComponent.findMany({ where, select: { id: true } })
+    ).map((c) => c.id);
+
+    const [workOrders, production, fittings, measurements, options, rentalSelections, repairs, allocations] =
+      await Promise.all([
+        this.prisma.workOrder.count({ where }),
+        this.prisma.productionEvent.count({ where }),
+        this.prisma.fittingSession.count({ where }),
+        this.prisma.orderItemMeasurement.count({ where }),
+        this.prisma.optionSelectionSession.count({ where }),
+        this.prisma.rentalSelectionSession.count({ where }),
+        this.prisma.repairRequest.count({ where }),
+        componentIds.length
+          ? this.prisma.rentalAllocation.count({
+              where: { orderItemComponentId: { in: componentIds } },
+            })
+          : Promise.resolve(0),
+      ]);
+
+    return [
+      [workOrders, '작업지시서'],
+      [production, '제작 이력'],
+      [fittings, '가봉'],
+      [measurements, '채촌 연결'],
+      [options, '옵션 선택'],
+      [rentalSelections, '렌탈 스타일 선택'],
+      [repairs, '수선'],
+      [allocations, '렌탈 배정'],
+    ]
+      .filter(([count]) => (count as number) > 0)
+      .map(([, label]) => label as string);
+  }
+
+  /**
    * 계약서 출력용 JSON (현재 적용 버전 기준).
    * 웹 표시 규칙(D7): 세부가격 노출 — 라인 세부품목·라인금액 + 옵션명·추가금액 + 서명 상태.
+   * 품목은 주문품목(정장 #1·#2) × 부위(상의·하의·베스트) 계층으로 펼치고,
+   * 부위 아래에는 **추가금액이 붙은 옵션만** 옵션명·금액으로 나열한다.
    */
   async getDocument(id: string) {
     const contract = await this.getDetail(id);
     const version =
       contract.currentVersion ?? contract.versions[contract.versions.length - 1] ?? null;
-    const options = await this.loadContractOptions(id);
+    const options = (await this.loadContractOptions(id)).filter((o) => o.extraPrice > 0);
+    const itemTree = await this.loadContractOptionTree(id);
     return {
       contractNo: contract.contractNo,
       status: contract.status,
@@ -688,14 +877,16 @@ export class ContractsService {
         productCategory: l.productCategory,
         categoryLabel: CATEGORY_LABEL[l.productCategory] ?? l.productCategory,
         itemDescription: l.itemDescription,
-        // 웹 상세 토글용 세부품목(구성품) 라벨
+        // 주문 생성 전(계약 확정 전) 폴백용 세부품목 라벨
         components: componentLabels(l.productCategory),
         quantity: l.quantity,
         unitPrice: l.unitPrice,
         lineAmount: l.lineAmount,
         notes: l.notes,
+        // 주문품목 × 부위 × 유료옵션 계층 (주문 생성 전에는 빈 배열)
+        items: itemTree.get(`${l.transactionType}|${l.productCategory}`) ?? [],
       })),
-      // 웹은 옵션명·추가금액을 노출한다 (D7)
+      // 웹은 옵션명·추가금액을 노출한다 (D7). 추가금액 0원 옵션은 계약서에 싣지 않는다.
       options: options.map((o) => ({ optionName: o.optionName, extraPrice: o.extraPrice })),
       // 서명 상태 (엑셀 버튼·확정 버튼 게이팅용)
       signature: version
@@ -1016,6 +1207,42 @@ export class ContractsService {
     return `${prefix}${String(seq).padStart(3, '0')}`;
   }
 
+  /**
+   * 초안 수정 감사로그의 전/후 스냅샷.
+   * 초안 버전 행 전체를 넣으면 diff가 잡음으로 가득 차므로 실제 수정 대상 필드만 추린다.
+   * 품목은 행 단위로 로그를 쪼개지 않고 `맞춤 예복 정장 1개 1,350,000원` 형태의 요약 배열 하나로 담는다.
+   */
+  private draftSnapshot(
+    contract: { contractTypeId: string | null; rowVersion: number },
+    version: {
+      versionNo: number;
+      totalAmount: unknown;
+      depositAmount: unknown;
+      balanceAmount: unknown;
+      completionDueDate: Date | null;
+      photoDate: Date | null;
+      weddingDate: Date | null;
+      signedAt: Date | null;
+      signerName: string | null;
+    },
+    lines: ContractLineSummarySource[],
+  ) {
+    return {
+      contractTypeId: contract.contractTypeId,
+      rowVersion: contract.rowVersion,
+      versionNo: version.versionNo,
+      totalAmount: version.totalAmount,
+      depositAmount: version.depositAmount,
+      balanceAmount: version.balanceAmount,
+      completionDueDate: version.completionDueDate,
+      photoDate: version.photoDate,
+      weddingDate: version.weddingDate,
+      signedAt: version.signedAt,
+      signerName: version.signerName,
+      lines: lines.map(lineSummary),
+    };
+  }
+
   private async getContractOrThrow(id: string) {
     const contract = await this.prisma.contract.findUnique({
       where: { id },
@@ -1050,6 +1277,191 @@ export class ContractsService {
       optionName: v.optionChoice.choiceName,
       extraPrice: Number(v.extraPriceSnapshot),
     }));
+  }
+
+  /**
+   * 계약서 웹 표시용 품목 계층 — `거래방식|품목` → 주문품목(정장 #1·#2) → 부위 → 유료 옵션.
+   *
+   * - 부위 축: 맞춤은 옵션 부위 그룹(상의·하의·베스트), 렌탈은 주문품목 구성품을 쓴다.
+   *   (스타일 컨설팅 화면과 같은 축이라 두 화면의 부위 목록이 어긋나지 않는다.)
+   * - 옵션은 현재 선택 세션의 값 중 **추가금액 > 0** 인 것만 담는다 (v2 계약관리 요구).
+   * - 부위 행은 유료 옵션이 없어도 항상 남긴다 (구성품 자체가 계약서 정보).
+   */
+  private async loadContractOptionTree(contractId: string) {
+    const items = await this.prisma.orderItem.findMany({
+      where: { order: { contractId }, status: { not: 'CANCELLED' } },
+      include: {
+        order: { select: { transactionType: true, orderNo: true } },
+        components: {
+          where: { active: true },
+          orderBy: [{ componentType: 'asc' }, { sequenceNo: 'asc' }],
+          select: { componentType: true },
+        },
+      },
+      orderBy: [{ productCategory: 'asc' }, { sequenceNo: 'asc' }],
+    });
+
+    const tree = new Map<string, ContractDocumentItem[]>();
+    if (items.length === 0) return tree;
+
+    const values = await this.prisma.optionSelectionValue.findMany({
+      where: {
+        selectionSession: { isCurrent: true, orderItem: { order: { contractId } } },
+        extraPriceSnapshot: { gt: 0 },
+      },
+      include: {
+        optionChoice: { select: { choiceName: true } },
+        optionStage: { select: { componentGroup: true, stageName: true, sequenceNo: true } },
+        selectionSession: { select: { orderItemId: true } },
+      },
+      orderBy: [{ optionStage: { sequenceNo: 'asc' } }],
+    });
+    const valuesByItem = new Map<string, typeof values>();
+    for (const v of values) {
+      const list = valuesByItem.get(v.selectionSession.orderItemId) ?? [];
+      list.push(v);
+      valuesByItem.set(v.selectionSession.orderItemId, list);
+    }
+
+    for (const item of items) {
+      const groupCodes =
+        item.order.transactionType === 'RENTAL'
+          ? item.components.map((c) => c.componentType)
+          : componentGroupsFor(item.productCategory);
+      const components = (groupCodes.length > 0 ? groupCodes : [item.productCategory]).map(
+        (group) => ({
+          group,
+          groupLabel: COMPONENT_GROUP_LABELS[group] ?? COMPONENT_LABEL[group] ?? group,
+          options: [] as Array<{ stageName: string; optionName: string; extraPrice: number }>,
+        }),
+      );
+
+      for (const v of valuesByItem.get(item.id) ?? []) {
+        const matched = components.find((c) => c.group === v.optionStage.componentGroup);
+        // 부위 미지정 단계(단일 부위 세트·구버전)는 부위가 하나면 그 부위, 아니면 '공통'으로 모은다.
+        let target = matched ?? (components.length === 1 ? components[0] : undefined);
+        if (!target) {
+          target = components.find((c) => c.group === 'COMMON');
+          if (!target) {
+            target = { group: 'COMMON', groupLabel: '공통', options: [] };
+            components.push(target);
+          }
+        }
+        target.options.push({
+          stageName: v.optionStage.stageName,
+          optionName: v.optionChoice.choiceName,
+          extraPrice: Number(v.extraPriceSnapshot),
+        });
+      }
+
+      const key = `${item.order.transactionType}|${item.productCategory}`;
+      const list = tree.get(key) ?? [];
+      list.push({
+        orderItemId: item.id,
+        orderNo: item.order.orderNo,
+        displayName: item.displayName,
+        sequenceNo: item.sequenceNo,
+        components,
+        optionTotal: components.reduce(
+          (s, c) => s + c.options.reduce((t, o) => t + o.extraPrice, 0),
+          0,
+        ),
+      });
+      tree.set(key, list);
+    }
+    return tree;
+  }
+
+  /**
+   * 계약 확정 시 주문별 진행(journey)을 보장한다 (설계서 07 §7.1).
+   *
+   * 전에는 진행이 수동 생성뿐이라, 계약을 확정해도 진행 화면과 고객 목록의 진행상태 열이
+   * 비어 있었다. 계약 확정이 곧 진행의 시작점(plan_v2 "상담 - 계약 - 스타일 컨설팅")이므로
+   * 주문 1건당 진행 1건을 여기서 만든다.
+   *
+   * 상담 단계에서 수동 생성해 둔 진행(orderId 미연결)이 있으면 새로 만들지 않고 그 진행에
+   * 주문을 연결한다 — 그러지 않으면 같은 고객에게 진행이 둘 생긴다.
+   */
+  private async ensureJourneysForOrders(
+    tx: Prisma.TransactionClient,
+    customerId: string,
+    orders: { id: string; tradeType: string }[],
+    confirmedAt: Date,
+    actorId: string,
+  ): Promise<void> {
+    for (const order of orders) {
+      // 주문 1건당 진행 1건 (journeys.service.create와 같은 규칙). 취소된 진행은 되살리지 않는다.
+      const linked = await tx.customerJourney.findFirst({
+        where: { orderId: order.id, status: { not: 'CANCELLED' } },
+        select: { id: true },
+      });
+      if (linked) continue;
+
+      const stages = await tx.journeyStage.findMany({
+        where: { trackType: order.tradeType, active: true },
+        orderBy: { sequenceNo: 'asc' },
+      });
+      const target = stages.find((s) => s.code === 'CONTRACT_CONFIRMED');
+      // 트랙에 단계 정의가 없으면(시드 미적용) 계약 확정 자체를 막지 않고 넘어간다.
+      if (!target) continue;
+
+      // 상담 단계에서 만들어 둔 미연결 진행을 우선 흡수한다.
+      const orphan = await tx.customerJourney.findFirst({
+        where: {
+          customerId,
+          orderId: null,
+          sourceRepairRequestId: null,
+          trackType: order.tradeType,
+          status: 'ACTIVE',
+        },
+        orderBy: { startedAt: 'desc' },
+      });
+
+      const journeyId = orphan?.id ?? randomUUID();
+      const fromStageCode = orphan?.currentStageCode ?? null;
+      if (orphan) {
+        await tx.customerJourney.update({
+          where: { id: orphan.id },
+          data: { orderId: order.id, currentStageCode: target.code, rowVersion: { increment: 1 } },
+        });
+      } else {
+        await tx.customerJourney.create({
+          data: {
+            id: journeyId,
+            customerId,
+            orderId: order.id,
+            trackType: order.tradeType,
+            currentStageCode: target.code,
+            status: 'ACTIVE',
+            startedAt: confirmedAt,
+          },
+        });
+      }
+
+      await tx.journeyEvent.create({
+        data: {
+          id: randomUUID(),
+          journeyId,
+          stageId: target.id,
+          fromStageCode,
+          toStageCode: target.code,
+          notificationOutcome: 'NONE',
+          actorId,
+          changedAt: confirmedAt,
+        },
+      });
+      await this.audit.log(
+        {
+          userId: actorId,
+          action: orphan ? 'UPDATE' : 'CREATE',
+          entityType: 'CUSTOMER_JOURNEY',
+          entityId: journeyId,
+          after: { trackType: order.tradeType, currentStageCode: target.code, orderId: order.id },
+          reason: '계약 확정 시 진행 자동 시작',
+        },
+        asAuditClient(tx),
+      );
+    }
   }
 
   /**
@@ -1179,6 +1591,24 @@ export class ContractsService {
 
 function toDate(value?: string | null): Date | null {
   return value ? new Date(value) : null;
+}
+
+/** 감사로그 품목 요약의 입력 — 저장된 행(Decimal)과 요청 DTO(number)를 모두 받는다. */
+interface ContractLineSummarySource {
+  productCategory: string;
+  itemDescription?: string | null;
+  quantity: number;
+  lineAmount?: unknown;
+}
+
+/**
+ * 계약 품목 1행을 감사로그용 한 줄로 압축한다.
+ * 품목별 감사 이벤트를 따로 만들지 않고, 이 문자열 배열의 전/후 차이로 "무엇이 어떻게 바뀌었는지"를 읽게 한다.
+ */
+function lineSummary(line: ContractLineSummarySource): string {
+  const name = line.itemDescription?.trim() || CATEGORY_LABEL[line.productCategory] || line.productCategory;
+  const amount = Number(line.lineAmount ?? 0);
+  return `${name} ${line.quantity}개 ${amount.toLocaleString('ko-KR')}원`;
 }
 
 /** 대분류의 기본 구성품을 한글 세부품목 라벨로 (설계서 03 §5.3). */

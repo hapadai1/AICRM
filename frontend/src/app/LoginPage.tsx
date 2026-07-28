@@ -1,5 +1,5 @@
 import { LockOutlined, UserOutlined } from '@ant-design/icons';
-import { App, Button, Card, Form, Input, Typography } from 'antd';
+import { App, Button, Card, Form, Input, Typography, theme } from 'antd';
 import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ApiError, request } from '../api/client';
@@ -18,6 +18,7 @@ interface LoginResponse {
 
 export function LoginPage() {
   const { message } = App.useApp();
+  const { token } = theme.useToken();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const setAuth = useAuthStore((s) => s.setAuth);
@@ -49,7 +50,7 @@ export function LoginPage() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: '#f0f2f5',
+        background: token.colorBgLayout,
       }}
     >
       <Card style={{ width: 380 }}>

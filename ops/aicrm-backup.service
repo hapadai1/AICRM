@@ -1,0 +1,17 @@
+[Unit]
+Description=AICRM 일일 백업 (DB + 업로드 파일)
+Documentation=file:///opt/aicrm/ops/README.md
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=aicrm
+Group=aicrm
+WorkingDirectory=/opt/aicrm
+ExecStart=/opt/aicrm/ops/backup.sh
+# 백업 대상 경로는 여기서 조정한다 (기본값은 backup.sh 참고)
+Environment=BACKUP_DIR=/var/backups/aicrm
+Environment=RETENTION_DAYS=30
+# NAS 등 다른 디스크로 한 벌 더 복사하려면 주석을 푼다
+# Environment=BACKUP_MIRROR_DIR=/mnt/nas/aicrm-backup
+SyslogIdentifier=aicrm-backup

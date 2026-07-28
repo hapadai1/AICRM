@@ -47,6 +47,10 @@ export function NotificationConfirmModal({ open, title, suggestion, onDone, onCa
 
   if (!suggestion) return null;
 
+  // 알림톡은 승인된 문구 그대로일 때만 나간다. 고친 문구는 SMS로 발송된다.
+  const edited = body !== suggestion.renderedBody;
+  const channel = edited ? 'SMS' : suggestion.channel;
+
   const finish = async (outcome: SendOutcome, historyId?: string) => {
     try {
       await onDone(outcome, historyId);
@@ -63,8 +67,9 @@ export function NotificationConfirmModal({ open, title, suggestion, onDone, onCa
         customerId: suggestion.customerId,
         phone: suggestion.recipientPhone,
         templateId: suggestion.templateId,
-        // 담당자가 본문을 고쳤을 수 있으므로 최종 문구를 변수로 덮어 보낸다.
-        variables: { ...suggestion.variables, 본문: body },
+        variables: suggestion.variables,
+        // 담당자가 창에서 고친 문구가 있으면 그대로 나간다(원문 그대로면 템플릿 채널 유지).
+        body,
         fallbackSms: true,
         orderId: suggestion.orderId ?? undefined,
         triggerKey: suggestion.triggerKey,
@@ -117,8 +122,8 @@ export function NotificationConfirmModal({ open, title, suggestion, onDone, onCa
         <Descriptions size="small" column={1} bordered>
           <Descriptions.Item label="받는 사람">{suggestion.recipientPhone}</Descriptions.Item>
           <Descriptions.Item label="채널">
-            <Tag color={suggestion.channel === 'ALIMTALK' ? 'gold' : 'blue'}>
-              {suggestion.channel === 'ALIMTALK' ? '알림톡' : 'SMS'}
+            <Tag color={channel === 'ALIMTALK' ? 'gold' : 'blue'}>
+              {channel === 'ALIMTALK' ? '알림톡' : 'SMS'}
             </Tag>
             <Typography.Text type="secondary">{suggestion.templateName}</Typography.Text>
           </Descriptions.Item>
@@ -129,6 +134,11 @@ export function NotificationConfirmModal({ open, title, suggestion, onDone, onCa
           onChange={(e) => setBody(e.target.value)}
           placeholder="보낼 내용"
         />
+        {edited && suggestion.channel === 'ALIMTALK' && (
+          <Typography.Text type="warning" style={{ fontSize: 12 }}>
+            문구를 고쳤으므로 알림톡 대신 SMS로 발송됩니다.
+          </Typography.Text>
+        )}
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           &quot;나중에&quot;를 고르면 대시보드 연락 대기 목록에 남습니다.
         </Typography.Text>
