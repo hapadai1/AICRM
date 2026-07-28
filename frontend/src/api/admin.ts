@@ -307,6 +307,25 @@ export async function saveOptionStages(
   );
 }
 
+/**
+ * 선택지 추가금액만 수정한다 — 사용중 버전에서도 쓸 수 있다.
+ *
+ * 구성(단계·선택지)을 바꾸려면 새 버전이 필요하지만 가격은 값만 조정하는 일이라
+ * 백엔드가 사용중 버전에도 허용한다. 확정된 계약은 선택 시점 스냅샷을 쓰므로 소급되지 않고,
+ * 언제 얼마에서 얼마로 바뀌었는지는 감사로그(대상: 옵션 선택지)에 남는다.
+ */
+export async function updateOptionChoicePrice(
+  choiceId: string,
+  extraPrice: number,
+  reason?: string,
+): Promise<{ choiceId: string; extraPrice: number; changed: boolean }> {
+  return request({
+    url: `/option-choices/${choiceId}/price`,
+    method: 'PATCH',
+    data: { extraPrice, reason },
+  });
+}
+
 export async function activateOptionSetVersion(
   versionId: string,
 ): Promise<OptionSetVersionSummary> {
@@ -429,6 +448,13 @@ const PERMISSION_GROUP_LABELS: Record<string, string> = {
   ROLE: '역할',
   AUDIT: '감사로그',
   FILE: '파일',
+  // 아래 5개가 빠져 있어 권한 화면 '업무 영역'에 영문 코드가 그대로 보였다
+  // (CONSULTATION·FITTING·JOURNEY·NAVER·PAYMENT).
+  CONSULTATION: '상담',
+  FITTING: '가봉',
+  JOURNEY: '진행 단계',
+  NAVER: '네이버 연동',
+  PAYMENT: '결제',
 };
 
 function toPermission(row: PermissionApiRow): PermissionDef {

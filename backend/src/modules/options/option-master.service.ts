@@ -12,6 +12,7 @@ import {
   ActivateOptionSetVersionDto,
   CreateOptionSetVersionDto,
   SaveOptionStagesDto,
+  UpdateOptionChoicePriceDto,
 } from './options.dto';
 
 /** 이미지 미지정 선택지에 연결하는 placeholder 이미지 */
@@ -213,6 +214,85 @@ export class OptionMasterService {
       });
     });
     return this.getVersionDetail(versionId);
+  }
+
+  /**
+   * PATCH /option-choices/:id/price — 선택지 추가금액만 수정한다.
+   *
+   * 구성(단계·선택지)을 바꾸려면 새 버전을 만들어야 하지만(saveStages는 DRAFT 전용),
+   * 가격은 같은 구성에서 값만 조정하는 일이라 사용중(ACTIVE) 버전에서도 바로 고친다.
+   * - 이미 확정된 계약: option_selection_values.extra_price_snapshot 을 쓰므로 영향 없다.
+   * - 앞으로의 선택: 바뀐 가격이 적용된다.
+   * - 종료(RETIRED) 버전은 과거 기록이므로 고치지 않는다.
+   * 변경 이력은 감사로그(OPTION_CHOICE / UPDATE)로만 남긴다 — 화면에 따로 노출하지 않는다.
+   */
+  async updateChoicePrice(choiceId: string, dto: UpdateOptionChoicePriceDto, actor: AuthUser) {
+    const choice = await this.prisma.optionChoice.findUnique({
+      where: { id: choiceId },
+      select: {
+        id: true,
+        choiceCode: true,
+        choiceName: true,
+        extraPrice: true,
+        optionStage: {
+          select: {
+            stageName: true,
+            optionSetVersionId: true,
+            optionSetVersion: { select: { status: true, versionNo: true } },
+          },
+        },
+      },
+    });
+    if (!choice) throw new NotFoundException('옵션 선택지가 없습니다.');
+
+    const versionStatus = choice.optionStage.optionSetVersion.status;
+    if (versionStatus === 'RETIRED')
+      throw new BusinessException(
+        'INVALID_STATUS_TRANSITION',
+        '종료된 버전의 가격은 수정할 수 없습니다.',
+        undefined,
+        { status: versionStatus },
+      );
+
+    const before = Number(choice.extraPrice);
+    if (before === dto.extraPrice) {
+      // 값이 같으면 감사로그를 남기지 않는다 — 이력이 의미 없는 줄로 지저분해진다.
+      return { choiceId, extraPrice: before, changed: false };
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.optionChoice.update({
+        where: { id: choiceId },
+        data: { extraPrice: dto.extraPrice },
+        select: { extraPrice: true },
+      });
+      await this.audit.log(
+        {
+          userId: actor.id,
+          action: 'UPDATE',
+          entityType: 'OPTION_CHOICE',
+          entityId: choiceId,
+          // 나중에 "이 계약 옵션 가격이 왜 이랬지"를 되짚을 때 단계·선택지 이름이 같이 보여야 한다.
+          before: {
+            extraPrice: before,
+            stageName: choice.optionStage.stageName,
+            choiceName: choice.choiceName,
+            versionNo: choice.optionStage.optionSetVersion.versionNo,
+          },
+          after: {
+            extraPrice: dto.extraPrice,
+            stageName: choice.optionStage.stageName,
+            choiceName: choice.choiceName,
+            versionNo: choice.optionStage.optionSetVersion.versionNo,
+          },
+          reason: dto.reason,
+        },
+        tx,
+      );
+      return row;
+    });
+
+    return { choiceId, extraPrice: Number(updated.extraPrice), changed: true };
   }
 
   /** POST /option-set-versions/:id/activate — 검증 후 기존 ACTIVE→RETIRED, 신규 ACTIVE (단일 트랜잭션) */

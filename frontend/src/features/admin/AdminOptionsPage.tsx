@@ -29,6 +29,7 @@ import {
   activateOptionSetVersion,
   createOptionSetVersion,
   fetchOptionSets,
+  updateOptionChoicePrice,
 } from '../../api/admin';
 import { CHOICE_SLOTS, MAX_CHOICES, MIN_CHOICES } from '../../api/admin';
 import type { OptionSetVersionStatus, OptionSetVersionSummary } from '../../api/admin';
@@ -50,6 +51,8 @@ const STATUS_META: Record<OptionSetVersionStatus, { label: string; color: string
 };
 
 interface EditableChoice {
+  /** 서버 선택지 id — 사용중 버전에서 가격만 바로 고칠 때 쓴다. 새로 추가한 칸은 없다. */
+  id?: string;
   name: string;
   factoryName: string;
   /** 계약금액에 더해지는 추가금액(원) */
@@ -107,6 +110,15 @@ const SLOT_COLUMN_LIMIT = 5;
 
 /** 줄바꿈 배치에서 한 줄에 놓는 선택지 수 */
 const CHOICES_PER_ROW = 3;
+
+/** 선택지 추가금액 상한(원) — 백엔드 MAX_EXTRA_PRICE 와 같은 값. 자릿수 오타를 막는다. */
+const MAX_EXTRA_PRICE = 100_000_000;
+
+/**
+ * 한 화면에 펼치는 단계 수.
+ * 사진이 원본 크기라 단계 하나가 400px 넘게 차지한다 — 전부 쌓으면 페이지가 7,000px을 넘었다.
+ */
+const STAGES_PER_PAGE = 3;
 
 /** 아직 이미지가 없는 선택지(신규 단계) 자리 표시 */
 function ImagePlaceholder() {
@@ -212,6 +224,7 @@ export function AdminOptionsPage() {
         choices: CHOICE_SLOTS.map((slot) => s.choices.find((c) => c.slot === slot))
           .filter((c): c is NonNullable<typeof c> => !!c)
           .map((c) => ({
+            id: c.id,
             name: c.name,
             factoryName: c.factoryName ?? '',
             extraPrice: c.extraPrice,
@@ -229,6 +242,21 @@ export function AdminOptionsPage() {
   };
   const onApiError = (e: unknown) =>
     message.error(e instanceof ApiError ? e.message : '처리에 실패했습니다.');
+
+  /**
+   * 사용중 버전의 추가금액만 바로 고친다.
+   * 구성 변경은 새 버전이 필요하지만 가격은 값만 바뀌는 일이라 새 버전을 만들지 않는다.
+   * 확정된 계약은 선택 시점 스냅샷을 쓰므로 소급되지 않고, 이력은 감사로그에 남는다.
+   */
+  const priceMutation = useMutation({
+    mutationFn: ({ choiceId, extraPrice }: { choiceId: string; extraPrice: number }) =>
+      updateOptionChoicePrice(choiceId, extraPrice),
+    onSuccess: (res) => {
+      if (res.changed) message.success('추가금액을 변경했습니다. (변경 이력은 감사로그에 남습니다)');
+      invalidate();
+    },
+    onError: onApiError,
+  });
 
   const createVersionMutation = useMutation({
     mutationFn: () => createOptionSetVersion(currentSet!.id, selectedVersionId ?? undefined),
@@ -320,6 +348,25 @@ export function AdminOptionsPage() {
     setDirty(true);
   };
 
+  /**
+   * 서버에 저장된 추가금액. 포커스를 벗어날 때 값이 실제로 달라졌는지만 보고 PATCH 한다
+   * (숫자를 눌렀다 되돌린 경우까지 감사로그에 남으면 이력이 지저분해진다).
+   */
+  const serverPriceById = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const stage of version?.stages ?? []) {
+      for (const c of stage.choices) map.set(c.id, c.extraPrice);
+    }
+    return map;
+  }, [version]);
+
+  const savePriceIfChanged = (choice: EditableChoice) => {
+    if (!choice.id) return;
+    const saved = serverPriceById.get(choice.id);
+    if (saved === undefined || saved === choice.extraPrice) return;
+    priceMutation.mutate({ choiceId: choice.id, extraPrice: choice.extraPrice });
+  };
+
   const addChoiceButton = (stage: EditableStage) => (
     <Button
       size="small"
@@ -407,10 +454,34 @@ export function AdminOptionsPage() {
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 {choice.factoryName || '-'}
               </Typography.Text>
-              {choice.extraPrice > 0 && (
-                <Tag color="red" style={{ marginInlineEnd: 0 }}>
-                  +{choice.extraPrice.toLocaleString()}원
-                </Tag>
+              {/*
+                추가금액은 사용중 버전에서도 바로 고친다 — 가격만 바뀌는 일에 새 버전을
+                만들게 하면 실무에서 버전이 계속 늘어난다. 종료된 버전은 과거 기록이라 잠근다.
+              */}
+              {choice.id && version?.status === 'ACTIVE' ? (
+                <InputNumber
+                  size="small"
+                  min={0}
+                  max={MAX_EXTRA_PRICE}
+                  step={1000}
+                  style={{ width: '100%' }}
+                  prefix="+"
+                  addonAfter="원"
+                  value={choice.extraPrice}
+                  formatter={(v) => `${v ?? 0}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+                  parser={(v) => Number((v ?? '').replace(/,/g, ''))}
+                  disabled={priceMutation.isPending}
+                  // 입력 중마다 저장하지 않는다 — 포커스를 벗어나거나 Enter를 눌렀을 때만 보낸다.
+                  onChange={(v) => patchChoice(stage.key, index, { extraPrice: v ?? 0 })}
+                  onBlur={() => savePriceIfChanged(choice)}
+                  onPressEnter={() => savePriceIfChanged(choice)}
+                />
+              ) : (
+                choice.extraPrice > 0 && (
+                  <Tag color="red" style={{ marginInlineEnd: 0 }}>
+                    +{choice.extraPrice.toLocaleString()}원
+                  </Tag>
+                )
               )}
             </>
           )}
@@ -464,7 +535,7 @@ export function AdminOptionsPage() {
     {
       title: '순서',
       dataIndex: 'sortOrder',
-      width: 80,
+      width: 56,
       render: (v: number, s) =>
         isDraft ? (
           <InputNumber
@@ -481,7 +552,8 @@ export function AdminOptionsPage() {
     {
       title: '단계명',
       dataIndex: 'name',
-      width: 180,
+      // 단계명은 "자켓 디자인"처럼 짧다 — 180px은 좌측 블록만 넓히고 사진 칸을 밀어냈다.
+      width: 116,
       render: (v: string, s) =>
         isDraft ? (
           <Input
@@ -496,7 +568,7 @@ export function AdminOptionsPage() {
     {
       title: '필수',
       dataIndex: 'required',
-      width: 70,
+      width: 52,
       align: 'center',
       render: (v: boolean, s) => (
         <Checkbox
@@ -556,7 +628,21 @@ export function AdminOptionsPage() {
       loading={versionQuery.isLoading}
       dataSource={rows}
       columns={stageColumns}
-      pagination={false}
+      /*
+        사진을 원본 크기로 두는 규칙(THUMB_STYLE 주석)은 그대로 지킨다 — 줄이면 확인이 안 된다.
+        대신 한 화면에 쌓는 단계 수를 제한한다. 단계를 전부 펼치면 페이지가 7,000px을 넘어
+        아래쪽 단계는 스크롤로만 닿을 수 있었다. 한 번에 STAGES_PER_PAGE개씩 본다.
+      */
+      pagination={
+        rows.length > STAGES_PER_PAGE
+          ? {
+              pageSize: STAGES_PER_PAGE,
+              showSizeChanger: true,
+              pageSizeOptions: [STAGES_PER_PAGE, 6, 12, 50],
+              showTotal: (total, range) => `단계 ${range[0]}–${range[1]} / 총 ${total}`,
+            }
+          : false
+      }
       scroll={{ x: 'max-content' }}
       locale={{ emptyText: '단계가 없습니다. 단계를 추가해 주세요.' }}
     />
@@ -699,12 +785,22 @@ export function AdminOptionsPage() {
             ) : undefined
           }
         >
-          {!isDraft && (
+          {/* 가격만 바로 고칠 수 있게 열어 두었으므로 "직접 수정 불가"라고만 쓰면 사실과 다르다. */}
+          {version.status === 'ACTIVE' && (
             <Alert
               type="info"
               showIcon
               style={{ marginBottom: 12 }}
-              message="사용중·종료 버전은 직접 수정할 수 없습니다. 변경이 필요하면 새 버전을 생성해 주세요."
+              message="단계·선택지 구성은 새 버전을 만들어 바꿉니다. 추가금액은 여기서 바로 고칠 수 있습니다."
+              description="추가금액 변경은 이미 확정된 계약에 소급되지 않습니다(선택 시점 금액이 계약에 남습니다). 변경 이력은 감사로그 › 옵션 선택지에서 확인합니다."
+            />
+          )}
+          {version.status === 'RETIRED' && (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="종료된 버전은 과거 기록이라 수정할 수 없습니다. 변경이 필요하면 새 버전을 생성해 주세요."
             />
           )}
           {isDraft && dirty && (
