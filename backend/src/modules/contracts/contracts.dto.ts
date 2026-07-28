@@ -113,8 +113,21 @@ export class UpdateContractDto extends ContractAmountsDto {
   version?: number;
 }
 
-/** 계약 상태 (설계서 6.1) */
-export const CONTRACT_STATUSES = ['DRAFT', 'CONFIRMED', 'CHANGED', 'CANCELLED'] as const;
+/**
+ * 계약 상태 (설계서 6.1 + v2 확정 2026-07-28).
+ *
+ * 흐름: DRAFT(계약서 작성) → CONFIRMED(등록·주문 생성) → [스타일 컨설팅] → 서명 →
+ * COMPLETED(계약 완료). 변경계약을 확정하면 CHANGED로 돌아가 재서명·재완료한다.
+ */
+export const CONTRACT_STATUSES = ['DRAFT', 'CONFIRMED', 'CHANGED', 'COMPLETED', 'CANCELLED'] as const;
+
+/** 계약 완료 (서명 필수) */
+export class CompleteContractDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  version?: number;
+}
 
 /** 목록 기간 필터 기준 (개편계획 06 §2.1) */
 export const CONTRACT_DATE_FIELDS = ['contractedAt', 'completionDueDate'] as const;

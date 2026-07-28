@@ -28,8 +28,12 @@ export const ERROR_CODES = {
   /** 삭제 불가 상태이거나 진행 이력이 있는 계약의 삭제 시도 */
   CONTRACT_NOT_DELETABLE: HttpStatus.CONFLICT,
   CONTRACT_VERSION_CONFLICT: HttpStatus.CONFLICT,
-  /** 서명 없이 계약 확정을 시도 (v2 설계서 03 §2.4 / D4) */
+  /** 서명 없이 계약 확정·완료를 시도 (v2 설계서 03 §2.4 / D4) */
   CONTRACT_SIGNATURE_REQUIRED: HttpStatus.CONFLICT,
+  /** 스타일 컨설팅이 끝나지 않은 상태에서 서명 시도 (v2 확정 2026-07-28) */
+  CONSULTING_NOT_CONFIRMED: HttpStatus.UNPROCESSABLE_ENTITY,
+  /** 완료할 수 없는 상태의 계약 (확정/변경확정 상태에서만 완료 가능) */
+  CONTRACT_NOT_COMPLETABLE: HttpStatus.CONFLICT,
   ORDER_ITEM_COUNT_LOCKED: HttpStatus.UNPROCESSABLE_ENTITY,
 
   // 옵션·채촌·작업지시서

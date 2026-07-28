@@ -18,10 +18,15 @@ export type ContractVersionStatus = 'DRAFT' | 'CONFIRMED' | 'SUPERSEDED';
 
 /**
  * 목록 필터로 보낼 수 있는 상태 — 백엔드 CONTRACT_STATUSES 와 동일해야 한다.
- * COMPLETED 는 DB에는 존재하지만 백엔드 필터 허용값이 아니라 400을 만든다. 그래서 필터에서 제외한다.
- * (라벨 맵에는 남겨 둬야 COMPLETED 행이 정상 표시된다 — features/contracts/labels.ts)
+ * COMPLETED(계약 완료)는 v2 흐름 확정(2026-07-28)으로 정식 상태가 되어 필터에도 넣는다.
  */
-export const CONTRACT_FILTER_STATUSES: ContractStatus[] = ['DRAFT', 'CONFIRMED', 'CHANGED', 'CANCELLED'];
+export const CONTRACT_FILTER_STATUSES: ContractStatus[] = [
+  'DRAFT',
+  'CONFIRMED',
+  'CHANGED',
+  'COMPLETED',
+  'CANCELLED',
+];
 
 export interface ContractTypeLine {
   transactionType: TransactionType;
@@ -540,7 +545,53 @@ export interface SignatureMeta {
   downloadUrl?: string | null;
 }
 
-/** 서명 이미지 저장·교체 (DRAFT 버전 한정). */
+/**
+ * 계약 흐름 게이팅 (GET /contracts/:id/flow).
+ * 계약서 등록 → 스타일 컨설팅 → 서명 → 계약 완료 중 어디까지 왔는지 알려준다.
+ */
+export interface ContractFlow {
+  contractId: string;
+  status: ContractStatus;
+  version: number;
+  currentVersionId: string | null;
+  registered: boolean;
+  consulting: {
+    ready: boolean;
+    targetCount: number;
+    pending: { orderItemId: string; displayName: string; transactionType: TransactionType }[];
+  };
+  signed: boolean;
+  signedAt: string | null;
+  signerName: string | null;
+  canSign: boolean;
+  canComplete: boolean;
+  completed: boolean;
+  excelStored: boolean;
+}
+
+export function fetchContractFlow(id: string): Promise<ContractFlow> {
+  return request<ContractFlow>({ url: `/contracts/${id}/flow` });
+}
+
+/** 계약 완료 — 서명이 끝난 확정 계약만. 완료 시점 계약서 엑셀이 보관된다. */
+export interface ContractCompleteResult {
+  contractId: string;
+  contractNo: string;
+  status: ContractStatus;
+  versionNo: number;
+  excelFileId: string;
+  downloadUrl: string;
+}
+
+export function completeContract(id: string, body: { version?: number }): Promise<ContractCompleteResult> {
+  return request<ContractCompleteResult>({
+    url: `/contracts/${id}/complete`,
+    method: 'POST',
+    data: body,
+  });
+}
+
+/** 서명 이미지 저장·교체 (컨설팅 확정 후 현재 확정 버전 한정). */
 export function saveSignature(
   contractId: string,
   versionId: string,
