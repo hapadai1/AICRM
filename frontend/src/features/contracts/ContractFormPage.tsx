@@ -226,8 +226,6 @@ export function ContractFormPage() {
       weddingDate: fmt(values.weddingDate),
       // 자동 모드는 품목 합계를 그대로 보낸다(폼 값 동기화 타이밍에 기대지 않는다).
       totalAmount: manualTotal ? (values.totalAmount ?? 0) : lineTotal,
-      // 계약금 입력 필드는 없앴다. 기존 계약에 저장된 값은 건드리지 않고 그대로 둔다.
-      depositAmount: draft?.depositAmount ?? 0,
       note: values.note,
       lines: lines.map((l) => ({
         id: l.id,

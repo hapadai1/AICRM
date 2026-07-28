@@ -55,7 +55,6 @@ describe('대시보드 (dashboard)', () => {
         contractNo: 'CTR-260701-001',
         customerId,
         status: 'CONFIRMED',
-        balanceDueDate: dbDate(-1), // 잔금 결제 예정일 경과 → 결제 지연 판정 (연동정합화 §4·§10)
       },
     });
     const versionId = randomUUID();

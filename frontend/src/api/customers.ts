@@ -21,7 +21,6 @@ export interface CustomerListItem {
   /** 세부 진행상태: 진행 journey의 현재 단계. 진행 journey가 없으면 null */
   currentStage?: CustomerCurrentStage | null;
   contractCount: number;
-  balanceAmount: number;
 }
 
 export interface CustomerListParams {
@@ -70,8 +69,6 @@ export interface CustomerContractRow {
   status: string;
   currentVersionNo: number | null;
   totalAmount: number;
-  depositAmount: number;
-  balanceAmount: number;
   contractedAt?: string | null;
   completionDueDate?: string | null;
 }

@@ -280,8 +280,6 @@ export function ContractDetailPage() {
         changeReason: revision.changeReason,
         version: detail?.version ?? 1,
         totalAmount: revTotal,
-        // 계약금 입력은 없앴다. 기존 버전에 저장된 값을 그대로 이어 보낸다.
-        depositAmount: draftRevision?.depositAmount ?? 0,
         lines: revLines.map((l) => ({
           id: l.id,
           transactionType: l.transactionType,
@@ -571,7 +569,7 @@ export function ContractDetailPage() {
         </Flex>
 
         {/*
-          금액(합계·계약금/잔금)은 아래 계약서 카드의 요약에서만 보여준다. 여기서 또 쓰면
+          금액(품목 합계·총 계약금액)은 아래 계약서 카드의 요약에서만 보여준다. 여기서 또 쓰면
           같은 숫자가 두 번 나오고, 3열 표에 빈 칸이 남는다.
           계약 비고 필드는 백엔드 스키마에 없어 표시하지 않는다 (docs/dev/08 §4).
         */}

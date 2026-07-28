@@ -100,8 +100,6 @@ const LIST_INCLUDE = {
       versionNo: true,
       versionStatus: true,
       totalAmount: true,
-      depositAmount: true,
-      balanceAmount: true,
       completionDueDate: true,
     },
   },
@@ -173,8 +171,6 @@ export class ContractsService {
           versionNo: 1,
           versionStatus: 'DRAFT',
           totalAmount: dto.totalAmount ?? 0,
-          depositAmount: dto.depositAmount ?? 0,
-          balanceAmount: dto.balanceAmount ?? 0,
           completionDueDate: toDate(dto.completionDueDate),
           photoDate: toDate(dto.photoDate),
           weddingDate: toDate(dto.weddingDate),
@@ -365,8 +361,6 @@ export class ContractsService {
         where: { id: draft.id },
         data: {
           ...(dto.totalAmount !== undefined ? { totalAmount: dto.totalAmount } : {}),
-          ...(dto.depositAmount !== undefined ? { depositAmount: dto.depositAmount } : {}),
-          ...(dto.balanceAmount !== undefined ? { balanceAmount: dto.balanceAmount } : {}),
           ...(dto.completionDueDate !== undefined ? { completionDueDate: toDate(dto.completionDueDate) } : {}),
           ...(dto.photoDate !== undefined ? { photoDate: toDate(dto.photoDate) } : {}),
           ...(dto.weddingDate !== undefined ? { weddingDate: toDate(dto.weddingDate) } : {}),
@@ -533,8 +527,6 @@ export class ContractsService {
         versionStatus: 'DRAFT',
         changeReason: dto.changeReason ?? null,
         totalAmount: dto.totalAmount ?? base.totalAmount,
-        depositAmount: dto.depositAmount ?? base.depositAmount,
-        balanceAmount: dto.balanceAmount ?? base.balanceAmount,
         completionDueDate: dto.completionDueDate !== undefined ? toDate(dto.completionDueDate) : base.completionDueDate,
         photoDate: dto.photoDate !== undefined ? toDate(dto.photoDate) : base.photoDate,
         weddingDate: dto.weddingDate !== undefined ? toDate(dto.weddingDate) : base.weddingDate,
@@ -608,12 +600,6 @@ export class ContractsService {
         }
         const amountData: Prisma.ContractVersionUncheckedUpdateInput = {};
         if (dto.totalAmount !== undefined) amountData.totalAmount = dto.totalAmount;
-        if (dto.depositAmount !== undefined) amountData.depositAmount = dto.depositAmount;
-        if (dto.totalAmount !== undefined || dto.depositAmount !== undefined) {
-          const total = dto.totalAmount ?? Number(revision.totalAmount);
-          const deposit = dto.depositAmount ?? Number(revision.depositAmount);
-          amountData.balanceAmount = total - deposit;
-        }
 
         await tx.contractVersion.update({
           where: { id: revisionId },
@@ -865,8 +851,6 @@ export class ContractsService {
             versionStatus: version.versionStatus,
             changeReason: version.changeReason,
             totalAmount: version.totalAmount,
-            depositAmount: version.depositAmount,
-            balanceAmount: version.balanceAmount,
             completionDueDate: version.completionDueDate,
             photoDate: version.photoDate,
             weddingDate: version.weddingDate,
@@ -1217,8 +1201,6 @@ export class ContractsService {
     version: {
       versionNo: number;
       totalAmount: unknown;
-      depositAmount: unknown;
-      balanceAmount: unknown;
       completionDueDate: Date | null;
       photoDate: Date | null;
       weddingDate: Date | null;
@@ -1232,8 +1214,6 @@ export class ContractsService {
       rowVersion: contract.rowVersion,
       versionNo: version.versionNo,
       totalAmount: version.totalAmount,
-      depositAmount: version.depositAmount,
-      balanceAmount: version.balanceAmount,
       completionDueDate: version.completionDueDate,
       photoDate: version.photoDate,
       weddingDate: version.weddingDate,

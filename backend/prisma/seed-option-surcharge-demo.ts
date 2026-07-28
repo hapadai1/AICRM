@@ -28,7 +28,6 @@ const CONTRACT_NO = 'CTR-OPTDEMO-001';
 const ORDER_NO = 'ORD-OPTDEMO-001';
 
 const UNIT_PRICE = 1_500_000; // 맞춤 정장 1벌 기본가
-const DEPOSIT = 1_000_000;
 
 function daysAgo(n: number): Date {
   const d = new Date();
@@ -123,8 +122,6 @@ async function main() {
         versionNo: 1,
         versionStatus: 'CONFIRMED',
         totalAmount: baseTotal,
-        depositAmount: DEPOSIT,
-        balanceAmount: baseTotal - DEPOSIT,
         completionDueDate: daysAgo(-14),
         confirmedBy: admin.id,
         confirmedAt: daysAgo(10),
@@ -236,14 +233,11 @@ async function main() {
       contractSurcharge += surcharge;
     }
 
-    // 4) 옵션 추가금액을 계약 현재 버전 금액에 반영(total/balance 증가)
+    // 4) 옵션 추가금액을 계약 현재 버전 총액에 반영
     if (contractSurcharge > 0) {
       await tx.contractVersion.update({
         where: { id: versionId },
-        data: {
-          totalAmount: { increment: contractSurcharge },
-          balanceAmount: { increment: contractSurcharge },
-        },
+        data: { totalAmount: { increment: contractSurcharge } },
       });
     }
 

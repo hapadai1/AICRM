@@ -340,7 +340,6 @@ model Contract {
   status           String    @default("DRAFT") @map("status") @db.VarChar(20)
   currentVersionId String?   @map("current_version_id") @db.Uuid
   contractedAt     DateTime? @map("contracted_at") @db.Timestamptz(6)
-  balanceDueDate   DateTime? @map("balance_due_date") @db.Date
   rowVersion       Int       @default(0) @map("row_version")
   createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -361,9 +360,8 @@ model ContractVersion {
   versionNo         Int       @map("version_no")
   versionStatus     String    @default("DRAFT") @map("version_status") @db.VarChar(20)
   changeReason      String?   @map("change_reason")
+  /// 총 계약금액. 거래가 전부 일시불이라 계약금·잔금은 두지 않는다(v2 확정 2026-07-28).
   totalAmount       Decimal   @default(0) @map("total_amount") @db.Decimal(14, 2)
-  depositAmount     Decimal   @default(0) @map("deposit_amount") @db.Decimal(14, 2)
-  balanceAmount     Decimal   @default(0) @map("balance_amount") @db.Decimal(14, 2)
   completionDueDate DateTime? @map("completion_due_date") @db.Date
   photoDate         DateTime? @map("photo_date") @db.Date
   weddingDate       DateTime? @map("wedding_date") @db.Date

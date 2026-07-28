@@ -71,8 +71,6 @@ interface ContractVersionApiRow {
   versionStatus: ContractVersionStatus;
   changeReason?: string | null;
   totalAmount: string | number;
-  depositAmount: string | number;
-  balanceAmount: string | number;
   completionDueDate?: string | null;
   photoDate?: string | null;
   weddingDate?: string | null;
@@ -81,7 +79,7 @@ interface ContractVersionApiRow {
   lines?: ContractLineApiRow[];
 }
 
-/** 목록 응답의 currentVersion 은 select 가 좁다 (계약금·잔금 없음) */
+/** 목록 응답의 currentVersion 은 select 가 좁다 */
 interface ContractListVersionApiRow {
   versionNo: number;
   versionStatus: ContractVersionStatus;
@@ -97,7 +95,6 @@ interface ContractListApiRow {
   status: ContractStatus;
   contractedAt?: string | null;
   createdAt?: string | null;
-  balanceDueDate?: string | null;
   rowVersion: number;
   customer: { id: string; name: string; phone: string };
   contractType?: { code: string; name: string } | null;
@@ -187,8 +184,6 @@ export interface ContractVersion {
   changeReason?: string;
   createdAt: string;
   totalAmount: number;
-  depositAmount: number;
-  balanceAmount: number;
   completionDueDate?: string;
   photoDate?: string;
   weddingDate?: string;
@@ -209,8 +204,6 @@ export interface ContractDetail {
   /** 현재 적용 버전(currentVersion)에서 편 값들 */
   currentVersionNo?: number;
   totalAmount?: number;
-  depositAmount?: number;
-  balanceAmount?: number;
   completionDueDate?: string;
   photoDate?: string;
   weddingDate?: string;
@@ -245,8 +238,6 @@ function toVersion(row: ContractVersionApiRow): ContractVersion {
     changeReason: row.changeReason ?? undefined,
     createdAt: toDateOnly(row.createdAt) ?? '',
     totalAmount: toNumber(row.totalAmount) ?? 0,
-    depositAmount: toNumber(row.depositAmount) ?? 0,
-    balanceAmount: toNumber(row.balanceAmount) ?? 0,
     completionDueDate: toDateOnly(row.completionDueDate),
     photoDate: toDateOnly(row.photoDate),
     weddingDate: toDateOnly(row.weddingDate),
@@ -286,8 +277,6 @@ function toContractDetail(row: ContractDetailApiRow): ContractDetail {
     contractedAt: toDateOnly(row.contractedAt),
     currentVersionNo: current?.versionNo,
     totalAmount: toNumber(current?.totalAmount),
-    depositAmount: toNumber(current?.depositAmount),
-    balanceAmount: toNumber(current?.balanceAmount),
     completionDueDate: toDateOnly(current?.completionDueDate),
     photoDate: toDateOnly(current?.photoDate),
     weddingDate: toDateOnly(current?.weddingDate),
@@ -315,7 +304,6 @@ export interface ContractDraftInput {
   photoDate?: string;
   weddingDate?: string;
   totalAmount: number;
-  depositAmount: number;
   note?: string;
   lines: ContractLineInput[];
 }
@@ -333,7 +321,6 @@ export interface RevisionConfirmInput {
   changeReason?: string;
   version: number;
   totalAmount: number;
-  depositAmount: number;
   lines: ContractLineInput[];
 }
 
@@ -448,7 +435,6 @@ function toDraftPayload(body: Partial<ContractDraftInput>): Record<string, unkno
     ...(body.photoDate !== undefined ? { photoDate: body.photoDate } : {}),
     ...(body.weddingDate !== undefined ? { weddingDate: body.weddingDate } : {}),
     ...(body.totalAmount !== undefined ? { totalAmount: body.totalAmount } : {}),
-    ...(body.depositAmount !== undefined ? { depositAmount: body.depositAmount } : {}),
     ...(body.lines ? { lines: toLinePayload(body.lines) } : {}),
   };
 }
@@ -497,7 +483,6 @@ export function confirmContractRevision(id: string, revisionId: string, body: Re
       ...(body.changeReason !== undefined ? { changeReason: body.changeReason } : {}),
       version: body.version,
       totalAmount: body.totalAmount,
-      depositAmount: body.depositAmount,
       lines: toLinePayload(body.lines),
     },
   });
@@ -656,8 +641,6 @@ export interface ContractDocument {
   contractTypeName?: string;
   versionNo?: number;
   totalAmount: number;
-  depositAmount: number;
-  balanceAmount: number;
   completionDueDate?: string;
   photoDate?: string;
   weddingDate?: string;
@@ -704,8 +687,6 @@ interface ContractDocumentApiRow {
     versionNo: number;
     versionStatus: ContractVersionStatus;
     totalAmount: string | number;
-    depositAmount: string | number;
-    balanceAmount: string | number;
     completionDueDate?: string | null;
     photoDate?: string | null;
     weddingDate?: string | null;
@@ -725,8 +706,6 @@ export function fetchContractDocument(id: string): Promise<ContractDocument> {
     contractTypeName: row.contractType?.name ?? undefined,
     versionNo: row.version?.versionNo,
     totalAmount: toNumber(row.version?.totalAmount) ?? 0,
-    depositAmount: toNumber(row.version?.depositAmount) ?? 0,
-    balanceAmount: toNumber(row.version?.balanceAmount) ?? 0,
     completionDueDate: toDateOnly(row.version?.completionDueDate),
     photoDate: toDateOnly(row.version?.photoDate),
     weddingDate: toDateOnly(row.version?.weddingDate),

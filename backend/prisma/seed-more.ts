@@ -194,9 +194,9 @@ async function main(): Promise<void> {
       }
       const createContract = async (args: {
         contractNo: string; customerId: string; typeCode: string; status: string;
-        contractedAt: Date; balanceDueDate?: Date | null;
+        contractedAt: Date;
         versions: Array<{
-          versionNo: number; versionStatus: string; total: number; deposit: number;
+          versionNo: number; versionStatus: string; total: number;
           confirmedAt?: Date; completionDueDate?: Date; photoDate?: Date; weddingDate?: Date;
           changeReason?: string; lines: LineDef[];
         }>;
@@ -210,7 +210,6 @@ async function main(): Promise<void> {
             contractTypeId: contractTypeId(args.typeCode),
             status: args.status,
             contractedAt: args.contractedAt,
-            balanceDueDate: args.balanceDueDate ?? null,
           },
         });
         const versionLineIds: string[][] = [];
@@ -225,8 +224,6 @@ async function main(): Promise<void> {
               versionStatus: v.versionStatus,
               changeReason: v.changeReason ?? null,
               totalAmount: v.total,
-              depositAmount: v.deposit,
-              balanceAmount: v.total - v.deposit,
               completionDueDate: v.completionDueDate ?? null,
               photoDate: v.photoDate ?? null,
               weddingDate: v.weddingDate ?? null,
@@ -553,7 +550,7 @@ async function main(): Promise<void> {
       const repair = async (args: {
         customerId: string; repairType: string; requestDate: Date; dueDate?: Date; status: string;
         description: string; orderId?: string; orderItemId?: string; componentId?: string;
-        rentalInventoryItemId?: string; notes?: string;
+        notes?: string;
         events: Array<{ previousStatus?: string; newStatus: string; eventDate: Date }>;
       }): Promise<void> => {
         const id = uuid();
@@ -564,7 +561,6 @@ async function main(): Promise<void> {
             orderId: args.orderId ?? null,
             orderItemId: args.orderItemId ?? null,
             componentId: args.componentId ?? null,
-            rentalInventoryItemId: args.rentalInventoryItemId ?? null,
             repairType: args.repairType,
             requestDate: args.requestDate,
             dueDate: args.dueDate ?? null,
@@ -723,10 +719,10 @@ async function main(): Promise<void> {
       // =====================================================================
       const hjm = await createContract({
         contractNo: 'CTR-260625-101', customerId: 한지민, typeCode: 'WEDDING_PACKAGE_RENTAL',
-        status: 'CONFIRMED', contractedAt: at(-24, 15), balanceDueDate: dateOnly(12),
+        status: 'CONFIRMED', contractedAt: at(-24, 15),
         versions: [
           {
-            versionNo: 1, versionStatus: 'SUPERSEDED', total: 3600000, deposit: 1500000,
+            versionNo: 1, versionStatus: 'SUPERSEDED', total: 3600000,
             confirmedAt: at(-24, 15), completionDueDate: dateOnly(16), photoDate: dateOnly(21), weddingDate: dateOnly(30),
             lines: [
               { transactionType: 'CUSTOM', productCategory: 'SUIT', itemDescription: '맞춤 예복 정장', quantity: 2, unitPrice: 1400000 },
@@ -735,7 +731,7 @@ async function main(): Promise<void> {
             ],
           },
           {
-            versionNo: 2, versionStatus: 'CONFIRMED', total: 4200000, deposit: 1500000,
+            versionNo: 2, versionStatus: 'CONFIRMED', total: 4200000,
             confirmedAt: at(-18, 14), completionDueDate: dateOnly(16), photoDate: dateOnly(21), weddingDate: dateOnly(30),
             changeReason: '맞춤 셔츠 2장 추가',
             lines: [
@@ -849,10 +845,10 @@ async function main(): Promise<void> {
       // =====================================================================
       const osh = await createContract({
         contractNo: 'CTR-260707-102', customerId: 오세훈, typeCode: 'BUSINESS_SUIT_CUSTOM',
-        status: 'CONFIRMED', contractedAt: at(-16, 17), balanceDueDate: dateOnly(-3),
+        status: 'CONFIRMED', contractedAt: at(-16, 17),
         versions: [
           {
-            versionNo: 1, versionStatus: 'CONFIRMED', total: 2100000, deposit: 700000,
+            versionNo: 1, versionStatus: 'CONFIRMED', total: 2100000,
             confirmedAt: at(-16, 17), completionDueDate: dateOnly(5),
             lines: [
               { transactionType: 'CUSTOM', productCategory: 'SUIT', itemDescription: '맞춤 비즈니스 정장', quantity: 1, unitPrice: 1500000 },
@@ -912,10 +908,10 @@ async function main(): Promise<void> {
       // =====================================================================
       const sjw = await createContract({
         contractNo: 'CTR-260512-103', customerId: 서지우, typeCode: 'WEDDING_PACKAGE_RENTAL',
-        status: 'COMPLETED', contractedAt: at(-65, 14), balanceDueDate: null,
+        status: 'COMPLETED', contractedAt: at(-65, 14),
         versions: [
           {
-            versionNo: 1, versionStatus: 'CONFIRMED', total: 900000, deposit: 300000,
+            versionNo: 1, versionStatus: 'CONFIRMED', total: 900000,
             confirmedAt: at(-65, 14), completionDueDate: dateOnly(-40),
             lines: [
               { transactionType: 'RENTAL', productCategory: 'SUIT', itemDescription: '렌탈 예식용 턱시도', quantity: 1, unitPrice: 700000 },
@@ -953,10 +949,10 @@ async function main(): Promise<void> {
       // =====================================================================
       const bjh = await createContract({
         contractNo: 'CTR-260611-105', customerId: 배정훈, typeCode: 'BUSINESS_SUIT_CUSTOM',
-        status: 'CANCELLED', contractedAt: at(-40, 11), balanceDueDate: null,
+        status: 'CANCELLED', contractedAt: at(-40, 11),
         versions: [
           {
-            versionNo: 1, versionStatus: 'CONFIRMED', total: 1300000, deposit: 400000,
+            versionNo: 1, versionStatus: 'CONFIRMED', total: 1300000,
             confirmedAt: at(-40, 11), completionDueDate: dateOnly(-5),
             lines: [
               { transactionType: 'CUSTOM', productCategory: 'SUIT', itemDescription: '맞춤 비즈니스 정장', quantity: 1, unitPrice: 1300000 },
@@ -980,10 +976,10 @@ async function main(): Promise<void> {
       // =====================================================================
       const ydh = await createContract({
         contractNo: 'CTR-260712-106', customerId: 윤도현, typeCode: 'WEDDING_PACKAGE_RENTAL',
-        status: 'CONFIRMED', contractedAt: at(-9, 16), balanceDueDate: dateOnly(3),
+        status: 'CONFIRMED', contractedAt: at(-9, 16),
         versions: [
           {
-            versionNo: 1, versionStatus: 'CONFIRMED', total: 750000, deposit: 250000,
+            versionNo: 1, versionStatus: 'CONFIRMED', total: 750000,
             confirmedAt: at(-9, 16), completionDueDate: dateOnly(4),
             lines: [
               { transactionType: 'RENTAL', productCategory: 'SUIT', itemDescription: '렌탈 행사용 정장', quantity: 1, unitPrice: 550000 },

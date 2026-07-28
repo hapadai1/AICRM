@@ -597,7 +597,7 @@ async function main(): Promise<void> {
         contractId: string,
         versionNo: number,
         versionStatus: string,
-        amounts: { total: number; deposit: number },
+        amounts: { total: number },
         dates: { confirmedAt?: Date; completionDueDate?: Date; photoDate?: Date; weddingDate?: Date },
         changeReason: string | null,
         lines: LineDef[],
@@ -611,8 +611,6 @@ async function main(): Promise<void> {
             versionStatus,
             changeReason,
             totalAmount: amounts.total,
-            depositAmount: amounts.deposit,
-            balanceAmount: amounts.total - amounts.deposit,
             completionDueDate: dates.completionDueDate ?? null,
             photoDate: dates.photoDate ?? null,
             weddingDate: dates.weddingDate ?? null,
@@ -653,12 +651,11 @@ async function main(): Promise<void> {
           contractTypeId: weddingType.id,
           status: 'CONFIRMED',
           contractedAt: at(-30, 15),
-          balanceDueDate: dateOnly(-5), // 잔금 결제 지연 데모 (과거 예정일 + 미수 잔액)
         },
       });
       await createVersion(
         ct1, 1, 'SUPERSEDED',
-        { total: 1850000, deposit: 1000000 },
+        { total: 1850000 },
         { confirmedAt: at(-30, 15), completionDueDate: dateOnly(14), photoDate: dateOnly(20), weddingDate: dateOnly(45) },
         null,
         [
@@ -669,7 +666,7 @@ async function main(): Promise<void> {
       );
       const ct1v2 = await createVersion(
         ct1, 2, 'CONFIRMED',
-        { total: 3200000, deposit: 1000000 },
+        { total: 3200000 },
         { confirmedAt: at(-25, 14), completionDueDate: dateOnly(14), photoDate: dateOnly(20), weddingDate: dateOnly(45) },
         '혼주 정장 1벌 추가',
         [
@@ -690,12 +687,11 @@ async function main(): Promise<void> {
           contractTypeId: businessType.id,
           status: 'CONFIRMED',
           contractedAt: at(-15, 16),
-          balanceDueDate: dateOnly(10),
         },
       });
       const ct2v1 = await createVersion(
         ct2, 1, 'CONFIRMED',
-        { total: 1800000, deposit: 500000 },
+        { total: 1800000 },
         { confirmedAt: at(-15, 16), completionDueDate: dateOnly(10) },
         null,
         [
@@ -715,12 +711,11 @@ async function main(): Promise<void> {
           contractTypeId: businessType.id,
           status: 'COMPLETED',
           contractedAt: at(-85, 13),
-          balanceDueDate: null, // 완납 — 지연 판정 제외
         },
       });
       const ct3v1 = await createVersion(
         ct3, 1, 'CONFIRMED',
-        { total: 1500000, deposit: 500000 },
+        { total: 1500000 },
         { confirmedAt: at(-85, 13), completionDueDate: dateOnly(-60) },
         null,
         [
@@ -1149,7 +1144,7 @@ async function main(): Promise<void> {
       const repair = async (args: {
         customerId: string; repairType: string; requestDate: Date; dueDate?: Date; status: string;
         description: string; orderId?: string; orderItemId?: string;
-        rentalInventoryItemId?: string; notes?: string;
+        notes?: string;
         events: Array<{ previousStatus?: string; newStatus: string; eventDate: Date }>;
       }): Promise<void> => {
         const id = uuid();
@@ -1159,7 +1154,6 @@ async function main(): Promise<void> {
             customerId: args.customerId,
             orderId: args.orderId ?? null,
             orderItemId: args.orderItemId ?? null,
-            rentalInventoryItemId: args.rentalInventoryItemId ?? null,
             repairType: args.repairType,
             requestDate: args.requestDate,
             dueDate: args.dueDate ?? null,

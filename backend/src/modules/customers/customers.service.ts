@@ -127,10 +127,7 @@ export class CustomersService {
       ? await this.prisma.$transaction([
           this.prisma.contract.findMany({
             where: { customerId: { in: ids }, status: { not: 'CANCELLED' } },
-            select: {
-              customerId: true,
-              currentVersion: { select: { balanceAmount: true } },
-            },
+            select: { customerId: true },
           }),
           this.prisma.appointment.findMany({
             where: { customerId: { in: ids }, status: 'VISITED' },
@@ -153,12 +150,9 @@ export class CustomersService {
         ])
       : [[], [], [], [], []];
 
-    const summaryByCustomer = new Map<string, { contractCount: number; balanceAmount: number }>();
-    for (const c of contracts as { customerId: string; currentVersion: { balanceAmount: unknown } | null }[]) {
-      const cur = summaryByCustomer.get(c.customerId) ?? { contractCount: 0, balanceAmount: 0 };
-      cur.contractCount += 1;
-      cur.balanceAmount += Number(c.currentVersion?.balanceAmount ?? 0);
-      summaryByCustomer.set(c.customerId, cur);
+    const contractCountByCustomer = new Map<string, number>();
+    for (const c of contracts as { customerId: string }[]) {
+      contractCountByCustomer.set(c.customerId, (contractCountByCustomer.get(c.customerId) ?? 0) + 1);
     }
     const visitByCustomer = new Map<string, string>();
     for (const v of visits as { customerId: string; scheduledStart: Date }[]) {
@@ -189,12 +183,10 @@ export class CustomersService {
 
     const enriched = items.map((c) => {
       const row = c as { id: string };
-      const summary = summaryByCustomer.get(row.id);
       const journey = journeyByCustomer.get(row.id);
       return {
         ...c,
-        contractCount: summary?.contractCount ?? 0,
-        balanceAmount: summary?.balanceAmount ?? 0,
+        contractCount: contractCountByCustomer.get(row.id) ?? 0,
         lastVisitDate: visitByCustomer.get(row.id) ?? null,
         lastTransactionType: lastTxByCustomer.get(row.id) ?? null,
         // 세부 진행상태: 진행 journey의 현재 단계(코드/표시명/트랙/상태). 없으면 null
@@ -268,8 +260,6 @@ export class CustomersService {
               select: {
                 versionNo: true,
                 totalAmount: true,
-                depositAmount: true,
-                balanceAmount: true,
                 completionDueDate: true,
               },
             },
@@ -400,8 +390,6 @@ export class CustomersService {
         status: c.status,
         currentVersionNo: c.currentVersion?.versionNo ?? null,
         totalAmount: Number(c.currentVersion?.totalAmount ?? 0),
-        depositAmount: Number(c.currentVersion?.depositAmount ?? 0),
-        balanceAmount: Number(c.currentVersion?.balanceAmount ?? 0),
         contractedAt: toDateOnly(c.contractedAt),
         completionDueDate: toDateOnly(c.currentVersion?.completionDueDate),
       })),
