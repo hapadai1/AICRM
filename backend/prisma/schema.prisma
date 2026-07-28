@@ -978,6 +978,11 @@ model RentalSelectionSession {
   orderItemId        String    @map("order_item_id") @db.Uuid
   selectionVersionNo Int       @default(1) @map("selection_version_no")
   status             String    @default("IN_PROGRESS") @map("status") @db.VarChar(20)
+  /// 대여 기간 (현업 확정 2026-07-28: 대여 날짜는 필수값).
+  /// 이 기간으로 가용 실물을 찾고 확정한다. 기존 행 보존을 위해 컬럼은 nullable이며
+  /// 후보 검색·확정 시점에 앱이 필수로 검증한다.
+  pickupDate         DateTime? @map("pickup_date") @db.Date
+  returnDueDate      DateTime? @map("return_due_date") @db.Date
   confirmedAt        DateTime? @map("confirmed_at") @db.Timestamptz(6)
   isCurrent          Boolean   @default(true) @map("is_current")
   rowVersion         Int       @default(0) @map("row_version")
@@ -1005,7 +1010,7 @@ model RentalSelectionLine {
   sizeCode                String?  @map("size_code") @db.VarChar(30)
   /// 수선명령(수치 등) 수기 — 비고
   notes                   String?  @map("notes")
-  /// 선택한 후보 실물(가용검색 결과). 날짜 확정 전이라 nullable.
+  /// 선택한 후보 실물(대여 기간 기준 가용검색 결과). 아직 고르기 전이면 null.
   selectedInventoryItemId String?  @map("selected_inventory_item_id") @db.Uuid
   createdAt               DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt               DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
