@@ -5,14 +5,18 @@
  */
 import { PlusOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Button, Card, Empty, Input, Segmented, Space, Table, Tag, Typography } from 'antd';
+import { Button, Empty, Input, Segmented, Space, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { fetchMeasurementTargets, type MeasurementTargetRow } from '../../api/measurements';
+import { LAYOUT } from '../../app/theme';
 import { Can } from '../../shared/Can';
+import { DataTable } from '../../shared/DataTable';
+import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { metaOf } from '../../shared/status-meta';
+import { autoWidth } from '../../shared/table-width';
 import { PRODUCT_CATEGORY_LABEL } from '../contracts/labels';
 import { MEASUREMENT_TYPE_META } from './meas-meta';
 
@@ -32,11 +36,21 @@ function measurementStateOf(row: MeasurementTargetRow): { label: string; color: 
 
 type StateFilter = 'ALL' | 'NONE' | 'DONE';
 
-export function MeasurementListPage() {
+interface MeasurementListProps {
+  /** 지정 시 이 고객의 계약만 조회(고객모드 임베드용) */
+  customerId?: string;
+  /** 임베드 모드: 검색·필터 크롬 없이 표만 렌더, 고객 열 숨김 */
+  embedded?: boolean;
+}
+
+export function MeasurementListPage({
+  customerId: customerIdProp,
+  embedded = false,
+}: MeasurementListProps = {}) {
   const navigate = useNavigate();
   // 고객 상세·주문 화면에서 ?customerId= 로 넘어오면 그 고객의 계약만 추린다.
   const [searchParams, setSearchParams] = useSearchParams();
-  const customerId = searchParams.get('customerId');
+  const customerId = customerIdProp ?? searchParams.get('customerId');
   const [keyword, setKeyword] = useState('');
   const [filter, setFilter] = useState<StateFilter>('ALL');
 
@@ -63,7 +77,7 @@ export function MeasurementListPage() {
     {
       title: '고객',
       key: 'customer',
-      width: 160,
+      ...autoWidth(140),
       render: (_, row) => (
         <Space direction="vertical" size={0}>
           <Typography.Text strong>{row.customerName}</Typography.Text>
@@ -73,23 +87,23 @@ export function MeasurementListPage() {
         </Space>
       ),
     },
-    { title: '계약번호', dataIndex: 'contractNo', width: 130 },
+    { title: '계약번호', dataIndex: 'contractNo', ...autoWidth() },
     {
       title: '품목 구성',
       key: 'composition',
-      width: 140,
+      ...autoWidth(),
       render: (_, row) => itemComposition(row.categoryCounts) || '-',
     },
     {
       title: '완성 예정일',
       dataIndex: 'dueDate',
-      width: 110,
+      ...autoWidth(),
       render: (v: string | null) => v ?? <Typography.Text type="secondary">미정</Typography.Text>,
     },
     {
       title: '스타일 컨설팅',
       key: 'consulting',
-      width: 140,
+      ...autoWidth(),
       render: (_, row) =>
         row.consultingComplete ? (
           <Tag color="green">전체 완료</Tag>
@@ -105,7 +119,7 @@ export function MeasurementListPage() {
     {
       title: '채촌 상태',
       key: 'measurement',
-      width: 120,
+      ...autoWidth(),
       render: (_, row) => {
         const state = measurementStateOf(row);
         return <StatusBadge label={state.label} color={state.color} />;
@@ -114,7 +128,7 @@ export function MeasurementListPage() {
     {
       title: '최근 채촌',
       key: 'lastMeasurement',
-      width: 190,
+      ...autoWidth(),
       render: (_, row) =>
         row.lastMeasurementDate ? (
           <Space direction="vertical" size={0}>
@@ -139,7 +153,7 @@ export function MeasurementListPage() {
     {
       title: '액션',
       key: 'actions',
-      width: 190,
+      ...autoWidth(),
       render: (_, row) => (
         <Space size={4} onClick={(e) => e.stopPropagation()}>
           <Button
@@ -166,14 +180,38 @@ export function MeasurementListPage() {
     },
   ];
 
+  const tableEl = (
+    <DataTable<MeasurementTargetRow>
+      rowKey="contractId"
+      loading={query.isLoading}
+      dataSource={rows}
+      columns={embedded ? columns.filter((c) => c.key !== 'customer') : columns}
+      pagination={false}
+      onRow={(row) => ({
+        onClick: () => {
+          if (row.lastSessionId) navigate(`/measurements/${row.lastSessionId}`);
+        },
+        style: { cursor: row.lastSessionId ? 'pointer' : 'default' },
+      })}
+      locale={{
+        emptyText: <Empty description="스타일 컨설팅 대상 맞춤 품목이 있는 계약이 없습니다." />,
+      }}
+    />
+  );
+
+  // 임베드(고객모드): 크롬 없이 표만. 고객 열은 숨긴다.
+  if (embedded) return tableEl;
+
   return (
-    <Card>
+    <PageShell>
+      <PageCard>
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-        <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
-          <Space wrap>
+        <ListToolbar
+          filters={
+            <>
             <Input.Search
               allowClear
-              style={{ width: 280 }}
+              style={{ width: LAYOUT.searchWidth }}
               placeholder="고객명 · 전화번호 · 계약번호"
               onSearch={setKeyword}
               onChange={(e) => {
@@ -195,33 +233,20 @@ export function MeasurementListPage() {
               </Tag>
             )}
             <Typography.Text type="secondary">총 {rows.length}건</Typography.Text>
-          </Space>
-          <Can permission="MEASUREMENT_EDIT">
-            <Button icon={<PlusOutlined />} onClick={() => navigate('/measurements/new')}>
-              신규 채촌
-            </Button>
-          </Can>
-        </Space>
-
-        <Table<MeasurementTargetRow>
-          rowKey="contractId"
-          size="small"
-          loading={query.isLoading}
-          dataSource={rows}
-          columns={columns}
-          pagination={false}
-          scroll={{ x: 1180 }}
-          onRow={(row) => ({
-            onClick: () => {
-              if (row.lastSessionId) navigate(`/measurements/${row.lastSessionId}`);
-            },
-            style: { cursor: row.lastSessionId ? 'pointer' : 'default' },
-          })}
-          locale={{
-            emptyText: <Empty description="스타일 컨설팅 대상 맞춤 품목이 있는 계약이 없습니다." />,
-          }}
+            </>
+          }
+          actions={
+            <Can permission="MEASUREMENT_EDIT">
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/measurements/new')}>
+                신규 채촌
+              </Button>
+            </Can>
+          }
         />
+
+        {tableEl}
       </Space>
-    </Card>
+      </PageCard>
+    </PageShell>
   );
 }

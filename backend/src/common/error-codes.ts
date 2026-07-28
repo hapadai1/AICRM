@@ -21,12 +21,12 @@ export const ERROR_CODES = {
   // 고객·예약
   CUSTOMER_NOT_FOUND: HttpStatus.NOT_FOUND,
   CUSTOMER_PHONE_DUPLICATE: HttpStatus.CONFLICT,
-  /** 이미 정식 고객으로 등록된 고객에 [예약 고객 등록]을 다시 시도 */
-  CUSTOMER_ALREADY_REGISTERED: HttpStatus.CONFLICT,
   NAVER_RESERVATION_CONFLICT: HttpStatus.CONFLICT,
 
   // 계약·주문
   CONTRACT_NOT_DRAFT: HttpStatus.CONFLICT,
+  /** 삭제 불가 상태이거나 진행 이력이 있는 계약의 삭제 시도 */
+  CONTRACT_NOT_DELETABLE: HttpStatus.CONFLICT,
   CONTRACT_VERSION_CONFLICT: HttpStatus.CONFLICT,
   /** 서명 없이 계약 확정을 시도 (v2 설계서 03 §2.4 / D4) */
   CONTRACT_SIGNATURE_REQUIRED: HttpStatus.CONFLICT,

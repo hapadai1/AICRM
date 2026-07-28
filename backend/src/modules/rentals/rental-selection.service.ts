@@ -89,6 +89,107 @@ export class RentalSelectionService {
     return this.detail(created.id);
   }
 
+  /**
+   * GET /rental-selections/progress?contractId= — 렌탈 품목별 부위 선택 현황.
+   * 맞춤 옵션 진행 목록(option-progress)과 같은 형태로 내려, 스타일 컨설팅 화면이
+   * 맞춤·렌탈을 한 목록에 부위 단위 행으로 펼칠 수 있게 한다.
+   * 세션이 아직 없는 품목도 구성품 슬롯만 채워 행으로 나온다.
+   */
+  async progress(contractId?: string) {
+    const [items, colors, sizes] = await Promise.all([
+      this.prisma.orderItem.findMany({
+        where: {
+          status: { not: 'CANCELLED' },
+          order: { transactionType: 'RENTAL', ...(contractId ? { contractId } : {}) },
+        },
+        include: {
+          order: {
+            select: {
+              orderNo: true,
+              contractId: true,
+              completionDueDate: true,
+              contract: {
+                select: {
+                  contractNo: true,
+                  customer: { select: { id: true, name: true, phone: true } },
+                },
+              },
+            },
+          },
+          components: {
+            where: { active: true },
+            orderBy: [{ componentType: 'asc' }, { sequenceNo: 'asc' }],
+          },
+          rentalSelectionSessions: {
+            where: { isCurrent: true },
+            include: { lines: { include: { selectedInventoryItem: true } } },
+          },
+        },
+        orderBy: [{ createdAt: 'asc' }, { sequenceNo: 'asc' }],
+      }),
+      this.prisma.rentalColor.findMany(),
+      this.prisma.rentalSize.findMany(),
+    ]);
+    const colorName = new Map(colors.map((c) => [c.code, c.name]));
+    const sizeName = new Map(sizes.map((s) => [s.code, s.name]));
+
+    return items.map((item) => {
+      const session = item.rentalSelectionSessions[0];
+      const lineByComponent = new Map(
+        (session?.lines ?? []).map((l) => [l.orderItemComponentId, l]),
+      );
+      return {
+        orderItemId: item.id,
+        displayName: item.displayName,
+        productCategory: item.productCategory,
+        contractId: item.order.contractId,
+        contractNo: item.order.contract.contractNo,
+        customerId: item.order.contract.customer.id,
+        customerName: item.order.contract.customer.name,
+        customerPhone: item.order.contract.customer.phone,
+        orderNo: item.order.orderNo,
+        completionDueDate: item.order.completionDueDate?.toISOString() ?? null,
+        sessionId: session?.id ?? null,
+        status: session?.status ?? 'NOT_STARTED',
+        version: session?.rowVersion ?? 0,
+        components: item.components.map((c) => {
+          const line = lineByComponent.get(c.id);
+          return {
+            orderItemComponentId: c.id,
+            componentType: c.componentType,
+            sequenceNo: c.sequenceNo,
+            colorCode: line?.colorCode ?? null,
+            colorName: line?.colorCode ? (colorName.get(line.colorCode) ?? line.colorCode) : null,
+            sizeCode: line?.sizeCode ?? null,
+            sizeName: line?.sizeCode ? (sizeName.get(line.sizeCode) ?? line.sizeCode) : null,
+            notes: line?.notes ?? null,
+            selectedInventoryItemId: line?.selectedInventoryItemId ?? null,
+            selectedItemCode: line?.selectedInventoryItem?.managementCode ?? null,
+          };
+        }),
+      };
+    });
+  }
+
+  /**
+   * GET /rental-selections/codes — 렌탈 컬러·사이즈 활성 코드 (읽기 전용).
+   * 같은 데이터의 CRUD는 /admin/master/rental-{colors,sizes}(ADMIN_MASTER_EDIT)에 있지만,
+   * 스타일 컨설팅·재고 화면의 드롭다운은 조회 권한(RENTAL_VIEW)만 있는 직원도 써야 한다.
+   */
+  async codes() {
+    const [colors, sizes] = await Promise.all([
+      this.prisma.rentalColor.findMany({ where: { active: true }, orderBy: { sortOrder: 'asc' } }),
+      this.prisma.rentalSize.findMany({ where: { active: true }, orderBy: { sortOrder: 'asc' } }),
+    ]);
+    const toRow = (r: { code: string; name: string; sortOrder: number }) => ({
+      code: r.code,
+      name: r.name,
+      sortOrder: r.sortOrder,
+      active: true,
+    });
+    return { colors: colors.map(toRow), sizes: sizes.map(toRow) };
+  }
+
   /** GET /order-items/:id/rental-selection — 현재 세션 상세 (없으면 { session: null }) */
   async currentSession(orderItemId: string) {
     const item = await this.prisma.orderItem.findUnique({ where: { id: orderItemId } });

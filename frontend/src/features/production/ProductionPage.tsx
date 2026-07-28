@@ -1,13 +1,17 @@
 /** PROD-001 계약별 제작 관리 목록 — 고객명·전화로 식별, 행 클릭 시 계약 제작 관리 화면으로 진입 */
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Card, Input, Progress, Space, Table, Tag, Typography } from 'antd';
+import { Alert, Input, Progress, Space, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { ProductCategory } from '../../api/contracts';
 import { fetchProductionItems, type ProductionItem } from '../../api/production';
+import { LAYOUT } from '../../app/theme';
+import { DataTable } from '../../shared/DataTable';
+import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { metaOf } from '../../shared/status-meta';
+import { autoWidth } from '../../shared/table-width';
 import { PRODUCT_CATEGORY_LABEL } from '../contracts/labels';
 import { WORK_ORDER_STATUS_META } from '../workorders/wo-meta';
 
@@ -127,46 +131,47 @@ export function ProductionPage() {
     {
       title: '고객명',
       key: 'customerName',
-      width: 100,
+      ...autoWidth(),
       render: (_, r) => <Typography.Text strong>{r.customerName}</Typography.Text>,
     },
     {
       title: '전화번호',
       dataIndex: 'customerPhone',
       key: 'customerPhone',
-      width: 130,
+      ...autoWidth(),
       render: (v: string) => v || <Typography.Text type="secondary">-</Typography.Text>,
     },
-    { title: '계약번호', dataIndex: 'contractNo', key: 'contractNo', width: 120 },
+    { title: '계약번호', dataIndex: 'contractNo', key: 'contractNo', ...autoWidth() },
     {
       title: '품목 구성',
       key: 'composition',
-      width: 140,
+      ...autoWidth(),
       render: (_, r) => itemComposition(r.categoryCounts),
     },
     {
       title: '건수',
       dataIndex: 'itemCount',
       key: 'itemCount',
-      width: 55,
+      ...autoWidth(),
       align: 'center',
     },
     {
       title: '완성 예정일',
       dataIndex: 'dueDate',
       key: 'dueDate',
-      width: 110,
+      ...autoWidth(),
       render: (v: string | null) => v ?? <Typography.Text type="secondary">미정</Typography.Text>,
     },
     {
       title: 'D-day',
       key: 'dday',
-      width: 80,
+      ...autoWidth(),
       render: (_, r) => (r.dueDate ? <DdayTag due={r.dueDate} /> : <Typography.Text type="secondary">-</Typography.Text>),
     },
     {
       title: '제작 진행률',
       key: 'progress',
+      ...autoWidth(160),
       render: (_, r) => {
         const pct = r.progressCount ? Math.round((r.progressSum / r.progressCount) * 100) : 0;
         return <Progress percent={pct} size="small" style={{ minWidth: 120 }} />;
@@ -175,7 +180,7 @@ export function ProductionPage() {
     {
       title: '입고',
       key: 'received',
-      width: 80,
+      ...autoWidth(),
       render: (_, r) =>
         r.releasedCount === r.itemCount ? (
           <Tag color="green">전체 출고</Tag>
@@ -190,7 +195,7 @@ export function ProductionPage() {
     {
       title: '작업지시서',
       key: 'workOrder',
-      width: 120,
+      ...autoWidth(),
       render: (_, r) =>
         r.woUnorderedCount === 0 && r.woReprintCount === 0 ? (
           <Tag color="green">전체 최신</Tag>
@@ -223,34 +228,39 @@ export function ProductionPage() {
   }
 
   return (
-    <Card>
-      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-        <Input.Search
-          allowClear
-          style={{ maxWidth: 320 }}
-          placeholder="고객명 · 전화번호 검색"
-          defaultValue={keyword}
-          onSearch={(v) => {
-            const next = new URLSearchParams(searchParams);
-            if (v.trim()) next.set('q', v.trim());
-            else next.delete('q');
-            setSearchParams(next, { replace: true });
-          }}
-        />
-        <Table<ContractRow>
-          rowKey="contractId"
-          size="middle"
-          loading={itemsQuery.isLoading}
-          dataSource={rows}
-          columns={columns}
-          pagination={false}
-          onRow={(r) => ({
-            onClick: () => navigate(`/contracts/${r.contractId}/production`),
-            style: { cursor: 'pointer' },
-          })}
-          locale={{ emptyText: '제작 대상 품목이 있는 계약이 없습니다.' }}
-        />
-      </Space>
-    </Card>
+    <PageShell>
+      <PageCard>
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <ListToolbar
+            filters={
+              <Input.Search
+                allowClear
+                style={{ width: LAYOUT.searchWidth }}
+                placeholder="고객명 · 전화번호 검색"
+                defaultValue={keyword}
+                onSearch={(v) => {
+                  const next = new URLSearchParams(searchParams);
+                  if (v.trim()) next.set('q', v.trim());
+                  else next.delete('q');
+                  setSearchParams(next, { replace: true });
+                }}
+              />
+            }
+          />
+          <DataTable<ContractRow>
+            rowKey="contractId"
+            loading={itemsQuery.isLoading}
+            dataSource={rows}
+            columns={columns}
+            pagination={false}
+            onRow={(r) => ({
+              onClick: () => navigate(`/contracts/${r.contractId}/production`),
+              style: { cursor: 'pointer' },
+            })}
+            locale={{ emptyText: '제작 대상 품목이 있는 계약이 없습니다.' }}
+          />
+        </Space>
+      </PageCard>
+    </PageShell>
   );
 }

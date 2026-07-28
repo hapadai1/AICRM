@@ -430,6 +430,7 @@ export function RentalSelectionPage() {
           dataSource={candidatesQuery.data?.candidates ?? []}
           columns={candidateColumns}
           pagination={false}
+          scroll={{ x: 'max-content' }}
           locale={{ emptyText: '조건에 맞는 대여 가능 실물이 없습니다.' }}
         />
       </Modal>
@@ -461,6 +462,7 @@ export function RentalSelectionPage() {
               rowKey="orderItemComponentId"
               size="small"
               pagination={false}
+              scroll={{ x: 'max-content' }}
               dataSource={reviewQuery.data.components}
               columns={[
                 {

@@ -40,6 +40,7 @@ import {
   getStageItems,
   journeyStatusMeta,
   OUTCOME_META,
+  repairStageReached,
   setNotificationOutcome,
   trackTypeLabel,
   TRACK_TYPES,
@@ -47,11 +48,15 @@ import {
   type Journey,
   type JourneyEvent,
   type JourneyStageView,
+  type StageItem,
   type TrackType,
 } from '../../api/journeys';
+import { PRODUCTION_STATUS_META } from '../../api/production';
+import { repairStatusMeta } from '../../api/repairs';
 import { useAuthStore } from '../../app/auth-store';
 import { Can } from '../../shared/Can';
 import { NotificationConfirmModal, type SendOutcome } from '../../shared/NotificationConfirmModal';
+import { metaOf } from '../../shared/status-meta';
 
 /**
  * 고객 상세 최상단 진행 단계 카드 (개발설계서 05 G-11).
@@ -93,6 +98,36 @@ const ITEM_PROGRESS_STAGE: Record<string, 'IN' | 'OUT'> = {
 };
 /** '입고완료'로 집계할 품목 상태 (부분출고·출고는 이미 전체 입고된 것). */
 const ITEM_RECEIVED_STATUSES = new Set(['RECEIVED', 'PARTIALLY_RELEASED', 'RELEASED']);
+
+/**
+ * 품목 상태 힌트 — 완료의 근거가 아니라 담당자 판단을 돕는 표시다(설계서 v2 02 §3.3).
+ * 원천은 대상 유형에 따라 다르다: 맞춤·렌탈은 제작 상태, 수선은 수선 상태(통합설계서 §12.1).
+ *
+ * 수선은 수선 화면과 진행 카드 두 곳에 각각 입력해야 하므로, 수선 상태가 이미 이 단계를
+ * 지났는데 품목 완료가 비어 있으면 "누를 차례"로 강조한다. 자동 완료는 하지 않는다.
+ */
+function statusHint(it: StageItem, stageCode: string) {
+  const status = it.productionHint?.status;
+  if (!status) return null;
+  const isRepair = it.targetType === 'REPAIR_ITEM';
+  const label = isRepair
+    ? repairStatusMeta(status).label
+    : metaOf(PRODUCTION_STATUS_META, status).label;
+  const nudge = isRepair && !it.completed && repairStageReached(stageCode, status);
+  return (
+    <Tooltip
+      title={
+        nudge
+          ? `수선 상태가 '${label}'까지 왔습니다 — [완료]를 눌러 진행에도 기록하세요.`
+          : `${isRepair ? '수선' : '제작'} 상태 힌트 (자동 완료 아님)`
+      }
+    >
+      <Tag color={nudge ? 'gold' : 'default'} style={{ marginInlineEnd: 0 }}>
+        {label}
+      </Tag>
+    </Tooltip>
+  );
+}
 
 interface Props {
   customerId: string;
@@ -382,6 +417,7 @@ export function JourneyCard({ customerId, customerName, contracts, orders }: Pro
   // 각 품목을 [완료]/[취소]로 수동 확정하고, 전 품목 완료 시 [전체 완료]가 열린다(설계서 v2 02 §4·§9.3).
   const renderStageChecklist = () => {
     if (!isGatedCurrent) return null;
+    const stageCode = detail?.currentStageCode ?? '';
     const remaining = (currentStage?.targetCount ?? 0) - (currentStage?.completedCount ?? 0);
     return (
       <Space direction="vertical" size={6} style={{ width: '100%' }}>
@@ -435,13 +471,7 @@ export function JourneyCard({ customerId, customerName, contracts, orders }: Pro
                 </Tag>
               )}
               <Typography.Text style={{ fontSize: 12 }}>{it.displayName}</Typography.Text>
-              {it.productionHint?.status && (
-                <Tooltip title="제작 상태 힌트 (자동 완료 아님)">
-                  <Tag color="default" style={{ marginInlineEnd: 0 }}>
-                    {it.productionHint.status}
-                  </Tag>
-                </Tooltip>
-              )}
+              {statusHint(it, stageCode)}
               {it.completed && it.completedByName && (
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                   {it.completedByName}

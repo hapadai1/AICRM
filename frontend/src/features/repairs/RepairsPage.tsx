@@ -4,16 +4,13 @@ import {
   Alert,
   App,
   Button,
-  Card,
   DatePicker,
   Form,
   Input,
-  InputNumber,
   Modal,
   Select,
   Space,
   Steps,
-  Table,
   Tag,
   Typography,
 } from 'antd';
@@ -21,13 +18,14 @@ import type { ColumnsType } from 'antd/es/table';
 import dayjs, { type Dayjs } from 'dayjs';
 import { useState } from 'react';
 import { ApiError } from '../../api/client';
+import { LAYOUT } from '../../app/theme';
+import { DataTable, PAGE_SIZE_OPTIONS } from '../../shared/DataTable';
+import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { fetchCustomers } from '../../api/customers';
-import { fetchRentalItems } from '../../api/rentals';
 import {
   REPAIR_COMPONENT_TYPE_LABELS,
   REPAIR_STATUS_FLOW,
   REPAIR_TYPES,
-  REPAIR_TYPE_LABELS,
   createRepair,
   fetchRepair,
   fetchRepairLinkTargets,
@@ -46,22 +44,20 @@ import {
   type RepairReceiptMethod,
   type RepairReleaseMethod,
   type RepairStatus,
-  type RepairType,
 } from '../../api/repairs';
 import { Can } from '../../shared/Can';
 import { NotificationConfirmModal } from '../../shared/NotificationConfirmModal';
 import { StatusBadge } from '../../shared/StatusBadge';
+import { autoWidth } from '../../shared/table-width';
 
 interface ReceiptValues {
   customerId: string;
-  repairType: RepairType;
+  repairType: string;
   orderItemId?: string;
   componentId?: string;
-  rentalInventoryItemId?: string;
   requestDate: Dayjs;
   dueDate?: Dayjs;
   description: string;
-  cost?: number;
   notes?: string;
   /** 접수·출고 방식 (개발설계서 05 G-07) */
   receiptMethod?: RepairReceiptMethod;
@@ -110,23 +106,17 @@ export function RepairsPage() {
   const customerQuery = useQuery({
     queryKey: ['customers', 'search', customerKeyword],
     queryFn: () =>
-      fetchCustomers({ q: customerKeyword || undefined, includeProspect: true, size: 20 }),
+      fetchCustomers({ q: customerKeyword || undefined, scope: 'ALL', size: 20 }),
   });
 
   const receiptCustomerId = Form.useWatch('customerId', receiptForm);
   const receiptType = Form.useWatch('repairType', receiptForm);
-  const linkKind = repairLinkKind((receiptType ?? 'AFTER_SALE') as RepairType);
+  const linkKind = repairLinkKind(receiptType ?? 'AFTER_SALE');
 
   const linkTargetsQuery = useQuery({
     queryKey: ['repairs', 'link-targets', receiptCustomerId],
     queryFn: () => fetchRepairLinkTargets(receiptCustomerId as string),
     enabled: receiptOpen && !!receiptCustomerId,
-  });
-
-  const rentalItemsQuery = useQuery({
-    queryKey: ['repairs', 'rental-items'],
-    queryFn: () => fetchRentalItems({ size_: 100 }),
-    enabled: receiptOpen && linkKind === 'RENTAL',
   });
 
   const detailQuery = useQuery({
@@ -148,7 +138,6 @@ export function RepairsPage() {
         requestDate: v.requestDate.format('YYYY-MM-DD'),
         dueDate: v.dueDate?.format('YYYY-MM-DD'),
         description: v.description,
-        cost: v.cost,
         notes: v.notes,
         receiptMethod: v.receiptMethod,
         releaseMethod: v.releaseMethod,
@@ -156,7 +145,6 @@ export function RepairsPage() {
         deliveryAddress: v.deliveryAddress,
         orderItemId: v.componentId ? undefined : v.orderItemId,
         componentId: v.componentId,
-        rentalInventoryItemId: v.rentalInventoryItemId,
       }),
     onSuccess: (r) => {
       message.success(`${r.customerName} 고객의 수선이 접수되었습니다.`);
@@ -202,28 +190,6 @@ export function RepairsPage() {
     ],
   }));
 
-  const allocatedRentalIds = new Set(
-    (linkTargetsQuery.data?.rentalItems ?? []).map((it) => it.id),
-  );
-  const rentalTargetOptions = [
-    {
-      label: '이 고객에게 배정된 실물',
-      options: (linkTargetsQuery.data?.rentalItems ?? []).map((it) => ({
-        value: it.id,
-        label: `${it.managementCode} · ${it.design} · ${it.color} · ${it.size}`,
-      })),
-    },
-    {
-      label: '전체 실물',
-      options: (rentalItemsQuery.data?.data ?? [])
-        .filter((it) => it.status !== 'RETIRED' && !allocatedRentalIds.has(it.id))
-        .map((it) => ({
-          value: it.id,
-          label: `${it.managementCode} · ${it.design} · ${it.color} · ${it.size}`,
-        })),
-    },
-  ];
-
   const openStatusChange = (repair: Repair, toStatus: RepairStatus) => {
     noteForm.resetFields();
     setStatusTarget({ repair, toStatus });
@@ -233,7 +199,7 @@ export function RepairsPage() {
     {
       title: '고객',
       dataIndex: 'customerName',
-      width: 160,
+      ...autoWidth(140),
       render: (name: string, r) => (
         <Space direction="vertical" size={0}>
           <Typography.Text strong>{name}</Typography.Text>
@@ -246,13 +212,13 @@ export function RepairsPage() {
     {
       title: '유형',
       dataIndex: 'repairType',
-      width: 120,
+      ...autoWidth(),
       render: (t: string) => <Tag>{repairTypeLabel(t)}</Tag>,
     },
     {
       title: '대상',
       dataIndex: 'targetLabel',
-      width: 190,
+      ...autoWidth(140),
       render: (label: string, r) => (
         <Space direction="vertical" size={0}>
           <Typography.Text>{label}</Typography.Text>
@@ -264,11 +230,11 @@ export function RepairsPage() {
         </Space>
       ),
     },
-    { title: '접수일', dataIndex: 'requestDate', width: 110 },
+    { title: '접수일', dataIndex: 'requestDate', ...autoWidth() },
     {
       title: '완료 예정일',
       dataIndex: 'dueDate',
-      width: 130,
+      ...autoWidth(),
       render: (d: string | undefined, r) => (
         <Space size={4}>
           {d ?? '-'}
@@ -279,16 +245,9 @@ export function RepairsPage() {
       ),
     },
     {
-      title: '비용',
-      dataIndex: 'cost',
-      width: 100,
-      align: 'right',
-      render: (c?: number) => (c ? `${c.toLocaleString()}원` : '-'),
-    },
-    {
       title: '상태',
       dataIndex: 'status',
-      width: 120,
+      ...autoWidth(),
       align: 'center',
       render: (s: string) => {
         const meta = repairStatusMeta(s);
@@ -300,46 +259,48 @@ export function RepairsPage() {
   const isCancel = statusTarget?.toStatus === 'CANCELLED';
 
   return (
-    <Card>
+    <PageShell>
+      <PageCard>
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-        <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
-          <Space wrap>
-            <Typography.Title level={4} style={{ margin: 0 }}>
-              접수·진행
-            </Typography.Title>
-            <Select
-              showSearch
-              allowClear
-              placeholder="고객 검색 (이름·전화)"
-              style={{ width: 220 }}
-              filterOption={false}
-              onSearch={setCustomerKeyword}
-              loading={customerQuery.isLoading}
-              options={customerOptions}
-              value={customerFilter}
-              onChange={(v: string | undefined) => {
-                setCustomerFilter(v);
-                setPage(1);
-              }}
-            />
-            <Select
-              allowClear
-              placeholder="상태 전체"
-              style={{ width: 150 }}
-              value={statusFilter}
-              onChange={(v: string | undefined) => {
-                setStatusFilter(v);
-                setPage(1);
-              }}
-              options={STATUS_FILTER_OPTIONS}
-            />
-          </Space>
-          <Can permission="REPAIR_EDIT">
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setReceiptOpen(true)}>
-              수선 접수
-            </Button>
-          </Can>
-        </Space>
+        <ListToolbar
+          filters={
+            <>
+              <Select
+                showSearch
+                allowClear
+                placeholder="고객 검색 (이름·전화)"
+                style={{ width: 220 }}
+                filterOption={false}
+                onSearch={setCustomerKeyword}
+                loading={customerQuery.isLoading}
+                options={customerOptions}
+                value={customerFilter}
+                onChange={(v: string | undefined) => {
+                  setCustomerFilter(v);
+                  setPage(1);
+                }}
+              />
+              <Select
+                allowClear
+                placeholder="상태 전체"
+                style={{ width: LAYOUT.filterWidth }}
+                value={statusFilter}
+                onChange={(v: string | undefined) => {
+                  setStatusFilter(v);
+                  setPage(1);
+                }}
+                options={STATUS_FILTER_OPTIONS}
+              />
+            </>
+          }
+          actions={
+            <Can permission="REPAIR_EDIT">
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => setReceiptOpen(true)}>
+                수선 접수
+              </Button>
+            </Can>
+          }
+        />
 
         <Alert
           type="info"
@@ -352,13 +313,11 @@ export function RepairsPage() {
           description="다음 단계로만 이동할 수 있고, 취소는 어느 단계에서든 가능합니다. 행을 누르면 상세가 펼쳐지며 상태 변경도 그곳에서 진행합니다."
         />
 
-        <Table<Repair>
+        <DataTable<Repair>
           rowKey="id"
-          size="middle"
           loading={listQuery.isLoading}
           dataSource={listQuery.data?.data ?? []}
           columns={columns}
-          scroll={{ x: 1000 }}
           onRow={(r) => ({
             onClick: () => setExpandedId((cur) => (cur === r.id ? null : r.id)),
             style: { cursor: 'pointer' },
@@ -368,7 +327,7 @@ export function RepairsPage() {
             pageSize: size,
             total: listQuery.data?.page.totalElements ?? 0,
             showSizeChanger: true,
-            pageSizeOptions: ['30', '50', '100'],
+            pageSizeOptions: PAGE_SIZE_OPTIONS,
             showTotal: (total) => `총 ${total}건`,
             onChange: (nextPage, nextSize) => {
               setPage(nextSize !== size ? 1 : nextPage);
@@ -508,7 +467,6 @@ export function RepairsPage() {
                 receiptForm.setFieldsValue({
                   orderItemId: undefined,
                   componentId: undefined,
-                  rentalInventoryItemId: undefined,
                 })
               }
             />
@@ -516,12 +474,11 @@ export function RepairsPage() {
 
           <Form.Item name="repairType" label="수선 유형" rules={[{ required: true }]}>
             <Select
-              options={REPAIR_TYPES.map((t) => ({ value: t, label: REPAIR_TYPE_LABELS[t] }))}
+              options={REPAIR_TYPES.map((t) => ({ value: t, label: repairTypeLabel(t) }))}
               onChange={() =>
                 receiptForm.setFieldsValue({
                   orderItemId: undefined,
                   componentId: undefined,
-                  rentalInventoryItemId: undefined,
                 })
               }
             />
@@ -566,23 +523,6 @@ export function RepairsPage() {
             <Input />
           </Form.Item>
 
-          {linkKind === 'RENTAL' && (
-            <Form.Item
-              name="rentalInventoryItemId"
-              label="대상 렌탈 실물"
-              rules={[{ required: true, message: '렌탈 실물을 선택해 주세요.' }]}
-              extra="수선 중에는 해당 실물을 신규 배정할 수 없습니다."
-            >
-              <Select
-                showSearch
-                placeholder="관리 ID 검색"
-                optionFilterProp="label"
-                loading={rentalItemsQuery.isLoading || linkTargetsQuery.isLoading}
-                options={rentalTargetOptions}
-              />
-            </Form.Item>
-          )}
-
           <Space size="middle" style={{ display: 'flex' }} align="start">
             <Form.Item
               name="requestDate"
@@ -593,9 +533,6 @@ export function RepairsPage() {
             </Form.Item>
             <Form.Item name="dueDate" label="완료 예정일">
               <DatePicker />
-            </Form.Item>
-            <Form.Item name="cost" label="수선 비용(원)">
-              <InputNumber min={0} step={1000} style={{ width: 160 }} />
             </Form.Item>
           </Space>
 
@@ -717,6 +654,7 @@ export function RepairsPage() {
         onDone={() => setSuggestion(null)}
         onCancel={() => setSuggestion(null)}
       />
-    </Card>
+      </PageCard>
+    </PageShell>
   );
 }

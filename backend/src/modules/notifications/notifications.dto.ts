@@ -94,6 +94,15 @@ export class SendNotificationDto {
   @IsObject()
   variables?: Record<string, string>;
 
+  /**
+   * 담당자가 직접 쓰거나 고친 최종 발송 문구. 지정하면 템플릿 렌더 결과 대신 이 문구가 나간다.
+   * 승인된 템플릿 본문을 벗어나므로 알림톡이 아닌 SMS로 발송된다.
+   */
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  body?: string;
+
   /** 알림톡 실패 시 SMS 대체 발송 여부(기본 true). */
   @IsOptional()
   @IsBoolean()

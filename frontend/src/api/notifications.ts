@@ -32,6 +32,9 @@ export const NOTIFICATION_STATUS_META: Record<string, StatusMeta> = {
   FAILED: { label: '실패', color: 'red' },
 };
 
+/** 템플릿 없이 담당자가 직접 쓴 문구의 이력 표시명. */
+export const DIRECT_TEMPLATE_LABEL = '직접 입력';
+
 export const NOTIFICATION_CHANNEL_META: Record<string, StatusMeta> = {
   ALIMTALK: { label: '알림톡', color: 'gold' },
   SMS: { label: 'SMS', color: 'blue' },
@@ -68,8 +71,14 @@ export interface NotificationRecord {
 export interface SendNotificationInput {
   customerId: string;
   phone: string;
-  templateId: string;
+  /** 문구를 직접 쓰는 경우 생략할 수 있다. */
+  templateId?: string;
   variables: Record<string, string>;
+  /**
+   * 담당자가 직접 쓰거나 고친 최종 발송 문구. 넣으면 템플릿 원문 대신 이 문구가 나가고,
+   * 승인 본문을 벗어나므로 SMS로 발송된다.
+   */
+  body?: string;
   fallbackSms: boolean;
   orderId?: string;
   /**
@@ -105,12 +114,12 @@ interface RawHistory {
   template?: { code: string; name: string; channel: string } | null;
 }
 
-/** 발송 API 응답의 개별 결과 항목. */
+/** 발송 API 응답의 개별 결과 항목. 템플릿 없이 직접 쓴 문구는 template* 필드가 null이다. */
 interface RawSendResult {
   id: string;
-  templateId: string;
-  templateCode: string;
-  templateName: string;
+  templateId: string | null;
+  templateCode: string | null;
+  templateName: string | null;
   channel: string;
   customerId: string;
   recipientPhone: string;
@@ -162,7 +171,7 @@ function mapHistory(raw: RawHistory): NotificationRecord {
     phone: raw.recipientPhone,
     channel: toChannel(raw.channel ?? raw.template?.channel),
     templateId: raw.templateId ?? undefined,
-    templateName: raw.template?.name ?? raw.template?.code ?? '-',
+    templateName: raw.template?.name ?? raw.template?.code ?? DIRECT_TEMPLATE_LABEL,
     content: raw.body ?? '',
     status: toNotificationStatus(raw.status),
     failReason: raw.errorMessage ?? undefined,
@@ -178,8 +187,8 @@ function mapSendResult(raw: RawSendResult): NotificationRecord {
     customerId: raw.customerId,
     phone: raw.recipientPhone,
     channel: toChannel(raw.channel),
-    templateId: raw.templateId,
-    templateName: raw.templateName || raw.templateCode,
+    templateId: raw.templateId ?? undefined,
+    templateName: raw.templateName || raw.templateCode || DIRECT_TEMPLATE_LABEL,
     content: raw.renderedBody,
     status: toNotificationStatus(raw.status),
     failReason: raw.errorMessage ?? undefined,
@@ -199,6 +208,48 @@ export function searchCustomers(query: string): Promise<ListResult<CustomerSearc
 export async function fetchNotificationTemplates(): Promise<NotificationTemplate[]> {
   const raw = await request<RawTemplate[]>({ url: '/notification-templates' });
   return (raw ?? []).map(mapTemplate);
+}
+
+/** 문구 등록·수정 입력. 화면 용어(content/status)를 백엔드 컬럼(body/approvalStatus)으로 옮긴다. */
+export interface NotificationTemplateInput {
+  name: string;
+  channel: NotificationChannel;
+  content: string;
+  status: TemplateStatus;
+}
+
+export async function createNotificationTemplate(
+  input: NotificationTemplateInput & { code: string },
+): Promise<NotificationTemplate> {
+  const raw = await request<RawTemplate>({
+    url: '/notification-templates',
+    method: 'POST',
+    data: {
+      code: input.code,
+      name: input.name,
+      channel: input.channel,
+      body: input.content,
+      approvalStatus: input.status,
+    },
+  });
+  return mapTemplate(raw);
+}
+
+export async function updateNotificationTemplate(
+  id: string,
+  input: NotificationTemplateInput,
+): Promise<NotificationTemplate> {
+  const raw = await request<RawTemplate>({
+    url: `/notification-templates/${id}`,
+    method: 'PATCH',
+    data: {
+      name: input.name,
+      channel: input.channel,
+      body: input.content,
+      approvalStatus: input.status,
+    },
+  });
+  return mapTemplate(raw);
 }
 
 /** 미리보기 — 백엔드는 `renderedBody`(치환 완료 본문)를 돌려준다. */
@@ -232,6 +283,7 @@ export async function sendNotification(
       templateId: payload.templateId,
       recipientPhone: payload.phone,
       variables: payload.variables,
+      body: payload.body,
       fallbackSms: payload.fallbackSms,
       orderId: payload.orderId,
       triggerKey: payload.triggerKey,

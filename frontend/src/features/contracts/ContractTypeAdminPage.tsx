@@ -160,7 +160,8 @@ export function ContractTypeAdminPage() {
       width: 200,
       render: (v: string) => <Typography.Text strong>{v}</Typography.Text>,
     },
-    { title: '설명', dataIndex: 'description', ellipsis: true, render: (v?: string) => v ?? '-' },
+    // ellipsis 컬럼은 표 레이아웃이 fixed로 바뀌므로 폭을 지정해 둔다(미지정 시 좁게 찌그러짐).
+    { title: '설명', dataIndex: 'description', width: 260, ellipsis: true, render: (v?: string) => v ?? '-' },
     {
       title: '기본 품목',
       dataIndex: 'lines',
@@ -244,7 +245,7 @@ export function ContractTypeAdminPage() {
         columns={columns}
         dataSource={types ?? []}
         pagination={false}
-        scroll={{ x: 1000 }}
+        scroll={{ x: 'max-content' }}
       />
 
       <Modal

@@ -20,6 +20,7 @@ import { MEASUREMENT_TYPE_META } from './meas-meta';
 import { BackButton } from '../../shared/BackButton';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { labelOf, metaOf } from '../../shared/status-meta';
+import { SEMANTIC_COLOR } from '../../app/theme';
 
 function versionLabel(meta: MeasurementCompareVersionMeta): string {
   return `V${meta.versionNo} · ${meta.measurementDate} · ${labelOf(MEASUREMENT_TYPE_LABELS, meta.measurementType)}`;
@@ -221,7 +222,7 @@ export function MeasurementComparePage() {
           size="middle"
           rowClassName={(row) => (changedKeys.has(row.key) ? 'meas-compare-changed' : '')}
         />
-        <style>{`.meas-compare-changed td { background: #fffbe6 !important; }`}</style>
+        <style>{`.meas-compare-changed td { background: ${SEMANTIC_COLOR.diffBg} !important; }`}</style>
       </Card>
 
       <Row gutter={16}>

@@ -26,8 +26,12 @@ export interface CustomerListItem {
 
 export interface CustomerListParams {
   q?: string;
-  /** true면 PROSPECT·INACTIVE 포함 (기본 CONTRACTED만) */
-  includeProspect?: boolean;
+  /**
+   * 조회 범위 (설계서 07 D3). 기본 CONTRACT.
+   * - CONTRACT: 계약을 한 건이라도 보유한 고객 (작성중·취소 포함)
+   * - ALL:      계약 유무와 무관한 전 고객
+   */
+  scope?: 'CONTRACT' | 'ALL';
   transactionType?: 'CUSTOM' | 'RENTAL';
   /** 진행상태 검색: ACTIVE(진행중) | DONE(완료) | ALL(전체) */
   progress?: 'ACTIVE' | 'DONE' | 'ALL';
@@ -41,12 +45,16 @@ export interface CustomerBase {
   phone: string;
   email?: string;
   customerStatus: CustomerStatus;
-  /** 정식 고객으로 등록된 시각. 없으면 예약만 있는 미등록 고객 */
+  /** 고객으로 등록된 시각. 예약 자동생성분을 포함해 항상 채워진다 (설계서 07 D2) */
   registeredAt?: string | null;
   firstReservedAt?: string;
   contractedAt?: string;
   notes?: string;
   inactiveReason?: string;
+  /** 신체 정보 (v2 작업지시서 연동). 계약서 작성 전 보완 대상 — 설계서 07 D7 */
+  heightCm?: number | null;
+  weightKg?: number | null;
+  age?: number | null;
   version: number;
 }
 
@@ -134,6 +142,10 @@ export interface CustomerSaveBody {
   phone: string;
   email?: string;
   notes?: string;
+  /** 신체 정보 (v2 작업지시서 연동, 선택 입력) */
+  heightCm?: number;
+  weightKg?: number;
+  age?: number;
   /** 최초 예약일 (ISO-8601). 생성 시에만 사용 */
   firstReservedAt?: string;
   version?: number;
@@ -145,7 +157,7 @@ export function fetchCustomers(params: CustomerListParams): Promise<Paged<Custom
     method: 'GET',
     params: {
       q: params.q || undefined,
-      includeProspect: params.includeProspect ? 'true' : undefined,
+      scope: params.scope || undefined,
       transactionType: params.transactionType || undefined,
       progress: params.progress && params.progress !== 'ALL' ? params.progress : undefined,
       page: params.page ?? 1,
@@ -162,7 +174,11 @@ export function createCustomer(body: CustomerSaveBody): Promise<CustomerBase> {
   return request({ url: '/customers', method: 'POST', data: body });
 }
 
-export function updateCustomer(id: string, body: CustomerSaveBody): Promise<CustomerBase> {
+/** 부분 수정 — 백엔드 UpdateCustomerDto는 version 외 전 필드가 선택이다 */
+export function updateCustomer(
+  id: string,
+  body: Partial<CustomerSaveBody> & { version: number },
+): Promise<CustomerBase> {
   return request({ url: `/customers/${id}`, method: 'PATCH', data: body });
 }
 

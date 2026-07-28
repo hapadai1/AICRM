@@ -70,6 +70,17 @@ type SessionWithDetail = Prisma.OptionSelectionSessionGetPayload<{
   include: typeof SESSION_INCLUDE;
 }>;
 
+/**
+ * 단계의 부위 그룹을 카테고리의 부위 슬롯 중 하나로 확정한다.
+ * 셔츠·구두처럼 단일 부위 세트는 단계에 componentGroup이 없고(null), 정장도
+ * 백필 이전 단계는 null일 수 있다 — 그대로 두면 어느 부위 행에도 안 잡혀
+ * 화면에서 선택할 수 없게 되므로 대표 부위(첫 슬롯)로 귀속시킨다.
+ */
+function bucketGroup(stageGroup: string | null, groups: string[]): string | null {
+  if (stageGroup && groups.includes(stageGroup)) return stageGroup;
+  return groups[0] ?? null;
+}
+
 /** 옵션 선택 세션: 시작·임시저장·재개·확인서·확정·복사 (설계서 §8.3~8.5, 데이터 규칙 §15.3) */
 @Injectable()
 export class OptionSessionsService {
@@ -251,8 +262,14 @@ export class OptionSessionsService {
             where: { isCurrent: true },
             include: {
               values: { select: { optionStageId: true } },
+              componentAttrs: true,
               optionSetVersion: {
-                select: { stages: { where: { active: true }, select: { id: true } } },
+                select: {
+                  stages: {
+                    where: { active: true },
+                    select: { id: true, componentGroup: true },
+                  },
+                },
               },
             },
           },
@@ -263,11 +280,16 @@ export class OptionSessionsService {
         select: {
           productCategory: true,
           activeVersion: {
-            select: { stages: { where: { active: true }, select: { id: true } } },
+            select: {
+              stages: { where: { active: true }, select: { id: true, componentGroup: true } },
+            },
           },
         },
       }),
     ]);
+    const activeStages = new Map(
+      optionSets.map((s) => [s.productCategory, s.activeVersion?.stages ?? []]),
+    );
     const activeStageCount = new Map(
       optionSets.map((s) => [s.productCategory, s.activeVersion?.stages.length ?? 0]),
     );
@@ -276,6 +298,9 @@ export class OptionSessionsService {
       const session = item.optionSelectionSessions[0];
       const activeStageIds = new Set(session?.optionSetVersion.stages.map((s) => s.id) ?? []);
       return {
+        // 부위(상의/하의/베스트) 슬롯 — 목록을 부위 단위 행으로 펼치기 위한 축.
+        // 세션이 없는 품목도 카테고리의 ACTIVE 버전 단계로 부위별 총 단계 수를 채운다.
+        components: this.progressComponents(item, session, activeStages),
         orderItemId: item.id,
         displayName: item.displayName,
         productCategory: item.productCategory,
@@ -295,6 +320,51 @@ export class OptionSessionsService {
           ? activeStageIds.size
           : (activeStageCount.get(item.productCategory) ?? 0),
         sessionId: session?.id ?? null,
+      };
+    });
+  }
+
+  /**
+   * progress() 행의 부위별 슬롯 — 부위당 원단·컬러·패턴·비고 + 그 부위 단계의 진행 수.
+   * 부위 슬롯 자체는 카테고리 상수(OPTION_COMPONENT_GROUPS)로 고정이라 저장값이
+   * 없어도(=세션 이전) 항상 상의/하의/베스트 세 줄이 나온다.
+   */
+  private progressComponents(
+    item: { productCategory: string },
+    session:
+      | {
+          values: { optionStageId: string }[];
+          componentAttrs: {
+            componentGroup: string;
+            fabricName: string | null;
+            colorName: string | null;
+            patternName: string | null;
+            notes: string | null;
+          }[];
+          optionSetVersion: { stages: { id: string; componentGroup: string | null }[] };
+        }
+      | undefined,
+    activeStages: Map<string, { id: string; componentGroup: string | null }[]>,
+  ) {
+    const groups = componentGroupsFor(item.productCategory);
+    if (groups.length === 0) return [];
+    const stages = session
+      ? session.optionSetVersion.stages
+      : (activeStages.get(item.productCategory) ?? []);
+    const selected = new Set(session?.values.map((v) => v.optionStageId) ?? []);
+    const attrByGroup = new Map((session?.componentAttrs ?? []).map((a) => [a.componentGroup, a]));
+
+    return groups.map((group) => {
+      const groupStages = stages.filter((s) => bucketGroup(s.componentGroup, groups) === group);
+      const attr = attrByGroup.get(group);
+      return {
+        componentGroup: group,
+        fabricName: attr?.fabricName ?? null,
+        colorName: attr?.colorName ?? null,
+        patternName: attr?.patternName ?? null,
+        notes: attr?.notes ?? null,
+        totalStages: groupStages.length,
+        completedStages: groupStages.filter((s) => selected.has(s.id)).length,
       };
     });
   }
@@ -356,6 +426,11 @@ export class OptionSessionsService {
         stageName: s.stageName,
         sequenceNo: s.sequenceNo,
         required: s.required,
+        // 부위(상의/하의/베스트) 축 — 화면이 부위별로 단계를 나눠 띄운다.
+        componentGroup: bucketGroup(
+          s.componentGroup,
+          componentGroupsFor(session.orderItem.productCategory),
+        ),
         choices: s.choices
           .filter((c) => c.active)
           .map((c) => ({ ...c, extraPrice: Number(c.extraPrice) })),

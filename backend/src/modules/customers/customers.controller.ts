@@ -4,7 +4,6 @@ import {
   CreateCustomerDto,
   CustomerListQueryDto,
   DeactivateCustomerDto,
-  RegisterCustomerDto,
   UpdateCustomerDto,
 } from './customers.dto';
 import { CustomersService } from './customers.service';
@@ -44,16 +43,8 @@ export class CustomersController {
     return this.customersService.update(id, dto, actor);
   }
 
-  /** 예약으로 생긴 미등록 고객을 정식 고객으로 등록 (CUST-001 [예약 고객 등록]) */
-  @Post('customers/:id/register')
-  @RequirePermission('CUSTOMER_EDIT')
-  register(
-    @Param('id') id: string,
-    @Body() dto: RegisterCustomerDto,
-    @CurrentUser() actor: AuthUser,
-  ) {
-    return this.customersService.register(id, dto, actor);
-  }
+  // POST /customers/:id/register 는 제거했다 — 예약 등록이 곧 고객 등록이라
+  // 별도 승격 절차가 없어졌다(설계서 07 D2). 고객 정보 수정은 PATCH로 일원화한다.
 
   @Post('customers/:id/deactivate')
   @RequirePermission('CUSTOMER_DEACTIVATE')

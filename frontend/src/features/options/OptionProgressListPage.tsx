@@ -1,12 +1,16 @@
 /** OPT-001 스타일 컨설팅 목록 — 계약 단위로 묶어 고객명·전화로 식별, 행 클릭 시 계약 스타일 컨설팅 화면으로 진입 */
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Card, Input, Progress, Segmented, Space, Spin, Table, Tag, Typography } from 'antd';
+import { Alert, Input, Progress, Segmented, Space, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
 import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { OptionProgressItem, ProductCategory } from '../../api/options';
 import { fetchOptionProgress } from '../../api/options';
+import { DataTable } from '../../shared/DataTable';
+import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
+import { LAYOUT } from '../../app/theme';
+import { autoWidth } from '../../shared/table-width';
 import { PRODUCT_CATEGORY_LABEL } from '../contracts/labels';
 
 /** 납기 D-day 태그 */
@@ -67,7 +71,17 @@ function itemComposition(counts: Partial<Record<ProductCategory, number>>): stri
     .join(' · ');
 }
 
-export function OptionProgressListPage() {
+interface OptionProgressListProps {
+  /** 지정 시 이 계약들만 표시(고객모드 임베드용) */
+  contractIds?: string[];
+  /** 임베드 모드: 검색·필터 크롬 없이 표만 렌더, 고객명·전화 열 숨김 */
+  embedded?: boolean;
+}
+
+export function OptionProgressListPage({
+  contractIds,
+  embedded = false,
+}: OptionProgressListProps = {}) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const keyword = searchParams.get('q') ?? '';
@@ -80,6 +94,11 @@ export function OptionProgressListPage() {
 
   const rows = useMemo(() => {
     let grouped = groupByContract(data ?? []);
+    // 고객모드: 이 고객의 계약들로만 좁힌다(OptionProgressItem에 customerId가 없어 계약ID로 필터).
+    if (contractIds) {
+      const allow = new Set(contractIds);
+      grouped = grouped.filter((r) => allow.has(r.contractId));
+    }
     const q = keyword.trim().toLowerCase();
     if (q) {
       grouped = grouped.filter((r) =>
@@ -90,48 +109,48 @@ export function OptionProgressListPage() {
     if (status === 'COMPLETE') grouped = grouped.filter((r) => r.confirmedCount === r.itemCount);
     if (status === 'INCOMPLETE') grouped = grouped.filter((r) => r.confirmedCount < r.itemCount);
     return grouped;
-  }, [data, keyword, status]);
+  }, [data, keyword, status, contractIds]);
 
   const columns: ColumnsType<ContractRow> = [
     {
       title: '고객명',
       key: 'customerName',
-      width: 100,
+      ...autoWidth(),
       render: (_, row) => <Typography.Text strong>{row.customerName}</Typography.Text>,
     },
     {
       title: '전화번호',
       dataIndex: 'customerPhone',
       key: 'customerPhone',
-      width: 130,
+      ...autoWidth(),
       render: (v: string) => v || <Typography.Text type="secondary">-</Typography.Text>,
     },
-    { title: '계약번호', dataIndex: 'contractNo', key: 'contractNo', width: 120 },
+    { title: '계약번호', dataIndex: 'contractNo', key: 'contractNo', ...autoWidth() },
     {
       title: '품목 구성',
       key: 'composition',
-      width: 140,
+      ...autoWidth(),
       render: (_, row) => itemComposition(row.categoryCounts),
     },
-    { title: '건수', dataIndex: 'itemCount', key: 'itemCount', width: 55, align: 'center' },
+    { title: '건수', dataIndex: 'itemCount', key: 'itemCount', ...autoWidth(), align: 'center' },
     {
       title: '완성 예정일',
       dataIndex: 'dueDate',
       key: 'dueDate',
-      width: 110,
+      ...autoWidth(),
       render: (v: string | null) => v ?? <Typography.Text type="secondary">미정</Typography.Text>,
     },
     {
       title: 'D-day',
       key: 'dday',
-      width: 80,
+      ...autoWidth(),
       render: (_, row) =>
         row.dueDate ? <DdayTag due={row.dueDate} /> : <Typography.Text type="secondary">-</Typography.Text>,
     },
     {
       title: '확정',
       key: 'confirmed',
-      width: 80,
+      ...autoWidth(),
       render: (_, row) =>
         row.confirmedCount === row.itemCount ? (
           <Tag color="green">전체 확정</Tag>
@@ -144,6 +163,7 @@ export function OptionProgressListPage() {
     {
       title: '진행률',
       key: 'progress',
+      ...autoWidth(160),
       render: (_, row) => (
         <Progress
           percent={row.totalStages ? Math.round((row.completedStages / row.totalStages) * 100) : 0}
@@ -155,7 +175,7 @@ export function OptionProgressListPage() {
     {
       title: '단계',
       key: 'stages',
-      width: 65,
+      ...autoWidth(),
       align: 'center',
       render: (_, row) => (
         <Typography.Text type="secondary">
@@ -176,13 +196,36 @@ export function OptionProgressListPage() {
     );
   }
 
+  const tableEl = (
+    <DataTable<ContractRow>
+      rowKey="contractId"
+      loading={isLoading}
+      dataSource={rows}
+      columns={
+        embedded ? columns.filter((c) => c.key !== 'customerName' && c.key !== 'customerPhone') : columns
+      }
+      pagination={false}
+      onRow={(row) => ({
+        onClick: () => navigate(`/contracts/${row.contractId}/options`),
+        style: { cursor: 'pointer' },
+      })}
+      locale={{ emptyText: '스타일 컨설팅 대상 맞춤 품목이 있는 계약이 없습니다.' }}
+    />
+  );
+
+  // 임베드(고객모드): 크롬 없이 표만. 고객명·전화 열은 숨긴다.
+  if (embedded) return tableEl;
+
   return (
-    <Card>
+    <PageShell>
+      <PageCard>
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-        <Space wrap>
+        <ListToolbar
+          filters={
+            <>
           <Input.Search
             allowClear
-            style={{ width: 320 }}
+            style={{ width: LAYOUT.searchWidth }}
             placeholder="고객명 · 전화번호 검색"
             defaultValue={keyword}
             onSearch={(v) => {
@@ -201,24 +244,12 @@ export function OptionProgressListPage() {
               { label: '완료', value: 'COMPLETE' },
             ]}
           />
-        </Space>
-        {isLoading ? (
-          <Spin style={{ display: 'block', margin: '48px auto' }} />
-        ) : (
-          <Table<ContractRow>
-            rowKey="contractId"
-            dataSource={rows}
-            columns={columns}
-            pagination={false}
-            size="middle"
-            onRow={(row) => ({
-              onClick: () => navigate(`/contracts/${row.contractId}/options`),
-              style: { cursor: 'pointer' },
-            })}
-            locale={{ emptyText: '스타일 컨설팅 대상 맞춤 품목이 있는 계약이 없습니다.' }}
-          />
-        )}
+            </>
+          }
+        />
+        {tableEl}
       </Space>
-    </Card>
+      </PageCard>
+    </PageShell>
   );
 }

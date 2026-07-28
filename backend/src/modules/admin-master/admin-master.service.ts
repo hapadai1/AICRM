@@ -10,7 +10,6 @@ import { CreateMasterItemDto, UpdateMasterItemDto } from './admin-master.dto';
  * 기준정보 관리 (화면·API 정의서 13.8 ADMIN-001).
  * type별로 전용 테이블에 위임한다. 코드/표시명/정렬/사용여부만 다루며 스키마가 동일하다.
  * - appointment-purposes → appointment_purposes
- * - payment-method       → payment_methods
  * - rental-colors        → rental_colors (v2 D3)
  * - rental-sizes         → rental_sizes  (v2 D3)
  */
@@ -44,11 +43,6 @@ export class AdminMasterService {
         return {
           delegate: this.prisma.appointmentPurpose as unknown as MasterDelegate,
           entityType: 'APPOINTMENT_PURPOSE',
-        };
-      case 'payment-method':
-        return {
-          delegate: this.prisma.paymentMethod as unknown as MasterDelegate,
-          entityType: 'PAYMENT_METHOD',
         };
       case 'rental-colors':
         return {

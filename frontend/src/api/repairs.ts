@@ -1,30 +1,29 @@
 import { request, type ListResult } from './client';
-// 표시명은 중앙(api/code-labels) 공유 맵을 쓴다(관리자 편집 전 화면 반영). 코드 집합·분기는 여기 고정.
-import { COMPONENT_TYPE_LABELS, REPAIR_TYPE_LABELS_MAP } from './code-labels';
+// 코드 집합·표시명 모두 중앙(api/code-labels) 공유 객체를 쓴다 — 원본은 서버 기준정보 상수다.
+import { COMPONENT_TYPE_LABELS, REPAIR_TYPE_CODES, REPAIR_TYPE_LABELS_MAP } from './code-labels';
 
 /**
  * 수선 도메인 API (화면·API 정의서 §13.7, 통합설계서 §12.1)
  * 코드값·응답 형태는 백엔드(`repairs.service.ts`)가 기준이다.
  */
 
-/** 수선 유형 — 백엔드 REPAIR_TYPES */
-export type RepairType = 'CUSTOM_DURING' | 'AFTER_SALE' | 'RENTAL_PRE' | 'RENTAL_POST' | 'GENERAL';
+/**
+ * 수선 유형 코드 집합 — `GET /code-labels`(repair-type)로 하이드레이션되는 공유 배열.
+ * 렌탈 수선은 여기서 다루지 않는다(렌탈 진행의 수선요청·입고·출고 단계에서 관리).
+ */
+export const REPAIR_TYPES = REPAIR_TYPE_CODES;
 
-export const REPAIR_TYPES: RepairType[] = [
-  'CUSTOM_DURING',
-  'AFTER_SALE',
-  'RENTAL_PRE',
-  'RENTAL_POST',
-  'GENERAL',
-];
+export const REPAIR_TYPE_LABELS = REPAIR_TYPE_LABELS_MAP;
 
-export const REPAIR_TYPE_LABELS = REPAIR_TYPE_LABELS_MAP as Record<RepairType, string>;
+/**
+ * 연결 대상 분기가 걸린 코드. 분기 규칙(백엔드 resolveLinks)이 이 코드들에 묶여 있어
+ * 코드 집합과 달리 정적으로 둔다 — 새 코드는 연결 없는 유형(NONE)으로 취급된다.
+ */
+const CUSTOM_LINK_TYPES = ['CUSTOM_DURING', 'AFTER_SALE'];
 
 /** 유형별 연결 대상 (백엔드 resolveLinks 규칙) */
-export function repairLinkKind(type: RepairType): 'CUSTOM' | 'RENTAL' | 'NONE' {
-  if (type === 'CUSTOM_DURING' || type === 'AFTER_SALE') return 'CUSTOM';
-  if (type === 'RENTAL_PRE' || type === 'RENTAL_POST') return 'RENTAL';
-  return 'NONE';
+export function repairLinkKind(type: string): 'CUSTOM' | 'NONE' {
+  return CUSTOM_LINK_TYPES.includes(type) ? 'CUSTOM' : 'NONE';
 }
 
 /** 수선 진행 상태 — 접수→수선 요청→수선 중→수선 입고→고객 연락→출고 완료 (+취소) */
@@ -68,7 +67,7 @@ export function repairStatusMeta(status: string): StatusMeta {
 }
 
 export function repairTypeLabel(type: string): string {
-  return REPAIR_TYPE_LABELS[type as RepairType] ?? type;
+  return REPAIR_TYPE_LABELS[type] ?? type;
 }
 
 /** 다음 정방향 상태. 흐름 밖 코드(CANCELLED 등)면 없음. */
@@ -85,7 +84,6 @@ interface RepairApiRow {
   dueDate?: string | null;
   status: string;
   description: string;
-  cost?: string | number | null;
   notes?: string | null;
   receiptMethod?: string | null;
   releaseMethod?: string | null;
@@ -97,7 +95,6 @@ interface RepairApiRow {
   order?: { id: string; orderNo: string } | null;
   orderItem?: { id: string; displayName: string; productCategory: string } | null;
   component?: { id: string; componentType: string; sequenceNo: number } | null;
-  rentalInventoryItem?: { id: string; managementCode: string } | null;
   statusEvents?: RepairEventApiRow[];
 }
 
@@ -132,7 +129,7 @@ export const REPAIR_METHOD_LABELS: Record<string, string> = {
   DELIVERY: '방문 배송',
 };
 
-/** 화면용 수선 행 — 날짜·금액·대상 라벨을 정규화한 형태 */
+/** 화면용 수선 행 — 날짜·대상 라벨을 정규화한 형태 (비용 필드는 v2 D6으로 제거) */
 export interface Repair {
   id: string;
   repairType: string;
@@ -140,13 +137,12 @@ export interface Repair {
   customerId: string;
   customerName: string;
   customerPhone: string;
-  /** 연결 대상 표시 문자열 (품목·구성품·렌탈 실물 / 없으면 '-') */
+  /** 연결 대상 표시 문자열 (맞춤 품목·구성품 / 없으면 '-') */
   targetLabel: string;
   orderNo?: string;
   requestDate: string;
   dueDate?: string;
   description: string;
-  cost?: number;
   notes?: string;
   receiptMethod?: RepairReceiptMethod;
   releaseMethod?: RepairReleaseMethod;
@@ -160,12 +156,6 @@ function toDateOnly(value?: string | null): string | undefined {
   return value ? value.slice(0, 10) : undefined;
 }
 
-function toNumber(value?: string | number | null): number | undefined {
-  if (value === null || value === undefined) return undefined;
-  const n = typeof value === 'number' ? value : Number(value);
-  return Number.isNaN(n) ? undefined : n;
-}
-
 function targetLabelOf(row: RepairApiRow): string {
   if (row.component) {
     const type = COMPONENT_TYPE_LABELS[row.component.componentType] ?? row.component.componentType;
@@ -173,7 +163,6 @@ function targetLabelOf(row: RepairApiRow): string {
     return `${item}${type} #${row.component.sequenceNo}`;
   }
   if (row.orderItem) return row.orderItem.displayName;
-  if (row.rentalInventoryItem) return row.rentalInventoryItem.managementCode;
   return '-';
 }
 
@@ -190,7 +179,6 @@ function toRepair(row: RepairApiRow): Repair {
     requestDate: toDateOnly(row.requestDate) ?? '',
     dueDate: toDateOnly(row.dueDate),
     description: row.description,
-    cost: toNumber(row.cost),
     notes: row.notes ?? undefined,
     receiptMethod: (row.receiptMethod as RepairReceiptMethod) ?? undefined,
     releaseMethod: (row.releaseMethod as RepairReleaseMethod) ?? undefined,
@@ -238,15 +226,14 @@ export interface CreateRepairInput {
   releaseMethod?: RepairReleaseMethod;
   pickupAddress?: string;
   deliveryAddress?: string;
-  repairType: RepairType;
+  /** 코드 집합은 서버 기준정보(repair-type)가 정한다 */
+  repairType: string;
   requestDate: string;
   dueDate?: string;
   description: string;
-  cost?: number;
   notes?: string;
   orderItemId?: string;
   componentId?: string;
-  rentalInventoryItemId?: string;
 }
 
 /** 수선 접수 — POST /repairs */
@@ -294,15 +281,6 @@ export interface RepairLinkTargets {
     orderId: string;
     orderNo: string;
     components: { id: string; componentType: string; sequenceNo: number; status: string }[];
-  }[];
-  rentalItems: {
-    id: string;
-    managementCode: string;
-    componentType: string;
-    design: string;
-    color: string;
-    size: string;
-    status: string;
   }[];
 }
 

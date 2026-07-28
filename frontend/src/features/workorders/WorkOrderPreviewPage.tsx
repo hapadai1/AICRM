@@ -228,8 +228,55 @@ export function WorkOrderPreviewPage() {
               {preview.currentVersionNo ? ` · 최신 출력 V${preview.currentVersionNo}` : ''}
             </Typography.Text>
           </div>
-          <StatusBadge label={statusMeta.label} color={statusMeta.color} />
+          {/* 기능 버튼은 화면 우상단 한 곳에 모은다 (계약서 작성·렌탈 선택 화면과 동일 규칙). */}
+          <Space wrap>
+            <StatusBadge label={statusMeta.label} color={statusMeta.color} />
+            <Button
+              icon={<EyeOutlined />}
+              disabled={!printable}
+              onClick={() => setFormPreviewTarget('draft')}
+            >
+              양식 미리보기
+            </Button>
+            {latestVersion && (
+              <Button
+                icon={<DownloadOutlined />}
+                loading={
+                  downloadMutation.isPending &&
+                  downloadMutation.variables?.versionId === latestVersion.id
+                }
+                onClick={() =>
+                  downloadMutation.mutate({
+                    versionId: latestVersion.id,
+                    fileName: latestVersion.fileName,
+                  })
+                }
+              >
+                최신본 받기 (V{latestVersion.versionNo})
+              </Button>
+            )}
+            <Button
+              type="primary"
+              icon={<FileExcelOutlined />}
+              disabled={!printable}
+              loading={issueMutation.isPending}
+              onClick={openIssueDialog}
+            >
+              Excel 출력
+            </Button>
+          </Space>
         </Space>
+        {/* 출력 시 기록할 사유 — 누르는 버튼([Excel 출력])과 같은 카드에 둔다. */}
+        <div style={{ marginTop: 12, maxWidth: 520 }}>
+          <Typography.Text type="secondary">변경 사유·비고 (V2 이상 출력 시 입력 권장)</Typography.Text>
+          <Input
+            size="large"
+            style={{ height: 48 }}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="예: 가봉 보정 반영"
+          />
+        </div>
         {!printable && (
           <Alert
             style={{ marginTop: 12 }}
@@ -309,65 +356,6 @@ export function WorkOrderPreviewPage() {
         </Col>
       </Row>
 
-      <Card>
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          <div>
-            <Typography.Text type="secondary">변경 사유·비고 (V2 이상 출력 시 입력 권장)</Typography.Text>
-            <Input
-              size="large"
-              style={{ height: 48 }}
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="예: 가봉 보정 반영"
-            />
-          </div>
-          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-            <BackButton />
-            <Space>
-              <Button
-                size="large"
-                style={{ height: 56, minWidth: 200, fontSize: 18 }}
-                icon={<EyeOutlined />}
-                disabled={!printable}
-                onClick={() => setFormPreviewTarget('draft')}
-              >
-                양식 미리보기
-              </Button>
-              {latestVersion && (
-                <Button
-                  size="large"
-                  style={{ height: 56, minWidth: 200, fontSize: 18 }}
-                  icon={<DownloadOutlined />}
-                  loading={
-                    downloadMutation.isPending &&
-                    downloadMutation.variables?.versionId === latestVersion.id
-                  }
-                  onClick={() =>
-                    downloadMutation.mutate({
-                      versionId: latestVersion.id,
-                      fileName: latestVersion.fileName,
-                    })
-                  }
-                >
-                  최신본 받기 (V{latestVersion.versionNo})
-                </Button>
-              )}
-              <Button
-                type="primary"
-                size="large"
-                style={{ height: 56, minWidth: 220, fontSize: 18 }}
-                icon={<FileExcelOutlined />}
-                disabled={!printable}
-                loading={issueMutation.isPending}
-                onClick={openIssueDialog}
-              >
-                Excel 출력
-              </Button>
-            </Space>
-          </Space>
-        </Space>
-      </Card>
-
       <Card title="출력 이력" size="small">
         {workOrderId ? (
           <Table<WorkOrderVersionRow>
@@ -383,6 +371,11 @@ export function WorkOrderPreviewPage() {
         ) : (
           <Typography.Text type="secondary">출력 이력이 없습니다. 첫 출력 시 V1이 생성됩니다.</Typography.Text>
         )}
+      </Card>
+
+      {/* 하단은 페이지 이동 전용 — 출력 버튼들은 위 헤더 액션바에 있다. */}
+      <Card>
+        <BackButton />
       </Card>
 
       <WorkOrderFormPreviewModal

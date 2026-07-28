@@ -1,6 +1,28 @@
-import { DownloadOutlined, MinusCircleOutlined, PlusOutlined } from '@ant-design/icons';
+import {
+  DeleteOutlined,
+  DownloadOutlined,
+  MinusCircleOutlined,
+  PaperClipOutlined,
+  PlusOutlined,
+  UploadOutlined,
+} from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App, Button, DatePicker, Empty, Form, Input, List, Modal, Select, Space, Tag, Typography } from 'antd';
+import {
+  App,
+  Button,
+  DatePicker,
+  Empty,
+  Form,
+  Input,
+  List,
+  Modal,
+  Select,
+  Space,
+  Tag,
+  Typography,
+  Upload,
+} from 'antd';
+import type { RcFile } from 'antd/es/upload';
 import dayjs, { type Dayjs } from 'dayjs';
 import { ApiError } from '../../api/client';
 import {
@@ -9,12 +31,17 @@ import {
   FITTING_AREA_LABELS,
   FITTING_STANDARD_AREAS,
   createFitting,
+  deleteFittingFile,
+  downloadFittingFile,
   downloadFittingSheet,
+  fetchFittingFiles,
   fetchFittings,
   fittingAreaLabel,
+  uploadFittingFile,
   type FittingAreaCode,
   type ProductionItem,
 } from '../../api/production';
+import { Can } from '../../shared/Can';
 import { labelOf } from '../../shared/status-meta';
 
 /** 백엔드 CreateFittingDto와 같은 모양 — 보정은 구성품별 {부위, 지시} 배열이다. */
@@ -37,6 +64,90 @@ interface FittingModalProps {
   item: ProductionItem;
   open: boolean;
   onClose: () => void;
+}
+
+/** 백엔드 `FilesService.ALLOWED_EXTENSIONS`와 같은 목록 (공장 회신은 스캔본·엑셀이 대부분) */
+const FITTING_FILE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'pdf', 'xlsx'];
+const FITTING_FILE_ACCEPT = FITTING_FILE_EXTENSIONS.map((e) => `.${e}`).join(',');
+
+/**
+ * 가봉 세션 첨부 (설계서 v2 06 §5.4) — 공장이 회신한 지시서·마킹본을 세션에 붙여 둔다.
+ * 내려받기 지시서(`GET /fittings/:id/sheet`)와는 별개 파일이라 별도 줄로 낸다.
+ */
+function FittingFiles({ fittingId }: { fittingId: string }) {
+  const { message } = App.useApp();
+  const queryClient = useQueryClient();
+  const queryKey = ['production', 'fittings', fittingId, 'files'];
+
+  const filesQuery = useQuery({ queryKey, queryFn: () => fetchFittingFiles(fittingId) });
+  const files = filesQuery.data ?? [];
+  const invalidate = () => queryClient.invalidateQueries({ queryKey });
+
+  const uploadMutation = useMutation({
+    mutationFn: (file: File) => uploadFittingFile(fittingId, file),
+    onSuccess: () => {
+      message.success('첨부했습니다.');
+      void invalidate();
+    },
+    onError: (e) => message.error(e instanceof ApiError ? e.message : '첨부에 실패했습니다.'),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (fileId: string) => deleteFittingFile(fittingId, fileId),
+    onSuccess: () => {
+      message.success('첨부를 삭제했습니다.');
+      void invalidate();
+    },
+    onError: (e) => message.error(e instanceof ApiError ? e.message : '첨부 삭제에 실패했습니다.'),
+  });
+
+  return (
+    <Space wrap size={4} style={{ marginTop: 4 }}>
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        <PaperClipOutlined /> 공장 회신
+      </Typography.Text>
+      {files.map((f) => (
+        <Tag key={f.id} style={{ marginInlineEnd: 0 }}>
+          <a onClick={() => void downloadFittingFile(f)}>{f.originalName}</a>
+          <Can permission="FITTING_EDIT">
+            <Button
+              type="text"
+              size="small"
+              icon={<DeleteOutlined />}
+              loading={deleteMutation.isPending && deleteMutation.variables === f.id}
+              onClick={() => deleteMutation.mutate(f.id)}
+            />
+          </Can>
+        </Tag>
+      ))}
+      {files.length === 0 && !filesQuery.isLoading && (
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          없음
+        </Typography.Text>
+      )}
+      <Can permission="FITTING_EDIT">
+        {/* 자동 업로드를 끄고 직접 올린다(인증 헤더가 필요해 AntD 기본 업로더를 쓸 수 없다). */}
+        <Upload
+          accept={FITTING_FILE_ACCEPT}
+          showUploadList={false}
+          beforeUpload={(file: RcFile) => {
+            // 백엔드 FilesService와 같은 허용 목록 — 서버 400을 기다리지 않고 여기서 걸러 준다.
+            const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+            if (!FITTING_FILE_EXTENSIONS.includes(ext)) {
+              message.error(`허용되지 않은 파일 형식입니다. (허용: ${FITTING_FILE_EXTENSIONS.join(', ')})`);
+              return Upload.LIST_IGNORE;
+            }
+            uploadMutation.mutate(file);
+            return false;
+          }}
+        >
+          <Button size="small" icon={<UploadOutlined />} loading={uploadMutation.isPending}>
+            첨부
+          </Button>
+        </Upload>
+      </Can>
+    </Space>
+  );
 }
 
 /** FIT-001 가봉·피팅 기록 모달: 가봉일·대상 구성품·보정 내용·다음 방문일 */
@@ -214,6 +325,7 @@ export function FittingModal({ item, open, onClose }: FittingModalProps) {
                         다음 방문일: {f.nextAppointmentDate}
                       </Typography.Text>
                     )}
+                    <FittingFiles fittingId={f.id} />
                   </>
                 }
               />

@@ -1,4 +1,5 @@
 import { request, type ListResult } from './client';
+import { REPAIR_STATUS_FLOW, type RepairStatus } from './repairs';
 
 /**
  * 고객 진행 단계 API (개발설계서 05 G-11).
@@ -145,8 +146,32 @@ export interface StageItem {
   completedAt: string | null;
   completedBy: string | null;
   completedByName: string | null;
-  /** production 상태 힌트(읽기 전용, 완료를 자동 생성하지 않음) */
+  /**
+   * 품목 상태 힌트(읽기 전용, 완료를 자동 생성하지 않음).
+   * 원천은 대상 유형에 따라 다르다 — ORDER_ITEM은 제작 상태, REPAIR_ITEM은 수선 상태.
+   */
   productionHint: { status: string | null } | null;
+}
+
+/**
+ * REPAIR 트랙 단계에 대응하는 수선 상태(통합설계서 §12.1 6단계) — **화면 힌트 전용**.
+ *
+ * 두 레이어는 자동 연동하지 않는다(설계서 v2 02 §3.3 — 완료 원천은 담당자가 누른 기록).
+ * 다만 수선 상태가 이미 그 단계를 지났는데 진행 카드의 품목 완료가 비어 있으면
+ * 담당자가 누락한 것이므로, "누를 차례"임을 표시해 이중 입력의 부담을 줄인다.
+ */
+const REPAIR_STAGE_REACHED_AT: Record<string, RepairStatus> = {
+  REPAIR_REQUESTED: 'REQUESTED',
+  REPAIR_CHECKED_IN: 'RETURNED_TO_SHOP',
+  REPAIR_RELEASED: 'RELEASED',
+};
+
+/** 수선 상태가 이 단계에 도달했는가. 취소·미등록 코드는 흐름 밖이므로 false. */
+export function repairStageReached(stageCode: string, repairStatus: string | null): boolean {
+  const need = REPAIR_STAGE_REACHED_AT[stageCode];
+  if (!need || !repairStatus) return false;
+  const at = REPAIR_STATUS_FLOW.indexOf(repairStatus as RepairStatus);
+  return at >= 0 && at >= REPAIR_STATUS_FLOW.indexOf(need);
 }
 
 /** GET /journeys/:id/stages/:stageCode/items */

@@ -1038,9 +1038,9 @@ async function main(): Promise<void> {
         ],
       });
       await repair({
-        customerId: 서지우, repairType: 'RENTAL_POST', requestDate: dateOnly(-42), dueDate: dateOnly(-38),
-        status: 'RELEASED', description: '반납 턱시도 바지 밑단 풀림 수선',
-        rentalInventoryItemId: inventoryIds['PNT-BLK-34-003'], notes: '검수 시 발견, 수선 후 재고 복귀 예정',
+        customerId: 서지우, repairType: 'GENERAL', requestDate: dateOnly(-42), dueDate: dateOnly(-38),
+        status: 'RELEASED', description: 'PNT-BLK-34-003 반납 턱시도 바지 밑단 풀림 수선',
+        notes: '검수 시 발견, 수선 후 재고 복귀 예정',
         events: [
           { newStatus: 'RECEIVED', eventDate: dateOnly(-42) },
           { previousStatus: 'RECEIVED', newStatus: 'REQUESTED', eventDate: dateOnly(-42) },

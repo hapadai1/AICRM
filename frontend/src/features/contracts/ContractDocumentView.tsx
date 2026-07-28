@@ -1,11 +1,11 @@
-import { DownOutlined, RightOutlined, SkinOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Card, Flex, Space, Table, Tag, Typography } from 'antd';
+import { Card, Divider, Flex, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import { useMemo } from 'react';
 import {
   fetchContractDocument,
-  type ContractDocumentLine,
-  type ContractDocumentOption,
+  type ContractDocument,
+  type ContractDocumentComponentOption,
   type ProductCategory,
   type TransactionType,
 } from '../../api/contracts';
@@ -18,14 +18,97 @@ import {
 } from './labels';
 
 /**
- * 계약서 웹 표시 (설계서 v2 03 §6·§7).
+ * 계약서 웹 표시 (설계서 v2 03 §6·§7 / v2 계약관리 보강).
  *
- * D7 웹 규칙: 세부 가격을 노출하고 "상세 토글"로 구성품·옵션을 펼친다.
- * - 최초(옵션 미추가): 품목(대분류) · 개수 · **가격(라인금액)** → 상세 토글 = 세부품목(구성품)
- * - 스타일 옵션 추가 후: 옵션명 · **가격(추가금액)** 표
+ * 표는 **품목(벌) 한 줄**이 기본이다. 옵션은 계약서의 곁가지이고 아예 없는 계약도 많으므로,
+ * 부위·옵션마다 줄을 늘리지 않고 한 칸에 접어 넣는다.
+ * - 옵션 칸: 유료 옵션이 있는 부위만 `부위 · 옵션명, 옵션명` 으로 나열
+ * - 금액: 옵션별 가격은 싣지 않고 품목별 **옵션 합계**만 (총합은 표 아래 요약)
  *
- * (엑셀은 총액만 — 백엔드가 처리. 프런트는 웹에만 세부가격을 노출한다.)
+ * (엑셀은 총액만 — 백엔드가 처리. 프런트는 웹에만 세부 금액을 노출한다.)
  */
+
+/** 부위 하나 — 유료 옵션이 붙은 것만 표시 대상 */
+interface RowComponent {
+  label: string;
+  optionNames: string[];
+}
+
+/** 표 한 줄 = 품목 한 벌(또는 계약 확정 전 라인 한 줄) */
+interface DocRow {
+  key: string;
+  transactionType: TransactionType;
+  /** "정장 #1" (주문품목) 또는 "정장 ×2" (주문 생성 전) */
+  itemLabel: string;
+  orderNo?: string;
+  quantity: number;
+  amount: number;
+  notes?: string;
+  components: RowComponent[];
+  optionTotal: number;
+}
+
+function sumExtra(options: ContractDocumentComponentOption[]): number {
+  return options.reduce((s, o) => s + (o.extraPrice || 0), 0);
+}
+
+/** 계약서 응답 → 품목 단위 행 목록 */
+function buildRows(data?: ContractDocument): DocRow[] {
+  const rows: DocRow[] = [];
+  for (const [li, line] of (data?.lines ?? []).entries()) {
+    const categoryLabel =
+      line.categoryLabel || PRODUCT_CATEGORY_LABEL[line.productCategory as ProductCategory];
+
+    if (line.items.length > 0) {
+      // 주문품목이 있으면 벌 단위(정장 #1·#2)로 편다.
+      for (const it of line.items) {
+        rows.push({
+          key: it.orderItemId,
+          transactionType: line.transactionType,
+          itemLabel: it.displayName,
+          orderNo: it.orderNo,
+          quantity: 1,
+          amount: line.unitPrice || (line.quantity ? line.lineAmount / line.quantity : 0),
+          notes: line.notes,
+          components: it.components
+            .filter((c) => c.options.length > 0)
+            .map((c) => ({ label: c.groupLabel, optionNames: c.options.map((o) => o.optionName) })),
+          optionTotal: it.components.reduce((s, c) => s + sumExtra(c.options), 0),
+        });
+      }
+      continue;
+    }
+
+    // 계약 확정 전 — 주문품목이 아직 없으므로 계약 라인 한 줄로 보여준다.
+    rows.push({
+      key: `line-${li}`,
+      transactionType: line.transactionType,
+      itemLabel: line.quantity > 1 ? `${categoryLabel} ×${line.quantity}` : categoryLabel,
+      quantity: line.quantity,
+      amount: line.lineAmount,
+      notes: line.notes,
+      components: [],
+      optionTotal: 0,
+    });
+  }
+  return rows;
+}
+
+/** 옵션 칸 — 유료 옵션이 붙은 부위만 한 줄씩 */
+function OptionCell({ row }: { row: DocRow }) {
+  if (row.components.length === 0) return <Typography.Text type="secondary">—</Typography.Text>;
+  return (
+    <Flex vertical gap={2}>
+      {row.components.map((c) => (
+        <Space key={c.label} size={6} align="start" wrap>
+          <Tag style={{ margin: 0 }}>{c.label}</Tag>
+          <Typography.Text style={{ fontSize: 13 }}>{c.optionNames.join(', ')}</Typography.Text>
+        </Space>
+      ))}
+    </Flex>
+  );
+}
+
 export function ContractDocumentView({ contractId }: { contractId: string }) {
   const { data, isLoading } = useQuery({
     queryKey: ['contracts', contractId, 'document'],
@@ -33,54 +116,79 @@ export function ContractDocumentView({ contractId }: { contractId: string }) {
     enabled: !!contractId,
   });
 
-  const lineColumns: ColumnsType<ContractDocumentLine> = [
+  const rows = useMemo(() => buildRows(data), [data]);
+
+  // 유료 옵션이 하나도 없는 계약이 흔하다. 그럴 땐 옵션 두 열을 아예 빼서
+  // 품목·개수·금액만 남긴다(빈 칸이 표 폭의 절반을 먹지 않게).
+  const hasOptions = rows.some((r) => r.components.length > 0 || r.optionTotal > 0);
+
+  const columns: ColumnsType<DocRow> = [
     {
       title: '품목',
-      key: 'category',
+      key: 'item',
+      width: 240,
       render: (_, r) => (
-        <Space size={6}>
-          <Tag color={TRANSACTION_TYPE_TAG_COLOR[r.transactionType as TransactionType]}>
-            {TRANSACTION_TYPE_LABEL[r.transactionType as TransactionType]}
-          </Tag>
-          <Typography.Text strong>
-            {r.categoryLabel || PRODUCT_CATEGORY_LABEL[r.productCategory as ProductCategory]}
-          </Typography.Text>
+        <Space direction="vertical" size={2}>
+          <Space size={6}>
+            <Tag color={TRANSACTION_TYPE_TAG_COLOR[r.transactionType]} style={{ margin: 0 }}>
+              {TRANSACTION_TYPE_LABEL[r.transactionType]}
+            </Tag>
+            <Typography.Text strong>{r.itemLabel}</Typography.Text>
+          </Space>
+          {r.orderNo && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {r.orderNo}
+            </Typography.Text>
+          )}
+          {/* 비고는 옵션 열이 없을 때 별도 열로 뺀다(아래) — 중복 표시하지 않는다. */}
+          {hasOptions && r.notes && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              비고: {r.notes}
+            </Typography.Text>
+          )}
         </Space>
       ),
     },
-    { title: '개수', dataIndex: 'quantity', width: 90, align: 'right' },
+    { title: '개수', dataIndex: 'quantity', width: 80, align: 'right' },
     {
-      title: '가격',
-      dataIndex: 'lineAmount',
+      title: '금액',
+      dataIndex: 'amount',
       width: 140,
       align: 'right',
       render: (v: number) => <Typography.Text strong>{formatKrw(v)}</Typography.Text>,
     },
+    // 옵션 열이 없으면 마지막 자리는 비고가 채운다(남는 폭이 빈 칸으로 남지 않게).
+    ...(!hasOptions
+      ? ([
+          {
+            title: '비고',
+            dataIndex: 'notes',
+            render: (v?: string) => v ?? <Typography.Text type="secondary">—</Typography.Text>,
+          },
+        ] as ColumnsType<DocRow>)
+      : []),
+    ...(hasOptions
+      ? ([
+          { title: '선택 옵션', key: 'options', render: (_, r) => <OptionCell row={r} /> },
+          {
+            // 옵션별 가격은 싣지 않는다. 품목별 합계만 보여주고 총합은 표 아래 요약에서 본다.
+            title: '옵션 합계',
+            dataIndex: 'optionTotal',
+            width: 120,
+            align: 'right',
+            render: (v: number) =>
+              v > 0 ? (
+                <Typography.Text strong>+{formatKrw(v)}</Typography.Text>
+              ) : (
+                <Typography.Text type="secondary">—</Typography.Text>
+              ),
+          },
+        ] as ColumnsType<DocRow>)
+      : []),
   ];
 
-  const optionColumns: ColumnsType<ContractDocumentOption> = [
-    {
-      title: '옵션명',
-      dataIndex: 'optionName',
-      render: (v: string) => (
-        <Space size={6}>
-          <SkinOutlined />
-          <Typography.Text>{v}</Typography.Text>
-        </Space>
-      ),
-    },
-    {
-      title: '가격(추가금액)',
-      dataIndex: 'extraPrice',
-      width: 160,
-      align: 'right',
-      render: (v: number) => <Typography.Text strong>{formatKrw(v)}</Typography.Text>,
-    },
-  ];
-
-  const options = data?.options ?? [];
   const lineTotal = (data?.lines ?? []).reduce((s, l) => s + l.lineAmount, 0);
-  const optionTotal = options.reduce((s, o) => s + o.extraPrice, 0);
+  const optionTotal = (data?.options ?? []).reduce((s, o) => s + o.extraPrice, 0);
 
   return (
     <Card
@@ -99,60 +207,57 @@ export function ContractDocumentView({ contractId }: { contractId: string }) {
         ) : null
       }
     >
-      <Flex vertical gap={16}>
-        <Typography.Text type="secondary">
-          품목별 가격은 상세 토글(▶)로 세부 구성품을 펼쳐 확인할 수 있습니다. 총 계약금액은 아래에 표시됩니다.
-        </Typography.Text>
-
-        <Table<ContractDocumentLine>
-          rowKey={(r) => `${r.transactionType}|${r.productCategory}|${r.itemDescription ?? ''}`}
+      <Flex vertical gap={12}>
+        <Table<DocRow>
+          rowKey="key"
           size="small"
           pagination={false}
-          columns={lineColumns}
-          dataSource={data?.lines ?? []}
-          scroll={{ x: 480 }}
-          expandable={{
-            // 상세 토글 = 세부품목(구성품). 구성품이 없으면 펼치기 불가.
-            rowExpandable: (r) => r.components.length > 0,
-            expandIcon: ({ expanded, onExpand, record }) =>
-              record.components.length > 0 ? (
-                <Typography.Link onClick={(e) => onExpand(record, e)}>
-                  {expanded ? <DownOutlined /> : <RightOutlined />} 세부품목
-                </Typography.Link>
-              ) : null,
-            expandedRowRender: (r) => (
-              <Space size={[8, 8]} wrap>
-                {r.components.map((c, i) => (
-                  <Tag key={`${c}-${i}`}>{c}</Tag>
-                ))}
-                {r.notes && <Typography.Text type="secondary">비고: {r.notes}</Typography.Text>}
-              </Space>
-            ),
-          }}
+          columns={columns}
+          dataSource={rows}
+          scroll={{ x: 760 }}
+          locale={{ emptyText: '품목이 없습니다.' }}
         />
 
-        {options.length > 0 && (
-          <div>
-            <Typography.Title level={5}>스타일 옵션</Typography.Title>
-            <Table<ContractDocumentOption>
-              rowKey={(o) => o.optionName}
-              size="small"
-              pagination={false}
-              columns={optionColumns}
-              dataSource={options}
-              scroll={{ x: 360 }}
-            />
-          </div>
-        )}
-
-        <Flex justify="flex-end" gap={24} wrap>
-          <Typography.Text type="secondary">품목 {formatKrw(lineTotal)}</Typography.Text>
-          {options.length > 0 && (
-            <Typography.Text type="secondary">옵션 추가 {formatKrw(optionTotal)}</Typography.Text>
-          )}
-          <Typography.Text strong style={{ fontSize: 16 }}>
-            총 계약금액 {formatKrw(data?.totalAmount)}
-          </Typography.Text>
+        {/* 금액 요약 — 품목 합계 · 옵션 추가 · 계약금/잔금(있을 때만) · 총 계약금액 */}
+        <Flex justify="flex-end">
+          <Flex
+            vertical
+            gap={6}
+            style={{
+              minWidth: 300,
+              padding: '14px 18px',
+              background: '#fafafa',
+              border: '1px solid #f0f0f0',
+              borderRadius: 8,
+            }}
+          >
+            <Flex justify="space-between" gap={16}>
+              <Typography.Text type="secondary">품목 합계</Typography.Text>
+              <Typography.Text>{formatKrw(lineTotal)}</Typography.Text>
+            </Flex>
+            {optionTotal > 0 && (
+              <Flex justify="space-between" gap={16}>
+                <Typography.Text type="secondary">옵션 추가 합계</Typography.Text>
+                <Typography.Text>+{formatKrw(optionTotal)}</Typography.Text>
+              </Flex>
+            )}
+            <Divider style={{ margin: '2px 0' }} />
+            <Flex justify="space-between" align="baseline" gap={16}>
+              <Typography.Text strong>총 계약금액</Typography.Text>
+              <Typography.Text strong style={{ fontSize: 20 }}>
+                {formatKrw(data?.totalAmount)}
+              </Typography.Text>
+            </Flex>
+            {/* 계약금 입력은 없앴지만, 예전에 입력된 계약은 잔금까지 함께 보여준다. */}
+            {!!data?.depositAmount && (
+              <Flex justify="space-between" gap={16}>
+                <Typography.Text type="secondary">계약금 / 잔금</Typography.Text>
+                <Typography.Text type="secondary">
+                  {formatKrw(data.depositAmount)} / {formatKrw(data.balanceAmount)}
+                </Typography.Text>
+              </Flex>
+            )}
+          </Flex>
         </Flex>
       </Flex>
     </Card>

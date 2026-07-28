@@ -593,6 +593,11 @@ export class MeasurementsService {
       action: 'COMPLETE',
       entityType: 'MEASUREMENT_SESSION',
       entityId: id,
+      before: {
+        versionNo: session.versionNo,
+        valueCount: session.values.length,
+        completedAt: session.completedAt,
+      },
       after: {
         versionNo: completed.versionNo,
         valueCount: completed.values.length,

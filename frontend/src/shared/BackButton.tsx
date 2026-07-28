@@ -14,9 +14,9 @@ export function BackButton(props: ButtonProps) {
   const navigate = useNavigate();
   return (
     <Button
-      size="large"
+      // 높이 56 · 글자 18px 이면 버튼 하나가 카드 한 장만큼 자리를 차지했다.
+      // 위치(화면 하단 이동 영역)는 그대로 두고 크기만 보통 버튼으로 줄인다.
       icon={<ArrowLeftOutlined />}
-      style={{ height: 56, minWidth: 140, fontSize: 18 }}
       onClick={() => navigate(-1)}
       {...props}
     >

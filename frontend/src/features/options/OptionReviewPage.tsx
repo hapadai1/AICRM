@@ -1,18 +1,27 @@
 /** OPT-003 옵션 확인서 — 전체 단계 카드 검토 후 최종 저장(확정) */
-import { CheckCircleFilled, ExclamationCircleOutlined } from '@ant-design/icons';
+import {
+  CalculatorOutlined,
+  CheckCircleFilled,
+  CheckOutlined,
+  EditOutlined,
+  ExclamationCircleOutlined,
+} from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Button, Card, Col, Descriptions, Image, Modal, Row, Space, Spin, Tag, Tooltip, Typography, message } from 'antd';
+import { Alert, Button, Card, Col, Flex, Image, Modal, Row, Space, Spin, Tag, Tooltip, Typography, message } from 'antd';
+import type { CSSProperties } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { fetchFileObjectUrl } from '../../api/client';
 import type { OptionComponentAttr, OptionReviewStage, OptionSurcharge } from '../../api/options';
 import {
   applyOptionSurcharge,
   componentGroupLabel,
+  componentGroupsFor,
   confirmOptionSession,
   fetchOptionReview,
   fetchOptionSessionByItem,
   startOptionSession,
 } from '../../api/options';
+import { BackButton } from '../../shared/BackButton';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { metaOf } from '../../shared/status-meta';
 import { choiceColor, fabricFieldLabel, OPTION_STATUS_META, photoFrameStyle } from './option-meta';
@@ -70,44 +79,81 @@ function StageMedia({ st }: { st: OptionReviewStage }) {
 
 const won = (v: number) => `${v.toLocaleString()}원`;
 
-/** 부위(상의/하의/베스트)별 원단·컬러·패턴·비고 출력 (설계서 04 §2). */
+/**
+ * 부위 요약 표의 칸 폭 — 값 길이와 무관하게 열이 고정돼야 세 줄이 나란히 읽힌다.
+ * 비고만 길어질 수 있어 조금 넓게 잡고, 넘치면 줄바꿈 대신 말줄임 + 툴팁으로 처리한다.
+ */
+const ATTR_GRID = '104px 1fr 1fr 1fr 1.6fr';
+/** 열이 뭉개지지 않는 최소 폭 — 좁은 화면에서는 카드 안에서 가로 스크롤한다. */
+const ATTR_MIN_WIDTH = 620;
+
+/** 표 한 칸 — 한 줄 고정, 넘치면 말줄임(전체 값은 title로 확인). */
+function AttrCell({ value }: { value: string | null }) {
+  return (
+    <div
+      title={value ?? undefined}
+      style={{
+        fontSize: 14,
+        color: value ? 'rgba(0,0,0,0.88)' : '#bfbfbf',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+      }}
+    >
+      {value || '-'}
+    </div>
+  );
+}
+
+/**
+ * 부위(상의/하의/베스트)별 원단·컬러·패턴·비고 (설계서 04 §2).
+ * 부위 하나가 한 줄 — 라벨은 헤더로 한 번만 올리고 값은 고정 폭 열에 맞춰 세운다.
+ */
 function ComponentAttrsSummary({ components }: { components: OptionComponentAttr[] }) {
   if (components.length === 0) return null;
+  const rowStyle: CSSProperties = {
+    display: 'grid',
+    gridTemplateColumns: ATTR_GRID,
+    columnGap: 16,
+    alignItems: 'center',
+    minWidth: ATTR_MIN_WIDTH,
+  };
   return (
-    <Card size="small" title="부위별 원단·컬러·패턴">
-      <Space direction="vertical" size={12} style={{ width: '100%' }}>
-        {components.map((c) => (
-          <Descriptions
+    <Card size="small" title="부위별 원단·컬러·패턴" styles={{ body: { padding: '0 16px 8px' } }}>
+      <div style={{ overflowX: 'auto' }}>
+        {/* 헤더 — 라벨을 값 옆에 반복하지 않고 열 제목으로 한 번만 둔다. */}
+        <div style={{ ...rowStyle, height: 32, borderBottom: '1px solid #f0f0f0' }}>
+          {['부위', '원단', '컬러', '패턴', '비고'].map((label) => (
+            <Typography.Text key={label} type="secondary" style={{ fontSize: 12 }}>
+              {label}
+            </Typography.Text>
+          ))}
+        </div>
+        {components.map((c, i) => (
+          <div
             key={c.componentGroup}
-            size="small"
-            column={2}
-            bordered
-            title={componentGroupLabel(c.componentGroup)}
+            style={{ ...rowStyle, height: 44, borderTop: i > 0 ? '1px solid #fafafa' : undefined }}
           >
-            <Descriptions.Item label="원단">{c.fabricName || '-'}</Descriptions.Item>
-            <Descriptions.Item label="컬러">{c.colorName || '-'}</Descriptions.Item>
-            <Descriptions.Item label="패턴">{c.patternName || '-'}</Descriptions.Item>
-            <Descriptions.Item label="비고">{c.notes || '-'}</Descriptions.Item>
-          </Descriptions>
+            <Tag color="blue" style={{ margin: 0, width: 92, textAlign: 'center' }}>
+              {componentGroupLabel(c.componentGroup)}
+            </Tag>
+            <AttrCell value={c.fabricName} />
+            <AttrCell value={c.colorName} />
+            <AttrCell value={c.patternName} />
+            <AttrCell value={c.notes} />
+          </div>
         ))}
-      </Space>
+      </div>
     </Card>
   );
 }
 
 /**
- * 옵션 추가금액과 계약금액 차액 안내.
- * 금액은 여기서 자동으로 바뀌지 않는다 — '계약금액에 반영'을 눌러야 반영된다.
+ * 옵션 추가금액과 계약금액 차액 안내 — 금액 설명만 한다.
+ * 실행 버튼([계약금액 반영])은 화면 규칙대로 헤더 우상단 액션바에 있다.
+ * 금액은 자동으로 바뀌지 않는다 — 그 버튼을 눌러야 반영된다.
  */
-function SurchargePanel({
-  surcharge,
-  onApply,
-  applying,
-}: {
-  surcharge: OptionSurcharge;
-  onApply: () => void;
-  applying: boolean;
-}) {
+function SurchargePanel({ surcharge }: { surcharge: OptionSurcharge }) {
   const { total, applied, pending, contract } = surcharge;
   if (total === 0 && applied === 0) return null;
 
@@ -144,18 +190,10 @@ function SurchargePanel({
               <Typography.Text type="secondary">
                 반영하면 계약금액 {won(contract.afterTotalAmount)} · 잔금{' '}
                 {won(contract.afterBalanceAmount)}이 됩니다. 계약 버전은 올라가지 않습니다.
+                {surcharge.appliable
+                  ? ' 위 [계약금액 반영]을 누르면 반영됩니다.'
+                  : ' 옵션을 확정하면 위에서 반영할 수 있습니다.'}
               </Typography.Text>
-            }
-            action={
-              surcharge.appliable ? (
-                <Button type="primary" loading={applying} onClick={onApply}>
-                  계약금액에 반영
-                </Button>
-              ) : (
-                <Tooltip title="옵션을 확정한 뒤 반영할 수 있습니다.">
-                  <Button disabled>계약금액에 반영</Button>
-                </Tooltip>
-              )
             }
           />
         )}
@@ -346,89 +384,180 @@ export function OptionReviewPage() {
     );
   };
 
+  /**
+   * 단계 카드를 부위(상의/하의/베스트)로 나눈다 — 정장처럼 부위가 여럿인 카테고리만.
+   * 확인서 응답에는 단계의 부위가 없어, 같은 세션의 상세(stages[].componentGroup)로 매핑한다.
+   * 셔츠·구두처럼 부위가 하나면 빈 배열 → 기존처럼 한 줄로 펼친다.
+   */
+  const groupOfStage = new Map((session?.stages ?? []).map((s) => [s.stageId, s.componentGroup]));
+  const groups = componentGroupsFor(session?.productCategory);
+  const stageSections =
+    groups.length > 1
+      ? groups
+          .map((g) => {
+            const stages = review.stages.filter((s) => groupOfStage.get(s.stageId) === g);
+            return {
+              key: g,
+              label: componentGroupLabel(g),
+              stages,
+              missingRequired: stages.filter((s) => s.required && !s.choiceId).length,
+            };
+          })
+          .filter((sec) => sec.stages.length > 0)
+      : [];
+  // 부위가 지정되지 않은 단계도 빠뜨리지 않는다.
+  const ungrouped =
+    stageSections.length > 0
+      ? review.stages.filter((s) => !groups.includes(groupOfStage.get(s.stageId) ?? ''))
+      : [];
+  if (ungrouped.length > 0)
+    stageSections.push({
+      key: '__etc',
+      label: '기타',
+      stages: ungrouped,
+      missingRequired: ungrouped.filter((s) => s.required && !s.choiceId).length,
+    });
+
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+    // Space가 아니라 Flex다 — Space는 자식마다 래퍼 div를 만들어 그 안에 갇힌
+    // sticky 액션바가 따라오지 못한다(계약서 작성 화면과 동일한 이유로 Flex 사용).
+    <Flex vertical gap={16} style={{ width: '100%' }}>
       {modalContextHolder}
-      <Card>
-        <Space align="center" style={{ width: '100%', justifyContent: 'space-between' }}>
-          <div>
+      {/*
+        작업 표시줄 — 부위별 카드가 길어 스크롤해도 상태·확정·반영 버튼이 따라온다
+        (계약서 작성 화면과 동일한 sticky 액션바). 안내 Alert는 아래 카드로 내려
+        이 줄이 얇게 유지되도록 한다.
+      */}
+      <Card
+        styles={{ body: { padding: '12px 20px' } }}
+        style={{ position: 'sticky', top: 0, zIndex: 20, boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}
+      >
+        <Space align="center" wrap style={{ width: '100%', justifyContent: 'space-between' }}>
+          <Space size={10} wrap>
             {/* 고객명·주문번호·옵션세트명은 백엔드 확인서 응답에 없다 (docs/dev/08 §4) */}
-            <Typography.Title level={4} style={{ margin: 0 }}>
+            <Typography.Title level={5} style={{ margin: 0 }}>
               옵션 확인서 — {session?.displayName ?? '맞춤 품목'}
             </Typography.Title>
             <Typography.Text type="secondary">
               {fabricFieldLabel(session?.productCategory)}: {review.fabric ?? '미입력'} · 옵션 세트 V
               {session?.optionSetVersionNo ?? '-'}
             </Typography.Text>
-          </div>
-          <Space>
+          </Space>
+          {/*
+            화면의 기능 버튼은 우상단 한 곳에 모은다 (렌탈 스타일 선택 화면과 동일 규칙).
+            확정 → 계약금액 반영이 한 자리에서 이어지도록 반영 버튼도 같은 줄에 둔다.
+            하단은 페이지 이동(이전화면) 전용이다.
+          */}
+          <Space wrap>
             <StatusBadge
               label={metaOf(OPTION_STATUS_META, review.status).label}
               color={metaOf(OPTION_STATUS_META, review.status).color}
             />
             {isConfirmed && <CheckCircleFilled style={{ color: '#52c41a', fontSize: 24 }} />}
+            {review.surcharge.pending !== 0 && (
+              <Tooltip
+                title={
+                  review.surcharge.appliable ? '' : '옵션을 확정한 뒤 계약금액에 반영할 수 있습니다.'
+                }
+              >
+                <Button
+                  icon={<CalculatorOutlined />}
+                  disabled={!review.surcharge.appliable}
+                  loading={applyMutation.isPending}
+                  onClick={() => openApplyDialog(review.surcharge)}
+                >
+                  계약금액 반영
+                </Button>
+              </Tooltip>
+            )}
+            {isConfirmed ? (
+              <Button
+                type="primary"
+                icon={<EditOutlined />}
+                loading={reopenMutation.isPending}
+                onClick={openReopenDialog}
+              >
+                옵션 변경
+              </Button>
+            ) : (
+              <Tooltip
+                title={review.missingCount > 0 ? '필수 단계를 모두 선택해야 확정할 수 있습니다.' : ''}
+              >
+                <Button
+                  type="primary"
+                  icon={<CheckOutlined />}
+                  disabled={review.missingCount > 0}
+                  loading={confirmMutation.isPending}
+                  onClick={openConfirmDialog}
+                >
+                  최종 저장(확정)
+                </Button>
+              </Tooltip>
+            )}
           </Space>
         </Space>
-        {review.missingCount > 0 && (
-          <Alert
-            style={{ marginTop: 12 }}
-            type="warning"
-            showIcon
-            message={`선택하지 않은 단계가 ${review.missingCount}개 있습니다. 카드를 눌러 해당 단계를 선택해 주세요.`}
-          />
-        )}
-        {isConfirmed && (
-          <Alert
-            style={{ marginTop: 12 }}
-            type="success"
-            showIcon
-            message="확정된 옵션입니다. 카드를 눌러 열람하고, 바꾸려면 아래 '옵션 변경'을 눌러 새 선택 버전을 시작하세요."
-          />
-        )}
       </Card>
+
+      {review.missingCount > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          message={`선택하지 않은 필수 단계가 ${review.missingCount}개 있습니다. 카드를 눌러 해당 단계를 선택해 주세요.`}
+        />
+      )}
+      {/* 베스트처럼 선택 단계는 안 골라도 확정된다 — 확정을 막지 않고 안내만 한다. */}
+      {review.missingCount === 0 && review.missingOptionalCount > 0 && !isConfirmed && (
+        <Alert
+          type="info"
+          showIcon
+          message={`선택하지 않은 선택 단계가 ${review.missingOptionalCount}개 있습니다. 필요 없으면 그대로 확정할 수 있습니다.`}
+        />
+      )}
+      {isConfirmed && (
+        <Alert
+          type="success"
+          showIcon
+          message="확정된 옵션입니다. 카드를 눌러 열람하고, 바꾸려면 위 '옵션 변경'을 눌러 새 선택 버전을 시작하세요."
+        />
+      )}
 
       <ComponentAttrsSummary components={review.components} />
 
-      <SurchargePanel
-        surcharge={review.surcharge}
-        applying={applyMutation.isPending}
-        onApply={() => openApplyDialog(review.surcharge)}
-      />
+      <SurchargePanel surcharge={review.surcharge} />
 
-      <Row gutter={16}>{review.stages.map(renderStageCard)}</Row>
+      {stageSections.length > 0 ? (
+        stageSections.map((sec) => (
+          <Card
+            key={sec.key}
+            size="small"
+            styles={{ body: { paddingBottom: 0 } }}
+            title={
+              <Space size={10}>
+                <Typography.Text strong style={{ fontSize: 15 }}>
+                  {sec.label}
+                </Typography.Text>
+                <Typography.Text type="secondary" style={{ fontWeight: 400 }}>
+                  {sec.stages.filter((s) => s.choiceId).length}/{sec.stages.length} 선택
+                </Typography.Text>
+                {sec.missingRequired > 0 && (
+                  <Tag color="red" style={{ margin: 0 }}>
+                    필수 {sec.missingRequired}개 미선택
+                  </Tag>
+                )}
+              </Space>
+            }
+          >
+            <Row gutter={16}>{sec.stages.map(renderStageCard)}</Row>
+          </Card>
+        ))
+      ) : (
+        <Row gutter={16}>{review.stages.map(renderStageCard)}</Row>
+      )}
 
+      {/* 하단은 페이지 이동 전용 — 기능 버튼(확정·반영)은 위 헤더 액션바에 있다. */}
       <Card>
-        <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-          {/* 목록 말고 계약·품목 상세에서도 들어오므로 온 곳으로 되돌린다. */}
-          <Button size="large" style={{ height: 56, minWidth: 140, fontSize: 18 }} onClick={() => navigate(-1)}>
-            이전화면
-          </Button>
-          {isConfirmed ? (
-            <Button
-              type="primary"
-              size="large"
-              style={{ height: 56, minWidth: 220, fontSize: 18 }}
-              loading={reopenMutation.isPending}
-              onClick={openReopenDialog}
-            >
-              옵션 변경
-            </Button>
-          ) : (
-            <Tooltip title={review.missingCount > 0 ? '모든 단계를 선택해야 확정할 수 있습니다.' : ''}>
-              <Button
-                type="primary"
-                size="large"
-                style={{ height: 56, minWidth: 220, fontSize: 18 }}
-                disabled={review.missingCount > 0}
-                loading={confirmMutation.isPending}
-                onClick={openConfirmDialog}
-              >
-                최종 저장(확정)
-              </Button>
-            </Tooltip>
-          )}
-        </Space>
+        <BackButton />
       </Card>
-    </Space>
+    </Flex>
   );
 }

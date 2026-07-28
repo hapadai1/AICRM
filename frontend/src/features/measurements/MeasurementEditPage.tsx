@@ -191,7 +191,7 @@ export function MeasurementEditPage() {
 
   const customerQuery = useQuery({
     queryKey: ['customers', 'search', customerKeyword],
-    queryFn: () => fetchCustomers({ q: customerKeyword || undefined, includeProspect: true, size: 20 }),
+    queryFn: () => fetchCustomers({ q: customerKeyword || undefined, scope: 'ALL', size: 20 }),
     enabled: isNew,
   });
 

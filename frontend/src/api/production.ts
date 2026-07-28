@@ -1,4 +1,4 @@
-import { api, request, type ListResult } from './client';
+import { api, downloadFile, request, type ListResult } from './client';
 import { labelOf } from '../shared/status-meta';
 // 구성품 표시명은 중앙(api/code-labels) 공유 맵을 재노출한다(관리자 편집 전 화면 반영).
 import { COMPONENT_TYPE_LABELS } from './code-labels';
@@ -77,6 +77,36 @@ export function isBackwardTransition(from: string, to: string): boolean {
   const toRank = COMPONENT_STATUS_RANK[to];
   if (fromRank === undefined || toRank === undefined) return false;
   return !forwardTransitions(from).includes(to as ComponentStatus) && toRank < fromRank;
+}
+
+/**
+ * 품목 상태 진행 순서 — 백엔드 `production-status.ts ITEM_STATUS_FLOW`와 같은 순서다.
+ * 구성품 흐름과 달리 옵션·채촌 대기와 집계 상태(부분 입고/출고)가 섞여 있다.
+ */
+export const ITEM_STATUS_RANK: Record<string, number> = {
+  CREATED: 0,
+  OPTION_PENDING: 1,
+  MEASUREMENT_PENDING: 2,
+  READY_TO_ORDER: 3,
+  PRODUCTION_REQUESTED: 4,
+  PRODUCTION_IN_PROGRESS: 5,
+  BASTING_RECEIVED: 6,
+  FITTING_COMPLETED: 7,
+  PRODUCTION_COMPLETED: 8,
+  PARTIALLY_RECEIVED: 9,
+  RECEIVED: 10,
+  PARTIALLY_RELEASED: 11,
+  RELEASED: 12,
+};
+
+/**
+ * [제작요청 완료]를 누를 수 있는가 (설계서 11 §9 — 작업지시서 출력과 커플링하지 않는 독립 버튼).
+ * 백엔드 `validateTransition`이 허용하는 범위(제작요청보다 앞선 상태, 취소 아님)와 같게 둔다.
+ * 중간 단계 건너뛰기는 허용되므로 "발주 가능"까지 와야만 눌리는 식으로 좁히지 않는다.
+ */
+export function canRequestProduction(itemStatus: string): boolean {
+  const rank = ITEM_STATUS_RANK[itemStatus];
+  return rank !== undefined && rank < ITEM_STATUS_RANK.PRODUCTION_REQUESTED;
 }
 
 /** 품목·구성품 상태 표시명/색상 (품목 집계 상태 포함) */
@@ -273,7 +303,10 @@ export interface ComponentChangeResult {
   event: ProductionEvent;
   component: ProductionComponentApiRow;
   orderItemStatus: string;
-  /** 전체 입고(완성복) 시 백엔드가 함께 내려주는 고객 연락 문구. 없으면 null. */
+  /**
+   * 하위호환용 필드 — 설계서 v2 02 §8(D7 일원화) 이후 백엔드가 **항상 null**을 내려준다.
+   * 완성복 입고 고객 연락은 진행(journey) PRODUCT_RECEIVED 단계에서만 제안한다(이중 노출 방지).
+   */
   suggestedNotification?: ProductionNotificationSuggestion | null;
 }
 
@@ -482,4 +515,55 @@ export async function downloadFittingSheet(fittingId: string): Promise<void> {
   link.download = fileName;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+// ---------------------------------------------------------------------------
+// 가봉 첨부 파일 (설계서 v2 06 §5.4) — 공장 회신·마킹본 보관. EntityFile 재사용.
+// ---------------------------------------------------------------------------
+
+/** 가봉 세션 첨부 (백엔드 listFittingFiles 응답) */
+export interface FittingFile {
+  /** File id — 다운로드·삭제 키 */
+  id: string;
+  /** EntityFile id (링크 자체의 id) */
+  entityFileId: string;
+  purpose: string;
+  originalName: string;
+  mimeType: string;
+  sizeBytes: number;
+  /** `/api/v1/files/:id` — 인증 헤더가 필요해 blob으로 받아야 한다 */
+  downloadUrl: string;
+  createdAt: string;
+}
+
+/** 첨부 목록 — GET /fittings/{id}/files */
+export function fetchFittingFiles(fittingId: string): Promise<FittingFile[]> {
+  return request<FittingFile[]>({ url: `/fittings/${fittingId}/files` }).then((r) => r ?? []);
+}
+
+/** 첨부 업로드 — POST /fittings/{id}/files (multipart, 필드명 `file`) */
+export function uploadFittingFile(fittingId: string, file: File): Promise<FittingFile> {
+  const form = new FormData();
+  form.append('file', file);
+  return request<FittingFile>({
+    url: `/fittings/${fittingId}/files`,
+    method: 'POST',
+    data: form,
+  });
+}
+
+/** 첨부 제거 — DELETE /fittings/{id}/files/{fileId} (경로 파라미터는 File id) */
+export function deleteFittingFile(
+  fittingId: string,
+  fileId: string,
+): Promise<{ id: string; deleted: boolean }> {
+  return request<{ id: string; deleted: boolean }>({
+    url: `/fittings/${fittingId}/files/${fileId}`,
+    method: 'DELETE',
+  });
+}
+
+/** 첨부 내려받기 — 인증 헤더가 필요하므로 blob 다운로드를 쓴다. */
+export function downloadFittingFile(file: FittingFile): Promise<void> {
+  return downloadFile(`/files/${file.id}`, file.originalName);
 }

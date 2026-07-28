@@ -45,6 +45,13 @@ export interface WorkOrderExcelMeasurement {
 export interface WorkOrderExcelData {
   customerName: string;
   customerPhone: string | null;
+  /**
+   * 고객 신체 정보 (v2 A2 / 설계서 06 §2.5). 양식의 '키/몸무게'(J3)·'연령대'(Y3) 칸에
+   * 출력한다. 채촌 신체열(F)과는 별개의 참고 정보라 서로 덮어쓰지 않는다.
+   */
+  customerHeightCm: number | null;
+  customerWeightKg: number | null;
+  customerAge: number | null;
   orderNo: string;
   itemLabel: string;
   productCategory: string;
@@ -331,6 +338,20 @@ function applyMeasurements(
   return { unmapped, lowerNotes };
 }
 
+/**
+ * '키/몸무게' 칸 문자열 (설계서 06 §2.5). 둘 다 선택 입력이라 있는 값만 적는다.
+ * 예: 175cm / 68kg · 175cm · 68kg · (둘 다 없으면 null → 인쇄된 빈칸 유지)
+ */
+export function formatBodySpec(
+  heightCm: number | null,
+  weightKg: number | null,
+): string | null {
+  const parts: string[] = [];
+  if (heightCm != null) parts.push(`${heightCm}cm`);
+  if (weightKg != null) parts.push(`${weightKg}kg`);
+  return parts.length > 0 ? parts.join(' / ') : null;
+}
+
 /** 템플릿을 열어 값까지 채운 워크북. 파일 저장과 화면 미리보기가 이걸 함께 쓴다. */
 export async function buildWorkOrderWorkbook(data: WorkOrderExcelData): Promise<ExcelJS.Workbook> {
   const wb = new ExcelJS.Workbook();
@@ -361,6 +382,8 @@ export async function buildWorkOrderWorkbook(data: WorkOrderExcelData): Promise<
   // --- 기본 정보 ---------------------------------------------------------
   put(ws, CELL.customerName, data.customerName);
   put(ws, CELL.phone, data.customerPhone);
+  put(ws, CELL.bodySpec, formatBodySpec(data.customerHeightCm, data.customerWeightKg));
+  put(ws, CELL.ageGroup, data.customerAge != null ? `${data.customerAge}세` : null);
   put(ws, CELL.orderDate, fmtDate(data.orderDate));
   put(ws, CELL.fittingDate, fmtDate(data.fittingDate));
   put(ws, CELL.completionDate, fmtDate(data.completionDate));
@@ -517,6 +540,9 @@ export async function buildShoesWorkOrderExcel(data: WorkOrderExcelData): Promis
   section('기본 정보');
   label('고객명', data.customerName);
   label('연락처', data.customerPhone);
+  // 고객 신체 정보 (설계서 06 §2.5 — 구두 메모형에도 동일 출력)
+  label('키/몸무게', formatBodySpec(data.customerHeightCm, data.customerWeightKg));
+  label('연령', data.customerAge != null ? `${data.customerAge}세` : null);
   label('주문번호', data.orderNo);
   label('품목', `${data.itemLabel} (${data.productCategory}#${data.sequenceNo})`);
   label('주문일', fmtDate(data.orderDate));

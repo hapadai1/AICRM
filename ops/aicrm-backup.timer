@@ -1,0 +1,12 @@
+[Unit]
+Description=AICRM 백업 매일 03:20 실행
+
+[Timer]
+# 매장 영업시간(10~20시) 밖. 정각을 피해 다른 배치와 겹치지 않게 한다.
+OnCalendar=*-*-* 03:20:00
+# 서버가 꺼져 있어 놓친 실행은 다음 부팅 후 따라잡는다 — 매장 서버는 상시가동이 아니다.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

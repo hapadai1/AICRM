@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Put } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Put, Query } from '@nestjs/common';
 import { AuthUser, CurrentUser, RequirePermission } from '../../common/decorators';
 import { RentalSelectionService } from './rental-selection.service';
 import {
@@ -24,6 +24,23 @@ export class RentalSelectionController {
   @RequirePermission('RENTAL_VIEW')
   currentSession(@Param('id') orderItemId: string) {
     return this.service.currentSession(orderItemId);
+  }
+
+  /**
+   * 렌탈 품목별 부위 선택 현황 (스타일 컨설팅 목록용).
+   * `:id` 라우트보다 먼저 선언해야 'progress'가 세션 id로 잡히지 않는다.
+   */
+  @Get('rental-selections/progress')
+  @RequirePermission('RENTAL_VIEW')
+  progress(@Query('contractId') contractId?: string) {
+    return this.service.progress(contractId);
+  }
+
+  /** 렌탈 컬러·사이즈 활성 코드 (드롭다운용 읽기 전용) */
+  @Get('rental-selections/codes')
+  @RequirePermission('RENTAL_VIEW')
+  codes() {
+    return this.service.codes();
   }
 
   @Get('rental-selections/:id')

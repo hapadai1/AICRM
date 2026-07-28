@@ -1,10 +1,9 @@
-import { ArrowLeftOutlined, ExportOutlined, ImportOutlined, SwapOutlined } from '@ant-design/icons';
+import { ExportOutlined, ImportOutlined, SwapOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
   App,
   Button,
-  Card,
   DatePicker,
   Descriptions,
   Form,
@@ -12,7 +11,6 @@ import {
   Modal,
   Select,
   Space,
-  Table,
   Tabs,
   Tag,
   Typography,
@@ -20,7 +18,7 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import dayjs, { type Dayjs } from 'dayjs';
 import { useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { ApiError } from '../../api/client';
 import {
   RENTAL_ITEM_STATUS_META,
@@ -33,13 +31,15 @@ import {
   type RentalAllocation,
   type RentalItemStatus,
 } from '../../api/rentals';
+import { LAYOUT } from '../../app/theme';
+import { DataTable } from '../../shared/DataTable';
+import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { metaOf } from '../../shared/status-meta';
 
 /** RENT-004 렌탈 출고·반납 */
 export function RentalHandoverPage() {
   const { message } = App.useApp();
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   const [checkoutTarget, setCheckoutTarget] = useState<RentalAllocation | null>(null);
@@ -229,28 +229,26 @@ export function RentalHandoverPage() {
   ];
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      <Card>
-        <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
-          <Space>
-            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/rentals')}>
-              재고 목록
-            </Button>
-          </Space>
-          <Button onClick={() => navigate('/rentals/allocate')}>가용 검색·배정으로</Button>
-        </Space>
-
-        <Input.Search
-          allowClear
-          style={{ maxWidth: 320, marginTop: 8 }}
-          placeholder="고객명 · 주문번호 · 실물 ID 검색"
-          defaultValue={keyword}
-          onSearch={(v) => {
-            const next = new URLSearchParams(searchParams);
-            if (v.trim()) next.set('q', v.trim());
-            else next.delete('q');
-            setSearchParams(next, { replace: true });
-          }}
+    <PageShell>
+      <PageCard>
+        {/* 화면끼리 잇던 [재고 목록]·[가용 검색·배정으로] 버튼은 뺐다 —
+            좌측 메뉴 "렌탈 관리" 아래 같은 이동이 있고, 렌탈 세 화면이 그 버튼을
+            저마다 다른 자리에 두는 바람에 배치가 어긋나 있었다. */}
+        <ListToolbar
+          filters={
+            <Input.Search
+              allowClear
+              style={{ width: LAYOUT.searchWidth }}
+              placeholder="고객명 · 주문번호 · 실물 ID 검색"
+              defaultValue={keyword}
+              onSearch={(v) => {
+                const next = new URLSearchParams(searchParams);
+                if (v.trim()) next.set('q', v.trim());
+                else next.delete('q');
+                setSearchParams(next, { replace: true });
+              }}
+            />
+          }
         />
 
         <Tabs
@@ -262,10 +260,8 @@ export function RentalHandoverPage() {
               key: 'pickup',
               label: `오늘 픽업(출고) 예정 (${pickups.length})`,
               children: (
-                <Table<RentalAllocation>
+                <DataTable<RentalAllocation>
                   rowKey="id"
-                  scroll={{ x: 'max-content' }}
-                  size="middle"
                   loading={pickupsQuery.isLoading}
                   dataSource={pickups}
                   columns={pickupColumns}
@@ -277,10 +273,8 @@ export function RentalHandoverPage() {
               key: 'return',
               label: `반납 대상 (대여 중 ${returns.length})`,
               children: (
-                <Table<RentalAllocation>
+                <DataTable<RentalAllocation>
                   rowKey="id"
-                  scroll={{ x: 'max-content' }}
-                  size="middle"
                   loading={returnsQuery.isLoading}
                   dataSource={returns}
                   columns={returnColumns}
@@ -290,7 +284,7 @@ export function RentalHandoverPage() {
             },
           ]}
         />
-      </Card>
+      </PageCard>
 
       {/* 출고 모달: 확인 ID 검증 → 불일치 시 RENTAL_ID_MISMATCH → ID 변경 */}
       <Modal
@@ -460,14 +454,14 @@ export function RentalHandoverPage() {
         </Form>
       </Modal>
 
-      <Card size="small">
+      <PageCard>
         <Space size="large" wrap>
           <StatusBadge label="지연: 픽업일 또는 반납 예정일이 오늘 이전" color="red" />
           <Typography.Text type="secondary">
             출고는 확인 ID가 예약 ID와 일치해야 하며, 불일치 시 ID 변경 후 재검증합니다.
           </Typography.Text>
         </Space>
-      </Card>
-    </Space>
+      </PageCard>
+    </PageShell>
   );
 }

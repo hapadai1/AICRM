@@ -49,6 +49,7 @@ import { APPT_STATUS_META, CONSULTATION_INTERESTS, SOURCE_META, SYNC_STATUS_META
 import { AppointmentFormModal } from './AppointmentFormModal';
 import { metaOf } from '../../shared/status-meta';
 import type { Dayjs } from 'dayjs';
+import { usePageTitle } from '../../shared/page-title-store';
 
 /** 상담 기록 폼 값 — 설계 PDF 1페이지 "용도·예산·희망 스타일·납기" */
 interface ConsultationFormValues {
@@ -169,6 +170,8 @@ export function AppointmentDetailPage() {
     },
     onError: (e) => onApiError(e, '상담 저장에 실패했습니다.'),
   });
+
+  usePageTitle(appointment ? '예약 상세' : null, appointment?.customerName);
 
   if (isLoading) {
     return (

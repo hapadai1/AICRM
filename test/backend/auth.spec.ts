@@ -32,6 +32,15 @@ describe('인증·권한 (Phase 1)', () => {
     await api(ctx).get('/api/v1/users').expect(401);
   });
 
+  // 배포 스크립트·systemd가 자격증명 없이 기동을 판정해야 해서 열어 둔 엔드포인트다(ops/README.md).
+  it('헬스체크는 인증 없이 200을 반환하고 업무 데이터를 노출하지 않는다', async () => {
+    const live = await api(ctx).get('/api/v1/health').expect(200);
+    expect(live.body.data).toEqual({ status: 'ok' });
+
+    const ready = await api(ctx).get('/api/v1/health/ready').expect(200);
+    expect(ready.body.data).toEqual({ status: 'ok', database: 'ok' });
+  });
+
   it('권한 보유 시 사용자 목록을 조회한다', async () => {
     const res = await api(ctx).get('/api/v1/users').set(auth(ctx)).expect(200);
     expect(res.body.data.some((u: { loginId: string }) => u.loginId === 'admin')).toBe(true);

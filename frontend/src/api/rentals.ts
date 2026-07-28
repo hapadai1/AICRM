@@ -41,6 +41,11 @@ export const RENTAL_ITEM_STATUS_META: Record<RentalItemStatus, { label: string; 
   RETIRED: { label: '사용 종료', color: 'default' },
 };
 
+/** 미등록 상태 코드가 와도 화면이 죽지 않도록 코드 그대로 표시한다. */
+export function rentalItemStatusLabel(status: string): string {
+  return RENTAL_ITEM_STATUS_META[status as RentalItemStatus]?.label ?? status;
+}
+
 /** 렌탈 배정 상태 (02_데이터모델설계서 §13.3) */
 export type AllocationStatus = 'RESERVED' | 'PREPARING' | 'CHECKED_OUT' | 'RETURNED' | 'CANCELLED';
 
@@ -84,10 +89,10 @@ export interface RentalItem {
   currentAllocation?: RentalAllocationSummary;
 }
 
+/** 실물 이력 = 상태 이벤트(백엔드 `statusEvents`). 대여·수선 이력은 배정/수선 도메인에서 본다. */
 export interface RentalItemEvent {
   id: string;
   at: string;
-  type: 'STATUS' | 'RENTAL' | 'ID_CHANGE' | 'REPAIR' | 'REGISTER';
   label: string;
   detail?: string;
   reason?: string;
@@ -314,8 +319,7 @@ export function fetchRentalItemDetail(id: string): Promise<RentalItemDetail> {
     events: (raw.statusEvents ?? []).map((e) => ({
       id: e.id,
       at: e.occurredAt,
-      type: 'STATUS' as const,
-      label: `${e.previousStatus ?? '-'} → ${e.newStatus}`,
+      label: `${e.previousStatus ? rentalItemStatusLabel(e.previousStatus) : '-'} → ${rentalItemStatusLabel(e.newStatus)}`,
       detail: e.availableFrom ? `대여 가능 예정일 ${dateOnly(e.availableFrom)}` : undefined,
       reason: e.reason ?? undefined,
       by: e.actor?.displayName ?? '-',
@@ -599,6 +603,49 @@ export interface RentalSelectionReview {
   version: number;
 }
 
+/** 목록의 부위 슬롯 (GET /rental-selections/progress) — 코드+표시명 병기 */
+export interface RentalProgressComponent {
+  orderItemComponentId: string;
+  componentType: RentalComponentType;
+  sequenceNo: number;
+  colorCode: string | null;
+  colorName: string | null;
+  sizeCode: string | null;
+  sizeName: string | null;
+  notes: string | null;
+  selectedInventoryItemId: string | null;
+  selectedItemCode: string | null;
+}
+
+/**
+ * 렌탈 품목별 부위 선택 현황 행 — 맞춤 option-progress와 같은 형태.
+ * 세션이 없으면 sessionId=null, status='NOT_STARTED'이고 부위 슬롯만 채워진다.
+ */
+export interface RentalProgressItem {
+  orderItemId: string;
+  displayName: string;
+  productCategory: string;
+  contractId: string;
+  contractNo: string;
+  customerId: string;
+  customerName: string;
+  customerPhone: string;
+  orderNo: string;
+  completionDueDate: string | null;
+  sessionId: string | null;
+  status: RentalSelectionStatus | 'NOT_STARTED';
+  version: number;
+  components: RentalProgressComponent[];
+}
+
+/** 렌탈 부위 선택 현황 — GET /rental-selections/progress?contractId= */
+export function fetchRentalSelectionProgress(contractId?: string): Promise<RentalProgressItem[]> {
+  return request<RentalProgressItem[]>({
+    url: '/rental-selections/progress',
+    params: contractId ? { contractId } : undefined,
+  });
+}
+
 /** 세션 시작/현재본 반환 — POST /order-items/:id/rental-selection (RENTAL 품목만) */
 export function startRentalSelection(orderItemId: string): Promise<RentalSelectionDetail> {
   return request<RentalSelectionDetail>({
@@ -692,21 +739,27 @@ interface RawMasterItem {
   active: boolean;
 }
 
-function fetchActiveMaster(type: 'rental-colors' | 'rental-sizes'): Promise<RentalMasterCode[]> {
-  return request<RawMasterItem[]>({ url: `/admin/master/${type}` }).then((rows) =>
-    rows
+/**
+ * 활성 코드 조회는 읽기 전용 엔드포인트를 쓴다.
+ * /admin/master/* 는 ADMIN_MASTER_EDIT 권한이라 조회 권한만 있는 직원 화면에서 403이 난다.
+ */
+function fetchSelectionCodes(kind: 'colors' | 'sizes'): Promise<RentalMasterCode[]> {
+  return request<{ colors: RawMasterItem[]; sizes: RawMasterItem[] }>({
+    url: '/rental-selections/codes',
+  }).then((res) =>
+    (res[kind] ?? [])
       .filter((r) => r.active)
       .sort((a, b) => a.sortOrder - b.sortOrder)
       .map((r) => ({ code: r.code, name: r.name, sortOrder: r.sortOrder })),
   );
 }
 
-/** 렌탈 컬러 12색 활성 코드 — GET /admin/master/rental-colors */
+/** 렌탈 컬러 12색 활성 코드 — GET /rental-selections/codes */
 export function fetchRentalColors(): Promise<RentalMasterCode[]> {
-  return fetchActiveMaster('rental-colors');
+  return fetchSelectionCodes('colors');
 }
 
-/** 렌탈 사이즈 활성 코드 — GET /admin/master/rental-sizes */
+/** 렌탈 사이즈 활성 코드 — GET /rental-selections/codes */
 export function fetchRentalSizes(): Promise<RentalMasterCode[]> {
-  return fetchActiveMaster('rental-sizes');
+  return fetchSelectionCodes('sizes');
 }

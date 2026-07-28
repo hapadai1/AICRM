@@ -1,5 +1,6 @@
 import {
   CheckOutlined,
+  DeleteOutlined,
   DiffOutlined,
   EditOutlined,
   FileExcelOutlined,
@@ -21,6 +22,7 @@ import {
   List,
   Modal,
   Space,
+  Switch,
   Table,
   Tag,
   Typography,
@@ -29,16 +31,17 @@ import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ApiError } from '../../api/client';
+import { useModeStore } from '../../app/mode-store';
 import {
   cancelContract,
   confirmContractRevision,
   createContractRevision,
+  deleteContract,
   downloadContractExcel,
   fetchContract,
   fetchContractVersions,
   getSignature,
   saveSignature,
-  type ContractLine,
   type ContractVersion,
   type ProductCategory,
   type RevisionConfirmResult,
@@ -48,19 +51,25 @@ import { BackButton } from '../../shared/BackButton';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { ContractDocumentView } from './ContractDocumentView';
-import { ContractLineEditor, createLine, linesTotal, type EditableLine } from './ContractLineEditor';
+import {
+  ContractLineEditor,
+  createLine,
+  linesTotal,
+  THOUSANDS,
+  type EditableLine,
+} from './ContractLineEditor';
 import { ContractSignPad } from './ContractSignPad';
 import {
   CONTRACT_STATUS_META,
   CONTRACT_VERSION_STATUS_META,
   formatKrw,
   metaOf,
-  ORDER_STATUS_META,
   PRODUCT_CATEGORY_LABEL,
   TRANSACTION_TYPE_LABEL,
   TRANSACTION_TYPE_TAG_COLOR,
 } from './labels';
 import { useUnsavedWarning } from './use-unsaved-warning';
+import { usePageTitle } from '../../shared/page-title-store';
 
 /** CONT-003 계약 상세·변경 계약 — 버전 목록, 변경 초안·비교·영향 미리보기·확정, 계약 취소 */
 
@@ -74,7 +83,15 @@ interface CompareRow {
   afterAmount: number;
 }
 
-function aggregate(lines: { transactionType: TransactionType; productCategory: ProductCategory; quantity: number; amount: number }[]) {
+/** 비교에 필요한 최소 형태 — 저장된 버전 라인(ContractLine)과 편집 중 라인(EditableLine) 모두 만족한다. */
+interface ComparableLine {
+  transactionType: TransactionType;
+  productCategory: ProductCategory;
+  quantity: number;
+  amount: number;
+}
+
+function aggregate(lines: ComparableLine[]) {
   const map = new Map<string, { qty: number; amount: number }>();
   for (const l of lines) {
     const key = `${l.transactionType}|${l.productCategory}`;
@@ -84,7 +101,7 @@ function aggregate(lines: { transactionType: TransactionType; productCategory: P
   return map;
 }
 
-function buildCompareRows(before: ContractLine[], after: EditableLine[]): CompareRow[] {
+function buildCompareRows(before: ComparableLine[], after: ComparableLine[]): CompareRow[] {
   const b = aggregate(before);
   const a = aggregate(after);
   const keys = [...new Set([...b.keys(), ...a.keys()])].sort();
@@ -131,16 +148,25 @@ export function ContractDetailPage() {
     enabled: !!id,
   });
 
+  // 고객모드에서 들어온 계약 상세에는 버전 이력을 노출하지 않는다 (고객 화면은 최종 계약서만).
+  const customerMode = useModeStore((s) => s.mode) === 'CUSTOMER';
+
   // 버전 상태 필드는 versionStatus 다 (status 아님).
-  const draftRevision = versions?.find((v) => v.versionStatus === 'DRAFT');
+  // 변경 초안 편집기는 '변경할 수 있는 계약'에만 띄운다. 작성 중(DRAFT)·취소된 계약에도 v1이
+  // DRAFT로 남아 있는데, 이걸 변경 초안으로 취급하면 계약서 + 편집기로 화면이 쪼개진다.
+  const revisable = detail?.status === 'CONFIRMED' || detail?.status === 'CHANGED';
+  const draftRevision = revisable ? versions?.find((v) => v.versionStatus === 'DRAFT') : undefined;
   const baseline = versions?.find(
     (v) => v.versionNo === detail?.currentVersionNo && v.versionStatus === 'CONFIRMED',
   );
 
+  // 버전 목록에서 고른 버전 — 목록 하단에 그 버전의 변경 전후를 편다.
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
+
   // 변경 초안 품목 편집 상태
   const [revLines, setRevLines] = useState<EditableLine[]>([]);
-  const [revTotal, setRevTotal] = useState(0);
-  const [revDeposit, setRevDeposit] = useState(0);
+  const [revManualTotal, setRevManualTotal] = useState(false);
+  const [revManualAmount, setRevManualAmount] = useState(0);
   const [revDirty, setRevDirty] = useState(false);
 
   useEffect(() => {
@@ -149,21 +175,21 @@ export function ContractDetailPage() {
       setRevDirty(false);
       return;
     }
-    setRevLines(
-      draftRevision.lines.map((l) =>
-        createLine({
-          id: l.id,
-          transactionType: l.transactionType,
-          productCategory: l.productCategory,
-          quantity: l.quantity,
-          unitPrice: l.unitPrice,
-          amount: l.amount,
-          note: l.note,
-        }),
-      ),
+    const loaded = draftRevision.lines.map((l) =>
+      createLine({
+        id: l.id,
+        transactionType: l.transactionType,
+        productCategory: l.productCategory,
+        quantity: l.quantity,
+        unitPrice: l.unitPrice,
+        amount: l.amount,
+        note: l.note,
+      }),
     );
-    setRevTotal(draftRevision.totalAmount);
-    setRevDeposit(draftRevision.depositAmount);
+    setRevLines(loaded);
+    // 저장된 합계가 품목 합계와 다르면(할인 등) 직접 입력 모드로 열어 그 값을 지킨다.
+    setRevManualAmount(draftRevision.totalAmount);
+    setRevManualTotal(draftRevision.totalAmount > 0 && draftRevision.totalAmount !== linesTotal(loaded));
     setRevDirty(false);
   }, [draftRevision?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -175,8 +201,26 @@ export function ContractDetailPage() {
   );
   const createdPreview = compareRows.filter((r) => r.afterQty > r.beforeQty);
   const cancelledPreview = compareRows.filter((r) => r.afterQty < r.beforeQty);
+  // 선택 버전 ↔ 직전 버전 비교 (버전 목록 하단)
+  const orderedVersions = useMemo(
+    () => [...(versions ?? [])].sort((a, b) => a.versionNo - b.versionNo),
+    [versions],
+  );
+  // 한 번이라도 확정된 적이 있는 계약인지 — DRAFT 버전을 '작성중'으로 부를지 가른다.
+  const hasConfirmedVersion = orderedVersions.some((v) => v.versionStatus !== 'DRAFT');
+  const selectedVersion = orderedVersions.find((v) => v.id === selectedVersionId) ?? null;
+  const previousVersion = selectedVersion
+    ? ([...orderedVersions].reverse().find((v) => v.versionNo < selectedVersion.versionNo) ?? null)
+    : null;
+  const versionCompareRows = useMemo(
+    () => (selectedVersion ? buildCompareRows(previousVersion?.lines ?? [], selectedVersion.lines) : []),
+    [selectedVersion, previousVersion],
+  );
+
   const revLineTotal = linesTotal(revLines);
-  const revMismatch = revLines.length > 0 && revTotal !== revLineTotal;
+  // 합계 금액은 품목 합계 자동. [직접 입력]을 켰을 때만 수기 값을 쓴다.
+  const revTotal = revManualTotal ? revManualAmount : revLineTotal;
+  const revDiff = revTotal - revLineTotal;
 
   // 변경 사유·취소 사유 입력 모달
   const [revisionModalOpen, setRevisionModalOpen] = useState(false);
@@ -236,7 +280,8 @@ export function ContractDetailPage() {
         changeReason: revision.changeReason,
         version: detail?.version ?? 1,
         totalAmount: revTotal,
-        depositAmount: revDeposit,
+        // 계약금 입력은 없앴다. 기존 버전에 저장된 값을 그대로 이어 보낸다.
+        depositAmount: draftRevision?.depositAmount ?? 0,
         lines: revLines.map((l) => ({
           id: l.id,
           transactionType: l.transactionType,
@@ -254,6 +299,39 @@ export function ContractDetailPage() {
     },
     onError: onApiError,
   });
+
+  // 삭제는 임시저장·취소 계약 한정 (진행 이력이 있으면 서버가 막는다).
+  const deleteMutation = useMutation({
+    mutationFn: () => deleteContract(id),
+    onSuccess: (result) => {
+      message.success(`계약 ${result.contractNo}을(를) 삭제했습니다.`);
+      invalidateAll();
+      navigate('/contracts', { replace: true });
+    },
+    onError: onApiError,
+  });
+
+  const handleDelete = () => {
+    modal.confirm({
+      title: '계약 삭제',
+      okText: '삭제',
+      okButtonProps: { danger: true },
+      cancelText: '닫기',
+      content: (
+        <Flex vertical gap={8}>
+          <Typography.Text>
+            계약 {detail?.contractNo}과(와) 그 버전·품목을 완전히 삭제합니다. 되돌릴 수 없습니다.
+          </Typography.Text>
+          <Typography.Text type="secondary">
+            작업지시서·렌탈 배정 등 진행 이력이 남아 있으면 삭제되지 않습니다.
+          </Typography.Text>
+        </Flex>
+      ),
+      onOk: async () => {
+        await deleteMutation.mutateAsync();
+      },
+    });
+  };
 
   const cancelMutation = useMutation({
     mutationFn: (reason: string) => cancelContract(id, { reason, version: detail?.version ?? 1 }),
@@ -316,11 +394,13 @@ export function ContractDetailPage() {
               message="작업지시서 출력·렌탈 배정 등 진행 이력이 있는 품목이 취소 대상에 포함될 수 있습니다. 진행이 덜 된 품목부터 취소됩니다."
             />
           )}
-          {revMismatch && (
+          {revManualTotal && revDiff !== 0 && (
             <Alert
               type="warning"
               showIcon
-              message={`합계 금액(${formatKrw(revTotal)})이 품목 합계(${formatKrw(revLineTotal)})와 다릅니다.`}
+              message={`직접 입력한 합계 금액이 품목 합계(${formatKrw(revLineTotal)})와 ${formatKrw(
+                Math.abs(revDiff),
+              )} 차이납니다.`}
             />
           )}
         </Flex>
@@ -330,6 +410,8 @@ export function ContractDetailPage() {
       },
     });
   };
+
+  usePageTitle(detail?.contractNo ? `계약 ${detail.contractNo}` : null);
 
   if (error) {
     return (
@@ -348,25 +430,8 @@ export function ContractDetailPage() {
   const statusMeta = metaOf(CONTRACT_STATUS_META, detail?.status ?? '');
   const canRevise = detail?.status === 'CONFIRMED' || detail?.status === 'CHANGED';
   const canCancel = detail && detail.status !== 'CANCELLED' && detail.status !== 'COMPLETED';
-
-  const lineColumns: ColumnsType<ContractLine> = [
-    {
-      title: '거래 방식',
-      dataIndex: 'transactionType',
-      width: 100,
-      render: (v: TransactionType) => <Tag color={TRANSACTION_TYPE_TAG_COLOR[v]}>{TRANSACTION_TYPE_LABEL[v]}</Tag>,
-    },
-    {
-      title: '품목',
-      dataIndex: 'productCategory',
-      width: 100,
-      render: (v: ProductCategory) => PRODUCT_CATEGORY_LABEL[v],
-    },
-    { title: '수량', dataIndex: 'quantity', width: 80, align: 'right' },
-    { title: '단가', dataIndex: 'unitPrice', width: 130, align: 'right', render: formatKrw },
-    { title: '금액', dataIndex: 'amount', width: 130, align: 'right', render: formatKrw },
-    { title: '비고', dataIndex: 'note', render: (v?: string) => v ?? '-' },
-  ];
+  // 삭제는 아직 확정되지 않았거나(임시저장) 이미 취소된 계약만 — 확정 계약은 취소로만 정리한다.
+  const canDelete = detail?.status === 'DRAFT' || detail?.status === 'CANCELLED';
 
   const versionColumns: ColumnsType<ContractVersion> = [
     {
@@ -376,8 +441,10 @@ export function ContractDetailPage() {
       render: (v: number, record) => (
         <Space size={4}>
           <Typography.Text strong>v{v}</Typography.Text>
-          {record.versionStatus === 'DRAFT' && <Tag color="gold">작업 중</Tag>}
-          {v === detail?.currentVersionNo && <Tag color="green">현재 적용</Tag>}
+          {/* 작업 중 여부는 옆 [상태] 열이 말한다. 여기서는 지금 적용 중인 버전만 표시. */}
+          {v === detail?.currentVersionNo && record.versionStatus !== 'DRAFT' && (
+            <Tag color="green">현재 적용</Tag>
+          )}
         </Space>
       ),
     },
@@ -386,6 +453,10 @@ export function ContractDetailPage() {
       dataIndex: 'versionStatus',
       width: 110,
       render: (v: string) => {
+        // 확정된 적이 없는 계약의 DRAFT 버전은 '변경 초안'이 아니라 작성 중인 계약서다.
+        if (v === 'DRAFT' && !hasConfirmedVersion) {
+          return <StatusBadge label="작성중" color="gold" />;
+        }
         const meta = metaOf(CONTRACT_VERSION_STATUS_META, v);
         return <StatusBadge label={meta.label} color={meta.color} />;
       },
@@ -484,25 +555,37 @@ export function ContractDetailPage() {
                 </Button>
               </Can>
             )}
+            {canDelete && (
+              <Can permission="CONTRACT_DELETE">
+                <Button
+                  danger
+                  icon={<DeleteOutlined />}
+                  loading={deleteMutation.isPending}
+                  onClick={handleDelete}
+                >
+                  계약 삭제
+                </Button>
+              </Can>
+            )}
           </Space>
         </Flex>
 
-        <Descriptions size="small" column={{ xs: 1, sm: 2, md: 4 }} bordered>
+        {/*
+          금액(합계·계약금/잔금)은 아래 계약서 카드의 요약에서만 보여준다. 여기서 또 쓰면
+          같은 숫자가 두 번 나오고, 3열 표에 빈 칸이 남는다.
+          계약 비고 필드는 백엔드 스키마에 없어 표시하지 않는다 (docs/dev/08 §4).
+        */}
+        <Descriptions size="small" column={{ xs: 1, sm: 2, md: 3 }} bordered>
           <Descriptions.Item label="고객">{detail?.customerName}</Descriptions.Item>
           <Descriptions.Item label="계약 구분">{detail?.contractTypeName}</Descriptions.Item>
           <Descriptions.Item label="계약일">{detail?.contractedAt ?? '-'}</Descriptions.Item>
           <Descriptions.Item label="완료 예정일">{detail?.completionDueDate ?? '-'}</Descriptions.Item>
           <Descriptions.Item label="촬영일">{detail?.photoDate ?? '-'}</Descriptions.Item>
           <Descriptions.Item label="예식일">{detail?.weddingDate ?? '-'}</Descriptions.Item>
-          <Descriptions.Item label="합계 금액">{formatKrw(detail?.totalAmount)}</Descriptions.Item>
-          <Descriptions.Item label="계약금 / 잔금">
-            {formatKrw(detail?.depositAmount)} / {formatKrw(detail?.balanceAmount)}
-          </Descriptions.Item>
-          {/* 계약 비고 필드는 백엔드 스키마에 없어 표시하지 않는다 (docs/dev/08 §4). */}
         </Descriptions>
       </Card>
 
-      {/* 계약서 웹 표시 — 세부품목 상세 토글·옵션·서명 상태 (설계서 v2 03 §6) */}
+      {/* 계약서 웹 표시 — 품목(벌) × 부위 × 유료옵션 계층·서명 상태 (설계서 v2 03 §6) */}
       {id && <ContractDocumentView contractId={id} />}
 
       {draftRevision && (
@@ -559,176 +642,139 @@ export function ContractDetailPage() {
                 }}
               />
             </div>
-            <Space size={24} wrap>
-              <Space>
-                <Typography.Text>합계 금액(원)</Typography.Text>
-                <InputNumber
-                  min={0}
-                  step={100000}
-                  style={{ width: 160 }}
-                  value={revTotal}
-                  formatter={(v) => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
-                  onChange={(v) => {
-                    setRevTotal(v ?? 0);
+            {/* 합계 금액은 품목 합계 자동. 할인 등으로 조정할 때만 [직접 입력]을 켠다. */}
+            <Flex justify="space-between" align="flex-end" wrap gap={16}>
+              <Flex vertical gap={4}>
+                <Typography.Text type="secondary">합계 금액 (변경 후)</Typography.Text>
+                {revManualTotal ? (
+                  <InputNumber
+                    className="num-input"
+                    size="large"
+                    min={0}
+                    step={100000}
+                    style={{ width: 220, fontWeight: 700 }}
+                    value={revManualAmount}
+                    formatter={THOUSANDS}
+                    onChange={(v) => {
+                      setRevManualAmount(v ?? 0);
+                      setRevDirty(true);
+                    }}
+                  />
+                ) : (
+                  <Typography.Title level={3} style={{ margin: 0 }}>
+                    {formatKrw(revLineTotal)}
+                  </Typography.Title>
+                )}
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {revManualTotal
+                    ? `품목 합계 ${formatKrw(revLineTotal)} · 품목을 고쳐도 이 금액은 따라가지 않습니다`
+                    : `품목 ${revLines.length}건 자동 합계`}
+                </Typography.Text>
+              </Flex>
+              <Space size={8}>
+                <Typography.Text type="secondary">직접 입력</Typography.Text>
+                <Switch
+                  size="small"
+                  checked={revManualTotal}
+                  onChange={(on) => {
+                    setRevManualTotal(on);
+                    if (on) setRevManualAmount(revLineTotal);
                     setRevDirty(true);
                   }}
                 />
               </Space>
-              <Space>
-                <Typography.Text>계약금(원)</Typography.Text>
-                <InputNumber
-                  min={0}
-                  step={100000}
-                  style={{ width: 160 }}
-                  value={revDeposit}
-                  formatter={(v) => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
-                  onChange={(v) => {
-                    setRevDeposit(v ?? 0);
-                    setRevDirty(true);
-                  }}
-                />
-              </Space>
-              <Typography.Text type="secondary">잔금 {formatKrw(revTotal - revDeposit)}</Typography.Text>
-            </Space>
-            {revMismatch && (
+            </Flex>
+            {revManualTotal && revDiff !== 0 && (
               <Alert
-                type="warning"
+                type={revDiff < 0 ? 'info' : 'warning'}
                 showIcon
-                message={`합계 금액(${formatKrw(revTotal)})이 품목 합계(${formatKrw(revLineTotal)})와 다릅니다.`}
+                message={`계약 금액이 품목 합계보다 ${formatKrw(Math.abs(revDiff))} ${
+                  revDiff < 0 ? '적습니다 (할인)' : '많습니다 (추가)'
+                }`}
+                description="의도한 금액이면 그대로 두세요."
+                action={
+                  <Button
+                    size="small"
+                    onClick={() => {
+                      // 불일치를 한 번에 해소: 품목 합계로 되돌리고 자동 모드로 복귀한다.
+                      setRevManualAmount(revLineTotal);
+                      setRevManualTotal(false);
+                      setRevDirty(true);
+                    }}
+                  >
+                    품목 합계로 맞추기
+                  </Button>
+                }
               />
             )}
 
-            <div>
-              <Typography.Title level={5}>변경 전후 비교</Typography.Title>
-              <Table
-                rowKey="key"
-                size="small"
-                pagination={false}
-                columns={compareColumns}
-                dataSource={compareRows}
-                scroll={{ x: 830 }}
-              />
-            </div>
-
-            <div>
-              <Typography.Title level={5}>영향 미리보기</Typography.Title>
-              {createdPreview.length === 0 && cancelledPreview.length === 0 ? (
-                <Typography.Text type="secondary">수량 변경이 없어 생성·취소되는 품목이 없습니다.</Typography.Text>
-              ) : (
-                <Flex vertical gap={8}>
-                  {createdPreview.length > 0 && (
-                    <Alert
-                      type="success"
-                      showIcon
-                      message="생성될 품목"
-                      description={createdPreview
-                        .map(
-                          (r) =>
-                            `${TRANSACTION_TYPE_LABEL[r.transactionType]} ${PRODUCT_CATEGORY_LABEL[r.productCategory]} ${r.afterQty - r.beforeQty}건`,
-                        )
-                        .join(' · ')}
-                    />
-                  )}
-                  {cancelledPreview.length > 0 && (
-                    <Alert
-                      type="error"
-                      showIcon
-                      message="취소될 품목"
-                      description={cancelledPreview
-                        .map(
-                          (r) =>
-                            `${TRANSACTION_TYPE_LABEL[r.transactionType]} ${PRODUCT_CATEGORY_LABEL[r.productCategory]} ${r.beforeQty - r.afterQty}건 (진행이 덜 된 품목부터 취소)`,
-                        )
-                        .join(' · ')}
-                    />
-                  )}
-                </Flex>
-              )}
-            </div>
+            {/*
+              변경 전후 비교·영향 미리보기는 화면에 상시 펴지 않는다.
+              전후 내용은 [버전 목록]에서 버전을 눌러 보고, 생성·취소 품목은 확정 직전 확인 창에서 알린다.
+            */}
           </Flex>
         </Card>
       )}
 
-      <Card title="현재 적용 품목">
-        <Table
-          rowKey="id"
-          size="small"
-          pagination={false}
-          columns={lineColumns}
-          dataSource={detail?.lines ?? []}
-          scroll={{ x: 700 }}
-          summary={() => (
-            <Table.Summary.Row>
-              <Table.Summary.Cell index={0} colSpan={4}>
-                <Typography.Text strong>품목 합계</Typography.Text>
-              </Table.Summary.Cell>
-              <Table.Summary.Cell index={1} align="right">
-                <Typography.Text strong>
-                  {formatKrw((detail?.lines ?? []).reduce((s, l) => s + l.amount, 0))}
+      {/*
+        계약 상세는 최종 계약 내용만 보여준다(위 계약서 카드).
+        품목 표·주문 목록은 각각 계약서 카드와 제작·입출고 화면에서 본다.
+        버전 이력은 관리자 화면에서만, 그것도 고른 버전의 전후만 아래에 편다.
+      */}
+      {!customerMode && (
+        <Card title="버전 목록">
+          <Flex vertical gap={12}>
+            <Typography.Text type="secondary">
+              버전을 누르면 그 버전의 변경 전후 내용을 아래에 표시합니다.
+            </Typography.Text>
+            <Table
+              rowKey="id"
+              size="small"
+              pagination={false}
+              columns={versionColumns}
+              dataSource={orderedVersions}
+              scroll={{ x: 'max-content' }}
+              onRow={(v) => ({
+                onClick: () => setSelectedVersionId((cur) => (cur === v.id ? null : v.id)),
+                style: { cursor: 'pointer' },
+              })}
+              rowClassName={(v) => (v.id === selectedVersionId ? 'ant-table-row-selected' : '')}
+            />
+
+            {selectedVersion && (
+              <Flex vertical gap={8}>
+                <Typography.Title level={5} style={{ margin: 0 }}>
+                  {previousVersion
+                    ? `변경 전후 (v${previousVersion.versionNo} → v${selectedVersion.versionNo})`
+                    : `최초 계약 내용 (v${selectedVersion.versionNo})`}
+                </Typography.Title>
+                <Typography.Text type="secondary">
+                  변경 사유: {selectedVersion.changeReason ?? '-'}
                 </Typography.Text>
-              </Table.Summary.Cell>
-              <Table.Summary.Cell index={2} />
-            </Table.Summary.Row>
-          )}
-        />
-      </Card>
-
-      <Card title="주문">
-        <Table
-          rowKey="id"
-          size="small"
-          pagination={false}
-          scroll={{ x: 'max-content' }}
-          dataSource={detail?.orders ?? []}
-          locale={{ emptyText: '계약 확정 시 맞춤·렌탈 주문이 생성됩니다.' }}
-          columns={[
-            {
-              title: '주문번호',
-              dataIndex: 'orderNo',
-              width: 160,
-              render: (v: string) => <Typography.Text strong>{v}</Typography.Text>,
-            },
-            {
-              title: '거래 방식',
-              dataIndex: 'transactionType',
-              width: 100,
-              render: (v: TransactionType) => (
-                <Tag color={TRANSACTION_TYPE_TAG_COLOR[v]}>{TRANSACTION_TYPE_LABEL[v]}</Tag>
-              ),
-            },
-            {
-              title: '상태',
-              dataIndex: 'status',
-              width: 110,
-              render: (v: string) => {
-                const meta = metaOf(ORDER_STATUS_META, v);
-                return <StatusBadge label={meta.label} color={meta.color} />;
-              },
-            },
-            {
-              title: '',
-              key: 'actions',
-              render: (_, o) => (
-                <Button type="link" onClick={() => navigate(`/orders/${o.id}`)}>
-                  주문 상세
-                </Button>
-              ),
-            },
-          ]}
-        />
-      </Card>
-
-      <Card title="버전 목록">
-        <Table
-          rowKey="id"
-          size="small"
-          pagination={false}
-          columns={versionColumns}
-          dataSource={versions ?? []}
-          scroll={{ x: 700 }}
-          rowClassName={(v) => (v.versionNo === detail?.currentVersionNo ? 'ant-table-row-selected' : '')}
-        />
-      </Card>
+                <Table
+                  rowKey="key"
+                  size="small"
+                  pagination={false}
+                  columns={compareColumns}
+                  dataSource={versionCompareRows}
+                  scroll={{ x: 'max-content' }}
+                  locale={{ emptyText: '품목 내용이 없습니다.' }}
+                />
+                <Flex justify="flex-end" align="center" gap={12} wrap>
+                  <Typography.Text type="secondary">
+                    합계 금액 {formatKrw(previousVersion?.totalAmount ?? 0)} →{' '}
+                    {formatKrw(selectedVersion.totalAmount)}
+                  </Typography.Text>
+                  <DiffText
+                    diff={selectedVersion.totalAmount - (previousVersion?.totalAmount ?? 0)}
+                    formatter={formatKrw}
+                  />
+                </Flex>
+              </Flex>
+            )}
+          </Flex>
+        </Card>
+      )}
 
       {/* 목록·고객 상세·칸반 등 여러 경로로 들어오므로 뒤로가기로 통일 */}
       <Card>
