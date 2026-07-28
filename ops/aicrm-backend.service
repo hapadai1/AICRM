@@ -1,0 +1,34 @@
+[Unit]
+Description=AICRM backend (NestJS)
+Documentation=file:///opt/aicrm/ops/README.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=aicrm
+Group=aicrm
+WorkingDirectory=/opt/aicrm/backend
+EnvironmentFile=/opt/aicrm/backend/.env
+ExecStart=/usr/bin/node dist/main.js
+Restart=always
+RestartSec=5
+# 매장 영업 중 재기동이 실패해도 재시도가 무한 루프로 CPU를 먹지 않도록 제한
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# 로그는 journald로 (조회: journalctl -u aicrm-backend -f)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aicrm
+
+# 보안 하드닝 — 업로드 저장소 외에는 파일시스템 쓰기를 막는다
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/aicrm
+
+[Install]
+WantedBy=multi-user.target
