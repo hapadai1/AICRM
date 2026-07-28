@@ -48,6 +48,8 @@ export const ERROR_CODES = {
 
   // 렌탈
   RENTAL_PERIOD_OVERLAP: HttpStatus.CONFLICT,
+  /** 대여 기간을 정하지 않고 후보 검색·확정을 시도 (v2 확정 2026-07-28) */
+  RENTAL_PERIOD_REQUIRED: HttpStatus.UNPROCESSABLE_ENTITY,
   RENTAL_ITEM_NOT_AVAILABLE: HttpStatus.CONFLICT,
   RENTAL_ID_MISMATCH: HttpStatus.CONFLICT,
 

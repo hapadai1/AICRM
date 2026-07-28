@@ -4,6 +4,7 @@ import { RentalSelectionService } from './rental-selection.service';
 import {
   ConfirmRentalSelectionDto,
   SaveRentalLineDto,
+  SaveRentalPeriodDto,
   SelectRentalItemDto,
 } from './rentals.dto';
 
@@ -50,6 +51,17 @@ export class RentalSelectionController {
   }
 
   /** 부위별 컬러·사이즈·비고 upsert */
+  /** 대여 기간 지정 (현업 확정 2026-07-28: 필수값). 기간이 바뀌면 고른 실물은 비워진다. */
+  @Put('rental-selections/:id/period')
+  @RequirePermission('RENTAL_ALLOCATE')
+  savePeriod(
+    @Param('id') id: string,
+    @Body() dto: SaveRentalPeriodDto,
+    @CurrentUser() actor: AuthUser,
+  ) {
+    return this.service.savePeriod(id, dto, actor);
+  }
+
   @Put('rental-selections/:id/lines/:componentId')
   @RequirePermission('RENTAL_ALLOCATE')
   saveLine(

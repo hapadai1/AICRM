@@ -193,6 +193,16 @@ export class SelectRentalItemDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) version?: number;
 }
 
+/**
+ * PUT /rental-selections/:id/period — 대여 기간 지정 (현업 확정 2026-07-28: 필수값).
+ * 이 기간으로 가용 실물을 찾는다. 기간 없이는 후보 검색·확정을 할 수 없다.
+ */
+export class SaveRentalPeriodDto {
+  @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) pickupDate: string;
+  @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) returnDueDate: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) version?: number;
+}
+
 /** POST /rental-selections/:id/confirm */
 export class ConfirmRentalSelectionDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) version?: number;
