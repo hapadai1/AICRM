@@ -23,15 +23,15 @@ export const PRODUCT_CATEGORY_LABEL = PRODUCT_CATEGORY_LABELS as Record<ProductC
 export const COMPONENT_TYPE_LABEL = COMPONENT_TYPE_LABELS;
 
 /**
- * 계약 상태 라벨. COMPLETED 는 DB에 실제로 존재하므로 라벨 맵에는 반드시 남긴다.
- * 다만 목록 필터로는 보낼 수 없다(백엔드 CONTRACT_STATUSES 미포함 → 400) — api/contracts.ts 의 CONTRACT_FILTER_STATUSES 참고.
+ * 계약 상태 라벨.
+ * 흐름: 작성중 → 등록(확정) → [스타일 컨설팅·서명] → 완료. 변경계약을 확정하면 '변경 확정'으로 돌아간다.
  */
 export const CONTRACT_STATUS_META: Record<string, StatusMeta> = {
   DRAFT: { label: '작성중', color: 'gold' },
-  CONFIRMED: { label: '확정', color: 'green' },
+  CONFIRMED: { label: '등록', color: 'green' },
   CHANGED: { label: '변경 확정', color: 'geekblue' },
   CANCELLED: { label: '취소', color: 'red' },
-  COMPLETED: { label: '완료', color: 'blue' },
+  COMPLETED: { label: '계약 완료', color: 'blue' },
 };
 
 export const CONTRACT_VERSION_STATUS_META: Record<string, StatusMeta> = {

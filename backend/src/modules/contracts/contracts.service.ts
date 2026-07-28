@@ -11,6 +11,7 @@ import { COMPONENT_GROUP_LABELS, componentGroupsFor } from '../options/option-co
 import { buildContractExcel, ContractExcelLine } from './contract-excel';
 import {
   CancelContractDto,
+  CompleteContractDto,
   ConfirmContractDto,
   ConfirmRevisionDto,
   CONTRACT_SORT_FIELDS,
@@ -28,6 +29,9 @@ const COMPONENT_MAP: Record<string, string[]> = {
   SHIRT: ['SHIRT'],
   SHOES: ['SHOES'],
 };
+
+/** 계약서 엑셀 MIME (파일 저장·스트리밍 공용) */
+const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 const CATEGORY_LABEL: Record<string, string> = {
   SUIT: '정장',
@@ -421,7 +425,8 @@ export class ContractsService {
           orderBy: { versionNo: 'desc' },
         });
         if (!draft) throw new BusinessException('CONTRACT_NOT_DRAFT', '확정할 초안 버전이 없습니다.');
-        this.assertSigned(draft.signatureFileId);
+        // 서명은 확정의 전제조건이 아니다 — 흐름이 뒤집혔다(현업 확정 2026-07-28).
+        // 계약서 등록(확정) → 스타일 컨설팅 → 서명 → 계약 완료 순서이며, 서명 검증은 complete()가 한다.
 
         const confirmedAt = dto.confirmedDate ? new Date(dto.confirmedDate) : new Date();
         await tx.contractVersion.update({
@@ -578,8 +583,8 @@ export class ContractsService {
       throw new BusinessException('CONTRACT_NOT_DRAFT', '초안 상태의 변경계약만 확정할 수 있습니다.', undefined, {
         versionStatus: revision.versionStatus,
       });
-    // 재계약도 서명이 전제조건 (설계서 03 §2.5) — 재서명 강제.
-    this.assertSigned(revision.signatureFileId);
+    // 변경계약을 확정하면 새 확정 버전에는 서명이 없다(복사하지 않는다).
+    // 컨설팅 재확정 → 재서명 → 재완료 순서를 다시 밟는다(현업 확정 2026-07-28).
 
     const changeReason = dto.changeReason ?? revision.changeReason;
     if (!changeReason)
@@ -886,18 +891,198 @@ export class ContractsService {
   }
 
   // ---------------------------------------------------------------------------
+  // 계약 흐름 게이팅 (현업 확정 2026-07-28)
+  //   계약서 작성 → 등록(확정·주문 생성) → 스타일 컨설팅 → 서명 → 계약 완료
+  // ---------------------------------------------------------------------------
+
+  /**
+   * 스타일 컨설팅이 전 품목 끝났는지 본다.
+   *
+   * 맞춤(CUSTOM) 주문의 품목은 옵션 선택 세션이, 렌탈(RENTAL) 주문의 품목은 렌탈 선택
+   * 세션이 각각 CONFIRMED여야 한다. 취소된 품목은 대상에서 뺀다.
+   * 주문이 아직 없으면(확정 전) 대상이 없으므로 준비된 것으로 보지 않는다.
+   */
+  async consultingReadiness(contractId: string) {
+    const orders = await this.prisma.order.findMany({
+      where: { contractId },
+      select: {
+        transactionType: true,
+        items: {
+          where: { status: { not: 'CANCELLED' } },
+          select: {
+            id: true,
+            displayName: true,
+            optionSelectionSessions: { where: { isCurrent: true }, select: { status: true } },
+            rentalSelectionSessions: { where: { isCurrent: true }, select: { status: true } },
+          },
+        },
+      },
+    });
+
+    const pending: { orderItemId: string; displayName: string; transactionType: string }[] = [];
+    let targetCount = 0;
+    for (const order of orders) {
+      for (const item of order.items) {
+        targetCount += 1;
+        const sessions =
+          order.transactionType === 'RENTAL' ? item.rentalSelectionSessions : item.optionSelectionSessions;
+        if (!sessions.some((x) => x.status === 'CONFIRMED')) {
+          pending.push({
+            orderItemId: item.id,
+            displayName: item.displayName,
+            transactionType: order.transactionType,
+          });
+        }
+      }
+    }
+    return { ready: targetCount > 0 && pending.length === 0, targetCount, pending };
+  }
+
+  /**
+   * 계약 흐름 상태 — 화면이 [서명하기]·[계약 완료] 버튼을 켤지 판단하는 근거.
+   * 서버가 최종 검증을 하므로 여기 값은 화면 안내용이다.
+   */
+  async getFlow(id: string) {
+    const contract = await this.getContractOrThrow(id);
+    const version = contract.currentVersionId
+      ? await this.prisma.contractVersion.findUnique({ where: { id: contract.currentVersionId } })
+      : null;
+    const consulting = await this.consultingReadiness(id);
+    const registered = ['CONFIRMED', 'CHANGED'].includes(contract.status);
+    const signed = !!version?.signatureFileId && !!version.signedAt;
+
+    return {
+      contractId: id,
+      status: contract.status,
+      version: contract.rowVersion,
+      currentVersionId: contract.currentVersionId,
+      /** 계약서 등록(확정) 완료 — 주문·품목이 생겨 컨설팅을 할 수 있는 상태 */
+      registered,
+      consulting: {
+        ready: consulting.ready,
+        targetCount: consulting.targetCount,
+        pending: consulting.pending,
+      },
+      signed,
+      signedAt: version?.signedAt ?? null,
+      signerName: version?.signerName ?? null,
+      /** 서명 가능 = 등록됨 + 컨설팅 전 품목 확정 + 아직 완료 전 */
+      canSign: registered && consulting.ready && contract.status !== 'COMPLETED',
+      /** 완료 가능 = 등록됨 + 서명됨 */
+      canComplete: registered && signed,
+      completed: contract.status === 'COMPLETED',
+      excelStored: !!version?.excelFileId,
+    };
+  }
+
+  /** 서명 가능 조건 검사 — 현재 확정 버전 + 컨설팅 전 품목 확정. */
+  private async assertSignable(
+    contract: { id: string; status: string; currentVersionId: string | null },
+    version: { id: string; versionStatus: string },
+  ) {
+    if (!['CONFIRMED', 'CHANGED'].includes(contract.status))
+      throw new BusinessException(
+        'CONTRACT_NOT_DRAFT',
+        '계약서를 등록(확정)한 뒤에 서명할 수 있습니다.',
+        undefined,
+        { status: contract.status },
+      );
+    if (version.versionStatus !== 'CONFIRMED' || contract.currentVersionId !== version.id)
+      throw new BusinessException(
+        'CONTRACT_NOT_DRAFT',
+        '현재 확정 버전에만 서명할 수 있습니다.',
+        undefined,
+        { versionStatus: version.versionStatus },
+      );
+
+    const consulting = await this.consultingReadiness(contract.id);
+    if (!consulting.ready)
+      throw new BusinessException(
+        'CONSULTING_NOT_CONFIRMED',
+        '스타일 컨설팅을 모든 품목에 대해 확정한 뒤 서명할 수 있습니다.',
+        undefined,
+        { pending: consulting.pending },
+      );
+  }
+
+  /**
+   * 계약 완료. 서명이 끝난 확정 계약만 완료할 수 있고, 완료 시점의 계약서 엑셀을
+   * 구워 버전에 보관한다(설계서 03 M3). 이후 다운로드는 이 보관본을 그대로 내려준다.
+   */
+  async complete(id: string, dto: CompleteContractDto, actor: AuthUser) {
+    const contract = await this.getContractOrThrow(id);
+    if (!['CONFIRMED', 'CHANGED'].includes(contract.status))
+      throw new BusinessException('CONTRACT_NOT_COMPLETABLE', '확정된 계약만 완료할 수 있습니다.', undefined, {
+        status: contract.status,
+      });
+    const version = contract.currentVersionId
+      ? await this.prisma.contractVersion.findUnique({ where: { id: contract.currentVersionId } })
+      : null;
+    if (!version) throw new NotFoundException('계약 버전이 없습니다.');
+    if (!version.signatureFileId || !version.signedAt)
+      throw new BusinessException('CONTRACT_SIGNATURE_REQUIRED', '서명을 받은 뒤 계약을 완료할 수 있습니다.');
+
+    // 엑셀은 트랜잭션 밖에서 만든다 — 파일 생성이 오래 걸려 잠금을 오래 쥐면 안 된다.
+    // 실패하면 완료 자체가 진행되지 않으므로 고아 파일도 남지 않는다.
+    const { buffer, fileName } = await this.buildContractDocumentExcel(id, actor, { audit: false });
+    const file = await this.files.saveBuffer(
+      { buffer, mimeType: XLSX_MIME, originalName: fileName },
+      actor,
+    );
+
+    const completedAt = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      await tx.contractVersion.update({
+        where: { id: version.id },
+        data: { excelFileId: file.id },
+      });
+      // version 미지정이면 현재 값으로 진행한다(단건 화면에서 낙관적 잠금 없이 누르는 경우).
+      await this.updateContractGuarded(tx, id, dto.version ?? contract.rowVersion, { status: 'COMPLETED' });
+      await this.audit.log(
+        {
+          userId: actor.id,
+          action: 'COMPLETE',
+          entityType: 'CONTRACT',
+          entityId: id,
+          before: { status: contract.status },
+          after: {
+            status: 'COMPLETED',
+            versionNo: version.versionNo,
+            excelFileId: file.id,
+            signedAt: version.signedAt,
+            completedAt,
+          },
+        },
+        asAuditClient(tx),
+      );
+    });
+
+    return {
+      contractId: id,
+      contractNo: contract.contractNo,
+      status: 'COMPLETED',
+      versionNo: version.versionNo,
+      excelFileId: file.id,
+      downloadUrl: `/api/v1/contracts/${id}/excel`,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
   // 전자서명 (설계서 03 §3)
   // ---------------------------------------------------------------------------
 
-  /** 서명 저장·교체. DRAFT 버전 한정. 이미지는 files 모듈에 저장하고 버전에 연결한다. */
+  /**
+   * 서명 저장·교체 (현업 확정 2026-07-28).
+   *
+   * 서명은 **스타일 컨설팅까지 끝난 현재 확정 버전**에 한다. 옵션 추가금액이 서명 전에
+   * 총액에 반영되므로, 서명본 금액과 이후 재출력 금액이 어긋나지 않는다(설계서 03 M1).
+   * 이미지는 files 모듈에 저장하고 버전에 연결한다.
+   */
   async saveSignature(id: string, versionId: string, dto: SaveSignatureDto, actor: AuthUser) {
     const contract = await this.getContractOrThrow(id);
     const version = await this.prisma.contractVersion.findUnique({ where: { id: versionId } });
     if (!version || version.contractId !== id) throw new NotFoundException('계약 버전이 없습니다.');
-    if (version.versionStatus !== 'DRAFT')
-      throw new BusinessException('CONTRACT_NOT_DRAFT', '초안 상태의 버전만 서명할 수 있습니다.', undefined, {
-        versionStatus: version.versionStatus,
-      });
+    await this.assertSignable(contract, version);
     this.assertVersionMatch(contract.rowVersion, dto.version);
 
     const buffer = decodeSignaturePng(dto.imageDataUrl);
@@ -934,14 +1119,14 @@ export class ContractsService {
     };
   }
 
-  /** 서명 제거 (다시 받기용, DRAFT 한정). */
+  /** 서명 제거 (다시 받기용). 완료된 계약의 서명은 지울 수 없다. */
   async removeSignature(id: string, versionId: string, actor: AuthUser) {
     const contract = await this.getContractOrThrow(id);
     const version = await this.prisma.contractVersion.findUnique({ where: { id: versionId } });
     if (!version || version.contractId !== id) throw new NotFoundException('계약 버전이 없습니다.');
-    if (version.versionStatus !== 'DRAFT')
-      throw new BusinessException('CONTRACT_NOT_DRAFT', '초안 상태의 버전만 서명을 제거할 수 있습니다.', undefined, {
-        versionStatus: version.versionStatus,
+    if (contract.status === 'COMPLETED')
+      throw new BusinessException('CONTRACT_NOT_COMPLETABLE', '완료된 계약의 서명은 지울 수 없습니다.', undefined, {
+        status: contract.status,
       });
     void contract;
 
@@ -977,11 +1162,31 @@ export class ContractsService {
   // 계약서 엑셀 (설계서 03 §5·§8) — 즉석 스트리밍
   // ---------------------------------------------------------------------------
 
-  async buildContractDocumentExcel(id: string, actor: AuthUser): Promise<{ buffer: Buffer; fileName: string }> {
+  async buildContractDocumentExcel(
+    id: string,
+    actor: AuthUser,
+    opts: { audit?: boolean } = {},
+  ): Promise<{ buffer: Buffer; fileName: string }> {
     const contract = await this.getDetail(id);
     const version =
       contract.currentVersion ?? contract.versions[contract.versions.length - 1] ?? null;
     if (!version) throw new NotFoundException('계약 버전이 없습니다.');
+
+    // 완료된 계약은 완료 시점에 구워 둔 보관본을 그대로 내려준다(설계서 03 M3).
+    // 지금 다시 만들면 완료 후 바뀐 값이 섞여 "그때 서명한 문서"가 아니게 된다.
+    if (version.excelFileId) {
+      const stored = await this.files.readBuffer(version.excelFileId);
+      if (opts.audit !== false) {
+        await this.audit.log({
+          userId: actor.id,
+          action: 'EXPORT',
+          entityType: 'CONTRACT',
+          entityId: id,
+          after: { contractNo: contract.contractNo, format: 'xlsx', stored: true },
+        });
+      }
+      return { buffer: stored, fileName: `contract-${contract.contractNo}.xlsx` };
+    }
 
     const lines: ContractExcelLine[] = version.lines.map((l) => ({
       category: CATEGORY_LABEL[l.productCategory] ?? l.productCategory,
@@ -1012,13 +1217,15 @@ export class ContractsService {
       issuedAt: new Date(),
     });
 
-    await this.audit.log({
-      userId: actor.id,
-      action: 'EXPORT',
-      entityType: 'CONTRACT',
-      entityId: id,
-      after: { contractNo: contract.contractNo, format: 'xlsx' },
-    });
+    if (opts.audit !== false) {
+      await this.audit.log({
+        userId: actor.id,
+        action: 'EXPORT',
+        entityType: 'CONTRACT',
+        entityId: id,
+        after: { contractNo: contract.contractNo, format: 'xlsx', stored: false },
+      });
+    }
 
     return { buffer, fileName: `contract-${contract.contractNo}.xlsx` };
   }
@@ -1230,16 +1437,6 @@ export class ContractsService {
     });
     if (!contract) throw new NotFoundException('계약이 없습니다.');
     return contract;
-  }
-
-  /** 서명 없이 확정 시도를 차단한다 (설계서 03 §2.4 / D4). */
-  private assertSigned(signatureFileId: string | null): void {
-    if (!signatureFileId)
-      throw new BusinessException(
-        'CONTRACT_SIGNATURE_REQUIRED',
-        '서명이 완료되어야 계약을 확정할 수 있습니다.',
-        [{ field: 'signature', reason: 'REQUIRED' }],
-      );
   }
 
   /** 계약의 현재 옵션 선택값(옵션명·추가금액)을 모은다. (웹·엑셀 공통 소스, 설계서 03 §7.1) */

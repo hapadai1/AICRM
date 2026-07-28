@@ -25,6 +25,7 @@ import {
   Switch,
   Table,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -39,8 +40,9 @@ import {
   deleteContract,
   downloadContractExcel,
   fetchContract,
+  completeContract,
+  fetchContractFlow,
   fetchContractVersions,
-  getSignature,
   saveSignature,
   type ContractVersion,
   type ProductCategory,
@@ -234,21 +236,38 @@ export function ContractDetailPage() {
     message.error(e instanceof ApiError ? e.message : '처리 중 오류가 발생했습니다.');
   };
 
-  // 변경계약도 서명이 확정 전제조건이다 (설계서 v2 03 §2.5). 변경 초안 버전의 서명 상태를 추적한다.
-  const signatureQuery = useQuery({
-    queryKey: ['contracts', id, 'signature', draftRevision?.id],
-    queryFn: () => getSignature(id, draftRevision!.id),
-    enabled: !!draftRevision?.id,
+  /**
+   * 계약 흐름 게이팅 (현업 확정 2026-07-28).
+   * 계약서 등록 → 스타일 컨설팅(전 품목 확정) → 서명 → 계약 완료.
+   * 서명은 **현재 확정 버전**에 붙는다. 변경계약을 확정하면 서명이 풀려 다시 받아야 한다.
+   */
+  const flowQuery = useQuery({
+    queryKey: ['contracts', id, 'flow'],
+    queryFn: () => fetchContractFlow(id),
+    enabled: !!id,
   });
-  const revSigned = !!signatureQuery.data?.signed;
+  const flow = flowQuery.data;
+  const invalidateFlow = () => {
+    void queryClient.invalidateQueries({ queryKey: ['contracts', id, 'flow'] });
+  };
 
   const signMutation = useMutation({
     mutationFn: (input: { imageDataUrl: string; signerName: string }) =>
-      saveSignature(id, draftRevision!.id, { ...input, version: detail?.version }),
+      saveSignature(id, flow!.currentVersionId!, { ...input, version: detail?.version }),
     onSuccess: () => {
       setSignOpen(false);
-      message.success('서명이 저장되었습니다. 변경 확정이 가능합니다.');
-      void queryClient.invalidateQueries({ queryKey: ['contracts', id, 'signature'] });
+      message.success('서명이 저장되었습니다. 이제 계약을 완료할 수 있습니다.');
+      invalidateFlow();
+    },
+    onError: onApiError,
+  });
+
+  const completeMutation = useMutation({
+    mutationFn: () => completeContract(id, { version: detail?.version }),
+    onSuccess: (result) => {
+      message.success(`계약이 완료되었습니다. 계약서 v${result.versionNo}를 보관했습니다.`);
+      invalidateFlow();
+      invalidateAll();
     },
     onError: onApiError,
   });
@@ -348,10 +367,6 @@ export function ContractDetailPage() {
       message.error('품목을 1개 이상 입력해 주세요.');
       return;
     }
-    if (!revSigned) {
-      message.error('먼저 [서명하기]로 서명을 완료해 주세요. 변경계약도 재서명이 필요합니다.');
-      return;
-    }
     modal.confirm({
       title: '변경 계약 확정',
       okText: '변경 확정',
@@ -427,6 +442,47 @@ export function ContractDetailPage() {
 
   const statusMeta = metaOf(CONTRACT_STATUS_META, detail?.status ?? '');
   const canRevise = detail?.status === 'CONFIRMED' || detail?.status === 'CHANGED';
+
+  /** [서명하기]가 잠긴 이유를 그 자리에서 알려준다 — 왜 못 누르는지 찾아다니지 않게. */
+  const signHint = !flow
+    ? ''
+    : flow.completed
+      ? '완료된 계약입니다.'
+      : !flow.registered
+        ? '계약서를 등록(확정)한 뒤 서명할 수 있습니다.'
+        : flow.consulting.ready
+          ? ''
+          : flow.consulting.targetCount === 0
+            ? '주문 품목이 없습니다.'
+            : `스타일 컨설팅 미확정 ${flow.consulting.pending.length}건: ${flow.consulting.pending
+                .map((item) => item.displayName)
+                .join(', ')}`;
+
+  const handleComplete = () => {
+    modal.confirm({
+      title: '계약 완료',
+      okText: '계약 완료',
+      cancelText: '취소',
+      width: 480,
+      content: (
+        <Flex vertical gap={8}>
+          <Typography.Text>
+            서명까지 끝난 계약서를 확정합니다. 완료 시점의 계약서 엑셀이 그대로 보관되며, 이후
+            내려받는 계약서는 이 보관본입니다.
+          </Typography.Text>
+          {flow?.signerName && (
+            <Typography.Text type="secondary">
+              서명자: {flow.signerName}
+              {flow.signedAt ? ` · ${flow.signedAt.slice(0, 16).replace('T', ' ')}` : ''}
+            </Typography.Text>
+          )}
+        </Flex>
+      ),
+      onOk: async () => {
+        await completeMutation.mutateAsync();
+      },
+    });
+  };
   const canCancel = detail && detail.status !== 'CANCELLED' && detail.status !== 'COMPLETED';
   // 삭제는 아직 확정되지 않았거나(임시저장) 이미 취소된 계약만 — 확정 계약은 취소로만 정리한다.
   const canDelete = detail?.status === 'DRAFT' || detail?.status === 'CANCELLED';
@@ -539,6 +595,35 @@ export function ContractDetailPage() {
                 제작·입출고
               </Button>
             )}
+            {/* 서명 → 계약 완료 (현업 확정 2026-07-28). 컨설팅이 끝나야 서명이 열린다. */}
+            {canRevise && (
+              <Can permission="CONTRACT_SIGN">
+                <Tooltip title={signHint}>
+                  <Button
+                    icon={<HighlightOutlined />}
+                    disabled={!flow?.canSign}
+                    onClick={() => setSignOpen(true)}
+                  >
+                    {flow?.signed ? '다시 서명' : '서명하기'}
+                  </Button>
+                </Tooltip>
+              </Can>
+            )}
+            {canRevise && (
+              <Can permission="CONTRACT_CONFIRM">
+                <Tooltip title={flow?.canComplete ? '' : '서명을 받은 뒤 완료할 수 있습니다.'}>
+                  <Button
+                    type="primary"
+                    icon={<CheckOutlined />}
+                    loading={completeMutation.isPending}
+                    disabled={!flow?.canComplete}
+                    onClick={handleComplete}
+                  >
+                    계약 완료
+                  </Button>
+                </Tooltip>
+              </Can>
+            )}
             {canRevise && !draftRevision && (
               <Can permission="CONTRACT_REVISE">
                 <Button icon={<DiffOutlined />} onClick={() => setRevisionModalOpen(true)}>
@@ -597,22 +682,12 @@ export function ContractDetailPage() {
           }
           extra={
             <Space wrap>
-              {revSigned ? (
-                <StatusBadge label="서명 완료" color="green" />
-              ) : (
-                <StatusBadge label="미서명" color="gold" />
-              )}
-              <Can permission="CONTRACT_SIGN">
-                <Button icon={<HighlightOutlined />} onClick={() => setSignOpen(true)}>
-                  {revSigned ? '다시 서명' : '서명하기'}
-                </Button>
-              </Can>
+              {/* 변경 확정 후에는 서명이 풀린다 — 컨설팅 재확정 → 재서명 → 재완료 순서다. */}
               <Can permission="CONTRACT_REVISE">
                 <Button
                   type="primary"
                   icon={<CheckOutlined />}
                   loading={confirmRevisionMutation.isPending}
-                  disabled={!revSigned}
                   onClick={handleConfirmRevision}
                 >
                   변경 확정
@@ -623,13 +698,6 @@ export function ContractDetailPage() {
         >
           <Flex vertical gap={16}>
             <Alert type="info" showIcon message={`변경 사유: ${draftRevision.changeReason ?? '-'}`} />
-            {revSigned && revDirty && (
-              <Alert
-                type="warning"
-                showIcon
-                message="품목을 변경했습니다. 확정 전 다시 서명하는 것을 권장합니다."
-              />
-            )}
             <div>
               <Typography.Title level={5}>품목 편집</Typography.Title>
               <ContractLineEditor
@@ -882,17 +950,17 @@ export function ContractDetailPage() {
         </Flex>
       </Modal>
 
-      {/* 변경계약 서명 캔버스 — 열 때마다 새로 마운트 */}
+      {/* 계약서 서명 캔버스 — 열 때마다 새로 마운트 */}
       <Modal
         open={signOpen}
-        title="변경계약 서명"
+        title="계약서 서명"
         footer={null}
         width={680}
         destroyOnClose
         maskClosable={false}
         onCancel={() => setSignOpen(false)}
       >
-        {draftRevision && (
+        {flow?.currentVersionId && (
           <ContractSignPad
             defaultSignerName={detail?.customerName}
             saving={signMutation.isPending}

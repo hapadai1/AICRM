@@ -48,23 +48,6 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
   }
 
   /** 유효한 1x1 흰 PNG dataURL — 서명 게이팅(v2 D4) 충족용 */
-  const SIGNATURE_PNG =
-    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
-
-  /** 현재 DRAFT 버전에 서명을 저장한다 — 확정(계약완료) 전제조건. */
-  async function signDraft(contractId: string): Promise<void> {
-    const versions = await api(ctx)
-      .get(`/api/v1/contracts/${contractId}/versions`)
-      .set(auth(ctx))
-      .expect(200);
-    const draft = versions.body.data.find((v: { versionStatus: string }) => v.versionStatus === 'DRAFT');
-    await api(ctx)
-      .post(`/api/v1/contracts/${contractId}/versions/${draft.id}/signature`)
-      .set(auth(ctx))
-      .send({ imageDataUrl: SIGNATURE_PNG, signerName: '고객서명' })
-      .expect(201);
-  }
-
   // ---------------------------------------------------------------------------
   // 계약 구분 마스터
   // ---------------------------------------------------------------------------
@@ -249,7 +232,6 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
     });
 
     it('확정 시 CUSTOM/RENTAL 주문 분리·수량만큼 품목 펼침·고객 CONTRACTED 전환이 한 번에 처리된다', async () => {
-      await signDraft(contractId);
       const version = await currentRowVersion(contractId);
       const res = await api(ctx)
         .post(`/api/v1/contracts/${contractId}/confirm`)
@@ -382,7 +364,6 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
         .expect(409);
       expect(conflict.body.error.code).toBe('CONTRACT_VERSION_CONFLICT');
 
-      await signDraft(contractId);
       const version = await currentRowVersion(contractId);
       const res = await api(ctx)
         .post(`/api/v1/contracts/${contractId}/revisions/${revision.body.data.id}/confirm`)
@@ -421,7 +402,6 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
           ],
         })
         .expect(201);
-      await signDraft(contractId);
       const version = await currentRowVersion(contractId);
       await api(ctx)
         .post(`/api/v1/contracts/${contractId}/revisions/${revision.body.data.id}/confirm`)
@@ -450,7 +430,6 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
         .set(auth(ctx))
         .send({ lines: [{ transactionType: 'CUSTOM', productCategory: 'SUIT', quantity: 2 }] })
         .expect(201);
-      await signDraft(contractId);
       const version = await currentRowVersion(contractId);
       const res = await api(ctx)
         .post(`/api/v1/contracts/${contractId}/revisions/${revision.body.data.id}/confirm`)
@@ -538,7 +517,6 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
       const draft = versions.body.data.find((v: { versionStatus: string }) => v.versionStatus === 'DRAFT');
       expect(draft.versionNo).toBe(4);
 
-      await signDraft(contractId);
       const version = await currentRowVersion(contractId);
       const res = await api(ctx)
         .post(`/api/v1/contracts/${contractId}/revisions/${draft.id}/confirm`)
@@ -596,7 +574,6 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
         })
         .expect(201);
       const contractId = created.body.data.id as string;
-      await signDraft(contractId);
       const version = await currentRowVersion(contractId);
       await api(ctx).post(`/api/v1/contracts/${contractId}/confirm`).set(auth(ctx)).send({ version }).expect(200);
 
@@ -668,7 +645,6 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
         })
         .expect(201);
       const contractId = created.body.data.id as string;
-      await signDraft(contractId);
       await api(ctx)
         .post(`/api/v1/contracts/${contractId}/confirm`)
         .set(auth(ctx))
@@ -701,7 +677,6 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
         })
         .expect(201);
       const contractId = created.body.data.id as string;
-      await signDraft(contractId);
       await api(ctx)
         .post(`/api/v1/contracts/${contractId}/confirm`)
         .set(auth(ctx))
@@ -744,14 +719,23 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
 });
 
 /** v2 계약 서명·엑셀 (설계서 03 / D4·D7) */
-describe('계약 서명·엑셀 (v2)', () => {
+describe('계약 흐름 — 등록→컨설팅→서명→완료 (v2 확정 2026-07-28)', () => {
   let ctx: TestContext;
+  let adminId: string;
+  let optionSetVersionId: string;
   const SIGN_PNG =
     'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
 
   beforeAll(async () => {
     ctx = await createTestContext([ContractsModule, OrdersModule]);
     await truncateBusinessData(ctx.prisma);
+    const admin = await ctx.prisma.user.findUniqueOrThrow({ where: { loginId: 'admin' } });
+    adminId = admin.id;
+    const optionSet = await ctx.prisma.optionSet.findUniqueOrThrow({ where: { productCategory: 'SUIT' } });
+    optionSetVersionId = randomUUID();
+    await ctx.prisma.optionSetVersion.create({
+      data: { id: optionSetVersionId, optionSetId: optionSet.id, versionNo: 1, status: 'ACTIVE', createdBy: adminId },
+    });
   });
   afterAll(async () => {
     await ctx.app.close();
@@ -787,51 +771,205 @@ describe('계약 서명·엑셀 (v2)', () => {
     return { contractId, versionId: draft.id };
   }
 
-  it('서명 없이 확정하면 CONTRACT_SIGNATURE_REQUIRED(409)로 막는다', async () => {
+  const rowVersion = async (contractId: string): Promise<number> =>
+    (await ctx.prisma.contract.findUniqueOrThrow({ where: { id: contractId } })).rowVersion;
+
+  /** 계약서 등록(확정) — 주문·품목이 생긴다. 서명은 아직 없다. */
+  async function registerContract(): Promise<{ contractId: string; currentVersionId: string }> {
     const { contractId } = await draftContract();
-    const version = (await ctx.prisma.contract.findUniqueOrThrow({ where: { id: contractId } })).rowVersion;
+    await api(ctx)
+      .post(`/api/v1/contracts/${contractId}/confirm`)
+      .set(auth(ctx))
+      .send({ version: await rowVersion(contractId) })
+      .expect(200);
+    const contract = await ctx.prisma.contract.findUniqueOrThrow({ where: { id: contractId } });
+    return { contractId, currentVersionId: contract.currentVersionId! };
+  }
+
+  /** 스타일 컨설팅 확정 — 품목마다 확정된 옵션 선택 세션을 만든다. */
+  async function confirmConsulting(contractId: string): Promise<void> {
+    const items = await ctx.prisma.orderItem.findMany({ where: { order: { contractId } } });
+    for (const item of items) {
+      await ctx.prisma.optionSelectionSession.create({
+        data: {
+          id: randomUUID(),
+          orderItemId: item.id,
+          optionSetVersionId,
+          selectionVersionNo: 1,
+          status: 'CONFIRMED',
+          confirmedAt: new Date(),
+          isCurrent: true,
+        },
+      });
+    }
+  }
+
+  /** supertest 요청을 그대로 돌려준다 — 호출부가 .expect(...)로 상태를 못 박는다. */
+  function sign(contractId: string, versionId: string) {
+    return api(ctx)
+      .post(`/api/v1/contracts/${contractId}/versions/${versionId}/signature`)
+      .set(auth(ctx))
+      .send({ imageDataUrl: SIGN_PNG, signerName: '홍길동' });
+  }
+
+  const flowOf = async (contractId: string) =>
+    (await api(ctx).get(`/api/v1/contracts/${contractId}/flow`).set(auth(ctx)).expect(200)).body.data;
+
+  it('계약서 등록(확정)은 서명 없이 된다 — 서명은 컨설팅 뒤 단계다', async () => {
+    const { contractId } = await draftContract();
     const res = await api(ctx)
       .post(`/api/v1/contracts/${contractId}/confirm`)
       .set(auth(ctx))
-      .send({ version })
-      .expect(409);
-    expect(res.body.error.code).toBe('CONTRACT_SIGNATURE_REQUIRED');
+      .send({ version: await rowVersion(contractId) })
+      .expect(200);
+    expect(res.body.data.status).toBe('CONFIRMED');
   });
 
-  it('서명 저장 후 확정에 성공하고, 비PNG는 거부한다', async () => {
+  it('초안 버전에는 서명할 수 없다 (현재 확정 버전에만 서명)', async () => {
     const { contractId, versionId } = await draftContract();
+    const res = await sign(contractId, versionId).expect(409);
+    expect(res.body.error.code).toBe('CONTRACT_NOT_DRAFT');
+  });
+
+  it('스타일 컨설팅이 끝나기 전에는 서명이 422 CONSULTING_NOT_CONFIRMED로 막힌다', async () => {
+    const { contractId, currentVersionId } = await registerContract();
+
+    const flow = await flowOf(contractId);
+    expect(flow.registered).toBe(true);
+    expect(flow.consulting.ready).toBe(false);
+    expect(flow.consulting.pending).toHaveLength(1);
+    expect(flow.canSign).toBe(false);
+
+    const res = await sign(contractId, currentVersionId).expect(422);
+    expect(res.body.error.code).toBe('CONSULTING_NOT_CONFIRMED');
+  });
+
+  it('컨설팅을 전 품목 확정하면 서명할 수 있고, 비PNG는 거부한다', async () => {
+    const { contractId, currentVersionId } = await registerContract();
+    await confirmConsulting(contractId);
+
+    const flowBefore = await flowOf(contractId);
+    expect(flowBefore.consulting.ready).toBe(true);
+    expect(flowBefore.canSign).toBe(true);
+    expect(flowBefore.canComplete).toBe(false);
 
     const badType = await api(ctx)
-      .post(`/api/v1/contracts/${contractId}/versions/${versionId}/signature`)
+      .post(`/api/v1/contracts/${contractId}/versions/${currentVersionId}/signature`)
       .set(auth(ctx))
       .send({ imageDataUrl: 'data:image/jpeg;base64,AAAA', signerName: '홍길동' });
     expect(badType.status).toBe(400);
 
-    const saved = await api(ctx)
-      .post(`/api/v1/contracts/${contractId}/versions/${versionId}/signature`)
-      .set(auth(ctx))
-      .send({ imageDataUrl: SIGN_PNG, signerName: '홍길동' })
-      .expect(201);
-    expect(saved.body.data).toMatchObject({ versionId, signerName: '홍길동' });
+    const saved = await sign(contractId, currentVersionId).expect(201);
+    expect(saved.body.data).toMatchObject({ versionId: currentVersionId, signerName: '홍길동' });
     expect(saved.body.data.signatureFileId).toBeTruthy();
 
-    const version = (await ctx.prisma.contract.findUniqueOrThrow({ where: { id: contractId } })).rowVersion;
-    await api(ctx).post(`/api/v1/contracts/${contractId}/confirm`).set(auth(ctx)).send({ version }).expect(200);
-
-    // 감사로그에 SIGN이 남는다
     const signLogs = await ctx.prisma.auditLog.findMany({
-      where: { entityType: 'CONTRACT_VERSION', action: 'SIGN', entityId: versionId },
+      where: { entityType: 'CONTRACT_VERSION', action: 'SIGN', entityId: currentVersionId },
     });
     expect(signLogs).toHaveLength(1);
+
+    const flowAfter = await flowOf(contractId);
+    expect(flowAfter.signed).toBe(true);
+    expect(flowAfter.canComplete).toBe(true);
   });
 
-  it('서명 있는 초안을 수정하면 서명이 무효화된다', async () => {
-    const { contractId, versionId } = await draftContract();
-    await api(ctx)
-      .post(`/api/v1/contracts/${contractId}/versions/${versionId}/signature`)
+  it('서명 없이 완료하면 CONTRACT_SIGNATURE_REQUIRED(409)로 막는다', async () => {
+    const { contractId } = await registerContract();
+    await confirmConsulting(contractId);
+    const res = await api(ctx)
+      .post(`/api/v1/contracts/${contractId}/complete`)
       .set(auth(ctx))
-      .send({ imageDataUrl: SIGN_PNG, signerName: '홍길동' })
-      .expect(201);
+      .send({ version: await rowVersion(contractId) })
+      .expect(409);
+    expect(res.body.error.code).toBe('CONTRACT_SIGNATURE_REQUIRED');
+  });
+
+  it('계약 완료 시 상태가 COMPLETED가 되고 그 시점 계약서 엑셀이 보관된다', async () => {
+    const { contractId, currentVersionId } = await registerContract();
+    await confirmConsulting(contractId);
+    await sign(contractId, currentVersionId).expect(201);
+
+    const done = await api(ctx)
+      .post(`/api/v1/contracts/${contractId}/complete`)
+      .set(auth(ctx))
+      .send({ version: await rowVersion(contractId) })
+      .expect(200);
+    expect(done.body.data.status).toBe('COMPLETED');
+    expect(done.body.data.excelFileId).toBeTruthy();
+
+    const contract = await ctx.prisma.contract.findUniqueOrThrow({ where: { id: contractId } });
+    expect(contract.status).toBe('COMPLETED');
+    const version = await ctx.prisma.contractVersion.findUniqueOrThrow({ where: { id: currentVersionId } });
+    expect(version.excelFileId).toBe(done.body.data.excelFileId);
+
+    // 완료 감사로그
+    const logs = await ctx.prisma.auditLog.findMany({
+      where: { entityType: 'CONTRACT', action: 'COMPLETE', entityId: contractId },
+    });
+    expect(logs).toHaveLength(1);
+
+    // 이후 다운로드는 보관본을 그대로 내려준다 — 두 번 받아도 같은 바이트다.
+    const first = await api(ctx).get(`/api/v1/contracts/${contractId}/excel`).set(auth(ctx)).expect(200);
+    expect(first.headers['content-type']).toContain('spreadsheetml');
+    const second = await api(ctx).get(`/api/v1/contracts/${contractId}/excel`).set(auth(ctx)).expect(200);
+    expect(second.headers['content-length']).toBe(first.headers['content-length']);
+
+    const flow = await flowOf(contractId);
+    expect(flow.completed).toBe(true);
+    expect(flow.excelStored).toBe(true);
+    expect(flow.canSign).toBe(false);
+  });
+
+  it('완료된 계약은 다시 완료할 수 없고 서명도 지울 수 없다', async () => {
+    const { contractId, currentVersionId } = await registerContract();
+    await confirmConsulting(contractId);
+    await sign(contractId, currentVersionId).expect(201);
+    await api(ctx)
+      .post(`/api/v1/contracts/${contractId}/complete`)
+      .set(auth(ctx))
+      .send({ version: await rowVersion(contractId) })
+      .expect(200);
+
+    const again = await api(ctx)
+      .post(`/api/v1/contracts/${contractId}/complete`)
+      .set(auth(ctx))
+      .send({ version: await rowVersion(contractId) })
+      .expect(409);
+    expect(again.body.error.code).toBe('CONTRACT_NOT_COMPLETABLE');
+
+    const del = await api(ctx)
+      .delete(`/api/v1/contracts/${contractId}/versions/${currentVersionId}/signature`)
+      .set(auth(ctx))
+      .expect(409);
+    expect(del.body.error.code).toBe('CONTRACT_NOT_COMPLETABLE');
+  });
+
+  it('미완료 계약의 엑셀은 즉석 생성본을 내려준다(보관 없음)', async () => {
+    const { contractId } = await registerContract();
+    const res = await api(ctx).get(`/api/v1/contracts/${contractId}/excel`).set(auth(ctx)).expect(200);
+    expect(res.headers['content-type']).toContain('spreadsheetml');
+    const version = await ctx.prisma.contractVersion.findFirstOrThrow({
+      where: { contractId, versionStatus: 'CONFIRMED' },
+    });
+    expect(version.excelFileId).toBeNull();
+  });
+
+  it('서명 있는 초안을 수정하면 서명이 무효화된다 (회귀)', async () => {
+    const { contractId, versionId } = await draftContract();
+    // 초안 서명은 막혔으므로 직접 심어 두고, 초안 수정이 이를 지우는지만 본다.
+    const file = await ctx.prisma.file.create({
+      data: {
+        id: randomUUID(),
+        storageKey: `test-signature/${randomUUID()}.png`,
+        originalName: 'sign.png',
+        mimeType: 'image/png',
+        sizeBytes: BigInt(10),
+      },
+    });
+    await ctx.prisma.contractVersion.update({
+      where: { id: versionId },
+      data: { signatureFileId: file.id, signedAt: new Date(), signerName: '홍길동' },
+    });
 
     await api(ctx)
       .patch(`/api/v1/contracts/${contractId}`)
@@ -842,26 +980,6 @@ describe('계약 서명·엑셀 (v2)', () => {
     const v = await ctx.prisma.contractVersion.findUniqueOrThrow({ where: { id: versionId } });
     expect(v.signatureFileId).toBeNull();
     expect(v.signedAt).toBeNull();
-  });
-
-  it('계약서 엑셀을 다운로드한다 (xlsx)', async () => {
-    const { contractId, versionId } = await draftContract();
-    await api(ctx)
-      .post(`/api/v1/contracts/${contractId}/versions/${versionId}/signature`)
-      .set(auth(ctx))
-      .send({ imageDataUrl: SIGN_PNG, signerName: '홍길동' })
-      .expect(201);
-    const version = (await ctx.prisma.contract.findUniqueOrThrow({ where: { id: contractId } })).rowVersion;
-    await api(ctx).post(`/api/v1/contracts/${contractId}/confirm`).set(auth(ctx)).send({ version }).expect(200);
-
-    const res = await api(ctx).get(`/api/v1/contracts/${contractId}/excel`).set(auth(ctx)).expect(200);
-    expect(res.headers['content-type']).toContain('spreadsheetml');
-    expect(Number(res.headers['content-length'])).toBeGreaterThan(0);
-
-    const logs = await ctx.prisma.auditLog.findMany({
-      where: { entityType: 'CONTRACT', action: 'EXPORT', entityId: contractId },
-    });
-    expect(logs.length).toBeGreaterThanOrEqual(1);
   });
 });
 

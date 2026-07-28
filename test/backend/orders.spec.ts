@@ -33,19 +33,7 @@ describe('주문·품목·구성품 (Phase 2)', () => {
         ],
       })
       .expect(201);
-    // v2: 확정 전 서명 필수 (D4)
-    const draft = await ctx.prisma.contractVersion.findFirstOrThrow({
-      where: { contractId: created.body.data.id, versionStatus: 'DRAFT' },
-    });
-    await api(ctx)
-      .post(`/api/v1/contracts/${created.body.data.id}/versions/${draft.id}/signature`)
-      .set(auth(ctx))
-      .send({
-        imageDataUrl:
-          'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
-        signerName: '주문테스트',
-      })
-      .expect(201);
+    // v2 확정 2026-07-28: 서명은 확정의 전제조건이 아니다(계약서 등록 → 컨설팅 → 서명 → 완료).
     const confirmed = await api(ctx)
       .post(`/api/v1/contracts/${created.body.data.id}/confirm`)
       .set(auth(ctx))

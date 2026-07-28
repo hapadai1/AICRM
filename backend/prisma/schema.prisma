@@ -130,6 +130,7 @@ model File {
   optionChoices             OptionChoice[]
   workOrderVersionOutputs   WorkOrderVersion[]
   contractVersionSignatures ContractVersion[]  @relation("ContractVersionSignature")
+  contractVersionExcels     ContractVersion[]  @relation("ContractVersionExcel")
 
   @@map("files")
 }
@@ -373,6 +374,9 @@ model ContractVersion {
 
   // --- v2 D4 전자서명 (설계서 03 §2.2). nullable·신규라 기존 데이터 무손상. ---
   signatureFileId String?   @map("signature_file_id") @db.Uuid
+  /// 계약 완료 시점에 구워 보관하는 계약서 엑셀 (설계서 03 M3 확정 2026-07-28).
+  /// 완료 전에는 null이며 다운로드는 즉석 생성한다.
+  excelFileId     String?   @map("excel_file_id") @db.Uuid
   signedAt        DateTime? @map("signed_at") @db.Timestamptz(6)
   signerName      String?   @map("signer_name") @db.VarChar(80)
 
@@ -381,6 +385,7 @@ model ContractVersion {
   createdByUser      User           @relation("ContractVersionCreatedBy", fields: [createdBy], references: [id])
   currentOfContracts Contract[]     @relation("ContractCurrentVersion")
   signatureFile      File?          @relation("ContractVersionSignature", fields: [signatureFileId], references: [id])
+  excelFile          File?          @relation("ContractVersionExcel", fields: [excelFileId], references: [id])
   lines              ContractLine[]
 
   @@unique([contractId, versionNo])
