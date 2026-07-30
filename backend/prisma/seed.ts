@@ -16,6 +16,7 @@ const prisma = new PrismaClient();
 const PERMISSIONS: Array<{ code: string; name: string; description: string }> = [
   { code: 'DASHBOARD_VIEW', name: '대시보드 조회', description: '대시보드 화면 조회' },
   { code: 'DASHBOARD_EDIT', name: '대시보드 처리', description: '대시보드 할 일 확인·보류·완료 처리 및 공유 메모 관리' },
+  { code: 'STATS_VIEW', name: '통계 조회', description: '건수 통계 차트 조회' },
   { code: 'APPOINTMENT_VIEW', name: '예약 조회', description: '예약 캘린더·목록 조회' },
   { code: 'APPOINTMENT_EDIT', name: '예약 편집', description: '예약 등록·수정·취소' },
   { code: 'NAVER_SYNC', name: '네이버 동기화', description: '네이버 예약 수동 동기화 실행' },

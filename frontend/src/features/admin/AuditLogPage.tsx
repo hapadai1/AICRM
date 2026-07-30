@@ -23,8 +23,12 @@ import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
 import { useMemo, useState } from 'react';
 import { fetchAuditLog, fetchUsers, searchAuditLogs } from '../../api/admin';
-import { COMPONENT_TYPE_LABELS, PRODUCT_CATEGORY_LABELS } from '../../api/code-labels';
-import { JOURNEY_STATUS_META } from '../../api/journeys';
+import {
+  COMPONENT_TYPE_LABELS,
+  PRODUCT_CATEGORY_LABELS,
+  REPAIR_TYPE_LABELS_MAP,
+} from '../../api/code-labels';
+import { JOURNEY_STATUS_META, TRACK_TYPE_LABELS } from '../../api/journeys';
 import { NOTIFICATION_STATUS_META, TEMPLATE_STATUS_META } from '../../api/notifications';
 import {
   ALLOCATION_STATUS_META,
@@ -198,12 +202,14 @@ const VALUE_META_BY_FIELD: Record<string, Record<string, { label: string }>> = {
 
 /**
  * 코드값의 한글 표시명. 없으면 null — 호출부가 원래 값을 그대로 쓴다.
- * 품목·구성품 표시명은 로그인 후 서버 값으로 하이드레이션되는 공유 맵이라 호출 시점에 읽는다.
+ * 품목·구성품·수선구분 표시명은 로그인 후 서버 값으로 하이드레이션되는 공유 맵이라 호출 시점에 읽는다.
  */
 function codeLabel(entityType: string, key: string, value: unknown): string | null {
   if (typeof value !== 'string' || !value) return null;
   if (key === 'productCategory') return PRODUCT_CATEGORY_LABELS[value] ?? null;
   if (key === 'componentType' || key === 'componentGroup') return COMPONENT_TYPE_LABELS[value] ?? null;
+  if (key === 'repairType') return REPAIR_TYPE_LABELS_MAP[value] ?? null;
+  if (key === 'trackType') return TRACK_TYPE_LABELS[value as keyof typeof TRACK_TYPE_LABELS] ?? null;
   const byField = VALUE_META_BY_FIELD[key]?.[value]?.label;
   if (byField) return byField;
   if (key === 'status') return STATUS_META_BY_ENTITY[entityType]?.[value]?.label ?? null;
@@ -270,6 +276,22 @@ const FIELD_LABELS: Record<string, string> = {
   componentType: '구성품',
   componentGroup: '구성품',
   managementCode: '관리번호',
+  orderNo: '주문번호',
+  assignedBy: '배정자',
+  repairType: '수선 구분',
+  trackType: '진행 트랙',
+  loginId: '로그인 ID',
+  templateName: '연락 문구',
+  targetUserName: '대상 사용자',
+  permissions: '권한',
+  changeReason: '변경 사유',
+  selectionVersionNo: '선택 버전',
+  optionSummary: '선택 요약',
+  linkedOrderItems: '연결 품목',
+  customerPhone: '고객 연락처',
+  staffName: '담당자',
+  measurementDate: '채촌일',
+  measurementType: '채촌 구분',
   itemStatus: '실물 상태',
   versionStatus: '버전 상태',
   active: '사용 여부',
@@ -305,6 +327,9 @@ const AMOUNT_KEY_RE = /(Amount|Price)$/;
  * (해당 대상의 이름은 서비스 계층이 전/후 스냅샷에 함께 남긴다: optionSetName 등)
  */
 const ID_KEY_RE = /Ids?$/;
+/** 키 이름과 상관없이(assignedBy 등) UUID 값은 요약에서 감춘다 — 사람이 알아볼 수 없다. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUuid = (v: unknown): boolean => typeof v === 'string' && UUID_RE.test(v);
 
 /**
  * 중첩된 객체가 어느 대상의 데이터인지 — 상태 코드를 그 대상의 표시명으로 읽기 위해 쓴다.
@@ -329,7 +354,7 @@ function fmtObject(value: Record<string, unknown>, entityType: string, withCode:
   );
   if (entries.length === 0) return '(없음)';
   const parts = entries.map(
-    ([key, v]) => `${FIELD_LABELS[key] ?? key} ${fmtValue(key, v, entityType, withCode, depth + 1)}`,
+    ([key, v]) => `${fieldLabel(entityType, key)} ${fmtValue(key, v, entityType, withCode, depth + 1)}`,
   );
   // 안쪽 묶음은 괄호로 싸야 어디까지가 그 항목의 값인지 보인다.
   return depth === 0 ? parts.join('\n') : `(${parts.join(' · ')})`;
@@ -406,7 +431,9 @@ function changedKeys(
     }
     return raw(before?.[key]) !== raw(after?.[key]);
   });
-  const readable = changed.filter((key) => !ID_KEY_RE.test(key));
+  const readable = changed.filter(
+    (key) => !ID_KEY_RE.test(key) && !isUuid(before?.[key]) && !isUuid(after?.[key]),
+  );
   // 바뀐 게 식별자뿐인 로그(예: 배정 실물 교체)는 감추면 보여줄 게 없어진다 — 그대로 둔다.
   return readable.length > 0 ? readable : changed;
 }
@@ -432,30 +459,81 @@ const NAME_KEYS = [
   'managementCode',
   'customerName',
   'name',
+  'displayName',
   'templateName',
   'title',
   'stageName',
+  'originalName',
 ];
 
 /**
- * 스냅샷 하나에서 사람이 부르는 이름을 만든다 — "정장 옵션 버전 2".
- * 서비스 계층이 전/후 스냅샷에 이름(optionSetName 등)을 함께 남겨 주는 것이 전제다.
+ * 같은 키가 대상에 따라 다른 뜻인 경우의 라벨 (displayName: 주문 품목은 '품목명', 사용자는 '이름').
  */
-function snapshotName(snapshot: Record<string, unknown> | null): string | null {
+const FIELD_LABELS_BY_ENTITY: Record<string, Record<string, string>> = {
+  USER: { displayName: '이름', status: '계정 상태' },
+  SHARED_NOTE: { content: '메모' },
+};
+
+function fieldLabel(entityType: string, key: string): string {
+  return FIELD_LABELS_BY_ENTITY[entityType]?.[key] ?? FIELD_LABELS[key] ?? key;
+}
+
+/**
+ * 이름을 여러 항목으로 만들어야 하는 대상.
+ * 렌탈 배정은 관리번호만으로는 "누구 것인지" 알 수 없어 고객명을 앞에 붙인다.
+ */
+const ENTITY_NAME_PARTS: Record<string, string[]> = {
+  RENTAL_ALLOCATION: ['customerName', 'managementCode'],
+  CONTRACT: ['customerName', 'contractNo'],
+  CONTRACT_VERSION: ['customerName', 'contractNo'],
+  // 주문 품목에서 뻗어 나온 대상들 — 계약번호보다 "누구의 어떤 품목"이 먼저 읽혀야 한다.
+  ORDER_ITEM: ['customerName', 'displayName'],
+  ORDER_ITEM_COMPONENT: ['customerName', 'displayName'],
+  OPTION_SELECTION_SESSION: ['customerName', 'displayName'],
+  RENTAL_SELECTION_SESSION: ['customerName', 'displayName'],
+  FITTING_SESSION: ['customerName', 'displayName'],
+  WORK_ORDER_VERSION: ['customerName', 'displayName'],
+  MEASUREMENT_SESSION: ['customerName'],
+  MEASUREMENT_SESSION_IMAGE: ['customerName'],
+  REPAIR_REQUEST: ['customerName'],
+  CUSTOMER_JOURNEY: ['customerName'],
+  APPOINTMENT: ['customerName'],
+  CONSULTATION: ['customerName'],
+  CUSTOMER: ['customerName'],
+  USER: ['name', 'displayName'],
+  FILE: ['originalName'],
+};
+
+const isFilledString = (v: unknown): v is string => typeof v === 'string' && v.trim() !== '';
+
+/**
+ * 스냅샷 하나에서 사람이 부르는 이름을 만든다 — "정장 옵션 버전 2", "홍길동 · JKT-BLACK-46-001".
+ * 서비스 계층이 전/후 스냅샷에 이름(optionSetName·customerName 등)을 함께 남겨 주는 것이 전제다.
+ */
+function snapshotName(snapshot: Record<string, unknown> | null, entityType: string): string | null {
   if (!snapshot) return null;
-  const name = NAME_KEYS.map((key) => snapshot[key]).find(
-    (v): v is string => typeof v === 'string' && v.trim() !== '',
-  );
+  const parts = ENTITY_NAME_PARTS[entityType];
+  const picked = parts
+    ? parts.map((key) => snapshot[key]).filter(isFilledString)
+    : [NAME_KEYS.map((key) => snapshot[key]).find(isFilledString)].filter(isFilledString);
   const versionNo = snapshot.versionNo;
-  const parts = [name, versionNo != null ? `버전 ${String(versionNo)}` : null].filter(Boolean);
-  return parts.length > 0 ? parts.join(' ') : null;
+  // 보강된 이름과 스냅샷의 이름이 겹칠 수 있다("관리자 · 관리자") — 같은 값은 한 번만 쓴다.
+  const name = Array.from(new Set(picked)).join(' · ');
+  return [name || null, versionNo != null ? `버전 ${String(versionNo)}` : null]
+    .filter(Boolean)
+    .join(' ') || null;
+}
+
+/** 이름으로 이미 쓴 필드 — 같은 값을 '변경 내용'에서 또 읽게 하지 않는다. */
+function nameKeySet(entityType: string): Set<string> {
+  return new Set([...(ENTITY_NAME_PARTS[entityType] ?? NAME_KEYS), 'versionNo']);
 }
 
 /**
  * 목록 '대상'에 함께 보여줄 이름 — "옵션셋 버전"만으로는 어느 화면의 무엇인지 알 수 없다.
  */
-function targetName(log: Pick<AuditLogItem, 'before' | 'after'>): string | null {
-  return snapshotName({ ...(log.before ?? {}), ...(log.after ?? {}) });
+function targetName(log: Pick<AuditLogItem, 'before' | 'after' | 'entityType'>): string | null {
+  return snapshotName({ ...(log.before ?? {}), ...(log.after ?? {}) }, log.entityType);
 }
 
 /** 한쪽만 남는 로그의 반대쪽 표기 — "-" 로 두면 무슨 일이 일어난 건지 읽히지 않는다. */
@@ -480,24 +558,21 @@ function targetFlow(log: Pick<AuditLogItem, 'before' | 'after' | 'entityType'>):
   const mode = changeMode(log);
   if (mode === 'before') {
     return {
-      from: snapshotName(log.before) ?? typeLabel,
+      from: snapshotName(log.before, log.entityType) ?? typeLabel,
       to: ONE_SIDED_COUNTERPART.before,
       removed: true,
     };
   }
   if (mode === 'after') {
-    const name = snapshotName(log.after);
+    const name = snapshotName(log.after, log.entityType);
     // 이름이 없으면 "없음 → 가봉 세션"이 되어 세션을 새로 만든 것처럼 읽힌다 — 유형만 둔다.
     return name ? { from: ONE_SIDED_COUNTERPART.after, to: name } : { from: null, to: typeLabel };
   }
-  const before = snapshotName(log.before);
-  const after = snapshotName(log.after);
+  const before = snapshotName(log.before, log.entityType);
+  const after = snapshotName(log.after, log.entityType);
   if (before && after && before !== after) return { from: before, to: after };
   return { from: null, to: after ?? before ?? typeLabel };
 }
-
-/** '대상' 이름을 만드는 데 쓰인 필드 — 같은 값을 '변경 내용'에서 또 읽게 하지 않는다. */
-const NAME_KEY_SET = new Set([...NAME_KEYS, 'versionNo']);
 
 /**
  * 조사(을/를·으로/로)를 고르기 위한 받침 판정. 0=받침 없음, 8=ㄹ, 그 외=받침 있음.
@@ -580,18 +655,19 @@ function changeSentence(log: Pick<AuditLogItem, 'action' | 'before' | 'after' | 
       : `${typeLabel}에 파일을 첨부했습니다`;
   }
 
-  const keys = changedKeys(log.before, log.after).filter((key) => !NAME_KEY_SET.has(key));
+  const named = nameKeySet(log.entityType);
+  const keys = changedKeys(log.before, log.after).filter((key) => !named.has(key));
   if (changeMode(log) === 'diff' && keys.length > 0) {
     if (keys.length === 1) {
       const key = keys[0];
-      const label = FIELD_LABELS[key] ?? key;
+      const label = fieldLabel(log.entityType, key);
       const from = fmtInline(key, log.before?.[key], log.entityType);
       const to = fmtInline(key, log.after?.[key], log.entityType);
       return `${subject}의 ${label}${objectSuffix(label)} ${from} → ${to}${towardSuffix(to)} ${predicate}`;
     }
     const labels = keys
       .slice(0, SENTENCE_FIELD_LIMIT)
-      .map((key) => FIELD_LABELS[key] ?? key)
+      .map((key) => fieldLabel(log.entityType, key))
       .join('·');
     const rest = keys.length > SENTENCE_FIELD_LIMIT ? ` 등 ${keys.length}개 항목` : '';
     return `${subject}의 ${labels}${rest}${objectSuffix(`${labels}${rest}`)} ${predicate}`;
@@ -668,7 +744,7 @@ function DiffView({
             const isChanged = raw(b) !== raw(a);
             return (
               <tr key={key} style={{ background: isChanged ? '#fffbe6' : undefined }}>
-                <td style={{ ...cell, fontWeight: 600 }}>{FIELD_LABELS[key] ?? key}</td>
+                <td style={{ ...cell, fontWeight: 600 }}>{fieldLabel(entityType, key)}</td>
                 {single !== null ? (
                   <td style={cell}>{fmtValue(key, single === 'before' ? b : a, entityType, true)}</td>
                 ) : (
@@ -794,12 +870,13 @@ export function AuditLogPage() {
         const changed = changedKeys(log.before, log.after);
         const mode = changeMode(log);
         // 이름·버전은 문장에 이미 들어 있다 — 값 줄에서는 나머지만 보여준다.
-        const withoutName = changed.filter((key) => !NAME_KEY_SET.has(key));
+        const named = nameKeySet(log.entityType);
+        const withoutName = changed.filter((key) => !named.has(key));
         const keys = withoutName.length > 0 ? withoutName : changed;
         const shown = keys.slice(0, CHANGES_INLINE_LIMIT);
         const values = shown
           .map((key) => {
-            const label = FIELD_LABELS[key] ?? key;
+            const label = fieldLabel(log.entityType, key);
             if (mode === 'diff') {
               const from = fmtInline(key, log.before?.[key], log.entityType);
               const to = fmtInline(key, log.after?.[key], log.entityType);

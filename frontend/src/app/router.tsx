@@ -32,6 +32,7 @@ import { RentalHandoverPage } from '../features/rentals/RentalHandoverPage';
 import { RentalSelectionPage } from '../features/rentals/RentalSelectionPage';
 import { RentalInventoryPage } from '../features/rentals/RentalInventoryPage';
 import { RepairsPage } from '../features/repairs/RepairsPage';
+import { StatsPage } from '../features/stats/StatsPage';
 import { WorkOrderPreviewPage } from '../features/workorders/WorkOrderPreviewPage';
 import { CustomerModeConsultingPage } from '../features/customer-mode/CustomerModeConsultingPage';
 import { CustomerModeContractPage } from '../features/customer-mode/CustomerModeContractPage';
@@ -58,6 +59,8 @@ export const router = createBrowserRouter([
     ),
     children: [
       { index: true, element: <DashboardPage /> },
+      // 건수 통계 — 기간·단위별 차트 (STAT-001)
+      { path: 'stats', element: <StatsPage /> },
       // 예약·고객
       { path: 'appointments', element: <AppointmentsPage /> },
       // 인쇄 전용 화면 — :id보다 먼저 선언해야 한다 (개발설계서 05 G-02)

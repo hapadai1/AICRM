@@ -1,4 +1,5 @@
 import {
+  BarChartOutlined,
   CalendarOutlined,
   ColumnHeightOutlined,
   DashboardOutlined,
@@ -54,6 +55,7 @@ export function AppLayout() {
   const permissions = user?.permissions ?? [];
   const canSeeAdmin =
     permissions.includes('USER_ADMIN') || permissions.includes('ADMIN_MASTER_EDIT');
+  const canSeeStats = permissions.includes('STATS_VIEW');
 
   const cid = selectedCustomerId;
   // 고객모드 4메뉴(고객·계약관리·스타일컨설팅·채촌) — 선택 고객 1명 컨텍스트로만 이동.
@@ -103,6 +105,10 @@ export function AppLayout() {
       ],
     },
     { key: '/notifications', icon: <CalendarOutlined />, label: '고객 연락' },
+    // 통계는 특정 업무 흐름이 아니라 전체를 되돌아보는 화면이라 업무 메뉴 뒤에 둔다.
+    ...(canSeeStats
+      ? [{ key: '/stats', icon: <BarChartOutlined />, label: '통계' } as MenuItem]
+      : []),
     ...(canSeeAdmin
       ? [
           {
