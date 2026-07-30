@@ -1023,63 +1023,46 @@ async function main(): Promise<void> {
       console.log('production_events: 6건');
 
       // -----------------------------------------------------------------------
-      // 8) 렌탈 SKU·실물 20·배정
+      // 8) 렌탈 실물 상태·배정
       // -----------------------------------------------------------------------
-      const sku = async (componentType: string, design: string, color: string, size: string): Promise<string> => {
-        const id = uuid();
-        await tx.rentalSku.create({ data: { id, componentType, design, color, size, active: true } });
-        return id;
-      };
-      const skuJktBlk100 = await sku('JACKET', '클래식 원버튼 턱시도', 'BLACK', '100');
-      const skuJktBlk105 = await sku('JACKET', '클래식 원버튼 턱시도', 'BLACK', '105');
-      const skuJktNvy100 = await sku('JACKET', '모던 스트라이프', 'NAVY', '100');
-      const skuPntBlk32 = await sku('TROUSERS', '클래식 턱시도 팬츠', 'BLACK', '32');
-      const skuPntBlk34 = await sku('TROUSERS', '클래식 턱시도 팬츠', 'BLACK', '34');
-      const skuVstBlk100 = await sku('VEST', '클래식 베스트', 'BLACK', '100');
-      const skuShtWht100 = await sku('SHIRT', '윙칼라 셔츠', 'WHITE', '100');
-      const skuShoBlk270 = await sku('SHOES', '스트레이트팁 옥스포드', 'BLACK', '270');
-      const skuShoBlk275 = await sku('SHOES', '스트레이트팁 옥스포드', 'BLACK', '275');
-
+      /*
+       * 렌탈 실물은 기본 시드(seed.ts)가 만든 확정 카탈로그를 그대로 쓴다.
+       * 컬러·사이즈가 현업 확정 목록이라(그레이/블랙…, 상의 46~60·하의 80~104)
+       * 데모가 SKU를 따로 만들면 재고 화면에 없는 색·호수가 섞인다.
+       * AVAILABLE로 둘 실물은 카탈로그에 이미 있으므로 여기서는 다루지 않고,
+       * 배정·수선처럼 상태를 바꿔야 하는 것만 집어 온다.
+       */
       const inventoryItems: Record<string, string> = {};
-      const inventory = async (managementCode: string, rentalSkuId: string, status: string, extra?: {
+      const useItem = async (managementCode: string, status: string, extra?: {
         availableFrom?: Date; notes?: string;
       }): Promise<string> => {
-        const id = uuid();
-        await tx.rentalInventoryItem.create({
+        const item = await tx.rentalInventoryItem.findFirst({
+          where: { managementCode, status: { not: 'RETIRED' } },
+          select: { id: true },
+        });
+        if (!item) {
+          throw new Error(
+            `렌탈 실물 ${managementCode}이 없다 — 기본 시드(npm run prisma:seed)를 먼저 실행한다.`,
+          );
+        }
+        await tx.rentalInventoryItem.update({
+          where: { id: item.id },
           data: {
-            id,
-            managementCode,
-            rentalSkuId,
             status,
             availableFrom: extra?.availableFrom ?? null,
             notes: extra?.notes ?? null,
-            active: true,
-            acquiredAt: dateOnly(-180),
           },
         });
-        inventoryItems[managementCode] = id;
-        return id;
+        inventoryItems[managementCode] = item.id;
+        return item.id;
       };
-      await inventory('JKT-BLK-100-001', skuJktBlk100, 'RESERVED'); // 김민준 배정
-      await inventory('JKT-BLK-100-002', skuJktBlk100, 'AVAILABLE');
-      await inventory('JKT-BLK-100-003', skuJktBlk100, 'ALTERATION', { availableFrom: dateOnly(7), notes: '소매 안감 수선 중' }); // 수선 중 실물
-      await inventory('JKT-BLK-105-001', skuJktBlk105, 'CHECKED_OUT'); // 정우성 대여 중
-      await inventory('JKT-BLK-105-002', skuJktBlk105, 'AVAILABLE');
-      await inventory('JKT-NVY-100-001', skuJktNvy100, 'AVAILABLE');
-      await inventory('PNT-BLK-32-001', skuPntBlk32, 'AVAILABLE');
-      await inventory('PNT-BLK-32-002', skuPntBlk32, 'AVAILABLE');
-      await inventory('PNT-BLK-32-003', skuPntBlk32, 'AVAILABLE');
-      await inventory('PNT-BLK-32-004', skuPntBlk32, 'RESERVED'); // 김민준 배정
-      await inventory('PNT-BLK-34-001', skuPntBlk34, 'CHECKED_OUT'); // 정우성 대여 중
-      await inventory('PNT-BLK-34-002', skuPntBlk34, 'AVAILABLE');
-      await inventory('VST-BLK-100-001', skuVstBlk100, 'AVAILABLE');
-      await inventory('VST-BLK-100-002', skuVstBlk100, 'AVAILABLE');
-      await inventory('SHT-WHT-100-001', skuShtWht100, 'AVAILABLE');
-      await inventory('SHT-WHT-100-002', skuShtWht100, 'AVAILABLE');
-      await inventory('SHO-BLK-270-001', skuShoBlk270, 'CHECKED_OUT'); // 정우성 반납 지연
-      await inventory('SHO-BLK-270-002', skuShoBlk270, 'RESERVED'); // 김민준 배정
-      await inventory('SHO-BLK-270-003', skuShoBlk270, 'AVAILABLE');
-      await inventory('SHO-BLK-275-001', skuShoBlk275, 'AVAILABLE');
+      await useItem('JKT-BLACK-50-001', 'RESERVED'); // 김민준 배정
+      await useItem('JKT-BLACK-50-003', 'ALTERATION', { availableFrom: dateOnly(7), notes: '소매 안감 수선 중' }); // 수선 중 실물
+      await useItem('JKT-BLACK-52-001', 'CHECKED_OUT'); // 정우성 대여 중
+      await useItem('TRS-BLACK-88-001', 'RESERVED'); // 김민준 배정
+      await useItem('TRS-BLACK-92-001', 'CHECKED_OUT'); // 정우성 대여 중
+      await useItem('SHO-SHOE_BLACK-270-001', 'CHECKED_OUT'); // 정우성 반납 지연
+      await useItem('SHO-SHOE_BLACK-275-001', 'RESERVED'); // 김민준 배정
 
       const allocation = async (args: {
         componentId: string; managementCode: string; pickupDate: Date; returnDueDate: Date;
@@ -1118,24 +1101,24 @@ async function main(): Promise<void> {
       };
 
       // 김민준: 오늘 픽업 예약 3건 (RESERVED)
-      await allocation({ componentId: cmpMjJacket, managementCode: 'JKT-BLK-100-001', pickupDate: dateOnly(0), returnDueDate: dateOnly(3), availabilityEndDate: dateOnly(5), status: 'RESERVED', assignedAt: at(-2, 11) });
-      await allocation({ componentId: cmpMjTrousers, managementCode: 'PNT-BLK-32-004', pickupDate: dateOnly(0), returnDueDate: dateOnly(3), availabilityEndDate: dateOnly(5), status: 'RESERVED', assignedAt: at(-2, 11) });
-      await allocation({ componentId: cmpMjShoes, managementCode: 'SHO-BLK-270-002', pickupDate: dateOnly(0), returnDueDate: dateOnly(3), availabilityEndDate: dateOnly(5), status: 'RESERVED', assignedAt: at(-2, 11) });
+      await allocation({ componentId: cmpMjJacket, managementCode: 'JKT-BLACK-50-001', pickupDate: dateOnly(0), returnDueDate: dateOnly(3), availabilityEndDate: dateOnly(5), status: 'RESERVED', assignedAt: at(-2, 11) });
+      await allocation({ componentId: cmpMjTrousers, managementCode: 'TRS-BLACK-88-001', pickupDate: dateOnly(0), returnDueDate: dateOnly(3), availabilityEndDate: dateOnly(5), status: 'RESERVED', assignedAt: at(-2, 11) });
+      await allocation({ componentId: cmpMjShoes, managementCode: 'SHO-SHOE_BLACK-275-001', pickupDate: dateOnly(0), returnDueDate: dateOnly(3), availabilityEndDate: dateOnly(5), status: 'RESERVED', assignedAt: at(-2, 11) });
       // 정우성: 렌탈 정장 대여 중 (자켓·팬츠, 반납 예정 +3)
-      await allocation({ componentId: cmpWsJacket, managementCode: 'JKT-BLK-105-001', pickupDate: dateOnly(-10), returnDueDate: dateOnly(3), availabilityEndDate: dateOnly(5), status: 'CHECKED_OUT', assignedAt: at(-12, 10), actualPickupAt: at(-10, 14) });
-      await allocation({ componentId: cmpWsTrousers, managementCode: 'PNT-BLK-34-001', pickupDate: dateOnly(-10), returnDueDate: dateOnly(3), availabilityEndDate: dateOnly(5), status: 'CHECKED_OUT', assignedAt: at(-12, 10), actualPickupAt: at(-10, 14) });
+      await allocation({ componentId: cmpWsJacket, managementCode: 'JKT-BLACK-52-001', pickupDate: dateOnly(-10), returnDueDate: dateOnly(3), availabilityEndDate: dateOnly(5), status: 'CHECKED_OUT', assignedAt: at(-12, 10), actualPickupAt: at(-10, 14) });
+      await allocation({ componentId: cmpWsTrousers, managementCode: 'TRS-BLACK-92-001', pickupDate: dateOnly(-10), returnDueDate: dateOnly(3), availabilityEndDate: dateOnly(5), status: 'CHECKED_OUT', assignedAt: at(-12, 10), actualPickupAt: at(-10, 14) });
       // 정우성: 렌탈 구두 반납 지연 (반납 예정 -2 경과, CHECKED_OUT 유지)
-      await allocation({ componentId: cmpWsShoes, managementCode: 'SHO-BLK-270-001', pickupDate: dateOnly(-10), returnDueDate: dateOnly(-2), availabilityEndDate: dateOnly(0), status: 'CHECKED_OUT', assignedAt: at(-12, 10), actualPickupAt: at(-10, 14) });
+      await allocation({ componentId: cmpWsShoes, managementCode: 'SHO-SHOE_BLACK-270-001', pickupDate: dateOnly(-10), returnDueDate: dateOnly(-2), availabilityEndDate: dateOnly(0), status: 'CHECKED_OUT', assignedAt: at(-12, 10), actualPickupAt: at(-10, 14) });
 
       // 수선 중 실물 상태 이력
       await tx.rentalInventoryStatusEvent.create({
         data: {
-          id: uuid(), rentalInventoryItemId: inventoryItems['JKT-BLK-100-003'],
+          id: uuid(), rentalInventoryItemId: inventoryItems['JKT-BLACK-50-003'],
           previousStatus: 'AVAILABLE', newStatus: 'ALTERATION', availableFrom: dateOnly(7),
           reason: '소매 안감 수선', actorId: adminId, occurredAt: at(-3, 10),
         },
       });
-      console.log('rental_skus: 9건 / rental_inventory_items: 20건 / rental_allocations: 6건');
+      console.log('rental_inventory_items: 7건 상태 변경 / rental_allocations: 6건');
 
       // -----------------------------------------------------------------------
       // 9) 수선 3건 (맞춤 사후 / 렌탈 실물 / 일반)
@@ -1183,11 +1166,11 @@ async function main(): Promise<void> {
           { previousStatus: 'RECEIVED', newStatus: 'REQUESTED', eventDate: dateOnly(-5) },
         ],
       });
-      // 일반 수선: 렌탈 실물(JKT-BLK-100-003) 관련 건이지만 수선구분은 일반 수선이다.
+      // 일반 수선: 렌탈 실물(JKT-BLACK-50-003) 관련 건이지만 수선구분은 일반 수선이다.
       // (렌탈 수선 진행 자체는 렌탈 진행의 수선요청·입고·출고 단계에서 관리한다)
       await repair({
         customerId: 정우성, repairType: 'GENERAL', requestDate: dateOnly(-3), dueDate: dateOnly(7),
-        status: 'REQUESTED', description: 'JKT-BLK-100-003 자켓 소매 안감 뜯어짐 수선',
+        status: 'REQUESTED', description: 'JKT-BLACK-50-003 자켓 소매 안감 뜯어짐 수선',
         targetProduct: 'JACKET', notes: '반납 검수 중 발견',
         events: [
           { newStatus: 'RECEIVED', eventDate: dateOnly(-3) },
