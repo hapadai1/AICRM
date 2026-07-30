@@ -18,5 +18,7 @@
     "strictPropertyInitialization": false,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src/**/*", "prisma/seed.ts"]
+  // 시드 스크립트 전체를 넣는다 — seed.ts만 넣어 두니 데모 시드가 스키마 변경을
+  // 따라가지 못한 채 타입체크·테스트 어디에도 안 걸려 조용히 깨졌다(2026-07-30).
+  "include": ["src/**/*", "prisma/**/*.ts"]
 }
