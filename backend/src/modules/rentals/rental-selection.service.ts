@@ -183,14 +183,26 @@ export class RentalSelectionService {
    * 같은 데이터의 CRUD는 /admin/master/rental-{colors,sizes}(ADMIN_MASTER_EDIT)에 있지만,
    * 스타일 컨설팅·재고 화면의 드롭다운은 조회 권한(RENTAL_VIEW)만 있는 직원도 써야 한다.
    */
-  async codes() {
+  async codes(componentType?: string) {
+    // 품목을 주면 그 품목에서 쓰는 코드만 돌려준다. componentTypes가 빈 코드는
+    // 품목을 가리지 않는 공통 코드라 항상 포함한다.
+    const scope = componentType
+      ? { OR: [{ componentTypes: { has: componentType } }, { componentTypes: { isEmpty: true } }] }
+      : {};
     const [colors, sizes] = await Promise.all([
-      this.prisma.rentalColor.findMany({ where: { active: true }, orderBy: { sortOrder: 'asc' } }),
-      this.prisma.rentalSize.findMany({ where: { active: true }, orderBy: { sortOrder: 'asc' } }),
+      this.prisma.rentalColor.findMany({
+        where: { active: true, ...scope },
+        orderBy: { sortOrder: 'asc' },
+      }),
+      this.prisma.rentalSize.findMany({
+        where: { active: true, ...scope },
+        orderBy: { sortOrder: 'asc' },
+      }),
     ]);
-    const toRow = (r: { code: string; name: string; sortOrder: number }) => ({
+    const toRow = (r: { code: string; name: string; sortOrder: number; componentTypes: string[] }) => ({
       code: r.code,
       name: r.name,
+      componentTypes: r.componentTypes,
       sortOrder: r.sortOrder,
       active: true,
     });
@@ -242,7 +254,6 @@ export class RentalSelectionService {
             ? {
                 id: line.selectedInventoryItem.id,
                 managementCode: line.selectedInventoryItem.managementCode,
-                design: line.selectedInventoryItem.rentalSku.design,
                 color: line.selectedInventoryItem.rentalSku.color,
                 size: line.selectedInventoryItem.rentalSku.size,
                 status: line.selectedInventoryItem.status,
@@ -398,7 +409,6 @@ export class RentalSelectionService {
       candidates: items.map((i) => ({
         id: i.id,
         managementCode: i.managementCode,
-        design: i.rentalSku.design,
         color: i.rentalSku.color,
         size: i.rentalSku.size,
         status: i.status,
@@ -417,8 +427,9 @@ export class RentalSelectionService {
     if (dto.inventoryItemId) {
       inventoryItemId = dto.inventoryItemId;
     } else if (dto.itemCode) {
-      const found = await this.prisma.rentalInventoryItem.findUnique({
-        where: { managementCode: dto.itemCode },
+      // 폐기된 실물은 고를 수 없다. 같은 코드가 이력으로 남아 있어도 살아 있는 것만 찾는다.
+      const found = await this.prisma.rentalInventoryItem.findFirst({
+        where: { managementCode: dto.itemCode, status: { not: 'RETIRED' } },
         select: { id: true },
       });
       if (!found) throw new NotFoundException(`해당 관리코드의 실물이 없습니다: ${dto.itemCode}`);
@@ -543,7 +554,6 @@ export class RentalSelectionService {
             ? {
                 id: line.selectedInventoryItem.id,
                 managementCode: line.selectedInventoryItem.managementCode,
-                design: line.selectedInventoryItem.rentalSku.design,
               }
             : null,
         };

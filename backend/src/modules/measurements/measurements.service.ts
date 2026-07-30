@@ -782,7 +782,8 @@ export class MeasurementsService {
     const view = this.toImageView(link);
     await this.audit.log({
       userId: actor.id,
-      action: 'LINK',
+      // 파일을 올린 일은 '연결'(LINK)보다 '첨부'로 읽혀야 한다 — 가봉 첨부와 같은 코드를 쓴다.
+      action: 'UPLOAD',
       entityType: 'MEASUREMENT_SESSION_IMAGE',
       entityId: sessionId,
       after: { fileId: uploaded.id, entityFileId: link.id, originalName: uploaded.originalName },

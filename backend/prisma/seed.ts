@@ -270,61 +270,197 @@ async function seedAppointmentPurposes(): Promise<void> {
   console.log(`appointment_purposes: ${APPOINTMENT_PURPOSES.length}건 (은퇴 ${retired.count}건)`);
 }
 
-// 렌탈 컬러 12색 (v2 D3 / 설계서 04 §5.2)
-const RENTAL_COLORS: Array<{ code: string; name: string }> = [
-  { code: 'BLACK', name: '블랙' },
-  { code: 'CHARCOAL', name: '차콜그레이' },
-  { code: 'GREY', name: '그레이' },
-  { code: 'NAVY', name: '네이비' },
-  { code: 'BLUE', name: '블루' },
-  { code: 'SKY', name: '스카이블루' },
-  { code: 'WHITE', name: '화이트' },
-  { code: 'IVORY', name: '아이보리' },
-  { code: 'BEIGE', name: '베이지' },
-  { code: 'BROWN', name: '브라운' },
-  { code: 'BURGUNDY', name: '버건디' },
-  { code: 'GREEN', name: '그린' },
+/*
+ * 렌탈 기준정보 — 현업 확정본 (2026-07-29).
+ *
+ * 컬러 리스트의 "3피스 / 2피스 / 상의"는 색 이름이 아니라 그 색으로 몇 벌이 있는지다.
+ *   3피스 → 상의·하의·베스트   2피스 → 상의·하의(베스트 없음)   상의 → 자켓만
+ * 그래서 코드·이름에는 넣지 않고 componentTypes로만 표현한다. 코드는 색 그 자체다.
+ *
+ * 반대로 셔츠·구두의 SHIRT_/SHOE_ 접두어는 남긴다. 화이트·블랙·브라운이 정장 색과
+ * 이름이 겹치는데 코드는 전역 유일이라, 어느 품목의 색인지 갈라 둬야 한다.
+ */
+const SUIT_3PC = ['JACKET', 'TROUSERS', 'VEST'];
+const SUIT_2PC = ['JACKET', 'TROUSERS'];
+const JACKET_ONLY = ['JACKET'];
+
+const RENTAL_COLORS: Array<{ code: string; name: string; componentTypes: string[] }> = [
+  { code: 'BLACK', name: '블랙', componentTypes: SUIT_3PC },
+  { code: 'CHARCOAL', name: '챠콜', componentTypes: SUIT_3PC },
+  { code: 'NAVY', name: '네이비', componentTypes: SUIT_2PC },
+  { code: 'GREY', name: '그레이', componentTypes: SUIT_3PC },
+  { code: 'BROWN', name: '부라운', componentTypes: SUIT_3PC },
+  { code: 'BEIGE', name: '베이지', componentTypes: SUIT_3PC },
+  { code: 'KHAKI', name: '카키', componentTypes: SUIT_2PC },
+  { code: 'WHITE', name: '화이트', componentTypes: SUIT_3PC },
+  { code: 'WHITE_SHAWL', name: '화이트 숄카라', componentTypes: JACKET_ONLY },
+  { code: 'VELVET', name: '벨벳', componentTypes: JACKET_ONLY },
+  { code: 'BEIGE_STRIPE', name: '베이지 스트라이프', componentTypes: JACKET_ONLY },
+  { code: 'HOUNDSTOOTH', name: '하운투스', componentTypes: JACKET_ONLY },
+  // 셔츠·구두 전용 색
+  { code: 'SHIRT_WHITE', name: '흰색', componentTypes: ['SHIRT'] },
+  { code: 'SHOE_BLACK', name: '검정', componentTypes: ['SHOES'] },
+  { code: 'SHOE_BROWN', name: '브라운', componentTypes: ['SHOES'] },
 ];
 
-// 렌탈 사이즈 (v2 D3 / 설계서 04 §5.2·M3, F3: 호수 체계로 확정)
-const RENTAL_SIZES: Array<{ code: string; name: string }> = [
-  { code: '90', name: '90호' },
-  { code: '95', name: '95호' },
-  { code: '100', name: '100호' },
-  { code: '105', name: '105호' },
-  { code: '110', name: '110호' },
-  { code: '115', name: '115호' },
-  { code: '120', name: '120호' },
-];
+/*
+ * 사이즈는 품목마다 체계가 다르다. 한 목록을 공유하면 상의 등록 화면에 구두 사이즈가 뜬다.
+ *   상의·베스트 46~60(58 없음 — 현업 확정)  하의 80~104  셔츠 95~120  구두 250~280
+ * 100은 하의와 셔츠가 함께 쓰므로 componentTypes에 둘 다 넣는다.
+ */
+const SUIT_TOP_SIZES = ['46', '48', '50', '52', '54', '56', '60'];
+const TROUSER_SIZES = ['80', '84', '88', '92', '96', '100', '104'];
+const SHIRT_SIZES = ['95', '100', '105', '110', '115', '120'];
+const SHOE_SIZES = ['250', '255', '260', '265', '270', '275', '280'];
+
+const RENTAL_SIZES: Array<{ code: string; name: string; componentTypes: string[] }> = (() => {
+  const owners = new Map<string, string[]>();
+  const claim = (codes: string[], types: string[]) => {
+    for (const code of codes) owners.set(code, [...new Set([...(owners.get(code) ?? []), ...types])]);
+  };
+  claim(SUIT_TOP_SIZES, ['JACKET', 'VEST']);
+  claim(TROUSER_SIZES, ['TROUSERS']);
+  claim(SHIRT_SIZES, ['SHIRT']);
+  claim(SHOE_SIZES, ['SHOES']);
+  return [...owners.entries()]
+    .sort((a, b) => Number(a[0]) - Number(b[0]))
+    .map(([code, componentTypes]) => ({
+      code,
+      // 구두만 mm 체계다 — 정장 호수와 같이 "250호"로 부르면 화면에서 어색하다.
+      name: componentTypes.includes('SHOES') ? `${code}mm` : `${code}호`,
+      componentTypes,
+    }));
+})();
+
+/**
+ * 품목별 보유 수량 — 같은 컬러·사이즈로 몇 벌을 갖고 있는지 (현업 확정 2026-07-29).
+ * 정장 3종은 조합마다 3벌, 셔츠·구두는 1벌씩이다.
+ */
+const STOCK_PER_SKU: Record<string, number> = {
+  JACKET: 3,
+  TROUSERS: 3,
+  VEST: 3,
+  SHIRT: 1,
+  SHOES: 1,
+};
+
+/** 관리코드 접두어 — `{접두어}-{컬러}-{사이즈}-001`(수량만큼 연번) */
+const CODE_PREFIX: Record<string, string> = {
+  JACKET: 'JKT',
+  TROUSERS: 'TRS',
+  VEST: 'VST',
+  SHIRT: 'SHT',
+  SHOES: 'SHO',
+};
 
 async function seedRentalColors(): Promise<void> {
   for (let i = 0; i < RENTAL_COLORS.length; i += 1) {
     const c = RENTAL_COLORS[i];
+    const data = { name: c.name, componentTypes: c.componentTypes, sortOrder: i + 1, active: true };
     await prisma.rentalColor.upsert({
       where: { code: c.code },
-      update: { name: c.name, sortOrder: i + 1, active: true },
-      create: { id: randomUUID(), code: c.code, name: c.name, sortOrder: i + 1, active: true },
+      update: data,
+      create: { id: randomUUID(), code: c.code, ...data },
     });
   }
-  console.log(`rental_colors: ${RENTAL_COLORS.length}건`);
+  // 확정 목록에 없는 예전 색(블루·버건디 등)은 물리삭제하지 않고 비활성으로 내린다.
+  const codes = RENTAL_COLORS.map((c) => c.code);
+  const deactivated = await prisma.rentalColor.updateMany({
+    where: { code: { notIn: codes }, active: true },
+    data: { active: false },
+  });
+  console.log(`rental_colors: ${RENTAL_COLORS.length}건 (예전 색 ${deactivated.count}건 비활성)`);
 }
 
 async function seedRentalSizes(): Promise<void> {
   for (let i = 0; i < RENTAL_SIZES.length; i += 1) {
     const s = RENTAL_SIZES[i];
+    const data = { name: s.name, componentTypes: s.componentTypes, sortOrder: i + 1, active: true };
     await prisma.rentalSize.upsert({
       where: { code: s.code },
-      update: { name: s.name, sortOrder: i + 1, active: true },
-      create: { id: randomUUID(), code: s.code, name: s.name, sortOrder: i + 1, active: true },
+      update: data,
+      create: { id: randomUUID(), code: s.code, ...data },
     });
   }
-  // F3: S~XXL 등 예전 사이즈 행은 물리삭제하지 않고 비활성 처리(호수 체계로 전환).
+  // F3: S~XXL·90호 등 예전 사이즈 행은 물리삭제하지 않고 비활성 처리.
   const codes = RENTAL_SIZES.map((s) => s.code);
   const deactivated = await prisma.rentalSize.updateMany({
     where: { code: { notIn: codes }, active: true },
     data: { active: false },
   });
   console.log(`rental_sizes: ${RENTAL_SIZES.length}건 (예전 사이즈 ${deactivated.count}건 비활성)`);
+}
+
+/**
+ * 렌탈 실물 재고 — 컬러 × 사이즈 전개, 각 1개 (현업 확정 2026-07-29).
+ * 어떤 색에 어떤 옷이 있는지는 컬러의 componentTypes가, 품목별 사이즈는 사이즈의
+ * componentTypes가 이미 알고 있으므로 둘을 맞물려 조합을 만든다.
+ */
+async function seedRentalInventory(): Promise<void> {
+  const rows: Array<{ componentType: string; color: string; size: string; code: string }> = [];
+  for (const componentType of Object.keys(CODE_PREFIX)) {
+    const colors = RENTAL_COLORS.filter((c) => c.componentTypes.includes(componentType));
+    const sizes = RENTAL_SIZES.filter((s) => s.componentTypes.includes(componentType));
+    const quantity = STOCK_PER_SKU[componentType] ?? 1;
+    for (const c of colors) {
+      for (const s of sizes) {
+        // 같은 조합을 여러 벌 보유하므로 관리코드는 연번(-001, -002, …)으로 가른다.
+        for (let n = 1; n <= quantity; n += 1) {
+          rows.push({
+            componentType,
+            color: c.code,
+            size: s.code,
+            code: `${CODE_PREFIX[componentType]}-${c.code}-${s.code}-${String(n).padStart(3, '0')}`,
+          });
+        }
+      }
+    }
+  }
+
+  for (const row of rows) {
+    const sku = await prisma.rentalSku.upsert({
+      where: {
+        componentType_color_size: {
+          componentType: row.componentType,
+          color: row.color,
+          size: row.size,
+        },
+      },
+      update: {},
+      create: {
+        id: randomUUID(),
+        componentType: row.componentType,
+        color: row.color,
+        size: row.size,
+      },
+    });
+    // 관리코드는 살아 있는 실물끼리만 유일해서 upsert(unique 기준)를 쓸 수 없다.
+    // 폐기 이력이 같은 코드로 남아 있어도 살아 있는 게 없으면 새로 만든다.
+    const alive = await prisma.rentalInventoryItem.findFirst({
+      where: { managementCode: row.code, status: { not: 'RETIRED' } },
+      select: { id: true },
+    });
+    if (!alive) {
+      await prisma.rentalInventoryItem.create({
+        data: {
+          id: randomUUID(),
+          managementCode: row.code,
+          rentalSkuId: sku.id,
+          status: 'AVAILABLE',
+          active: true,
+        },
+      });
+    }
+  }
+
+  const byType = rows.reduce<Record<string, number>>((acc, r) => {
+    acc[r.componentType] = (acc[r.componentType] ?? 0) + 1;
+    return acc;
+  }, {});
+  const summary = Object.entries(byType)
+    .map(([t, n]) => `${t} ${n}`)
+    .join(', ');
+  console.log(`rental_inventory_items: ${rows.length}건 (${summary})`);
 }
 
 async function seedOptionSets(): Promise<void> {
@@ -396,10 +532,11 @@ async function main(): Promise<void> {
   await seedAppointmentPurposes();
   await seedRentalColors();
   await seedRentalSizes();
+  await seedRentalInventory();
   await seedOptionSets();
   await seedContractTypes();
   await seedJourneyStages(prisma);
-  console.log(`notification_templates(단계 연락): ${STAGE_TEMPLATES.length}건`);
+  console.log(`notification_templates(연락 문구 고정메시지): ${STAGE_TEMPLATES.length}건`);
   console.log(`journey_stages: ${JOURNEY_STAGES.length}건`);
   console.log('시드 완료');
 }

@@ -3,6 +3,7 @@ import { IsISO8601, IsOptional, IsString } from 'class-validator';
 import { RequirePermission } from '../../common/decorators';
 import { PageQueryDto, Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
+import { AuditNamesService } from './audit-names.service';
 
 class AuditQueryDto extends PageQueryDto {
   @IsOptional() @IsString() entityType?: string;
@@ -27,7 +28,10 @@ function endOfRange(value: string): Date {
 
 @Controller('audit-logs')
 export class AuditController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly names: AuditNamesService,
+  ) {}
 
   @Get()
   @RequirePermission('AUDIT_LOG_VIEW')
@@ -70,7 +74,7 @@ export class AuditController {
       }),
       this.prisma.auditLog.count({ where }),
     ]);
-    return new Paginated(rows, query.page, query.size, total);
+    return new Paginated(await this.names.attach(rows), query.page, query.size, total);
   }
 
   @Get(':id')
@@ -81,6 +85,7 @@ export class AuditController {
       include: { user: { select: { loginId: true, displayName: true } } },
     });
     if (!row) throw new NotFoundException('감사로그가 없습니다.');
-    return row;
+    const [enriched] = await this.names.attach([row]);
+    return enriched;
   }
 }

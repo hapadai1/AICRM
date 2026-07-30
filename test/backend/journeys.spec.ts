@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { seedJourneyStages } from '../../backend/prisma/journey-stage-seed';
 import { computeGating } from '../../backend/src/modules/journeys/journey-gating';
 import { JourneysModule } from '../../backend/src/modules/journeys/journeys.module';
 import { PrismaService } from '../../backend/src/prisma/prisma.service';
@@ -80,6 +81,7 @@ async function createOrderWithItems(
 describe('진행 단계 (JOURNEY) — v2 재정의', () => {
   let ctx: TestContext;
   let customerId: string;
+  let customerName: string;
   let adminId: string;
 
   beforeAll(async () => {
@@ -87,6 +89,7 @@ describe('진행 단계 (JOURNEY) — v2 재정의', () => {
     await truncateBusinessData(ctx.prisma);
     const seeded = await seedCustomer(ctx.prisma);
     customerId = seeded.customer.id;
+    customerName = seeded.customer.name;
     adminId = seeded.admin.id;
   });
 
@@ -159,12 +162,127 @@ describe('진행 단계 (JOURNEY) — v2 재정의', () => {
     // 은퇴 단계는 노출되지 않는다.
     expect(custom.body.data.map((s: { code: string }) => s.code)).not.toContain('CONSULT_DONE');
 
+    // 연락 문구는 매장 확정 고정메시지 2종뿐이라, 문구가 붙은 단계도 두 곳이다.
     const withTemplate = custom.body.data.filter((s: { templateId: string | null }) => s.templateId);
     expect(withTemplate.map((s: { code: string }) => s.code)).toEqual([
       'BASTING_RECEIVED',
       'PRODUCT_RECEIVED',
-      'RELEASED',
     ]);
+  });
+
+  // ---------------------------------------------------------------------------
+  // 시점별 연락 문구 (관리자) — 문구는 시점 하나에만 붙는다 (2026-07-29)
+  // ---------------------------------------------------------------------------
+
+  describe('시점별 연락 문구', () => {
+    // 이 블록은 시드 문구를 실제로 고치고 지운다. 뒤 테스트(연락 제안)가 고정메시지 원문을
+    // 그대로 기대하므로 끝나면 시드 상태로 되돌린다.
+    afterAll(async () => {
+      await seedJourneyStages(ctx.prisma);
+      await ctx.prisma.notificationTemplate.updateMany({
+        where: { code: { in: ['JOURNEY_BASTING_RECEIVED', 'JOURNEY_PRODUCT_RECEIVED'] } },
+        data: { channel: 'ALIMTALK', approvalStatus: 'PENDING' },
+      });
+    });
+
+    /** 그 트랙의 단계 목록에서 code로 하나 집는다. */
+    async function stageOf(trackType: string, code: string) {
+      const res = await api(ctx)
+        .get(`/api/v1/journey-stages?trackType=${trackType}`)
+        .set(auth(ctx))
+        .expect(200);
+      return res.body.data.find((s: { code: string }) => s.code === code);
+    }
+
+    it('문구가 없는 시점에 쓰면 만들어 붙인다 (코드·이름은 단계에서 만든다)', async () => {
+      const stage = await stageOf('CUSTOM', 'RELEASED');
+      expect(stage.templateId).toBeNull();
+
+      const res = await api(ctx)
+        .put(`/api/v1/journey-stages/${stage.id}/message`)
+        .set(auth(ctx))
+        .send({ body: '#{고객명}님, 오늘 수령해 주셔서 감사합니다.' })
+        .expect(200);
+
+      expect(res.body.data.templateId).not.toBeNull();
+      expect(res.body.data.template).toMatchObject({
+        code: 'JOURNEY_RELEASED',
+        name: '완성복 출고/완료 안내',
+        channel: 'ALIMTALK',
+        approvalStatus: 'PENDING',
+        body: '#{고객명}님, 오늘 수령해 주셔서 감사합니다.',
+      });
+    });
+
+    it('이미 문구가 있으면 본문·채널·승인만 고친다 (코드 유지)', async () => {
+      const stage = await stageOf('CUSTOM', 'BASTING_RECEIVED');
+      const res = await api(ctx)
+        .put(`/api/v1/journey-stages/${stage.id}/message`)
+        .set(auth(ctx))
+        .send({ body: '가봉 문구 수정본', channel: 'SMS', approvalStatus: 'APPROVED' })
+        .expect(200);
+
+      expect(res.body.data.template).toMatchObject({
+        id: stage.templateId,
+        code: 'JOURNEY_BASTING_RECEIVED',
+        body: '가봉 문구 수정본',
+        channel: 'SMS',
+        approvalStatus: 'APPROVED',
+      });
+    });
+
+    it('한 문구를 두 시점에 붙일 수 없다', async () => {
+      const basting = await stageOf('CUSTOM', 'BASTING_RECEIVED');
+      const fitting = await stageOf('CUSTOM', 'FITTING_DONE');
+
+      const res = await api(ctx)
+        .patch(`/api/v1/journey-stages/${fitting.id}`)
+        .set(auth(ctx))
+        .send({ templateId: basting.templateId })
+        .expect(400);
+      expect(res.body.error.code).toBe('VALIDATION_ERROR');
+      expect(res.body.error.fieldErrors?.[0]).toMatchObject({
+        field: 'templateId',
+        reason: 'ALREADY_MAPPED',
+      });
+    });
+
+    it('연락을 끄면 문구까지 지운다 — 발송 이력은 본문을 남긴 채 링크만 끊는다', async () => {
+      const stage = await stageOf('CUSTOM', 'PRODUCT_RECEIVED');
+      const templateId = stage.templateId as string;
+      // 그 문구로 나간 이력이 있어도 지울 수 있어야 한다.
+      const historyId = randomUUID();
+      await ctx.prisma.notificationHistory.create({
+        data: {
+          id: historyId,
+          templateId,
+          customerId,
+          recipientPhone: '010-1111-2222',
+          channel: 'SMS',
+          body: '보낸 문구 본문',
+          status: 'SENT',
+          sentAt: new Date(),
+        },
+      });
+
+      const res = await api(ctx)
+        .delete(`/api/v1/journey-stages/${stage.id}/message`)
+        .set(auth(ctx))
+        .expect(200);
+      expect(res.body.data.templateId).toBeNull();
+
+      expect(await ctx.prisma.notificationTemplate.findUnique({ where: { id: templateId } })).toBeNull();
+      const history = await ctx.prisma.notificationHistory.findUniqueOrThrow({ where: { id: historyId } });
+      expect(history).toMatchObject({ templateId: null, body: '보낸 문구 본문' });
+
+      // 다시 쓰면 같은 코드로 새로 만들어진다.
+      const again = await api(ctx)
+        .put(`/api/v1/journey-stages/${stage.id}/message`)
+        .set(auth(ctx))
+        .send({ body: '완성복 입고 문구 재작성' })
+        .expect(200);
+      expect(again.body.data.template).toMatchObject({ code: 'JOURNEY_PRODUCT_RECEIVED' });
+    });
   });
 
   it('진행을 시작하면 트랙의 첫 단계에서 출발한다', async () => {
@@ -381,7 +499,9 @@ describe('진행 단계 (JOURNEY) — v2 재정의', () => {
       orderId: order.id,
       triggerKey: `journey:${created.body.data.id}:PRODUCT_RECEIVED`,
     });
-    expect(s.renderedBody).toContain('정장 #1');
+    // 매장 확정 고정메시지 원문 + 첫 인사의 #{고객명}만 치환된다.
+    expect(s.renderedBody).toContain(`안녕하세요, ${customerName} 고객님`);
+    expect(s.renderedBody).toContain('드디어 완성 되어 본점에 입고되었습니다.');
     expect(s.renderedBody).not.toContain('#{');
     expect(s.eventId).toBe(res.body.data.event.id);
   });
@@ -475,6 +595,26 @@ describe('진행 단계 (JOURNEY) — v2 재정의', () => {
   // ---------------------------------------------------------------------------
 
   describe('REPAIR 트랙', () => {
+    // 시드 연락 문구는 매장 확정 고정메시지 2종(가봉 입고·완성복 입고)뿐이라 REPAIR 트랙에는
+    // 매핑된 문구가 없다. 발송 → 수선 상태 연동 규약은 그대로 지켜져야 하므로,
+    // 담당자가 관리자 화면에서 문구를 만들어 매핑한 상황을 여기서 재현해 검증한다.
+    beforeAll(async () => {
+      const template = await ctx.prisma.notificationTemplate.create({
+        data: {
+          id: randomUUID(),
+          code: 'TEST_REPAIR_CHECKED_IN',
+          name: '수선 입고 안내(테스트)',
+          channel: 'ALIMTALK',
+          body: '#{고객명}님, 맡기신 수선 물품이 입고되었습니다.',
+          approvalStatus: 'PENDING',
+        },
+      });
+      await ctx.prisma.journeyStage.updateMany({
+        where: { trackType: 'REPAIR', code: 'REPAIR_CHECKED_IN' },
+        data: { templateId: template.id },
+      });
+    });
+
     /** 수선 접수 → REPAIR 진행 자동생성. 접수건 id와 자동생성된 진행 id를 돌려준다. */
     async function createRepairJourney() {
       const repair = await api(ctx)
@@ -527,7 +667,7 @@ describe('진행 단계 (JOURNEY) — v2 재정의', () => {
       // repairs 상태변경 경로의 자동 제안은 제거됐다(repairs.spec.ts 참조).
       const s = advanced.body.data.suggestedNotification;
       expect(s).toMatchObject({
-        templateCode: 'JOURNEY_REPAIR_CHECKED_IN',
+        templateCode: 'TEST_REPAIR_CHECKED_IN',
         triggerKey: `journey:${journeyId}:REPAIR_CHECKED_IN`,
       });
     });
@@ -566,8 +706,8 @@ describe('진행 단계 (JOURNEY) — v2 재정의', () => {
 
     it('수선 입고 안내를 발송하면 수선 상태가 고객 연락으로 함께 넘어간다', async () => {
       const { repairId, journeyId, eventId, suggestion } = await advanceToCheckedIn();
-      // 진행과 별개로 수선 건은 6단계 흐름을 따라 '수선 입고'까지 와 있다.
-      await pushRepairStatus(repairId, 'REQUESTED', 'IN_PROGRESS', 'RETURNED_TO_SHOP');
+      // 진행과 별개로 수선 건은 5단계 흐름을 따라 '수선 입고'까지 와 있다.
+      await pushRepairStatus(repairId, 'REQUESTED', 'RETURNED_TO_SHOP');
 
       const sent = await api(ctx)
         .post('/api/v1/notifications/send')
@@ -603,7 +743,7 @@ describe('진행 단계 (JOURNEY) — v2 재정의', () => {
     it('수선 입고 전이거나 발송하지 않았으면 수선 상태를 건드리지 않는다', async () => {
       // (1) 발송하지 않고 보류 → 상태 유지
       const deferredCase = await advanceToCheckedIn();
-      await pushRepairStatus(deferredCase.repairId, 'REQUESTED', 'IN_PROGRESS', 'RETURNED_TO_SHOP');
+      await pushRepairStatus(deferredCase.repairId, 'REQUESTED', 'RETURNED_TO_SHOP');
       await api(ctx)
         .post(`/api/v1/journeys/${deferredCase.journeyId}/events/${deferredCase.eventId}/notification-outcome`)
         .set(auth(ctx))
@@ -615,9 +755,9 @@ describe('진행 단계 (JOURNEY) — v2 재정의', () => {
         .expect(200);
       expect(deferred.body.data.status).toBe('RETURNED_TO_SHOP');
 
-      // (2) 보냈지만 수선 건이 아직 '수선 중' → 한 칸씩 전진 규칙을 깨지 않도록 건너뛴다
+      // (2) 보냈지만 수선 건이 아직 '수선 요청' → 한 칸씩 전진 규칙을 깨지 않도록 건너뛴다
       const earlyCase = await advanceToCheckedIn();
-      await pushRepairStatus(earlyCase.repairId, 'REQUESTED', 'IN_PROGRESS');
+      await pushRepairStatus(earlyCase.repairId, 'REQUESTED');
       const sent = await api(ctx)
         .post('/api/v1/notifications/send')
         .set(auth(ctx))
@@ -637,7 +777,7 @@ describe('진행 단계 (JOURNEY) — v2 재정의', () => {
         .get(`/api/v1/repairs/${earlyCase.repairId}`)
         .set(auth(ctx))
         .expect(200);
-      expect(early.body.data.status).toBe('IN_PROGRESS');
+      expect(early.body.data.status).toBe('REQUESTED');
     });
 
     it('상세 응답의 REPAIR_ITEMS 단계에도 게이팅 대상이 해석된다 (4단계)', async () => {

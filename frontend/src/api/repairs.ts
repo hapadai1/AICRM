@@ -1,6 +1,11 @@
 import { request, type ListResult } from './client';
 // 코드 집합·표시명 모두 중앙(api/code-labels) 공유 객체를 쓴다 — 원본은 서버 기준정보 상수다.
-import { COMPONENT_TYPE_LABELS, REPAIR_TYPE_CODES, REPAIR_TYPE_LABELS_MAP } from './code-labels';
+import {
+  COMPONENT_TYPE_CODES,
+  COMPONENT_TYPE_LABELS,
+  REPAIR_TYPE_CODES,
+  REPAIR_TYPE_LABELS_MAP,
+} from './code-labels';
 
 /**
  * 수선 도메인 API (화면·API 정의서 §13.7, 통합설계서 §12.1)
@@ -16,34 +21,52 @@ export const REPAIR_TYPES = REPAIR_TYPE_CODES;
 export const REPAIR_TYPE_LABELS = REPAIR_TYPE_LABELS_MAP;
 
 /**
- * 연결 대상 분기가 걸린 코드. 분기 규칙(백엔드 resolveLinks)이 이 코드들에 묶여 있어
- * 코드 집합과 달리 정적으로 둔다 — 새 코드는 연결 없는 유형(NONE)으로 취급된다.
+ * 수선 대상 품목 코드 집합 — `GET /code-labels`(component-type)로 하이드레이션되는 공유 배열.
+ * 계약에 등록된 주문 품목을 찾아 연결하지 않고 이 목록(상의·하의·베스트·셔츠·구두)에서 고른다.
  */
-const CUSTOM_LINK_TYPES = ['CUSTOM_DURING', 'AFTER_SALE'];
+export const REPAIR_TARGET_PRODUCTS = COMPONENT_TYPE_CODES;
 
-/** 유형별 연결 대상 (백엔드 resolveLinks 규칙) */
-export function repairLinkKind(type: string): 'CUSTOM' | 'NONE' {
-  return CUSTOM_LINK_TYPES.includes(type) ? 'CUSTOM' : 'NONE';
+/**
+ * 대상 품목이 필수인 코드. 필수 규칙(백엔드 assertTargetProduct)이 이 코드들에 묶여 있어
+ * 코드 집합과 달리 정적으로 둔다 — 새 코드는 선택 입력으로 취급된다.
+ */
+const CUSTOM_TYPES = ['CUSTOM_DURING', 'AFTER_SALE'];
+
+/** 대상 품목 필수 여부 (백엔드 assertItems 규칙) */
+export function isTargetProductRequired(type: string): boolean {
+  return CUSTOM_TYPES.includes(type);
 }
 
-/** 수선 진행 상태 — 접수→수선 요청→수선 중→수선 입고→고객 연락→출고 완료 (+취소) */
+/** 수선 진행 상태 — 접수→수선 요청→수선 입고→고객 연락→출고 완료 (+취소) */
 export type RepairStatus =
   | 'RECEIVED'
   | 'REQUESTED'
-  | 'IN_PROGRESS'
   | 'RETURNED_TO_SHOP'
   | 'CUSTOMER_NOTIFIED'
   | 'RELEASED'
   | 'CANCELLED';
 
-/** 정방향 전이 순서. 백엔드는 "바로 다음 단계" 또는 CANCELLED만 허용한다. */
+/**
+ * 정방향 전이 순서. 백엔드는 "바로 다음 단계" 또는 CANCELLED만 허용한다.
+ * 상태는 "그 단계를 끝낸 시점"을 뜻한다 — 접수 등록이 곧 접수 완료다.
+ */
 export const REPAIR_STATUS_FLOW: RepairStatus[] = [
   'RECEIVED',
   'REQUESTED',
-  'IN_PROGRESS',
   'RETURNED_TO_SHOP',
   'CUSTOMER_NOTIFIED',
   'RELEASED',
+];
+
+/**
+ * 업무 버튼 — 각 버튼은 "그 단계를 끝냈다"를 기록한다(수선 화면 하단 업무 처리).
+ * 접수는 등록으로 이미 끝났으므로 버튼이 없다.
+ */
+export const REPAIR_WORK_ACTIONS: { status: RepairStatus; label: string }[] = [
+  { status: 'REQUESTED', label: '수선요청 완료' },
+  { status: 'RETURNED_TO_SHOP', label: '입고 완료' },
+  { status: 'CUSTOMER_NOTIFIED', label: '고객 연락' },
+  { status: 'RELEASED', label: '출고 완료' },
 ];
 
 export interface StatusMeta {
@@ -54,7 +77,6 @@ export interface StatusMeta {
 export const REPAIR_STATUS_META: Record<string, StatusMeta> = {
   RECEIVED: { label: '접수', color: 'default' },
   REQUESTED: { label: '수선 요청', color: 'cyan' },
-  IN_PROGRESS: { label: '수선 중', color: 'blue' },
   RETURNED_TO_SHOP: { label: '수선 입고', color: 'gold' },
   CUSTOMER_NOTIFIED: { label: '고객 연락', color: 'purple' },
   RELEASED: { label: '출고 완료', color: 'green' },
@@ -85,6 +107,7 @@ interface RepairApiRow {
   status: string;
   description: string;
   notes?: string | null;
+  items?: RepairItemApiRow[];
   receiptMethod?: string | null;
   releaseMethod?: string | null;
   pickupAddress?: string | null;
@@ -98,6 +121,13 @@ interface RepairApiRow {
   statusEvents?: RepairEventApiRow[];
 }
 
+interface RepairItemApiRow {
+  id: string;
+  targetProduct: string;
+  quantity: number;
+  sequenceNo: number;
+}
+
 interface RepairEventApiRow {
   id: string;
   previousStatus?: string | null;
@@ -106,6 +136,12 @@ interface RepairEventApiRow {
   notes?: string | null;
   createdAt: string;
   actor?: { id: string; displayName: string } | null;
+}
+
+/** 수선 대상 한 줄 — 품목(component-type 코드)과 개수 */
+export interface RepairItem {
+  targetProduct: string;
+  quantity: number;
 }
 
 export interface RepairEvent {
@@ -137,7 +173,9 @@ export interface Repair {
   customerId: string;
   customerName: string;
   customerPhone: string;
-  /** 연결 대상 표시 문자열 (맞춤 품목·구성품 / 없으면 '-') */
+  /** 대상 품목·개수 (접수 입력 순서) */
+  items: RepairItem[];
+  /** 대상 표시 문자열 (품목 ×개수 / 구방식 연결 품목·구성품 / 없으면 '-') */
   targetLabel: string;
   orderNo?: string;
   requestDate: string;
@@ -156,7 +194,14 @@ function toDateOnly(value?: string | null): string | undefined {
   return value ? value.slice(0, 10) : undefined;
 }
 
+/** 대상 품목 한 줄의 표시명: `상의 ×2` */
+export function repairItemLabel(item: RepairItem): string {
+  return `${COMPONENT_TYPE_LABELS[item.targetProduct] ?? item.targetProduct} ×${item.quantity}`;
+}
+
 function targetLabelOf(row: RepairApiRow): string {
+  if (row.items?.length) return row.items.map(repairItemLabel).join(' · ');
+  // 아래는 계약 품목을 연결하던 시절 접수된 건의 표시 — 신규 접수는 items만 쓴다.
   if (row.component) {
     const type = COMPONENT_TYPE_LABELS[row.component.componentType] ?? row.component.componentType;
     const item = row.orderItem ? `${row.orderItem.displayName} · ` : '';
@@ -174,6 +219,10 @@ function toRepair(row: RepairApiRow): Repair {
     customerId: row.customer.id,
     customerName: row.customer.name,
     customerPhone: row.customer.phone,
+    items: (row.items ?? []).map((i) => ({
+      targetProduct: i.targetProduct,
+      quantity: i.quantity,
+    })),
     targetLabel: targetLabelOf(row),
     orderNo: row.order?.orderNo,
     requestDate: toDateOnly(row.requestDate) ?? '',
@@ -232,8 +281,8 @@ export interface CreateRepairInput {
   dueDate?: string;
   description: string;
   notes?: string;
-  orderItemId?: string;
-  componentId?: string;
+  /** 대상 품목·개수. 맞춤 수선은 1줄 이상 필수 */
+  items?: RepairItem[];
 }
 
 /** 수선 접수 — POST /repairs */
@@ -268,24 +317,6 @@ export function postRepairStatusEvent(
   body: { newStatus: RepairStatus; eventDate?: string; notes?: string },
 ): Promise<RepairStatusEventResult> {
   return request({ url: `/repairs/${repairId}/status-events`, method: 'POST', data: body });
-}
-
-/** 접수 모달 연결 대상 후보 — GET /repairs/link-targets?customerId= (연동정합화 계약 §8) */
-export interface RepairLinkTargets {
-  orderItems: {
-    id: string;
-    displayName: string;
-    productCategory: string;
-    sequenceNo: number;
-    status: string;
-    orderId: string;
-    orderNo: string;
-    components: { id: string; componentType: string; sequenceNo: number; status: string }[];
-  }[];
-}
-
-export function fetchRepairLinkTargets(customerId: string): Promise<RepairLinkTargets> {
-  return request<RepairLinkTargets>({ url: '/repairs/link-targets', params: { customerId } });
 }
 
 export { COMPONENT_TYPE_LABELS as REPAIR_COMPONENT_TYPE_LABELS };

@@ -71,7 +71,6 @@ export function RentalCandidateModal({
 
   const columns: ColumnsType<RentalCandidate> = [
     { title: '관리코드', dataIndex: 'managementCode', key: 'managementCode', width: 160 },
-    { title: '디자인', dataIndex: 'design', key: 'design' },
     { title: '컬러', dataIndex: 'color', key: 'color', width: 120 },
     { title: '사이즈', dataIndex: 'size', key: 'size', width: 100 },
     {

@@ -49,7 +49,7 @@ const ALLOCATION_VIEW_INCLUDE = {
             select: {
               id: true,
               orderNo: true,
-              contract: { select: { customer: { select: { id: true, name: true } } } },
+              contract: { select: { customer: { select: { id: true, name: true, phone: true } } } },
             },
           },
         },
@@ -162,7 +162,7 @@ export class RentalAllocationsService {
               select: {
                 id: true,
                 orderNo: true,
-                contract: { select: { customer: { select: { id: true, name: true } } } },
+                contract: { select: { customer: { select: { id: true, name: true, phone: true } } } },
               },
             },
           },
@@ -246,7 +246,8 @@ export class RentalAllocationsService {
 
     const pickup = parseDateOnly(dto.pickupDate);
     const returnDue = parseDateOnly(dto.returnDueDate);
-    const end = parseDateOnly(dto.availabilityEndDate);
+    // 가용 종료일을 따로 받지 않으면 반납 예정일까지만 묶는다.
+    const end = parseDateOnly(dto.availabilityEndDate ?? dto.returnDueDate);
     if (returnDue < pickup || end < returnDue)
       throw new BusinessException(
         'VALIDATION_ERROR',
@@ -378,12 +379,6 @@ export class RentalAllocationsService {
    * 확인 실물은 confirmedInventoryItemId 또는 confirmedItemCode(관리코드) 둘 중 하나로 받는다.
    */
   async checkout(id: string, dto: CheckoutDto, actor: AuthUser) {
-    const confirmedInventoryItemId = await this.resolveInventoryItemId(
-      dto.confirmedInventoryItemId,
-      dto.confirmedItemCode,
-      'confirmedInventoryItemId',
-    );
-
     const allocation = await this.prisma.rentalAllocation.findUnique({
       where: { id },
       include: { rentalInventoryItem: { select: { id: true, managementCode: true } } },
@@ -394,19 +389,6 @@ export class RentalAllocationsService {
         allocationStatus: allocation.status,
       });
     this.assertVersion(dto.version, allocation.rowVersion);
-
-    if (confirmedInventoryItemId !== allocation.rentalInventoryItemId)
-      throw new BusinessException(
-        'RENTAL_ID_MISMATCH',
-        '예약된 실물 ID와 출고 확인 ID가 다릅니다. 먼저 배정 실물을 변경해 주세요.',
-        undefined,
-        {
-          assignedInventoryItemId: allocation.rentalInventoryItemId,
-          assignedManagementCode: allocation.rentalInventoryItem.managementCode,
-          confirmedInventoryItemId,
-          ...(dto.confirmedItemCode ? { confirmedItemCode: dto.confirmedItemCode } : {}),
-        },
-      );
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const after = await tx.rentalAllocation.update({
@@ -425,6 +407,8 @@ export class RentalAllocationsService {
           rentalAllocationId: id,
           eventType: ALLOCATION_EVENT_TYPES.PICKED_UP,
           newInventoryItemId: allocation.rentalInventoryItemId,
+          // 예약과 다른 옷을 내보낸 경우 등 현장 메모를 이벤트에 남긴다.
+          reason: dto.notes?.trim() || null,
           actorId: actor.id,
         },
       });
@@ -528,8 +512,9 @@ export class RentalAllocationsService {
       throw new BusinessException('VALIDATION_ERROR', '실물 ID 또는 관리코드 중 하나는 필수입니다.', [
         { field, reason: 'ITEM_ID_OR_CODE_REQUIRED' },
       ]);
-    const item = await this.prisma.rentalInventoryItem.findUnique({
-      where: { managementCode: itemCode.trim() },
+    // 관리코드는 살아 있는 실물끼리만 유일하다 — 같은 코드의 폐기 이력은 건너뛴다.
+    const item = await this.prisma.rentalInventoryItem.findFirst({
+      where: { managementCode: itemCode.trim(), status: { not: 'RETIRED' } },
       select: { id: true },
     });
     if (!item) throw new NotFoundException(`해당 관리코드의 렌탈 실물이 없습니다: ${itemCode}`);
@@ -552,7 +537,6 @@ export class RentalAllocationsService {
       inventoryItemId: row.rentalInventoryItem.id,
       managementCode: row.rentalInventoryItem.managementCode,
       componentType: sku.componentType,
-      design: sku.design,
       color: sku.color,
       size: sku.size,
       componentId: row.orderItemComponent.id,
@@ -563,6 +547,7 @@ export class RentalAllocationsService {
       orderNo: orderItem.order.orderNo,
       customerId: orderItem.order.contract.customer.id,
       customerName: orderItem.order.contract.customer.name,
+      customerPhone: orderItem.order.contract.customer.phone,
       /** 반납 뷰: 기준일 기준 반납예정일 경과(지연) 여부 */
       overdue: row.status === 'CHECKED_OUT' && row.returnDueDate < baseDate,
     };

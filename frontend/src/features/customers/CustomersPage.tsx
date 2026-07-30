@@ -1,6 +1,6 @@
 import { FilterOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Button, Empty, Input, Radio, Segmented, Space } from 'antd';
+import { Button, Checkbox, Empty, Input, Radio, Segmented, Space } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -23,7 +23,7 @@ const JOURNEY_STATUS_COLOR: Record<'ACTIVE' | 'COMPLETED' | 'CANCELLED', string>
 
 /**
  * CUST-001 고객 목록 (설계서 07 §2).
- * 기본은 계약을 한 건이라도 보유한 고객(작성중·취소 포함). [전체 고객]으로 계약 전 고객도 본다.
+ * 기본은 계약을 한 건이라도 보유한 고객(작성중·취소 포함). [전체 고객] 체크로 계약 전 고객도 본다.
  */
 export function CustomersPage() {
   const navigate = useNavigate();
@@ -128,18 +128,16 @@ export function CustomersPage() {
                 <Button icon={<SearchOutlined />} onClick={runSearch}>
                   검색
                 </Button>
-                {/* 조회 범위(설계서 07 D3): 계약 보유 고객 / 전 고객 */}
-                <Segmented<'CONTRACT' | 'ALL'>
-                  value={scope}
-                  onChange={(v) => {
-                    setScope(v);
+                {/* 조회 범위(설계서 07 D3): 기본은 계약 보유 고객, 체크하면 계약 전 고객까지 */}
+                <Checkbox
+                  checked={scope === 'ALL'}
+                  onChange={(e) => {
+                    setScope(e.target.checked ? 'ALL' : 'CONTRACT');
                     setPage(1);
                   }}
-                  options={[
-                    { label: '계약 고객', value: 'CONTRACT' },
-                    { label: '전체 고객', value: 'ALL' },
-                  ]}
-                />
+                >
+                  전체 고객
+                </Checkbox>
                 {/* 진행상태 검색(설계서 06 §2 / 02): 진행중/완료/전체 */}
                 <Segmented<'ACTIVE' | 'DONE' | 'ALL'>
                   value={progress}

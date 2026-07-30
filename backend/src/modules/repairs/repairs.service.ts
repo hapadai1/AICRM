@@ -10,16 +10,20 @@ import { JourneysService } from '../journeys/journeys.service';
 import {
   CreateRepairDto,
   CreateRepairStatusEventDto,
-  LinkTargetsQueryDto,
   ListRepairsQueryDto,
+  RepairItemDto,
   UpdateRepairDto,
 } from './repairs.dto';
 
-/** 수선 상태 순서 (통합설계서 §12.1: 접수→수선 요청→수선 중→수선 입고→고객 연락→출고 완료) */
+/**
+ * 수선 상태 순서 (접수→수선 요청→수선 입고→고객 연락→출고 완료).
+ * 상태는 "그 단계를 끝낸 시점"을 뜻한다 — 접수 등록이 곧 접수 완료다.
+ * '수선 중'(IN_PROGRESS)은 담당자가 따로 누를 일이 없어 2026-07-29 흐름에서 뺐다
+ * (업무 버튼 수선요청 완료·입고 완료·고객요청·출고 완료와 1:1로 맞춘다).
+ */
 export const REPAIR_STATUS_FLOW = [
   'RECEIVED',
   'REQUESTED',
-  'IN_PROGRESS',
   'RETURNED_TO_SHOP',
   'CUSTOMER_NOTIFIED',
   'RELEASED',
@@ -37,6 +41,10 @@ const REPAIR_SUMMARY_SELECT = {
   status: true,
   description: true,
   notes: true,
+  items: {
+    select: { id: true, targetProduct: true, quantity: true, sequenceNo: true },
+    orderBy: { sequenceNo: 'asc' },
+  },
   receiptMethod: true,
   releaseMethod: true,
   pickupAddress: true,
@@ -99,54 +107,7 @@ export class RepairsService {
     return new Paginated(items, query.page, query.size, totalElements);
   }
 
-  /**
-   * 수선 접수 모달 연결 대상 후보 (연동정합화 계약 §8):
-   * - orderItems: 고객의 맞춤(CUSTOM) 주문 품목(취소 제외) + 활성 구성품
-   * 렌탈 실물은 후보가 아니다 — 렌탈 수선은 렌탈 진행에서 관리한다.
-   */
-  async linkTargets(query: LinkTargetsQueryDto) {
-    const customer = await this.prisma.customer.findUnique({ where: { id: query.customerId } });
-    if (!customer)
-      throw new BusinessException('CUSTOMER_NOT_FOUND', '고객이 없습니다.', [
-        { field: 'customerId', reason: 'NOT_FOUND' },
-      ]);
-
-    const items = await this.prisma.orderItem.findMany({
-      where: {
-        status: { not: 'CANCELLED' },
-        order: { transactionType: 'CUSTOM', contract: { customerId: query.customerId } },
-      },
-      select: {
-        id: true,
-        displayName: true,
-        productCategory: true,
-        sequenceNo: true,
-        status: true,
-        order: { select: { id: true, orderNo: true } },
-        components: {
-          where: { active: true },
-          select: { id: true, componentType: true, sequenceNo: true, status: true },
-          orderBy: [{ componentType: 'asc' }, { sequenceNo: 'asc' }],
-        },
-      },
-      orderBy: [{ createdAt: 'desc' }, { sequenceNo: 'asc' }],
-    });
-
-    return {
-      orderItems: items.map((item) => ({
-        id: item.id,
-        displayName: item.displayName,
-        productCategory: item.productCategory,
-        sequenceNo: item.sequenceNo,
-        status: item.status,
-        orderId: item.order.id,
-        orderNo: item.order.orderNo,
-        components: item.components,
-      })),
-    };
-  }
-
-  /** 수선 접수: 유형별 연결 검증 후 접수(RECEIVED) 상태로 생성한다 (통합설계서 §12.1). */
+  /** 수선 접수: 대상 품목·방식 검증 후 접수(RECEIVED) 상태로 생성한다 (통합설계서 §12.1). */
   async create(dto: CreateRepairDto, actor: AuthUser) {
     const customer = await this.prisma.customer.findUnique({ where: { id: dto.customerId } });
     if (!customer)
@@ -154,7 +115,7 @@ export class RepairsService {
         { field: 'customerId', reason: 'NOT_FOUND' },
       ]);
 
-    const links = await this.resolveLinks(dto);
+    this.assertItems(dto.repairType, dto.items);
     this.assertMethodAddresses(dto);
 
     const repair = await this.prisma.$transaction(async (tx) => {
@@ -163,9 +124,7 @@ export class RepairsService {
         data: {
           id: randomUUID(),
           customerId: dto.customerId,
-          orderId: links.orderId,
-          orderItemId: links.orderItemId,
-          componentId: links.componentId,
+          items: { create: this.itemRows(dto.items) },
           repairType: dto.repairType,
           requestDate,
           dueDate: toDate(dto.dueDate),
@@ -217,6 +176,8 @@ export class RepairsService {
       pickupAddress: dto.pickupAddress ?? before.pickupAddress ?? undefined,
       deliveryAddress: dto.deliveryAddress ?? before.deliveryAddress ?? undefined,
     });
+    // 품목도 기존 줄과 합쳐 판정한다 — 필수 유형에서 빈 목록으로 되돌릴 수 없다.
+    this.assertItems(before.repairType, dto.items ?? before.items);
 
     const updated = await this.prisma.repairRequest.update({
       where: { id },
@@ -224,6 +185,10 @@ export class RepairsService {
         ...(dto.dueDate !== undefined ? { dueDate: toDate(dto.dueDate) } : {}),
         ...(dto.description !== undefined ? { description: dto.description } : {}),
         ...(dto.notes !== undefined ? { notes: dto.notes } : {}),
+        // 줄 단위 수정은 없다 — 주면 통째로 갈아끼운다(순번이 화면 입력 순서다).
+        ...(dto.items !== undefined
+          ? { items: { deleteMany: {}, create: this.itemRows(dto.items) } }
+          : {}),
         ...this.methodData(dto),
       },
       select: REPAIR_DETAIL_SELECT,
@@ -288,7 +253,7 @@ export class RepairsService {
 
     // D8 일원화(설계서 02 §8·§10.3 #5): 수선 고객 연락 제안은 REPAIR 진행(journey)
     // REPAIR_CHECKED_IN 단계 진입에서만 만든다. 상태변경 기반 자동 제안은 제거해 이중 노출을 없앤다.
-    // notification_rules(REPAIR:*)·템플릿은 물리삭제하지 않고 존치(미사용).
+    // 연락 문구를 매장 고정메시지 2종으로 줄이면서 REPAIR:* 규칙·초안 템플릿은 시드에서 제거됐다.
     // 응답 필드는 하위호환을 위해 유지하되 항상 null(연락은 진행 카드에서).
     return { ...result, suggestedNotification: null };
   }
@@ -350,54 +315,27 @@ export class RepairsService {
   }
 
   /**
-   * 수선 유형별 연결 검증 (통합설계서 §12.1 수선 대상·연결 방식):
-   * - CUSTOM_DURING / AFTER_SALE → orderItemId 또는 componentId 필수
-   * - GENERAL → 고객만 연결(대상 설명은 description), 다른 연결 불가
+   * 수선 대상 품목 검증 (통합설계서 §12.1 수선 대상):
+   * - CUSTOM_DURING / AFTER_SALE → 품목 1줄 이상 필수
+   * - GENERAL → 선택(대상 설명은 description)
+   * 계약에 등록된 주문 품목을 찾아 연결하던 방식은 폐기됐다 — 우리가 만들지 않은 옷,
+   * 구성품으로 쪼개지지 않은 물건도 들어오므로 품목을 자유롭게 고른다.
    * 렌탈 실물 수선은 이 도메인에서 접수하지 않는다(렌탈 진행에서 관리).
    */
-  private async resolveLinks(dto: CreateRepairDto): Promise<{
-    orderId?: string;
-    orderItemId?: string;
-    componentId?: string;
-  }> {
-    const invalid = (message: string, fieldErrors?: FieldError[]) =>
-      new BusinessException('VALIDATION_ERROR', message, fieldErrors);
-
-    if (CUSTOM_TYPES.includes(dto.repairType)) {
-      if (!dto.orderItemId && !dto.componentId)
-        throw invalid('맞춤 수선은 주문 품목 또는 구성품 연결이 필요합니다.', [
-          { field: 'orderItemId', reason: 'REQUIRED_FOR_CUSTOM' },
-        ]);
-
-      if (dto.componentId) {
-        const component = await this.prisma.orderItemComponent.findUnique({
-          where: { id: dto.componentId },
-          include: { orderItem: { select: { id: true, orderId: true } } },
-        });
-        if (!component)
-          throw invalid('연결할 구성품이 없습니다.', [{ field: 'componentId', reason: 'NOT_FOUND' }]);
-        if (dto.orderItemId && dto.orderItemId !== component.orderItemId)
-          throw invalid('구성품이 지정한 주문 품목에 속하지 않습니다.', [
-            { field: 'componentId', reason: 'NOT_IN_ORDER_ITEM' },
-          ]);
-        return {
-          componentId: component.id,
-          orderItemId: component.orderItemId,
-          orderId: component.orderItem.orderId,
-        };
-      }
-
-      const item = await this.prisma.orderItem.findUnique({ where: { id: dto.orderItemId! } });
-      if (!item)
-        throw invalid('연결할 주문 품목이 없습니다.', [{ field: 'orderItemId', reason: 'NOT_FOUND' }]);
-      return { orderItemId: item.id, orderId: item.orderId };
-    }
-
-    // GENERAL: 고객만 연결하고 대상 설명(description)을 입력한다.
-    if (dto.orderItemId || dto.componentId)
-      throw invalid('일반 수선은 고객 외 대상을 연결할 수 없습니다.', [
-        { field: 'repairType', reason: 'GENERAL_MUST_NOT_LINK' },
+  private assertItems(repairType: string, items?: { targetProduct: string }[]): void {
+    if (CUSTOM_TYPES.includes(repairType) && !items?.length)
+      throw new BusinessException('VALIDATION_ERROR', '맞춤 수선은 대상 품목이 필요합니다.', [
+        { field: 'items', reason: 'REQUIRED_FOR_CUSTOM' },
       ]);
-    return {};
+  }
+
+  /** 화면 입력 순서를 순번으로 굳힌다 — 같은 품목을 여러 줄로 나눠 적어도 그대로 둔다. */
+  private itemRows(items?: RepairItemDto[]) {
+    return (items ?? []).map((item, index) => ({
+      id: randomUUID(),
+      targetProduct: item.targetProduct,
+      quantity: item.quantity,
+      sequenceNo: index + 1,
+    }));
   }
 }

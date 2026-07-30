@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import { AuthUser, CurrentUser, RequirePermission } from '../../common/decorators';
 import {
   ChangeStageDto,
@@ -8,6 +8,7 @@ import {
   ListJourneysQueryDto,
   ListStagesQueryDto,
   NotificationOutcomeDto,
+  PutStageMessageDto,
   UpdateStageTemplateDto,
 } from './journeys.dto';
 import { JourneysService } from './journeys.service';
@@ -26,7 +27,25 @@ export class JourneysController {
     return this.journeysService.listStages(query);
   }
 
-  /** 단계별 연락 문구 매핑 변경 (관리자) */
+  /** 그 시점에 보낼 문구를 쓴다 — 없으면 만들고, 있으면 고친다 (관리자) */
+  @Put('journey-stages/:id/message')
+  @RequirePermission('ADMIN_MASTER_EDIT')
+  putStageMessage(
+    @Param('id') id: string,
+    @Body() dto: PutStageMessageDto,
+    @CurrentUser() actor: AuthUser,
+  ) {
+    return this.journeysService.putStageMessage(id, dto, actor);
+  }
+
+  /** 그 시점의 연락을 끈다 — 문구까지 지운다(발송 이력은 남는다) (관리자) */
+  @Delete('journey-stages/:id/message')
+  @RequirePermission('ADMIN_MASTER_EDIT')
+  deleteStageMessage(@Param('id') id: string, @CurrentUser() actor: AuthUser) {
+    return this.journeysService.deleteStageMessage(id, actor);
+  }
+
+  /** 단계 ↔ 기존 문구 매핑 변경 (관리자). 화면은 위 message 경로를 쓴다. */
   @Patch('journey-stages/:id')
   @RequirePermission('ADMIN_MASTER_EDIT')
   updateStageTemplate(

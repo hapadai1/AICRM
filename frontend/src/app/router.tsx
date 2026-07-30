@@ -31,7 +31,6 @@ import { RentalAllocatePage } from '../features/rentals/RentalAllocatePage';
 import { RentalHandoverPage } from '../features/rentals/RentalHandoverPage';
 import { RentalSelectionPage } from '../features/rentals/RentalSelectionPage';
 import { RentalInventoryPage } from '../features/rentals/RentalInventoryPage';
-import { RentalItemDetailPage } from '../features/rentals/RentalItemDetailPage';
 import { RepairsPage } from '../features/repairs/RepairsPage';
 import { WorkOrderPreviewPage } from '../features/workorders/WorkOrderPreviewPage';
 import { CustomerModeConsultingPage } from '../features/customer-mode/CustomerModeConsultingPage';
@@ -96,7 +95,6 @@ export const router = createBrowserRouter([
       { path: 'rentals/handover', element: <RentalHandoverPage /> },
       // 렌탈 스타일 선택(컨설팅) — 품목 단위. :id보다 먼저 선언.
       { path: 'rentals/selection/:orderItemId', element: <RentalSelectionPage /> },
-      { path: 'rentals/:id', element: <RentalItemDetailPage /> },
       { path: 'repairs', element: <RepairsPage /> },
       // 연락
       { path: 'notifications', element: <NotificationsPage /> },

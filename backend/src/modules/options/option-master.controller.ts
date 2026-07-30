@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import { AuthUser, CurrentUser, RequirePermission } from '../../common/decorators';
 import { OptionMasterService } from './option-master.service';
 import {
@@ -53,6 +53,13 @@ export class OptionMasterController {
     return this.service.saveStages(id, dto, actor);
   }
 
+  /** 작성중(DRAFT) 버전만 삭제한다 — 잘못 만든 초안을 정리하는 용도 */
+  @Delete('option-set-versions/:id')
+  @RequirePermission('OPTION_MASTER_EDIT')
+  deleteVersion(@Param('id') id: string, @CurrentUser() actor: AuthUser) {
+    return this.service.deleteVersion(id, actor);
+  }
+
   @Post('option-set-versions/:id/activate')
   @RequirePermission('OPTION_MASTER_EDIT')
   activate(
@@ -64,8 +71,8 @@ export class OptionMasterController {
   }
 
   /**
-   * 선택지 추가금액만 수정 — 사용중 버전에서도 허용한다(새 버전 강제하지 않음).
-   * 확정된 계약은 선택 시점 스냅샷을 쓰므로 소급 변경되지 않고, 이력은 감사로그에 남는다.
+   * 선택지 추가금액만 수정 — **작성중(DRAFT) 버전 전용**. 사용중·종료 버전은 거부한다.
+   * 가격을 바꾸려면 새 버전을 만들어 수정한 뒤 활성화한다. 이력은 감사로그에 남는다.
    */
   @Patch('option-choices/:id/price')
   @RequirePermission('OPTION_MASTER_EDIT')

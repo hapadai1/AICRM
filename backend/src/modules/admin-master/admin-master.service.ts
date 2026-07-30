@@ -12,6 +12,9 @@ import { CreateMasterItemDto, UpdateMasterItemDto } from './admin-master.dto';
  * - appointment-purposes → appointment_purposes
  * - rental-colors        → rental_colors (v2 D3)
  * - rental-sizes         → rental_sizes  (v2 D3)
+ *
+ * 렌탈 컬러·사이즈만 componentTypes(적용 품목)를 추가로 갖는다 — 다른 유형에는 컬럼이 없어
+ * resolve()가 알려주는 경우에만 쓰기 데이터에 싣는다.
  */
 interface MasterRow {
   id: string;
@@ -19,6 +22,7 @@ interface MasterRow {
   name: string;
   sortOrder: number;
   active: boolean;
+  componentTypes?: string[];
 }
 
 /** 공통 CRUD 시그니처만 추린 Prisma 델리게이트 형태 */
@@ -37,22 +41,25 @@ export class AdminMasterService {
   ) {}
 
   /** type → { 델리게이트, 감사 entityType }. 미지원 type이면 400. */
-  private resolve(type: string): { delegate: MasterDelegate; entityType: string } {
+  private resolve(type: string): { delegate: MasterDelegate; entityType: string; hasComponentTypes: boolean } {
     switch (type) {
       case 'appointment-purposes':
         return {
           delegate: this.prisma.appointmentPurpose as unknown as MasterDelegate,
           entityType: 'APPOINTMENT_PURPOSE',
+          hasComponentTypes: false,
         };
       case 'rental-colors':
         return {
           delegate: this.prisma.rentalColor as unknown as MasterDelegate,
           entityType: 'RENTAL_COLOR',
+          hasComponentTypes: true,
         };
       case 'rental-sizes':
         return {
           delegate: this.prisma.rentalSize as unknown as MasterDelegate,
           entityType: 'RENTAL_SIZE',
+          hasComponentTypes: true,
         };
       default:
         throw new BusinessException('VALIDATION_ERROR', `지원하지 않는 기준정보 유형입니다: ${type}`, [
@@ -67,7 +74,7 @@ export class AdminMasterService {
   }
 
   async create(type: string, dto: CreateMasterItemDto, actor: AuthUser) {
-    const { delegate, entityType } = this.resolve(type);
+    const { delegate, entityType, hasComponentTypes } = this.resolve(type);
     const exists = await delegate.findUnique({ where: { code: dto.code } });
     if (exists)
       throw new BusinessException('VALIDATION_ERROR', '이미 존재하는 코드입니다.', [
@@ -78,6 +85,7 @@ export class AdminMasterService {
         id: randomUUID(),
         code: dto.code,
         name: dto.name.trim(),
+        ...(hasComponentTypes ? { componentTypes: dto.componentTypes ?? [] } : {}),
         sortOrder: dto.sortOrder ?? 0,
         active: dto.active ?? true,
       },
@@ -88,12 +96,15 @@ export class AdminMasterService {
 
   /** 표시명·정렬·사용 여부만 수정한다. code는 변경 불가. */
   async update(type: string, id: string, dto: UpdateMasterItemDto, actor: AuthUser) {
-    const { delegate, entityType } = this.resolve(type);
+    const { delegate, entityType, hasComponentTypes } = this.resolve(type);
     const before = await this.findOne(delegate, id);
     const item = await delegate.update({
       where: { id },
       data: {
         ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
+        ...(hasComponentTypes && dto.componentTypes !== undefined
+          ? { componentTypes: dto.componentTypes }
+          : {}),
         ...(dto.sortOrder !== undefined ? { sortOrder: dto.sortOrder } : {}),
         ...(dto.active !== undefined ? { active: dto.active } : {}),
       },

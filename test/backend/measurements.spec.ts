@@ -604,10 +604,10 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
     const list = await api(ctx).get(`/api/v1/measurements/${sid}/images`).set(auth(ctx)).expect(200);
     expect(list.body.data).toHaveLength(1);
 
-    const linkAudit = await ctx.prisma.auditLog.findFirst({
-      where: { entityType: 'MEASUREMENT_SESSION_IMAGE', action: 'LINK', entityId: sid },
+    const uploadAudit = await ctx.prisma.auditLog.findFirst({
+      where: { entityType: 'MEASUREMENT_SESSION_IMAGE', action: 'UPLOAD', entityId: sid },
     });
-    expect(linkAudit).not.toBeNull();
+    expect(uploadAudit).not.toBeNull();
 
     await api(ctx)
       .delete(`/api/v1/measurements/${sid}/images/${up.body.data.fileId}`)

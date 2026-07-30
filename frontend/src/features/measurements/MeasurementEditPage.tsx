@@ -47,7 +47,6 @@ import {
   MEASUREMENT_FIELDS,
   MEASUREMENT_GROUP_LABELS,
   MEASUREMENT_TYPE_LABELS,
-  cmToInch,
   completeMeasurement,
   createMeasurement,
   deleteMeasurement,
@@ -55,7 +54,7 @@ import {
   fetchMeasurement,
   fetchMeasurementImages,
   fetchMeasurements,
-  inchToCm,
+  formatInch,
   reopenMeasurement,
   updateMeasurement,
   uploadMeasurementImage,
@@ -89,36 +88,17 @@ const FIELD_LABELS: Record<string, string> = Object.fromEntries(
   MEASUREMENT_FIELDS.map((f) => [f.key, f.label]),
 );
 
-/** 화면 표시 단위 (저장은 항상 CM). */
+/**
+ * 화면 표시 단위. 입력·저장은 항상 CM이고 INCH는 보기 전용이다 (설계서 v2 05 §3.2).
+ * 매장 확인(2026-07-29): 인치는 소수가 아니라 1/8 단위 분수로 읽으므로 되돌려 입력받지 않는다.
+ */
 type Unit = 'CM' | 'INCH';
-
-/** 단위 전환 시 숫자 항목 표시값을 변환한다. 문자 항목은 그대로 둔다. */
-function convertValues(values: Record<string, string>, from: Unit, to: Unit): Record<string, string> {
-  if (from === to) return values;
-  const out = { ...values };
-  MEASUREMENT_FIELDS.forEach((f) => {
-    if (f.kind !== 'number') return;
-    const raw = (values[f.key] ?? '').trim();
-    if (raw === '' || raw === '.') return;
-    const n = Number(raw);
-    if (!Number.isFinite(n)) return;
-    out[f.key] = String(to === 'INCH' ? cmToInch(n) : inchToCm(n));
-  });
-  return out;
-}
 
 /**
  * 저장 payload: 빈 값은 null로 보내 해당 항목을 삭제한다 (설계서 09 §3.3).
- * 서버는 항상 CM로 받는다. inch 표시 중이면:
- *  - 사용자가 실제로 편집한 항목만 inch→cm 역환산해 보낸다.
- *  - 편집하지 않은 항목은 원본 cm를 그대로 보내 반올림 왕복 오차를 막는다 (설계서 v2 05 §3.2).
+ * 폼 값은 언제나 CM이므로 단위 환산은 없다.
  */
-function toPayloadValues(
-  values: Record<string, string>,
-  unit: Unit,
-  editedKeys: Set<string>,
-  originalCm: MeasurementValues,
-): MeasurementValues {
+function toPayloadValues(values: Record<string, string>): MeasurementValues {
   const out: MeasurementValues = {};
   MEASUREMENT_FIELDS.forEach((f) => {
     const raw = (values[f.key] ?? '').trim();
@@ -131,20 +111,7 @@ function toPayloadValues(
       return;
     }
     const n = Number(raw);
-    if (!Number.isFinite(n)) {
-      out[f.key] = null;
-      return;
-    }
-    if (unit === 'INCH') {
-      if (editedKeys.has(f.key)) {
-        out[f.key] = inchToCm(n);
-      } else {
-        const orig = originalCm[f.key];
-        out[f.key] = typeof orig === 'number' ? orig : inchToCm(n);
-      }
-    } else {
-      out[f.key] = n;
-    }
+    out[f.key] = Number.isFinite(n) ? n : null;
   });
   return out;
 }
@@ -177,8 +144,6 @@ export function MeasurementEditPage() {
   const [dirty, setDirty] = useState(false);
   // 화면 표시 단위 — 저장은 항상 CM. 단위 상태는 세션에 저장하지 않는다 (설계서 v2 05 §3.1).
   const [unit, setUnit] = useState<Unit>('CM');
-  // 사용자가 실제 편집한 항목 — inch 저장 시 편집분만 역환산한다.
-  const [editedKeys, setEditedKeys] = useState<Set<string>>(() => new Set());
   // 사진 인쇄 선택 (fileId 집합)
   const [selectedImages, setSelectedImages] = useState<Set<string>>(() => new Set());
 
@@ -236,19 +201,17 @@ export function MeasurementEditPage() {
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['measurements'] });
 
-  const markEdited = (key: string) => setEditedKeys((s) => (s.has(key) ? s : new Set(s).add(key)));
-
-  /** 단위 토글 — 표시값만 환산한다. 편집으로 치지 않아 dirty·editedKeys를 건드리지 않는다. */
+  /** 단위 토글 — 폼 값(CM)은 그대로 두고 보는 방식만 바꾼다. 편집으로 치지 않는다. */
   const changeUnit = (next: Unit) => {
     if (next === unit) return;
-    setForm((f) => (f ? { ...f, values: convertValues(f.values, unit, next) } : f));
+    // 인치 보기에서는 입력을 받지 않으므로 활성 항목을 풀어 키패드를 잠근다.
+    if (next === 'INCH') setActiveKey(null);
     setUnit(next);
   };
 
-  /** 문자 항목·직접 입력용 값 갱신 (편집 표시 포함) */
+  /** 문자 항목·직접 입력용 값 갱신 */
   const setValue = (key: string, val: string) => {
     setForm((f) => (f ? { ...f, values: { ...f.values, [key]: val } } : f));
-    markEdited(key);
     setDirty(true);
   };
 
@@ -308,7 +271,7 @@ export function MeasurementEditPage() {
       });
       // 값은 생성 직후 저장한다 — 생성 API는 값이 빈 항목을 거부한다.
       return updateMeasurement(created.id, {
-        values: toPayloadValues(form.values, unit, editedKeys, {}),
+        values: toPayloadValues(form.values),
         fitPreference: form.fitPreference.trim() || null,
         bodyNotes: form.bodyNotes.trim() || null,
         notes: form.notes.trim() || null,
@@ -329,7 +292,7 @@ export function MeasurementEditPage() {
       return updateMeasurement(session.id, {
         measurementDate: form.measurementDate,
         measurementType: form.measurementType,
-        values: toPayloadValues(form.values, unit, editedKeys, session.values),
+        values: toPayloadValues(form.values),
         fitPreference: form.fitPreference.trim() || null,
         bodyNotes: form.bodyNotes.trim() || null,
         notes: form.notes.trim() || null,
@@ -337,8 +300,6 @@ export function MeasurementEditPage() {
     },
     onSuccess: (updated) => {
       queryClient.setQueryData(['measurements', 'detail', id], updated);
-      // 저장된 값(CM)이 새 기준선이 되므로 편집 표시를 비운다 (inch 왕복 오차 방지).
-      setEditedKeys(new Set());
       void invalidate();
       setDirty(false);
     },
@@ -395,7 +356,7 @@ export function MeasurementEditPage() {
   };
 
   const handleKeypadPress = (key: string) => {
-    if (!activeKey || readOnly) return;
+    if (!activeKey || readOnly || unit === 'INCH') return;
     setForm((f) => {
       if (!f) return f;
       const cur = f.values[activeKey] ?? '';
@@ -408,19 +369,17 @@ export function MeasurementEditPage() {
       if (next === cur) return f;
       return { ...f, values: { ...f.values, [activeKey]: next } };
     });
-    markEdited(activeKey);
     setDirty(true);
   };
 
   const handleKeypadDelete = () => {
-    if (!activeKey || readOnly) return;
+    if (!activeKey || readOnly || unit === 'INCH') return;
     setForm((f) => {
       if (!f) return f;
       const cur = f.values[activeKey] ?? '';
       if (cur === '') return f;
       return { ...f, values: { ...f.values, [activeKey]: cur.slice(0, -1) } };
     });
-    markEdited(activeKey);
     setDirty(true);
   };
 
@@ -455,7 +414,7 @@ export function MeasurementEditPage() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeKey, readOnly]);
+  }, [activeKey, readOnly, unit]);
 
   if (!isNew && (sessionQuery.isLoading || !form || !session)) {
     if (sessionQuery.error) {
@@ -488,21 +447,27 @@ export function MeasurementEditPage() {
   const renderField = (def: MeasurementFieldDef) => {
     const value = form.values[def.key] ?? '';
     const active = activeKey === def.key;
+    // 인치 보기는 파생 표시 전용 — 값은 cm로만 입력받는다 (설계서 v2 05 §3.2).
+    const viewOnly = readOnly || unit === 'INCH';
     const style: CSSProperties = {
       border: active ? '2px solid #1677ff' : '1px solid #d9d9d9',
-      background: readOnly ? '#fafafa' : active ? '#e6f4ff' : '#fff',
+      background: viewOnly ? '#fafafa' : active ? '#e6f4ff' : '#fff',
       borderRadius: 8,
       padding: '8px 12px',
       minHeight: 56,
-      cursor: readOnly ? 'default' : 'pointer',
+      cursor: viewOnly ? 'default' : 'pointer',
       display: 'flex',
       flexDirection: 'column',
       justifyContent: 'center',
     };
     // 문자 항목(사이즈)은 키패드가 아니라 직접 입력한다.
-    const textInput = def.kind === 'text' && !readOnly;
+    const textInput = def.kind === 'text' && !viewOnly;
+    // 숫자 항목은 폼에 cm로 들어 있으므로 인치 보기에서만 분수로 환산해 렌더한다.
+    const numeric = def.kind === 'number' ? Number(value) : NaN;
+    const display =
+      def.kind === 'number' && unit === 'INCH' && Number.isFinite(numeric) ? formatInch(numeric) : value;
     return (
-      <div key={def.key} style={style} onClick={() => !readOnly && !textInput && setActiveKey(def.key)}>
+      <div key={def.key} style={style} onClick={() => !viewOnly && !textInput && setActiveKey(def.key)}>
         <Typography.Text type="secondary" style={{ fontSize: 13 }}>
           {def.label}
         </Typography.Text>
@@ -517,11 +482,13 @@ export function MeasurementEditPage() {
           />
         ) : value ? (
           <Typography.Text strong style={{ fontSize: 20 }}>
-            {value}
+            {display}
             {def.kind === 'number' ? (unit === 'INCH' ? ' in' : ' cm') : ''}
           </Typography.Text>
         ) : (
-          <Typography.Text style={{ fontSize: 18, color: '#bfbfbf' }}>입력</Typography.Text>
+          <Typography.Text style={{ fontSize: 18, color: '#bfbfbf' }}>
+            {viewOnly ? '-' : '입력'}
+          </Typography.Text>
         )}
       </div>
     );
@@ -699,8 +666,9 @@ export function MeasurementEditPage() {
             )}
 
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              표시 단위: {unit === 'INCH' ? 'inch(파생 표시 · 저장은 cm)' : 'cm'} (소수 허용) · 값이 없는
-              항목은 비워 둡니다.
+              {unit === 'INCH'
+                ? '인치 보기입니다 — 1/8인치 단위 분수로 환산해 보여 주며, 값 수정은 cm 보기에서 합니다.'
+                : '입력 단위: cm (소수 허용) · 값이 없는 항목은 비워 둡니다.'}
             </Typography.Text>
           </Space>
         </Card>
@@ -827,7 +795,13 @@ export function MeasurementEditPage() {
       <Col xs={24} lg={9} xl={8}>
         <div style={{ position: 'sticky', top: 16 }}>
           <Card
-            title={activeKey ? `입력 중: ${labelOf(FIELD_LABELS, activeKey)}` : '항목을 터치해 입력을 시작하세요'}
+            title={
+              unit === 'INCH'
+                ? '인치 보기 — 입력은 cm 보기에서 합니다'
+                : activeKey
+                  ? `입력 중: ${labelOf(FIELD_LABELS, activeKey)}`
+                  : '항목을 터치해 입력을 시작하세요'
+            }
           >
             <Space direction="vertical" size="middle" style={{ width: '100%' }}>
               <NumericKeypad
@@ -836,7 +810,7 @@ export function MeasurementEditPage() {
                 onPrev={() => moveActive(-1)}
                 onNext={() => moveActive(1)}
                 onDone={() => setActiveKey(null)}
-                disabled={!activeKey || readOnly}
+                disabled={!activeKey || readOnly || unit === 'INCH'}
               />
 
               {isNew ? (

@@ -299,11 +299,12 @@ export interface OptionReviewData {
   totalStages: number;
   completedStages: number;
   /**
-   * 미선택 **필수** 단계 수. 확정 가능 여부의 기준이다(백엔드 confirm도 required만 검증한다).
-   * 선택 단계(예: 베스트)는 안 골라도 확정할 수 있으므로 여기 세지 않는다.
+   * 미선택 **필수** 단계 수.
+   * 확정은 필수/선택 구분 없이 모든 단계를 골라야 하므로(백엔드 confirm도 동일),
+   * 확정 가능 여부는 missingCount + missingOptionalCount로 판단한다.
    */
   missingCount: number;
-  /** 미선택 선택(비필수) 단계 수 — 안내용 */
+  /** 미선택 선택(비필수) 단계 수 */
   missingOptionalCount: number;
   version: number;
   stages: OptionReviewStage[];

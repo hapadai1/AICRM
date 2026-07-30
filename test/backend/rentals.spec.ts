@@ -85,9 +85,8 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
       .set(auth(ctx))
       .send({
         componentType: 'JACKET',
-        design: '클래식',
         color: 'BLACK',
-        size: '100',
+        size: '50',
         managementCode: 'JKT-BK-100',
         quantity: 3,
       })
@@ -99,10 +98,10 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
     await api(ctx)
       .post('/api/v1/rental-inventory')
       .set(auth(ctx))
-      .send({ componentType: 'JACKET', design: '클래식', color: 'BLACK', size: '100', managementCode: 'JKT-BK-100-EX' })
+      .send({ componentType: 'JACKET', color: 'BLACK', size: '50', managementCode: 'JKT-BK-100-EX' })
       .expect(201);
     const skuCount = await ctx.prisma.rentalSku.count({
-      where: { componentType: 'JACKET', design: '클래식', color: 'BLACK', size: '100' },
+      where: { componentType: 'JACKET', color: 'BLACK', size: '50' },
     });
     expect(skuCount).toBe(1);
   });
@@ -111,7 +110,7 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
     const res = await api(ctx)
       .post('/api/v1/rental-inventory')
       .set(auth(ctx))
-      .send({ componentType: 'JACKET', design: '클래식', color: 'BLACK', size: '100', managementCode: 'JKT-BK-100-002' })
+      .send({ componentType: 'JACKET', color: 'BLACK', size: '50', managementCode: 'JKT-BK-100-002' })
       .expect(400);
     expect(res.body.error.code).toBe('VALIDATION_ERROR');
     expect(res.body.error.message).toContain('JKT-BK-100-002');
@@ -120,10 +119,10 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
 
   it('import는 dryRun 미리보기와 오류 행 분리를 지원한다', async () => {
     const items = [
-      { componentType: 'TROUSERS', design: '클래식', color: 'BLACK', size: '95', managementCode: 'PNT-BK-32-001' },
-      { componentType: 'JACKET', design: '클래식', color: 'BLACK', size: '100', managementCode: 'JKT-BK-100-002' }, // DB 중복
-      { componentType: 'HAT', design: '모자', color: 'GRAY', size: 'F', managementCode: 'HAT-001' }, // 허용되지 않은 품목
-      { componentType: 'SHOES', design: '더비', color: 'BROWN' }, // 필수값 누락
+      { componentType: 'TROUSERS', color: 'BLACK', size: '92', managementCode: 'PNT-BK-32-001' },
+      { componentType: 'JACKET', color: 'BLACK', size: '50', managementCode: 'JKT-BK-100-002' }, // DB 중복
+      { componentType: 'HAT', color: 'GRAY', size: 'F', managementCode: 'HAT-001' }, // 허용되지 않은 품목
+      { componentType: 'SHOES', color: 'SHOE_BROWN' }, // 필수값 누락
     ];
 
     const dry = await api(ctx)
@@ -157,7 +156,7 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
     await api(ctx)
       .post('/api/v1/rental-inventory')
       .set(auth(ctx))
-      .send({ componentType: 'JACKET', design: 'E10', color: 'CHARCOAL', size: '110', managementCode: 'E10-OK-001' })
+      .send({ componentType: 'JACKET', color: 'CHARCOAL', size: '52', managementCode: 'E10-OK-001' })
       .expect(201);
   });
 
@@ -166,7 +165,7 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
     const badColor = await api(ctx)
       .post('/api/v1/rental-inventory')
       .set(auth(ctx))
-      .send({ componentType: 'JACKET', design: 'E10', color: 'RAINBOW', size: '100', managementCode: 'E10-BADC-001' })
+      .send({ componentType: 'JACKET', color: 'RAINBOW', size: '50', managementCode: 'E10-BADC-001' })
       .expect(400);
     expect(badColor.body.error.code).toBe('VALIDATION_ERROR');
     expect(badColor.body.error.fieldErrors).toEqual(
@@ -178,7 +177,7 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
     const badSize = await api(ctx)
       .post('/api/v1/rental-inventory')
       .set(auth(ctx))
-      .send({ componentType: 'TROUSERS', design: 'E10', color: 'BLACK', size: '32', managementCode: 'E10-BADS-001' })
+      .send({ componentType: 'TROUSERS', color: 'BLACK', size: '32', managementCode: 'E10-BADS-001' })
       .expect(400);
     expect(badSize.body.error.code).toBe('VALIDATION_ERROR');
     expect(badSize.body.error.fieldErrors).toEqual(
@@ -194,8 +193,8 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
       .send({
         dryRun: true,
         items: [
-          { componentType: 'JACKET', design: 'E10', color: 'NAVY', size: '100', managementCode: 'E10-IMP-OK' },
-          { componentType: 'JACKET', design: 'E10', color: 'RAINBOW', size: '999', managementCode: 'E10-IMP-BAD' },
+          { componentType: 'JACKET', color: 'NAVY', size: '50', managementCode: 'E10-IMP-OK' },
+          { componentType: 'JACKET', color: 'RAINBOW', size: '999', managementCode: 'E10-IMP-BAD' },
         ],
       })
       .expect(201);
@@ -214,7 +213,7 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
     const created = await api(ctx)
       .post('/api/v1/rental-inventory')
       .set(auth(ctx))
-      .send({ componentType: 'JACKET', design: '가용', color: 'NAVY', size: '105', managementCode: 'AV-J', quantity: 2 })
+      .send({ componentType: 'JACKET', color: 'NAVY', size: '54', managementCode: 'AV-J', quantity: 2 })
       .expect(201);
     [itemA1, itemA2] = created.body.data;
     expect(itemA1.managementCode).toBe('AV-J-001');
@@ -222,7 +221,7 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
     const before = await api(ctx)
       .get('/api/v1/rental-inventory/availability')
       .set(auth(ctx))
-      .query({ componentType: 'JACKET', design: '가용', pickupDate: '2026-08-01', availabilityEndDate: '2026-08-05' })
+      .query({ componentType: 'JACKET', color: 'NAVY', size: '54', pickupDate: '2026-08-01', availabilityEndDate: '2026-08-05' })
       .expect(200);
     expect(before.body.data.map((i: { managementCode: string }) => i.managementCode)).toEqual(['AV-J-001', 'AV-J-002']);
 
@@ -248,7 +247,7 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
     const overlapped = await api(ctx)
       .get('/api/v1/rental-inventory/availability')
       .set(auth(ctx))
-      .query({ componentType: 'JACKET', design: '가용', pickupDate: '2026-08-03', availabilityEndDate: '2026-08-07' })
+      .query({ componentType: 'JACKET', color: 'NAVY', size: '54', pickupDate: '2026-08-03', availabilityEndDate: '2026-08-07' })
       .expect(200);
     expect(overlapped.body.data.map((i: { managementCode: string }) => i.managementCode)).toEqual(['AV-J-002']);
 
@@ -256,9 +255,55 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
     const later = await api(ctx)
       .get('/api/v1/rental-inventory/availability')
       .set(auth(ctx))
-      .query({ componentType: 'JACKET', design: '가용', pickupDate: '2026-08-10', availabilityEndDate: '2026-08-12' })
+      .query({ componentType: 'JACKET', color: 'NAVY', size: '54', pickupDate: '2026-08-10', availabilityEndDate: '2026-08-12' })
       .expect(200);
     expect(later.body.data.map((i: { managementCode: string }) => i.managementCode)).toContain('AV-J-001');
+  });
+
+  it('가용 종료일을 생략하면 반납 예정일까지만 묶이고 다음 날부터 예약된다', async () => {
+    const item = await api(ctx)
+      .post('/api/v1/rental-inventory')
+      .set(auth(ctx))
+      .send({ componentType: 'JACKET', color: 'GREY', size: '48', managementCode: 'END-J-001' })
+      .expect(201);
+    const itemId = item.body.data[0].id;
+
+    // 7/29 픽업 ~ 7/31 반납. 가용 종료일 미지정.
+    const alloc = await api(ctx)
+      .post(`/api/v1/rental-orders/${orderId}/allocations`)
+      .set(auth(ctx))
+      .send({
+        componentId: jacketComponentId,
+        inventoryItemId: itemId,
+        pickupDate: '2026-12-29',
+        returnDueDate: '2026-12-31',
+      })
+      .expect(201);
+    expect(alloc.body.data.availabilityEndDate).toContain('2026-12-31');
+
+    // 반납 예정일 당일은 아직 묶여 있다
+    await api(ctx)
+      .post(`/api/v1/rental-orders/${orderId}/allocations`)
+      .set(auth(ctx))
+      .send({
+        componentId: jacketComponentId,
+        inventoryItemId: itemId,
+        pickupDate: '2026-12-31',
+        returnDueDate: '2027-01-02',
+      })
+      .expect(409);
+
+    // 다음 날부터는 예약된다
+    await api(ctx)
+      .post(`/api/v1/rental-orders/${orderId}/allocations`)
+      .set(auth(ctx))
+      .send({
+        componentId: jacketComponentId,
+        inventoryItemId: itemId,
+        pickupDate: '2027-01-01',
+        returnDueDate: '2027-01-02',
+      })
+      .expect(201);
   });
 
   it('겹치는 기간의 배정을 RENTAL_PERIOD_OVERLAP으로 차단한다 (순차 2회 요청)', async () => {
@@ -280,16 +325,6 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
   // ---------------------------------------------------------------------------
   // 3. ID 일치 검증·실물 변경·출고
   // ---------------------------------------------------------------------------
-
-  it('예약 ID와 다른 실물 출고는 RENTAL_ID_MISMATCH로 차단한다', async () => {
-    const res = await api(ctx)
-      .post(`/api/v1/rental-allocations/${allocationId}/checkout`)
-      .set(auth(ctx))
-      .send({ confirmedInventoryItemId: itemA2.id, checkoutDate: '2026-08-01', version: 0 })
-      .expect(409);
-    expect(res.body.error.code).toBe('RENTAL_ID_MISMATCH');
-    expect(res.body.error.details.assignedManagementCode).toBe('AV-J-001');
-  });
 
   it('change-item으로 실물을 교체하면 구실물은 AVAILABLE로 복원되고 이력이 남는다', async () => {
     // 사유 누락은 400
@@ -325,7 +360,7 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
     const res = await api(ctx)
       .post(`/api/v1/rental-allocations/${allocationId}/checkout`)
       .set(auth(ctx))
-      .send({ confirmedInventoryItemId: itemA2.id, checkoutDate: '2026-08-01', version: 1 })
+      .send({ checkoutDate: '2026-08-01', version: 1 })
       .expect(201);
     expect(res.body.data.status).toBe('CHECKED_OUT');
     expect(res.body.data.actualPickupAt).toContain('2026-08-01');
@@ -368,9 +403,22 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
     const avail = await api(ctx)
       .get('/api/v1/rental-inventory/availability')
       .set(auth(ctx))
-      .query({ componentType: 'JACKET', design: '가용', pickupDate: '2026-09-01', availabilityEndDate: '2026-09-03' })
+      .query({ componentType: 'JACKET', color: 'NAVY', size: '54', pickupDate: '2026-09-01', availabilityEndDate: '2026-09-03' })
       .expect(200);
     expect(avail.body.data.map((i: { managementCode: string }) => i.managementCode)).not.toContain('AV-J-002');
+  });
+
+  it('수동 상태 변경은 사유가 필수다 (누락·공백 모두 거부)', async () => {
+    await api(ctx)
+      .post(`/api/v1/rental-inventory/${itemA2.id}/status-events`)
+      .set(auth(ctx))
+      .send({ newStatus: 'UNAVAILABLE' })
+      .expect(400);
+    await api(ctx)
+      .post(`/api/v1/rental-inventory/${itemA2.id}/status-events`)
+      .set(auth(ctx))
+      .send({ newStatus: 'UNAVAILABLE', reason: '   ' })
+      .expect(400);
   });
 
   it('수동 AVAILABLE 전환 후에도 available_from 이전 픽업 배정은 차단한다', async () => {
@@ -433,9 +481,18 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
     const created = await api(ctx)
       .post('/api/v1/rental-inventory')
       .set(auth(ctx))
-      .send({ componentType: 'SHOES', design: '더비', color: 'BLACK', size: '100', managementCode: 'SHO-RET-001' })
+      .send({ componentType: 'SHOES', color: 'SHOE_BLACK', size: '260', managementCode: 'SHO-RET-001' })
       .expect(201);
     const shoesId = created.body.data[0].id;
+
+    // 폐기는 되돌릴 수 없어 사유가 필수다 — 누락·공백 모두 거른다.
+    await api(ctx).post(`/api/v1/rental-inventory/${shoesId}/retire`).set(auth(ctx)).send({}).expect(400);
+    await api(ctx)
+      .post(`/api/v1/rental-inventory/${shoesId}/retire`)
+      .set(auth(ctx))
+      .send({ reason: '   ' })
+      .expect(400);
+
     const retired = await api(ctx)
       .post(`/api/v1/rental-inventory/${shoesId}/retire`)
       .set(auth(ctx))
@@ -443,6 +500,61 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
       .expect(201);
     expect(retired.body.data.status).toBe('RETIRED');
     expect(retired.body.data.active).toBe(false);
+
+    // 입력한 사유가 상태 이력에 그대로 남아야 화면 하단 패널에서 확인할 수 있다.
+    const detail = await api(ctx).get(`/api/v1/rental-inventory/${shoesId}`).set(auth(ctx)).expect(200);
+    const retireEvent = detail.body.data.statusEvents.find(
+      (e: { newStatus: string }) => e.newStatus === 'RETIRED',
+    );
+    expect(retireEvent.reason).toBe('운영 종료');
+  });
+
+  it('폐기한 실물의 관리코드는 새 실물에 다시 쓸 수 있다 (이력은 남는다)', async () => {
+    const code = 'REUSE-SHO-001';
+    const first = await api(ctx)
+      .post('/api/v1/rental-inventory')
+      .set(auth(ctx))
+      .send({ componentType: 'SHOES', color: 'SHOE_BLACK', size: '265', managementCode: code })
+      .expect(201);
+    const firstId = first.body.data[0].id;
+
+    // 살아 있는 동안에는 같은 코드로 다시 못 넣는다.
+    await api(ctx)
+      .post('/api/v1/rental-inventory')
+      .set(auth(ctx))
+      .send({ componentType: 'SHOES', color: 'SHOE_BROWN', size: '270', managementCode: code })
+      .expect(400);
+
+    await api(ctx)
+      .post(`/api/v1/rental-inventory/${firstId}/retire`)
+      .set(auth(ctx))
+      .send({ reason: '밑창 손상' })
+      .expect(201);
+
+    // 폐기 후에는 같은 코드표를 새 옷에 붙일 수 있다.
+    const second = await api(ctx)
+      .post('/api/v1/rental-inventory')
+      .set(auth(ctx))
+      .send({ componentType: 'SHOES', color: 'SHOE_BROWN', size: '270', managementCode: code })
+      .expect(201);
+    expect(second.body.data[0].id).not.toBe(firstId);
+
+    // 같은 코드로 두 행이 남되, 목록(기본=폐기 제외)에는 새 것만 보인다.
+    expect(await ctx.prisma.rentalInventoryItem.count({ where: { managementCode: code } })).toBe(2);
+    const list = await api(ctx)
+      .get('/api/v1/rental-inventory')
+      .set(auth(ctx))
+      .query({ managementCode: code })
+      .expect(200);
+    expect(list.body.data.map((i: { id: string }) => i.id)).toEqual([second.body.data[0].id]);
+
+    // 폐기만 보기로는 폐기된 쪽만 나온다.
+    const retiredOnly = await api(ctx)
+      .get('/api/v1/rental-inventory')
+      .set(auth(ctx))
+      .query({ managementCode: code, retired: 'true' })
+      .expect(200);
+    expect(retiredOnly.body.data.map((i: { id: string }) => i.id)).toEqual([firstId]);
   });
 
   // ---------------------------------------------------------------------------
@@ -519,7 +631,8 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
       .expect(201);
     codeAllocationId = res.body.data.id;
 
-    const item = await ctx.prisma.rentalInventoryItem.findUniqueOrThrow({
+    // 관리코드는 살아 있는 실물끼리만 유일하다(폐기 후 재사용) — findFirst로 찾는다.
+    const item = await ctx.prisma.rentalInventoryItem.findFirstOrThrow({
       where: { managementCode: 'JKT-BK-100-001' },
     });
     expect(res.body.data.rentalInventoryItemId).toBe(item.id);
@@ -539,7 +652,6 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
       returnDueDate: '2026-10-03',
       managementCode: 'JKT-BK-100-001',
       componentType: 'JACKET',
-      design: '클래식',
       componentId: jacketComponentId,
       displayName: '렌탈 정장 #1',
       orderNo: 'ORD-260721-901',
@@ -559,31 +671,37 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
     await api(ctx).get('/api/v1/rental-allocations').set(auth(ctx)).expect(400);
   });
 
-  it('출고 시 confirmedItemCode(관리코드)를 허용하고 불일치를 차단한다', async () => {
-    // 다른 실물의 관리코드는 RENTAL_ID_MISMATCH
-    const mismatch = await api(ctx)
-      .post(`/api/v1/rental-allocations/${codeAllocationId}/checkout`)
-      .set(auth(ctx))
-      .send({ confirmedItemCode: 'AV-J-002', checkoutDate: '2026-10-01', version: 0 })
-      .expect(409);
-    expect(mismatch.body.error.code).toBe('RENTAL_ID_MISMATCH');
-    expect(mismatch.body.error.details.assignedManagementCode).toBe('JKT-BK-100-001');
-    expect(mismatch.body.error.details.confirmedItemCode).toBe('AV-J-002');
-
-    // 확인 ID·관리코드 둘 다 없으면 400
-    const none = await api(ctx)
-      .post(`/api/v1/rental-allocations/${codeAllocationId}/checkout`)
-      .set(auth(ctx))
-      .send({ checkoutDate: '2026-10-01', version: 0 })
-      .expect(400);
-    expect(none.body.error.code).toBe('VALIDATION_ERROR');
-
+  it('출고 비고는 배정 이벤트에 남는다 (예약과 다른 옷을 내보낸 경우 기록용)', async () => {
     const ok = await api(ctx)
       .post(`/api/v1/rental-allocations/${codeAllocationId}/checkout`)
       .set(auth(ctx))
-      .send({ confirmedItemCode: 'JKT-BK-100-001', checkoutDate: '2026-10-01', version: 0 })
+      .send({ checkoutDate: '2026-10-01', notes: '사이즈 교환 요청으로 50호 출고', version: 0 })
       .expect(201);
     expect(ok.body.data.status).toBe('CHECKED_OUT');
+
+    const event = await ctx.prisma.rentalAllocationEvent.findFirstOrThrow({
+      where: { rentalAllocationId: codeAllocationId, eventType: 'PICKED_UP' },
+    });
+    expect(event.reason).toBe('사이즈 교환 요청으로 50호 출고');
+  });
+
+  it('출고 비고는 선택값이라 없어도 출고된다', async () => {
+    const alloc = await api(ctx)
+      .post(`/api/v1/rental-orders/${orderId}/allocations`)
+      .set(auth(ctx))
+      .send({
+        componentId: jacketComponentId,
+        itemCode: 'JKT-BK-100-002',
+        pickupDate: '2026-11-01',
+        returnDueDate: '2026-11-02',
+        availabilityEndDate: '2026-11-03',
+      })
+      .expect(201);
+    await api(ctx)
+      .post(`/api/v1/rental-allocations/${alloc.body.data.id}/checkout`)
+      .set(auth(ctx))
+      .send({ checkoutDate: '2026-11-01', version: 0 })
+      .expect(201);
   });
 
   it('return 뷰는 출고 배정을 지연 여부와 함께 반환한다', async () => {
@@ -648,7 +766,7 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
     const created = await api(ctx)
       .post('/api/v1/rental-inventory')
       .set(auth(ctx))
-      .send({ componentType: 'JACKET', design: 'CAL달력', color: 'NAVY', size: '100', managementCode: 'CAL-J', quantity: 2 })
+      .send({ componentType: 'JACKET', color: 'GREY', size: '56', managementCode: 'CAL-J', quantity: 2 })
       .expect(201);
     const [cal1] = created.body.data;
 
@@ -656,7 +774,7 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
     const before = await api(ctx)
       .get('/api/v1/rental-inventory/availability-calendar')
       .set(auth(ctx))
-      .query({ from: '2027-01-10', to: '2027-01-12', design: 'CAL달력' })
+      .query({ from: '2027-01-10', to: '2027-01-12', color: 'GREY', size: '56' })
       .expect(200);
     expect(before.body.data.map((d: { date: string }) => d.date)).toEqual([
       '2027-01-10',
@@ -683,7 +801,7 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
     const after = await api(ctx)
       .get('/api/v1/rental-inventory/availability-calendar')
       .set(auth(ctx))
-      .query({ from: '2027-01-10', to: '2027-01-12', design: 'CAL달력' })
+      .query({ from: '2027-01-10', to: '2027-01-12', color: 'GREY', size: '56' })
       .expect(200);
     const byDate = Object.fromEntries(
       after.body.data.map((d: { date: string; availableCount: number }) => [d.date, d.availableCount]),
@@ -758,13 +876,13 @@ describe('렌탈 스타일 선택·기준정보 (v2 D3)', () => {
     await api(ctx)
       .post('/api/v1/rental-inventory')
       .set(auth(ctx))
-      .send({ componentType: 'JACKET', design: '렌탈클래식', color: 'NAVY', size: '100', managementCode: 'RJ-NV-L', quantity: 2 })
+      .send({ componentType: 'JACKET', color: 'NAVY', size: '50', managementCode: 'RJ-NV-L', quantity: 2 })
       .expect(201);
     // 다른 색은 후보에서 제외되어야 한다
     await api(ctx)
       .post('/api/v1/rental-inventory')
       .set(auth(ctx))
-      .send({ componentType: 'JACKET', design: '렌탈클래식', color: 'BLACK', size: '100', managementCode: 'RJ-BK-L' })
+      .send({ componentType: 'JACKET', color: 'BLACK', size: '50', managementCode: 'RJ-BK-L' })
       .expect(201);
   });
 
@@ -779,7 +897,7 @@ describe('렌탈 스타일 선택·기준정보 (v2 D3)', () => {
 
     const sizes = await api(ctx).get('/api/v1/admin/master/rental-sizes').set(auth(ctx)).expect(200);
     expect(sizes.body.data.map((s: { code: string }) => s.code)).toEqual(
-      expect.arrayContaining(['90', '100', '110', '120']),
+      expect.arrayContaining(['46', '50', '92', '100', '260']),
     );
 
     // create → retire (마스터 테이블은 스위트 간 truncate되지 않으므로 코드는 매 실행 고유값)
@@ -820,12 +938,12 @@ describe('렌탈 스타일 선택·기준정보 (v2 D3)', () => {
     const res = await api(ctx)
       .put(`/api/v1/rental-selections/${sessionId}/lines/${jacketComponentId}`)
       .set(auth(ctx))
-      .send({ colorCode: 'NAVY', sizeCode: '100', notes: '기장 -2cm', version: sessionVersion })
+      .send({ colorCode: 'NAVY', sizeCode: '50', notes: '기장 -2cm', version: sessionVersion })
       .expect(200);
     const jacket = res.body.data.components.find(
       (c: { orderItemComponentId: string }) => c.orderItemComponentId === jacketComponentId,
     );
-    expect(jacket).toMatchObject({ colorCode: 'NAVY', sizeCode: '100', notes: '기장 -2cm' });
+    expect(jacket).toMatchObject({ colorCode: 'NAVY', sizeCode: '50', notes: '기장 -2cm' });
     sessionVersion = res.body.data.version;
 
     await api(ctx)
@@ -915,7 +1033,7 @@ describe('렌탈 스타일 선택·기준정보 (v2 D3)', () => {
       .set(auth(ctx))
       .expect(200);
     const rJacket = review.body.data.components[0];
-    expect(rJacket).toMatchObject({ colorCode: 'NAVY', colorName: '네이비', sizeCode: '100' });
+    expect(rJacket).toMatchObject({ colorCode: 'NAVY', colorName: '네이비', sizeCode: '50' });
     expect(rJacket.selectedItem.managementCode).toBe(pick.managementCode);
 
     // 감사로그
@@ -960,7 +1078,7 @@ describe('렌탈 스타일 선택·기준정보 (v2 D3)', () => {
     await api(ctx)
       .put(`/api/v1/rental-selections/${sid}/lines/${jacketComponentId}`)
       .set(auth(ctx))
-      .send({ colorCode: 'NAVY', sizeCode: '100', version: ver })
+      .send({ colorCode: 'NAVY', sizeCode: '50', version: ver })
       .then((r) => {
         ver = r.body.data.version;
       });

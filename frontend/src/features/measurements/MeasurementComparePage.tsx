@@ -9,9 +9,9 @@ import type { MeasurementCompareRow, MeasurementCompareVersionMeta } from '../..
 import {
   MEASUREMENT_GROUP_LABELS,
   MEASUREMENT_TYPE_LABELS,
-  cmToInch,
   fetchMeasurementCompare,
   fetchMeasurements,
+  formatInch,
 } from '../../api/measurements';
 
 /** 화면 표시 단위 (백엔드 compare 응답은 항상 CM — 표시·diff만 파생 환산) */
@@ -29,7 +29,7 @@ function versionLabel(meta: MeasurementCompareVersionMeta): string {
 function renderValue(row: MeasurementCompareRow, value: number | string | null, unit: Unit) {
   if (value === null || value === '') return <Typography.Text type="secondary">-</Typography.Text>;
   const display =
-    row.kind === 'number' && typeof value === 'number' && unit === 'INCH' ? cmToInch(value) : value;
+    row.kind === 'number' && typeof value === 'number' && unit === 'INCH' ? formatInch(value) : value;
   return (
     <Typography.Text style={{ fontSize: 16 }}>
       {display}
@@ -128,11 +128,13 @@ export function MeasurementComparePage() {
         if (row.diff === null) return <Typography.Text type="secondary">-</Typography.Text>;
         if (row.diff === 0) return <Typography.Text type="secondary">0</Typography.Text>;
         const positive = row.diff > 0;
-        // 서버 diff는 CM. inch 표시일 때는 diff도 파생 환산해 보여준다.
-        const diffDisplay = unit === 'INCH' ? cmToInch(row.diff) : row.diff;
+        // 서버 diff는 CM. inch 표시일 때는 diff도 분수로 파생 환산해 보여준다.
+        const diffDisplay = unit === 'INCH' ? formatInch(row.diff) : String(row.diff);
+        // inch 반올림으로 0이 된 차이에는 부호를 붙이지 않는다.
+        const signPrefix = positive && diffDisplay !== '0' ? '+' : '';
         return (
           <Typography.Text strong style={{ color: positive ? '#cf1322' : '#1668dc', fontSize: 16 }}>
-            {positive ? '+' : ''}
+            {signPrefix}
             {diffDisplay} {unit === 'INCH' ? 'in' : 'cm'}
           </Typography.Text>
         );
