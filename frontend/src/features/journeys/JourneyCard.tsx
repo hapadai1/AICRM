@@ -244,9 +244,12 @@ export function JourneyCard({ customerId, customerName, contracts, orders }: Pro
   const completeItemMutation = useMutation({
     mutationFn: (targetId: string) =>
       completeStageItem(activeId as string, detail!.currentStageCode, targetId),
-    onSuccess: () => {
+    onSuccess: (result) => {
       invalidateStageItems();
       invalidate();
+      // 마지막 품목을 완료해 게이팅이 열리면 단계 완료까지 그 자리에서 이어 묻는다
+      // (현업 확정 2026-07-28). 자동 전진은 하지 않는다 — 확인 후 담당자가 누른다.
+      if (result.gating.canComplete) handleCompleteStage();
     },
     onError: (error) =>
       message.error(error instanceof ApiError ? error.message : '품목 완료에 실패했습니다.'),

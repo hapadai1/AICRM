@@ -5,6 +5,7 @@ import {
   App,
   Button,
   Card,
+  DatePicker,
   Descriptions,
   Drawer,
   Empty,
@@ -14,8 +15,10 @@ import {
   Space,
   Spin,
   Table,
+  Tooltip,
   Typography,
 } from 'antd';
+import dayjs, { type Dayjs } from 'dayjs';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -31,6 +34,7 @@ import {
   fetchRentalSelectionReview,
   fetchRentalSizes,
   saveRentalLine,
+  saveRentalPeriod,
   selectRentalLineItem,
   startRentalSelection,
   type RentalAllocatePrefill,
@@ -50,9 +54,9 @@ interface Draft {
 
 /**
  * 렌탈 스타일 선택 화면 (v2 D3 / 설계서 04 §4).
- * 렌탈 주문 품목의 구성품(상의/하의/베스트)별로 컬러·사이즈·비고를 지정하고,
- * 재고상태 AVAILABLE 후보 실물을 골라 담은 뒤 확정하고 확인서를 확인한다.
- * (날짜 미확정 — 실제 기간 배정은 이후 렌탈예약 달력에서 수행)
+ * 렌탈 주문 품목의 **대여 기간**을 먼저 정하고, 구성품(상의/하의/베스트)별로 컬러·사이즈·비고를
+ * 지정한 뒤 그 기간에 비어 있는 후보 실물을 골라 확정한다.
+ * 대여 날짜는 필수값이다(현업 확정 2026-07-28) — 기간 없이는 후보 검색·확정이 막힌다.
  */
 export function RentalSelectionPage() {
   const { orderItemId } = useParams<{ orderItemId: string }>();
@@ -132,6 +136,28 @@ export function RentalSelectionPage() {
       message.success('후보 실물을 반영했습니다.');
     },
     onError: (e) => message.error(e instanceof ApiError ? e.message : '실물 선택에 실패했습니다.'),
+  });
+
+  // 대여 기간 — 필수값. 없으면 후보 검색·확정이 서버에서 막힌다(RENTAL_PERIOD_REQUIRED).
+  const period: [Dayjs, Dayjs] | null =
+    detail?.pickupDate && detail?.returnDueDate
+      ? [dayjs(detail.pickupDate), dayjs(detail.returnDueDate)]
+      : null;
+  const hasPeriod = !!period;
+
+  const periodMut = useMutation({
+    mutationFn: (range: [Dayjs, Dayjs]) =>
+      saveRentalPeriod(sessionId!, {
+        pickupDate: range[0].format('YYYY-MM-DD'),
+        returnDueDate: range[1].format('YYYY-MM-DD'),
+        version: detail?.version,
+      }),
+    onSuccess: (d) => {
+      applyDetail(d);
+      setCandidateFor(null);
+      message.success('대여 기간을 저장했습니다. 이 기간에 비어 있는 실물만 후보로 나옵니다.');
+    },
+    onError: (e) => message.error(e instanceof ApiError ? e.message : '대여 기간 저장에 실패했습니다.'),
   });
 
   const confirmMut = useMutation({
@@ -275,14 +301,16 @@ export function RentalSelectionPage() {
           >
             저장
           </Button>
-          <Button
-            size="small"
-            icon={<SearchOutlined />}
-            disabled={!editable}
-            onClick={() => setCandidateFor(r.orderItemComponentId)}
-          >
-            후보 조회
-          </Button>
+          <Tooltip title={hasPeriod ? '' : '대여 기간을 먼저 정해 주세요.'}>
+            <Button
+              size="small"
+              icon={<SearchOutlined />}
+              disabled={!editable || !hasPeriod}
+              onClick={() => setCandidateFor(r.orderItemComponentId)}
+            >
+              후보 조회
+            </Button>
+          </Tooltip>
           {r.selectedItem && (
             <Button
               size="small"
@@ -373,7 +401,7 @@ export function RentalSelectionPage() {
             <Button
               type="primary"
               icon={<CheckOutlined />}
-              disabled={!editable}
+              disabled={!editable || !hasPeriod}
               loading={confirmMut.isPending}
               onClick={() => confirmMut.mutate()}
             >
@@ -385,6 +413,23 @@ export function RentalSelectionPage() {
           <Descriptions.Item label="고객">{detail.customerName}</Descriptions.Item>
           <Descriptions.Item label="주문번호">{detail.orderNo}</Descriptions.Item>
           <Descriptions.Item label="품목">{detail.displayName}</Descriptions.Item>
+          <Descriptions.Item label="대여 기간" span={3}>
+            <Space wrap>
+              <DatePicker.RangePicker
+                value={period}
+                disabled={!editable || periodMut.isPending}
+                allowClear={false}
+                onChange={(range) => {
+                  if (range?.[0] && range[1]) periodMut.mutate([range[0], range[1]]);
+                }}
+              />
+              {!hasPeriod && (
+                <Typography.Text type="danger">
+                  대여일·반납일을 먼저 정해야 후보 실물을 찾을 수 있습니다.
+                </Typography.Text>
+              )}
+            </Space>
+          </Descriptions.Item>
         </Descriptions>
         {!editable && (
           <Alert

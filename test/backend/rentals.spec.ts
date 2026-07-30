@@ -410,10 +410,10 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
   });
 
   // ---------------------------------------------------------------------------
-  // 5. 상태 변경·사용 종료 충돌 검증
+  // 5. 상태 변경·폐기 처리 충돌 검증
   // ---------------------------------------------------------------------------
 
-  it('현재·미래 배정과 충돌하는 수동 상태 변경과 사용 종료를 차단한다', async () => {
+  it('현재·미래 배정과 충돌하는 수동 상태 변경과 폐기 처리를 차단한다', async () => {
     // itemA2는 08-07~08-09 RESERVED 배정 보유
     const statusRes = await api(ctx)
       .post(`/api/v1/rental-inventory/${itemA2.id}/status-events`)
@@ -429,7 +429,7 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
       .expect(409);
     expect(retireRes.body.error.code).toBe('INVALID_STATUS_TRANSITION');
 
-    // 배정 없는 실물은 사용 종료 가능
+    // 배정 없는 실물은 폐기 처리 가능
     const created = await api(ctx)
       .post('/api/v1/rental-inventory')
       .set(auth(ctx))
@@ -835,7 +835,40 @@ describe('렌탈 스타일 선택·기준정보 (v2 D3)', () => {
       .expect(400);
   });
 
-  it('후보 조회는 재고상태 AVAILABLE을 부위×컬러×사이즈로 필터한다', async () => {
+  it('대여 기간을 정하기 전에는 후보 조회·확정이 422 RENTAL_PERIOD_REQUIRED로 막힌다', async () => {
+    const cand = await api(ctx)
+      .get(`/api/v1/rental-selections/${sessionId}/lines/${jacketComponentId}/candidates`)
+      .set(auth(ctx))
+      .expect(422);
+    expect(cand.body.error.code).toBe('RENTAL_PERIOD_REQUIRED');
+
+    const confirm = await api(ctx)
+      .post(`/api/v1/rental-selections/${sessionId}/confirm`)
+      .set(auth(ctx))
+      .send({ version: sessionVersion })
+      .expect(422);
+    expect(confirm.body.error.code).toBe('RENTAL_PERIOD_REQUIRED');
+  });
+
+  it('대여 기간을 저장한다 — 반납일이 대여일보다 빠르면 거부', async () => {
+    const bad = await api(ctx)
+      .put(`/api/v1/rental-selections/${sessionId}/period`)
+      .set(auth(ctx))
+      .send({ pickupDate: '2026-09-10', returnDueDate: '2026-09-01', version: sessionVersion })
+      .expect(400);
+    expect(bad.body.error.code).toBe('VALIDATION_ERROR');
+
+    const res = await api(ctx)
+      .put(`/api/v1/rental-selections/${sessionId}/period`)
+      .set(auth(ctx))
+      .send({ pickupDate: '2026-09-01', returnDueDate: '2026-09-10', version: sessionVersion })
+      .expect(200);
+    expect(res.body.data.pickupDate).toContain('2026-09-01');
+    expect(res.body.data.returnDueDate).toContain('2026-09-10');
+    sessionVersion = res.body.data.version;
+  });
+
+  it('후보 조회는 대여 기간에 비어 있는 실물을 부위×컬러×사이즈로 필터한다', async () => {
     const res = await api(ctx)
       .get(`/api/v1/rental-selections/${sessionId}/lines/${jacketComponentId}/candidates`)
       .set(auth(ctx))
@@ -890,6 +923,87 @@ describe('렌탈 스타일 선택·기준정보 (v2 D3)', () => {
       where: { entityType: 'RENTAL_SELECTION_SESSION', entityId: sessionId, action: 'CONFIRM' },
     });
     expect(audits).toBe(1);
+  });
+
+  it('기간이 겹치는 배정이 있는 실물은 후보에서 빠지고, 기간을 바꾸면 고른 실물이 해제된다', async () => {
+    // 새 세션(2번째 버전)으로 검증한다 — 앞 테스트에서 현재 세션은 확정됐다.
+    await ctx.prisma.rentalSelectionSession.updateMany({
+      where: { orderItemId },
+      data: { isCurrent: false },
+    });
+    const started = await api(ctx)
+      .post(`/api/v1/order-items/${orderItemId}/rental-selection`)
+      .set(auth(ctx))
+      .expect(201);
+    const sid = started.body.data.sessionId as string;
+    let ver = started.body.data.version as number;
+
+    const setPeriod = async (pickupDate: string, returnDueDate: string) => {
+      const r = await api(ctx)
+        .put(`/api/v1/rental-selections/${sid}/period`)
+        .set(auth(ctx))
+        .send({ pickupDate, returnDueDate, version: ver })
+        .expect(200);
+      ver = r.body.data.version;
+      return r;
+    };
+    const codesOf = async () => {
+      const r = await api(ctx)
+        .get(`/api/v1/rental-selections/${sid}/lines/${jacketComponentId}/candidates`)
+        .set(auth(ctx))
+        .expect(200);
+      return (r.body.data.candidates as { managementCode: string }[])
+        .map((c) => c.managementCode)
+        .sort();
+    };
+
+    await api(ctx)
+      .put(`/api/v1/rental-selections/${sid}/lines/${jacketComponentId}`)
+      .set(auth(ctx))
+      .send({ colorCode: 'NAVY', sizeCode: '100', version: ver })
+      .then((r) => {
+        ver = r.body.data.version;
+      });
+
+    // 10/01~10/10에 RJ-NV-L-001을 이미 배정해 둔다 → 겹치는 기간에는 후보에서 빠져야 한다.
+    const occupied = await ctx.prisma.rentalInventoryItem.findFirstOrThrow({
+      where: { managementCode: 'RJ-NV-L-001' },
+    });
+    const component = await ctx.prisma.orderItemComponent.findUniqueOrThrow({
+      where: { id: jacketComponentId },
+    });
+    await ctx.prisma.rentalAllocation.create({
+      data: {
+        id: randomUUID(),
+        orderItemComponentId: component.id,
+        rentalInventoryItemId: occupied.id,
+        pickupDate: new Date('2026-10-01T00:00:00.000Z'),
+        returnDueDate: new Date('2026-10-10T00:00:00.000Z'),
+        availabilityEndDate: new Date('2026-10-10T00:00:00.000Z'),
+        status: 'RESERVED',
+        assignedAt: new Date(),
+        assignedBy: (await ctx.prisma.user.findUniqueOrThrow({ where: { loginId: 'admin' } })).id,
+      },
+    });
+
+    await setPeriod('2026-10-05', '2026-10-08');
+    expect(await codesOf()).toEqual(['RJ-NV-L-002']);
+
+    // 겹치지 않는 기간이면 둘 다 후보
+    await setPeriod('2026-11-01', '2026-11-05');
+    expect(await codesOf()).toEqual(['RJ-NV-L-001', 'RJ-NV-L-002']);
+
+    // 실물을 고른 뒤 기간을 바꾸면 선택이 해제된다(그 기간에 빈다는 보장이 사라지므로)
+    const picked = await api(ctx)
+      .put(`/api/v1/rental-selections/${sid}/lines/${jacketComponentId}/item`)
+      .set(auth(ctx))
+      .send({ itemCode: 'RJ-NV-L-001', version: ver })
+      .expect(200);
+    ver = picked.body.data.version;
+    expect(picked.body.data.components[0].selectedInventoryItemId).toBeTruthy();
+
+    const moved = await setPeriod('2026-12-01', '2026-12-05');
+    expect(moved.body.data.components[0].selectedInventoryItemId).toBeNull();
   });
 
   it('CUSTOM 품목은 렌탈 선택 시작이 거부된다', async () => {

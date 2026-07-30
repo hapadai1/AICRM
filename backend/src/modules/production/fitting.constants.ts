@@ -31,3 +31,12 @@ export function fittingCoverage(
   const written = new Set(adjustments.map((a) => a.areaCode));
   return Object.fromEntries(FITTING_STANDARD_AREAS.map((code) => [code, written.has(code)]));
 }
+
+/**
+ * 가봉 세션 첨부 파일의 용도 태그 (EntityFile.purpose).
+ *
+ * 현업 확정(2026-07-28): 이 첨부는 **공장에 보낸 가봉 작업지시서 엑셀**을 보관하는 것이다.
+ * 올린 값을 가봉 조정치에 반영하지 않는다(파싱 없음) — "이 파일을 보냈다"를 나중에
+ * 알아볼 수 있으면 된다. 그래서 회신(REPLY)이 아니라 발송(SENT)이다.
+ */
+export const FITTING_FILE_PURPOSE = 'FACTORY_SENT';

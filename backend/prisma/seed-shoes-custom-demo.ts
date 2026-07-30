@@ -114,8 +114,8 @@ async function main(): Promise<void> {
       }
       const createContract = async (args: {
         contractNo: string; customerId: string; typeCode: string; status: string;
-        contractedAt: Date; balanceDueDate?: Date | null;
-        versionNo: number; total: number; deposit: number; confirmedAt: Date;
+        contractedAt: Date;
+        versionNo: number; total: number; confirmedAt: Date;
         completionDueDate?: Date; lines: LineDef[];
       }): Promise<{ contractId: string; lineIds: string[] }> => {
         const contractId = uuid();
@@ -127,7 +127,6 @@ async function main(): Promise<void> {
             contractTypeId: contractTypeId(args.typeCode),
             status: args.status,
             contractedAt: args.contractedAt,
-            balanceDueDate: args.balanceDueDate ?? null,
           },
         });
         const versionId = uuid();
@@ -138,8 +137,6 @@ async function main(): Promise<void> {
             versionNo: args.versionNo,
             versionStatus: 'CONFIRMED',
             totalAmount: args.total,
-            depositAmount: args.deposit,
-            balanceAmount: args.total - args.deposit,
             completionDueDate: args.completionDueDate ?? null,
             confirmedBy: adminId,
             confirmedAt: args.confirmedAt,
@@ -278,8 +275,8 @@ async function main(): Promise<void> {
       });
       const kto = await createContract({
         contractNo: MARKER_CONTRACT_NO, customerId: 강태오, typeCode: 'SHOES_CUSTOM',
-        status: 'CONFIRMED', contractedAt: at(-11, 15), balanceDueDate: dateOnly(18),
-        versionNo: 1, total: 1700000, deposit: 700000, confirmedAt: at(-11, 15),
+        status: 'CONFIRMED', contractedAt: at(-11, 15),
+        versionNo: 1, total: 1700000, confirmedAt: at(-11, 15),
         completionDueDate: dateOnly(25),
         lines: [
           { transactionType: 'CUSTOM', productCategory: 'SHOES', itemDescription: '맞춤 구두', quantity: 2, unitPrice: 850000 },
@@ -324,8 +321,8 @@ async function main(): Promise<void> {
       });
       const ljh = await createContract({
         contractNo: 'CTR-260723-202', customerId: 임재현, typeCode: 'SUIT_SHOES_CUSTOM',
-        status: 'CONFIRMED', contractedAt: at(-4, 16), balanceDueDate: dateOnly(24),
-        versionNo: 1, total: 2350000, deposit: 1000000, confirmedAt: at(-4, 16),
+        status: 'CONFIRMED', contractedAt: at(-4, 16),
+        versionNo: 1, total: 2350000, confirmedAt: at(-4, 16),
         completionDueDate: dateOnly(30),
         lines: [
           { transactionType: 'CUSTOM', productCategory: 'SUIT', itemDescription: '맞춤 정장', quantity: 1, unitPrice: 1450000 },

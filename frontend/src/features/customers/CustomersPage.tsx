@@ -12,7 +12,7 @@ import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { autoWidth } from '../../shared/table-width';
 import { CustomerRegisterModal } from './CustomerRegisterModal';
-import { TRANSACTION_TYPE_LABEL, formatAmount } from './customer-constants';
+import { TRANSACTION_TYPE_LABEL } from './customer-constants';
 
 /** 진행 journey 상태별 세부 단계 배지 색상 (진행상태 재정의 02) */
 const JOURNEY_STATUS_COLOR: Record<'ACTIVE' | 'COMPLETED' | 'CANCELLED', string> = {
@@ -106,13 +106,6 @@ export function CustomersPage() {
       ...autoWidth(),
       align: 'right',
       render: (v: number) => `${v}건`,
-    },
-    {
-      title: '잔금',
-      dataIndex: 'balanceAmount',
-      ...autoWidth(),
-      align: 'right',
-      render: (v: number) => formatAmount(v),
     },
   ];
 

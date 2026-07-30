@@ -5,11 +5,18 @@ import { BusinessException } from '../../common/business.exception';
 import { AuthUser } from '../../common/decorators';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { ASSIGNABLE_ITEM_STATUSES } from './rentals.constants';
 import {
   ConfirmRentalSelectionDto,
   SaveRentalLineDto,
+  SaveRentalPeriodDto,
   SelectRentalItemDto,
 } from './rentals.dto';
+
+/** `YYYY-MM-DD` → Date(UTC 자정). @db.Date 컬럼과 같은 기준으로 맞춘다. */
+function parseDateOnly(value: string): Date {
+  return new Date(`${value}T00:00:00.000Z`);
+}
 
 const SESSION_INCLUDE = {
   orderItem: {
@@ -218,6 +225,9 @@ export class RentalSelectionService {
       isCurrent: session.isCurrent,
       confirmedAt: session.confirmedAt,
       version: session.rowVersion,
+      // 대여 기간 (필수값). 이게 없으면 후보 검색·확정을 할 수 없다.
+      pickupDate: session.pickupDate,
+      returnDueDate: session.returnDueDate,
       components: session.orderItem.components.map((c) => {
         const line = lineByComponent.get(c.id);
         return {
@@ -241,6 +251,65 @@ export class RentalSelectionService {
         };
       }),
     };
+  }
+
+  /**
+   * PUT /rental-selections/:id/period — 대여 기간 지정 (현업 확정 2026-07-28).
+   * 기간이 바뀌면 이미 고른 실물이 그 기간에 비어 있다는 보장이 사라지므로 선택을 비운다.
+   */
+  async savePeriod(sessionId: string, dto: SaveRentalPeriodDto, actor: AuthUser) {
+    const session = await this.load(sessionId);
+    this.ensureEditable(session);
+    if (dto.version !== undefined) this.ensureVersion(session, dto.version);
+
+    const pickup = parseDateOnly(dto.pickupDate);
+    const returnDue = parseDateOnly(dto.returnDueDate);
+    if (returnDue < pickup)
+      throw new BusinessException('VALIDATION_ERROR', '반납일은 대여일 이후여야 합니다.', [
+        { field: 'returnDueDate', reason: 'BEFORE_PICKUP_DATE' },
+      ]);
+
+    const changed =
+      session.pickupDate?.getTime() !== pickup.getTime() ||
+      session.returnDueDate?.getTime() !== returnDue.getTime();
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.rentalSelectionSession.update({
+        where: { id: sessionId },
+        data: { pickupDate: pickup, returnDueDate: returnDue, rowVersion: { increment: 1 } },
+      });
+      // 기간이 바뀌면 그 기간 기준으로 다시 골라야 한다(컬러·사이즈·비고는 남긴다).
+      if (changed) {
+        await tx.rentalSelectionLine.updateMany({
+          where: { sessionId, selectedInventoryItemId: { not: null } },
+          data: { selectedInventoryItemId: null },
+        });
+      }
+      await this.audit.log(
+        {
+          userId: actor.id,
+          action: 'UPDATE',
+          entityType: 'RENTAL_SELECTION_SESSION',
+          entityId: sessionId,
+          before: { pickupDate: session.pickupDate, returnDueDate: session.returnDueDate },
+          after: { pickupDate: pickup, returnDueDate: returnDue, clearedSelections: changed },
+        },
+        tx,
+      );
+    });
+
+    return this.detail(sessionId);
+  }
+
+  /** 대여 기간은 필수다 — 없으면 후보 검색·확정을 진행하지 않는다. */
+  private requirePeriod(session: SessionWithDetail): { pickup: Date; end: Date } {
+    if (!session.pickupDate || !session.returnDueDate)
+      throw new BusinessException(
+        'RENTAL_PERIOD_REQUIRED',
+        '대여 기간(대여일·반납일)을 먼저 지정해 주세요.',
+        [{ field: 'pickupDate', reason: 'REQUIRED' }],
+      );
+    return { pickup: session.pickupDate, end: session.returnDueDate };
   }
 
   /** PUT /rental-selections/:id/lines/:componentId — 부위별 컬러·사이즈·비고 upsert */
@@ -284,22 +353,34 @@ export class RentalSelectionService {
 
   /**
    * GET /rental-selections/:id/lines/:componentId/candidates — 후보 실물 검색.
-   * 컨설팅 단계이므로 날짜 없이 재고상태 AVAILABLE + active 실물을
-   * 부위(componentType) × 컬러 × 사이즈로 필터한다 (v2 M1 확정).
+   *
+   * 대여 기간(필수, 현업 확정 2026-07-28)과 겹치는 배정이 없는 실물만 후보로 낸다.
+   * 판정 규칙은 렌탈 가용검색(`rental-inventory.service.availability`)과 같다 —
+   * 두 화면이 다른 답을 내면 배정 단계에서 EXCLUDE 제약에 걸려 되돌아온다.
    */
   async candidates(sessionId: string, componentId: string) {
     const session = await this.load(sessionId);
     const component = this.requireComponent(session, componentId);
     const line = session.lines.find((l) => l.orderItemComponentId === componentId);
+    const { pickup, end } = this.requirePeriod(session);
 
     const items = await this.prisma.rentalInventoryItem.findMany({
       where: {
         active: true,
-        status: 'AVAILABLE',
+        status: { in: ASSIGNABLE_ITEM_STATUSES },
+        OR: [{ availableFrom: null }, { availableFrom: { lte: pickup } }],
         rentalSku: {
           componentType: component.componentType,
           ...(line?.colorCode ? { color: line.colorCode } : {}),
           ...(line?.sizeCode ? { size: line.sizeCode } : {}),
+        },
+        // 기존 배정(취소 제외)과 기간이 겹치는 실물 제외
+        allocations: {
+          none: {
+            status: { not: 'CANCELLED' },
+            pickupDate: { lte: end },
+            availabilityEndDate: { gte: pickup },
+          },
         },
       },
       include: { rentalSku: true },
@@ -310,6 +391,8 @@ export class RentalSelectionService {
       sessionId,
       orderItemComponentId: componentId,
       componentType: component.componentType,
+      pickupDate: session.pickupDate,
+      returnDueDate: session.returnDueDate,
       colorCode: line?.colorCode ?? null,
       sizeCode: line?.sizeCode ?? null,
       candidates: items.map((i) => ({
@@ -384,6 +467,8 @@ export class RentalSelectionService {
     const session = await this.load(sessionId);
     if (session.status === 'CONFIRMED')
       throw new BusinessException('INVALID_STATUS_TRANSITION', '이미 확정된 렌탈 선택입니다.');
+    // 대여 기간 없이 확정하면 어느 기간의 실물을 잡은 것인지 알 수 없다(현업 확정 2026-07-28).
+    this.requirePeriod(session);
     if (dto.version !== undefined) this.ensureVersion(session, dto.version);
 
     const now = new Date();
@@ -412,6 +497,8 @@ export class RentalSelectionService {
             status: 'CONFIRMED',
             orderItemId: session.orderItemId,
             selectionVersionNo: session.selectionVersionNo,
+            pickupDate: session.pickupDate,
+            returnDueDate: session.returnDueDate,
             lines: summary,
           },
         },

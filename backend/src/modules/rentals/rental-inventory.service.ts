@@ -362,7 +362,7 @@ export class RentalInventoryService {
   }
 
   // ---------------------------------------------------------------------------
-  // 수정·상태 변경·사용 종료
+  // 수정·상태 변경·폐기 처리
   // ---------------------------------------------------------------------------
 
   async update(id: string, dto: UpdateInventoryDto, actor: AuthUser) {
@@ -439,7 +439,7 @@ export class RentalInventoryService {
     this.assertVersion(dto.version, item.rowVersion);
 
     // 배정과 충돌하는 상태로의 수동 변경 차단: 실물을 배정 불가로 만드는 상태는
-    // 현재·미래의 살아있는 배정(RESERVED/PREPARING/CHECKED_OUT)이 없어야 한다.
+    // 현재·미래의 살아있는 배정(RESERVED/CHECKED_OUT)이 없어야 한다.
     if (!ASSIGNABLE_ITEM_STATUSES.includes(dto.newStatus)) {
       await this.assertNoActiveAllocations(id, `${dto.newStatus} 상태로 변경할 수 없습니다.`);
     }
@@ -482,13 +482,13 @@ export class RentalInventoryService {
     return updated;
   }
 
-  /** 사용 종료(RETIRED). 살아있는 배정이 있으면 불가. 이력 보존을 위해 삭제하지 않는다. */
+  /** 폐기 처리(RETIRED). 살아있는 배정이 있으면 불가. 이력 보존을 위해 삭제하지 않는다. */
   async retire(id: string, dto: RetireInventoryDto, actor: AuthUser) {
     const item = await this.prisma.rentalInventoryItem.findUnique({ where: { id } });
     if (!item) throw new NotFoundException('렌탈 실물이 없습니다.');
     if (item.status === 'RETIRED')
-      throw new BusinessException('INVALID_STATUS_TRANSITION', '이미 사용 종료된 실물입니다.');
-    await this.assertNoActiveAllocations(id, '사용 종료할 수 없습니다.');
+      throw new BusinessException('INVALID_STATUS_TRANSITION', '이미 폐기 처리된 실물입니다.');
+    await this.assertNoActiveAllocations(id, '폐기 처리할 수 없습니다.');
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const after = await tx.rentalInventoryItem.update({
@@ -508,7 +508,7 @@ export class RentalInventoryService {
           previousStatus: item.status,
           newStatus: 'RETIRED',
           availableFrom: after.availableFrom,
-          reason: dto.reason ?? '사용 종료',
+          reason: dto.reason ?? '폐기 처리',
           actorId: actor.id,
         },
       });
@@ -570,7 +570,7 @@ export class RentalInventoryService {
   /**
    * 렌탈예약 달력 (설계서 06 §4.4) — [from, to] 기간의 **일자별 가용 실물**을 집계한다.
    * 후보 = 배정 가능 상태 AND active AND available_from <= 해당일 (단일창 availability 필터 재사용).
-   * 점유 = ACTIVE 배정(RESERVED/PREPARING/CHECKED_OUT)이 해당일을 포함(pickup <= D <= availabilityEnd).
+   * 점유 = ACTIVE 배정(RESERVED/CHECKED_OUT)이 해당일을 포함(pickup <= D <= availabilityEnd).
    * 조회 전용 뷰이며 정합성(이중예약)은 DB EXCLUDE 제약이 최종 보장한다.
    */
   async availabilityCalendar(query: AvailabilityCalendarQueryDto) {

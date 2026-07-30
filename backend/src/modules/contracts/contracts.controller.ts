@@ -16,6 +16,7 @@ import { Response } from 'express';
 import { AuthUser, CurrentUser, RequirePermission } from '../../common/decorators';
 import {
   CancelContractDto,
+  CompleteContractDto,
   ConfirmContractDto,
   ConfirmRevisionDto,
   ContractListQueryDto,
@@ -97,6 +98,28 @@ export class ContractsController {
     @Headers('idempotency-key') idempotencyKey?: string,
   ) {
     return this.contracts.confirmRevision(id, revisionId, dto, actor, idempotencyKey);
+  }
+
+  /**
+   * 계약 완료 (현업 확정 2026-07-28). 서명이 끝난 확정 계약만 완료할 수 있고,
+   * 완료 시점의 계약서 엑셀을 구워 보관한다.
+   */
+  @Post(':id/complete')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission('CONTRACT_CONFIRM')
+  complete(
+    @Param('id') id: string,
+    @Body() dto: CompleteContractDto,
+    @CurrentUser() actor: AuthUser,
+  ) {
+    return this.contracts.complete(id, dto, actor);
+  }
+
+  /** 계약 흐름 게이팅 — 컨설팅 확정 여부·서명 여부·완료 가능 여부 */
+  @Get(':id/flow')
+  @RequirePermission('CONTRACT_VIEW')
+  flow(@Param('id') id: string) {
+    return this.contracts.getFlow(id);
   }
 
   @Post(':id/cancel')

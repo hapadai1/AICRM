@@ -1,10 +1,4 @@
-import {
-  CheckOutlined,
-  FileExcelOutlined,
-  HighlightOutlined,
-  SaveOutlined,
-  UserOutlined,
-} from '@ant-design/icons';
+import { CheckOutlined, FileExcelOutlined, SaveOutlined, UserOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
@@ -42,14 +36,11 @@ import {
   fetchContract,
   fetchContractTypes,
   fetchCustomerSummary,
-  getSignature,
-  saveSignature,
   updateContractDraft,
   type ContractConfirmResult,
   type ContractDetail,
   type ContractDraftInput,
 } from '../../api/contracts';
-import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
 import {
   ContractLineEditor,
@@ -58,7 +49,6 @@ import {
   THOUSANDS,
   type EditableLine,
 } from './ContractLineEditor';
-import { ContractSignPad } from './ContractSignPad';
 import { formatKrw, TRANSACTION_TYPE_LABEL, TRANSACTION_TYPE_TAG_COLOR } from './labels';
 import { useUnsavedWarning } from './use-unsaved-warning';
 
@@ -96,7 +86,6 @@ export function ContractFormPage() {
   const [pickerOpen, setPickerOpen] = useState(false);
   // 고객 정보 보완 게이트를 통과(저장)했는지. 통과 후 재조회 전까지 모달이 다시 뜨지 않게 잡아둔다.
   const [gateDismissed, setGateDismissed] = useState(false);
-  const [signOpen, setSignOpen] = useState(false);
   // 상단 고객 선택 필드의 검색어 — 이름·전화번호로 전 고객을 찾는다.
   const [customerKeyword, setCustomerKeyword] = useState('');
   // 합계 금액은 기본이 품목 합계 자동. 할인·에누리가 있을 때만 직접 입력으로 바꾼다.
@@ -226,8 +215,6 @@ export function ContractFormPage() {
       weddingDate: fmt(values.weddingDate),
       // 자동 모드는 품목 합계를 그대로 보낸다(폼 값 동기화 타이밍에 기대지 않는다).
       totalAmount: manualTotal ? (values.totalAmount ?? 0) : lineTotal,
-      // 계약금 입력 필드는 없앴다. 기존 계약에 저장된 값은 건드리지 않고 그대로 둔다.
-      depositAmount: draft?.depositAmount ?? 0,
       note: values.note,
       lines: lines.map((l) => ({
         id: l.id,
@@ -253,39 +240,12 @@ export function ContractFormPage() {
     message.error(e instanceof ApiError ? e.message : '처리 중 오류가 발생했습니다.');
   };
 
-  // 서명은 DRAFT 버전에 붙는다 (설계서 v2 03 §2.1). 서명 대상 버전 id·서명 상태를 추적한다.
-  const draftVersionId = draftDetail?.versions.find((v) => v.versionStatus === 'DRAFT')?.id;
-
-  const signatureQuery = useQuery({
-    queryKey: ['contracts', draftId, 'signature', draftVersionId],
-    queryFn: () => getSignature(draftId!, draftVersionId!),
-    enabled: !!draftId && !!draftVersionId,
-  });
-
-  // 내용을 고치면(임시저장·서명하기가 서버에서 서명을 무효화하므로) 서명을 다시 받아야 한다 → dirty면 미서명 취급.
-  const signed = !!signatureQuery.data?.signed && !dirty;
-  const invalidateSignature = () =>
-    queryClient.invalidateQueries({ queryKey: ['contracts', draftId, 'signature'] });
-
   const saveMutation = useMutation({
     mutationFn: async () => persistDraft(form.getFieldsValue()),
     onSuccess: (saved) => {
       setDirty(false);
       message.success(`임시 저장되었습니다. (${saved.contractNo})`);
       void queryClient.invalidateQueries({ queryKey: ['contracts'] });
-      // 내용 수정 시 백엔드가 서명을 초기화하므로 서명 상태를 다시 읽는다 (§2.6).
-      void invalidateSignature();
-    },
-    onError: onApiError,
-  });
-
-  const signMutation = useMutation({
-    mutationFn: (input: { imageDataUrl: string; signerName: string }) =>
-      saveSignature(draftId!, draftVersionId!, { ...input, version: draftDetail?.version }),
-    onSuccess: () => {
-      setSignOpen(false);
-      message.success('서명이 저장되었습니다. 계약을 확정할 수 있습니다.');
-      void invalidateSignature();
     },
     onError: onApiError,
   });
@@ -312,28 +272,6 @@ export function ContractFormPage() {
     onError: onApiError,
   });
 
-  // [서명하기]: 최신 내용을 먼저 저장(서명 대상 버전 확보·이전 서명 무효화)한 뒤 서명 캔버스를 연다.
-  const handleOpenSign = async () => {
-    const values = await form.validateFields();
-    if (lines.length === 0) {
-      message.error('품목을 1개 이상 입력해 주세요.');
-      return;
-    }
-    if (totalAmount <= 0) {
-      message.error('합계 금액이 0원입니다. 품목 단가·수량을 확인해 주세요.');
-      return;
-    }
-    try {
-      await persistDraft(values);
-      setDirty(false);
-      void queryClient.invalidateQueries({ queryKey: ['contracts'] });
-      void invalidateSignature();
-      setSignOpen(true);
-    } catch (e) {
-      onApiError(e);
-    }
-  };
-
   /** 계약 구분을 고르면 그 구분의 기본 품목으로 품목 라인을 곧바로 대체한다(확인창 없음). */
   const applyContractType = (typeId: string) => {
     const t = types?.find((x) => x.id === typeId);
@@ -351,28 +289,24 @@ export function ContractFormPage() {
   };
 
   const handleConfirm = () => {
-    // 서명이 확정의 전제조건이다 (설계서 v2 03 §2.4). 미서명이면 백엔드가 CONTRACT_SIGNATURE_REQUIRED 로 막는다.
-    if (!signed) {
-      message.error('먼저 [서명하기]로 서명을 완료해 주세요.');
-      return;
-    }
     modal.confirm({
-      title: '계약 확정(계약완료)',
-      okText: '계약 확정',
+      title: '계약서 등록',
+      okText: '등록',
       cancelText: '취소',
       width: 480,
       content: (
         <Flex vertical gap={8}>
           <Typography.Text>
-            계약을 확정하면 고객이 계약 고객으로 전환되고, 거래 방식별(맞춤/렌탈) 주문과 수량만큼의 주문
-            품목이 생성됩니다. 확정 후 품목·수량 수정은 변경 계약에서만 가능합니다.
+            계약서를 등록하면 고객이 계약 고객으로 전환되고, 거래 방식별(맞춤/렌탈) 주문과 수량만큼의 주문
+            품목이 생성됩니다. 이후 품목·수량 수정은 변경 계약에서만 가능합니다.
+          </Typography.Text>
+          <Typography.Text type="secondary">
+            다음 순서는 스타일 컨설팅 → 서명 → 계약 완료입니다. 서명은 컨설팅을 모두 확정한 뒤
+            계약 상세에서 받습니다.
           </Typography.Text>
           <Typography.Text>
             품목 {lines.length}건 · 품목 합계 {formatKrw(lineTotal)} · 계약 금액 {formatKrw(totalAmount)}
           </Typography.Text>
-          {signatureQuery.data?.signerName && (
-            <Typography.Text type="secondary">서명자: {signatureQuery.data.signerName}</Typography.Text>
-          )}
           {manualTotal && totalDiff !== 0 && (
             <Alert
               type="warning"
@@ -427,11 +361,6 @@ export function ContractFormPage() {
               계약서 작성
             </Typography.Title>
             {draftDetail?.contractNo && <Tag>{draftDetail.contractNo}</Tag>}
-            {signed ? (
-              <StatusBadge label="서명 완료" color="green" />
-            ) : (
-              <StatusBadge label="미서명" color="gold" />
-            )}
             {dirty && <StatusBadge label="저장 안 됨" color="gold" />}
             <Typography.Text type="secondary">합계 {formatKrw(totalAmount)}</Typography.Text>
           </Space>
@@ -452,35 +381,21 @@ export function ContractFormPage() {
             >
               Excel 출력
             </Button>
-            <Can permission="CONTRACT_SIGN">
-              <Button
-                icon={<HighlightOutlined />}
-                loading={saveMutation.isPending}
-                disabled={!customerId}
-                onClick={() => void handleOpenSign()}
-              >
-                {signed ? '다시 서명' : '서명하기'}
-              </Button>
-            </Can>
+            {/*
+              서명은 여기서 받지 않는다. 흐름이 계약서 등록 → 스타일 컨설팅 → 서명 →
+              계약 완료로 확정됐다(2026-07-28). 서명·완료는 계약 상세에서 한다.
+            */}
             <Button
               type="primary"
               icon={<CheckOutlined />}
               loading={confirmMutation.isPending}
-              disabled={!customerId || !signed || saveMutation.isPending}
+              disabled={!customerId || saveMutation.isPending}
               onClick={handleConfirm}
             >
-              계약완료(확정)
+              계약서 등록
             </Button>
           </Space>
         </Flex>
-        {signatureQuery.data?.signed && dirty && (
-          <Alert
-            style={{ marginTop: 12 }}
-            type="warning"
-            showIcon
-            message="내용을 변경하면 서명이 초기화됩니다. 저장 후 다시 서명해 주세요."
-          />
-        )}
       </Card>
 
       <Card>
@@ -755,25 +670,6 @@ export function ContractFormPage() {
         />
       )}
 
-      {/* 서명 캔버스 — 열 때마다 새로 마운트해 캔버스 크기를 다시 계산한다 */}
-      <Modal
-        open={signOpen}
-        title="계약서 서명"
-        footer={null}
-        width={680}
-        destroyOnClose
-        maskClosable={false}
-        onCancel={() => setSignOpen(false)}
-      >
-        {draftVersionId && (
-          <ContractSignPad
-            defaultSignerName={customer?.name}
-            saving={signMutation.isPending}
-            onCancel={() => setSignOpen(false)}
-            onSave={(imageDataUrl, signerName) => signMutation.mutate({ imageDataUrl, signerName })}
-          />
-        )}
-      </Modal>
     </Flex>
   );
 }

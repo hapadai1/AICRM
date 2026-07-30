@@ -63,7 +63,7 @@ export function NotificationConfirmModal({ open, title, suggestion, onDone, onCa
   const handleSend = async () => {
     setSending(true);
     try {
-      const { results } = await sendNotification({
+      const { results, duplicated } = await sendNotification({
         customerId: suggestion.customerId,
         phone: suggestion.recipientPhone,
         templateId: suggestion.templateId,
@@ -75,7 +75,11 @@ export function NotificationConfirmModal({ open, title, suggestion, onDone, onCa
         triggerKey: suggestion.triggerKey,
       });
       const sent = results.find((r) => r.status === 'SENT') ?? results[0];
-      if (sent?.status === 'SENT') {
+      if (duplicated) {
+        // 이 단계에서 이미 나간 연락이다(되돌렸다 다시 전진한 경우 등). 서버가 재발송을
+        // 막았으므로 "발송했습니다"라고 알리면 사실과 다르다.
+        message.info('이 단계의 연락은 이미 발송되어 다시 보내지 않았습니다.');
+      } else if (sent?.status === 'SENT') {
         message.success('발송했습니다.');
       } else {
         message.warning(`발송에 실패했습니다: ${sent?.failReason ?? '알 수 없는 오류'}`);

@@ -127,10 +127,7 @@ export interface OptionSurcharge {
     contractNo: string;
     versionNo: number;
     totalAmount: number;
-    depositAmount: number;
-    balanceAmount: number;
     afterTotalAmount: number;
-    afterBalanceAmount: number;
   } | null;
 }
 

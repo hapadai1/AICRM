@@ -51,11 +51,11 @@ interface ListToolbarProps {
  * 기존에는 검색·필터 배치가 세 가지로 갈려 있었다.
  *  (a) Space wrap + Input/Segmented   (고객·채촌·스타일 컨설팅)
  *  (b) Row/Col 그리드                 (계약 관리)
- *  (c) Form layout="inline" 라벨+콜론  (렌탈 전체관리·렌탈 예약)
+ *  (c) Form layout="inline" 라벨+콜론  (렌탈 재고·렌탈 예약)
  * 특히 (c)는 "검색어 :" 처럼 라벨이 붙어 혼자 다른 시스템처럼 보였다.
  * 앞으로 필터는 라벨 없이 placeholder 로 뜻을 전달하고 전부 이 툴바에 넣는다.
  *
- * 기능 버튼은 예외 없이 오른쪽(actions)이다 — 렌탈 전체관리처럼 왼쪽에 두거나
+ * 기능 버튼은 예외 없이 오른쪽(actions)이다 — 렌탈 재고처럼 왼쪽에 두거나
  * 출고·반납처럼 좌우로 갈라 두지 않는다.
  */
 export function ListToolbar({ filters, actions, info }: ListToolbarProps) {

@@ -73,7 +73,7 @@ export class RentalAllocationsService {
 
   /**
    * 출고·반납 화면 목록 뷰 (연동정합화 계약 §5):
-   * - pickup: RESERVED/PREPARING & pickupDate <= date (기본 오늘)
+   * - pickup: RESERVED & pickupDate <= date (기본 오늘)
    * - return: CHECKED_OUT 전체 — 반납예정일 경과(지연) 건 포함, overdue 플래그 제공
    */
   async list(query: AllocationListQueryDto) {
@@ -97,7 +97,7 @@ export class RentalAllocationsService {
       : undefined;
 
     const pickupWhere: Prisma.RentalAllocationWhereInput = {
-      status: { in: ['RESERVED', 'PREPARING'] },
+      status: 'RESERVED',
       // q가 있으면 미래 픽업일도 포함(제한 해제), 없으면 기존 "오늘 이하" 일일운영 뷰 유지.
       ...(q ? {} : { pickupDate: { lte: date } }),
     };
@@ -311,7 +311,7 @@ export class RentalAllocationsService {
       include: { rentalInventoryItem: true, orderItemComponent: { select: { componentType: true } } },
     });
     if (!allocation) throw new NotFoundException('렌탈 배정이 없습니다.');
-    if (!['RESERVED', 'PREPARING'].includes(allocation.status))
+    if (allocation.status !== 'RESERVED')
       throw new BusinessException('INVALID_STATUS_TRANSITION', '출고 전 배정만 실물을 변경할 수 있습니다.', undefined, {
         allocationStatus: allocation.status,
       });
@@ -389,7 +389,7 @@ export class RentalAllocationsService {
       include: { rentalInventoryItem: { select: { id: true, managementCode: true } } },
     });
     if (!allocation) throw new NotFoundException('렌탈 배정이 없습니다.');
-    if (!['RESERVED', 'PREPARING'].includes(allocation.status))
+    if (allocation.status !== 'RESERVED')
       throw new BusinessException('INVALID_STATUS_TRANSITION', '예약 상태의 배정만 출고할 수 있습니다.', undefined, {
         allocationStatus: allocation.status,
       });

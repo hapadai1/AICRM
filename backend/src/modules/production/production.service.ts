@@ -17,7 +17,7 @@ import {
   validateTransition,
 } from './production-status';
 import { buildFittingSheetExcel } from './fitting-sheet-excel';
-import { fittingCoverage } from './fitting.constants';
+import { FITTING_FILE_PURPOSE, fittingCoverage } from './fitting.constants';
 import {
   CreateFittingDto,
   CreateProductionEventDto,
@@ -496,10 +496,12 @@ export class ProductionService {
   }
 
   // ---------------------------------------------------------------------------
-  // 가봉 첨부 파일 (설계서 06 §5.4) — 공장 회신/마킹본 보관용. EntityFile 재사용.
+  // 가봉 첨부 파일 (설계서 06 §5.4) — 공장에 보낸 가봉 작업지시서 보관용. EntityFile 재사용.
+  // 현업 확정(2026-07-28): 업로드 값을 수치에 반영하지 않는다. "이 파일을 공장에 보냈다"를
+  // 알아볼 수 있으면 되는 보관 목적이므로 purpose는 FACTORY_SENT다.
   // ---------------------------------------------------------------------------
 
-  /** 가봉 세션에 파일 첨부. File 저장(FilesService 재사용) + EntityFile(FITTING_SESSION/FACTORY_REPLY) 연결. */
+  /** 가봉 세션에 파일 첨부. File 저장(FilesService 재사용) + EntityFile(FITTING_SESSION/FACTORY_SENT) 연결. */
   async uploadFittingFile(fittingId: string, file: UploadedMulterFile | undefined, actor: AuthUser) {
     await this.assertFittingExists(fittingId);
     const uploaded = await this.files.upload(file, actor);
@@ -509,7 +511,7 @@ export class ProductionService {
         fileId: uploaded.id,
         entityType: 'FITTING_SESSION',
         entityId: fittingId,
-        purpose: 'FACTORY_REPLY',
+        purpose: FITTING_FILE_PURPOSE,
       },
     });
     await this.audit.log({
@@ -517,9 +519,9 @@ export class ProductionService {
       action: 'CREATE',
       entityType: 'FITTING_SESSION',
       entityId: fittingId,
-      after: { fileId: uploaded.id, purpose: 'FACTORY_REPLY', originalName: uploaded.originalName },
+      after: { fileId: uploaded.id, purpose: FITTING_FILE_PURPOSE, originalName: uploaded.originalName },
     });
-    return { ...uploaded, purpose: 'FACTORY_REPLY' };
+    return { ...uploaded, purpose: FITTING_FILE_PURPOSE };
   }
 
   /** 가봉 세션 첨부 목록. */

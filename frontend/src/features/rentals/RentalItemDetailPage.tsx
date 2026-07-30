@@ -116,9 +116,7 @@ export function RentalItemDetailPage() {
   }
 
   const { item, allocations, events } = detailQuery.data;
-  const activeAllocations = allocations.filter(
-    (a) => a.status === 'RESERVED' || a.status === 'PREPARING' || a.status === 'CHECKED_OUT',
-  );
+  const activeAllocations = allocations.filter((a) => a.status === 'RESERVED' || a.status === 'CHECKED_OUT');
   const statusMeta = metaOf(RENTAL_ITEM_STATUS_META, item.status);
 
   const allocationColumns: ColumnsType<RentalAllocation> = [

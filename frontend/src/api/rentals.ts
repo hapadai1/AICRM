@@ -19,11 +19,13 @@ export const RENTAL_CODE_PREFIX: Record<RentalComponentType, string> = {
   SHOES: 'SHO',
 };
 
-/** 렌탈 실물 상태 (02_데이터모델설계서 §13.3) */
+/**
+ * 렌탈 실물 상태 (02_데이터모델설계서 §13.3).
+ * PREPARING(준비 중)은 제거했다 — 전이시키는 흐름이 없어 필터가 항상 0건이었다.
+ */
 export type RentalItemStatus =
   | 'AVAILABLE'
   | 'RESERVED'
-  | 'PREPARING'
   | 'ALTERATION'
   | 'CHECKED_OUT'
   | 'RETURNED_HOLD'
@@ -33,12 +35,11 @@ export type RentalItemStatus =
 export const RENTAL_ITEM_STATUS_META: Record<RentalItemStatus, { label: string; color: string }> = {
   AVAILABLE: { label: '대여 가능', color: 'green' },
   RESERVED: { label: '예약됨', color: 'blue' },
-  PREPARING: { label: '준비 중', color: 'cyan' },
   ALTERATION: { label: '수선 중', color: 'purple' },
   CHECKED_OUT: { label: '대여 중', color: 'geekblue' },
   RETURNED_HOLD: { label: '반납 대기', color: 'orange' },
   UNAVAILABLE: { label: '사용 불가', color: 'red' },
-  RETIRED: { label: '사용 종료', color: 'default' },
+  RETIRED: { label: '폐기', color: 'default' },
 };
 
 /** 미등록 상태 코드가 와도 화면이 죽지 않도록 코드 그대로 표시한다. */
@@ -47,11 +48,10 @@ export function rentalItemStatusLabel(status: string): string {
 }
 
 /** 렌탈 배정 상태 (02_데이터모델설계서 §13.3) */
-export type AllocationStatus = 'RESERVED' | 'PREPARING' | 'CHECKED_OUT' | 'RETURNED' | 'CANCELLED';
+export type AllocationStatus = 'RESERVED' | 'CHECKED_OUT' | 'RETURNED' | 'CANCELLED';
 
 export const ALLOCATION_STATUS_META: Record<AllocationStatus, { label: string; color: string }> = {
   RESERVED: { label: '예약', color: 'blue' },
-  PREPARING: { label: '준비 중', color: 'cyan' },
   CHECKED_OUT: { label: '출고', color: 'geekblue' },
   RETURNED: { label: '반납', color: 'green' },
   CANCELLED: { label: '취소', color: 'default' },
@@ -199,7 +199,7 @@ const dateOnly = (v?: string | null): string | undefined => (v ? String(v).slice
 
 export function toRentalItem(raw: RawRentalItem): RentalItem {
   const sku = raw.rentalSku;
-  const active = raw.allocations?.find((a) => ['RESERVED', 'PREPARING', 'CHECKED_OUT'].includes(a.status));
+  const active = raw.allocations?.find((a) => ['RESERVED', 'CHECKED_OUT'].includes(a.status));
   const currentAllocation =
     raw.currentAllocation ??
     (active
@@ -343,7 +343,7 @@ export function postRentalItemStatusEvent(
   return request<RentalItem>({ url: `/rental-inventory/${id}/status-events`, method: 'POST', data: body });
 }
 
-/** 사용 중지 — POST /rental-inventory/{id}/retire (§13.6) */
+/** 폐기 처리 — POST /rental-inventory/{id}/retire (§13.6) */
 export function retireRentalItem(id: string, body: { reason?: string }): Promise<RentalItem> {
   return request<RentalItem>({ url: `/rental-inventory/${id}/retire`, method: 'POST', data: body });
 }
@@ -555,10 +555,13 @@ export interface RentalSelectionDetail {
   isCurrent: boolean;
   confirmedAt: string | null;
   version: number;
+  /** 대여 기간 (필수값). 정하기 전에는 null이며, 없으면 후보 검색·확정이 막힌다. */
+  pickupDate: string | null;
+  returnDueDate: string | null;
   components: RentalSelectionComponent[];
 }
 
-/** 후보 실물 (AVAILABLE 재고, componentType×color×size 필터) */
+/** 후보 실물 (대여 기간에 배정이 겹치지 않는 실물, componentType×color×size 필터) */
 export interface RentalCandidate {
   id: string;
   managementCode: string;
@@ -573,6 +576,8 @@ export interface RentalLineCandidates {
   sessionId: string;
   orderItemComponentId: string;
   componentType: RentalComponentType;
+  pickupDate: string | null;
+  returnDueDate: string | null;
   colorCode: string | null;
   sizeCode: string | null;
   candidates: RentalCandidate[];
@@ -666,6 +671,21 @@ export function fetchCurrentRentalSelection(
 /** 세션 상세 — GET /rental-selections/:id */
 export function fetchRentalSelectionDetail(sessionId: string): Promise<RentalSelectionDetail> {
   return request<RentalSelectionDetail>({ url: `/rental-selections/${sessionId}` });
+}
+
+/**
+ * 대여 기간 지정 — PUT /rental-selections/:id/period.
+ * 기간이 바뀌면 서버가 이미 고른 실물 선택을 비운다(그 기간에 빈다는 보장이 사라지므로).
+ */
+export function saveRentalPeriod(
+  sessionId: string,
+  body: { pickupDate: string; returnDueDate: string; version?: number },
+): Promise<RentalSelectionDetail> {
+  return request<RentalSelectionDetail>({
+    url: `/rental-selections/${sessionId}/period`,
+    method: 'PUT',
+    data: body,
+  });
 }
 
 /** 부위별 컬러·사이즈·비고 upsert — PUT /rental-selections/:id/lines/:componentId */
