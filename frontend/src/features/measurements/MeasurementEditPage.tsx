@@ -27,6 +27,7 @@ import {
   Space,
   Spin,
   Tag,
+  Tooltip,
   Typography,
   Upload,
 } from 'antd';
@@ -55,6 +56,7 @@ import {
   fetchMeasurementImages,
   fetchMeasurements,
   formatInch,
+  linkMeasurementToOrder,
   reopenMeasurement,
   updateMeasurement,
   uploadMeasurementImage,
@@ -316,8 +318,22 @@ export function MeasurementEditPage() {
       queryClient.setQueryData(['measurements', 'detail', id], completed);
       void invalidate();
       void queryClient.invalidateQueries({ queryKey: ['workorders'] });
+      void queryClient.invalidateQueries({ queryKey: ['production'] });
     },
     onError: (e) => message.error(e instanceof ApiError ? e.message : '완료 처리에 실패했습니다.'),
+  });
+
+  // 재체촌 스왑·연결 누락 복구 — 이 채촌을 계약의 맞춤 품목에 (재)연결한다.
+  const linkOrderMutation = useMutation({
+    mutationFn: () => linkMeasurementToOrder(session?.id ?? ''),
+    onSuccess: (updated) => {
+      message.success('이 채촌을 계약 품목에 연결했습니다.');
+      queryClient.setQueryData(['measurements', 'detail', id], updated);
+      void invalidate();
+      void queryClient.invalidateQueries({ queryKey: ['workorders'] });
+      void queryClient.invalidateQueries({ queryKey: ['production'] });
+    },
+    onError: (e) => message.error(e instanceof ApiError ? e.message : '품목 연결에 실패했습니다.'),
   });
 
   const reopenMutation = useMutation({
@@ -654,13 +670,24 @@ export function MeasurementEditPage() {
                 message="완료된 채촌입니다. 값을 고치려면 완료를 해제한 뒤 저장하세요."
                 action={
                   <Can permission="MEASUREMENT_EDIT">
-                    <Button
-                      size="small"
-                      loading={reopenMutation.isPending}
-                      onClick={() => reopenMutation.mutate()}
-                    >
-                      완료 해제
-                    </Button>
+                    <Space size={8}>
+                      <Tooltip title="이 채촌을 계약의 맞춤 품목에 연결(교체)합니다. 재체촌 후 이 버전으로 바꿀 때 사용하세요.">
+                        <Button
+                          size="small"
+                          loading={linkOrderMutation.isPending}
+                          onClick={() => linkOrderMutation.mutate()}
+                        >
+                          품목에 연결
+                        </Button>
+                      </Tooltip>
+                      <Button
+                        size="small"
+                        loading={reopenMutation.isPending}
+                        onClick={() => reopenMutation.mutate()}
+                      >
+                        완료 해제
+                      </Button>
+                    </Space>
                   </Can>
                 }
               />
