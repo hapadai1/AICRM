@@ -649,7 +649,7 @@ async function main(): Promise<void> {
           contractNo: 'CTR-260620-001',
           customerId: 김민준,
           contractTypeId: weddingType.id,
-          status: 'CONFIRMED',
+          status: 'COMPLETED',
           contractedAt: at(-30, 15),
         },
       });
@@ -685,7 +685,7 @@ async function main(): Promise<void> {
           contractNo: 'CTR-260705-001',
           customerId: 이서연,
           contractTypeId: businessType.id,
-          status: 'CONFIRMED',
+          status: 'COMPLETED',
           contractedAt: at(-15, 16),
         },
       });
@@ -763,12 +763,17 @@ async function main(): Promise<void> {
         orderId: string; versionId: string; lineId: string; productCategory: string; sequenceNo: number;
         displayName: string; status: string;
       }): Promise<string> => {
+        // 품목은 계약 소유다 → 버전이 아니라 그 버전이 속한 계약에 붙인다.
+        const version = await tx.contractVersion.findUniqueOrThrow({
+          where: { id: args.versionId },
+          select: { contractId: true },
+        });
         const contractItemId = uuid();
         contractItemSeq += 1;
         await tx.contractItem.create({
           data: {
             id: contractItemId,
-            contractVersionId: args.versionId,
+            contractId: version.contractId,
             sourceContractLineId: args.lineId,
             transactionType: args.displayName.includes('렌탈') ? 'RENTAL' : 'CUSTOM',
             productCategory: args.productCategory,

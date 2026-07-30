@@ -289,14 +289,14 @@ async function main(): Promise<void> {
       }): Promise<string> => {
         const line = await tx.contractLine.findUniqueOrThrow({
           where: { id: args.lineId },
-          select: { contractVersionId: true, transactionType: true },
+          select: { transactionType: true, contractVersion: { select: { contractId: true } } },
         });
         const contractItemId = uuid();
         contractItemSeq += 1;
         await tx.contractItem.create({
           data: {
             id: contractItemId,
-            contractVersionId: line.contractVersionId,
+            contractId: line.contractVersion.contractId,
             sourceContractLineId: args.lineId,
             transactionType: line.transactionType,
             productCategory: args.productCategory,
@@ -739,7 +739,7 @@ async function main(): Promise<void> {
       // =====================================================================
       const hjm = await createContract({
         contractNo: 'CTR-260625-101', customerId: 한지민, typeCode: 'WEDDING_PACKAGE_RENTAL',
-        status: 'CONFIRMED', contractedAt: at(-24, 15),
+        status: 'COMPLETED', contractedAt: at(-24, 15),
         versions: [
           {
             versionNo: 1, versionStatus: 'SUPERSEDED', total: 3600000,
@@ -865,7 +865,7 @@ async function main(): Promise<void> {
       // =====================================================================
       const osh = await createContract({
         contractNo: 'CTR-260707-102', customerId: 오세훈, typeCode: 'BUSINESS_SUIT_CUSTOM',
-        status: 'CONFIRMED', contractedAt: at(-16, 17),
+        status: 'COMPLETED', contractedAt: at(-16, 17),
         versions: [
           {
             versionNo: 1, versionStatus: 'CONFIRMED', total: 2100000,
@@ -996,7 +996,7 @@ async function main(): Promise<void> {
       // =====================================================================
       const ydh = await createContract({
         contractNo: 'CTR-260712-106', customerId: 윤도현, typeCode: 'WEDDING_PACKAGE_RENTAL',
-        status: 'CONFIRMED', contractedAt: at(-9, 16),
+        status: 'COMPLETED', contractedAt: at(-9, 16),
         versions: [
           {
             versionNo: 1, versionStatus: 'CONFIRMED', total: 750000,

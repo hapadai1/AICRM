@@ -12,8 +12,6 @@ import { buildContractExcel, ContractExcelLine } from './contract-excel';
 import {
   CancelContractDto,
   CompleteContractDto,
-  ConfirmContractDto,
-  ConfirmRevisionDto,
   CONTRACT_SORT_FIELDS,
   ContractLineDto,
   ContractListQueryDto,
@@ -183,8 +181,8 @@ export class ContractsService {
           lines: { create: lines.map((l, i) => this.toLineData(l, i)) },
         },
       });
-      // 가계약 저장 즉시 컨설팅 대상 품목을 만든다 (계약-옵션-확정-주문 흐름).
-      await this.syncContractItemsToVersion(tx, versionId, null);
+      // 작성중 저장 즉시 컨설팅 대상 품목을 만든다 (계약-컨설팅-서명-완료-주문 흐름).
+      await this.syncContractItems(tx, contractId, versionId, null);
       return tx.contract.update({
         where: { id: contractId },
         data: { currentVersionId: versionId },
@@ -364,7 +362,8 @@ export class ContractsService {
           data: dto.lines.map((l, i) => ({ ...this.toLineData(l, i), contractVersionId: draft.id })),
         });
         // 라인이 바뀌면 컨설팅 대상 품목도 수량에 맞춰 정합한다 (기존 선택은 보존).
-        await this.syncContractItemsToVersion(tx, draft.id, null);
+        // 수정하기로 만든 버전이면 그 사유를 품목 취소 사유로 남긴다.
+        await this.syncContractItems(tx, id, draft.id, draft.changeReason);
       }
       const updatedDraft = await tx.contractVersion.update({
         where: { id: draft.id },
@@ -407,106 +406,84 @@ export class ContractsService {
   }
 
   // ---------------------------------------------------------------------------
-  // 확정 (설계서 18.2: 단일 트랜잭션 / API 정의서 14.1)
+  // 물리화 (계약완료 시점 — 현업 확정 2026-07-30)
   // ---------------------------------------------------------------------------
 
-  async confirm(id: string, dto: ConfirmContractDto, actor: AuthUser, headerKey?: string) {
-    const idempotencyKey = headerKey ?? dto.idempotencyKey;
-    const endpoint = `POST /contracts/${id}/confirm`;
-    const replayed = await this.findIdempotentResponse(idempotencyKey, endpoint);
-    if (replayed !== undefined) return replayed;
+  /**
+   * 계약이 성립할 때 한 번에 처리하는 것들 — 계약완료([계약완료] 버튼)에서만 부른다.
+   * 흐름: 작성중 → 서명완료 → **계약완료(여기)** → 수정하기(버전업) → 작성중 …
+   *
+   * 예전에는 '등록(확정)' 단계가 이 일을 앞에서 했는데, 컨설팅이 작성중 단계로 내려와
+   * 등록을 앞세울 이유가 없어졌다. 서명한 버전을 확정본으로 굳히고, 주문·고객·진행단계를
+   * 여기서 맞춘다. 수정하기로 다시 완료해도 품목이 계약 소유라 같은 주문품목이 이어진다.
+   */
+  private async physicalizeOnComplete(
+    tx: Prisma.TransactionClient,
+    contract: { id: string; customerId: string; contractedAt: Date | null; customer?: { contractedAt: Date | null; registeredAt: Date | null } | null },
+    version: { id: string; completionDueDate: Date | null; photoDate: Date | null; weddingDate: Date | null },
+    actor: AuthUser,
+    completedAt: Date,
+  ): Promise<{ orders: OrderSummary[]; customerStatus: string }> {
+    await tx.contractVersion.update({
+      where: { id: version.id },
+      data: { versionStatus: 'CONFIRMED', confirmedBy: actor.id, confirmedAt: completedAt },
+    });
+    // 이전 확정 버전 보존: SUPERSEDED (설계서 6.3)
+    await tx.contractVersion.updateMany({
+      where: { contractId: contract.id, versionStatus: 'CONFIRMED', id: { not: version.id } },
+      data: { versionStatus: 'SUPERSEDED' },
+    });
 
-    const contract = await this.getContractOrThrow(id);
-    if (contract.status !== 'DRAFT')
-      throw new BusinessException('CONTRACT_NOT_DRAFT', '초안 상태의 계약만 확정할 수 있습니다.', undefined, {
-        status: contract.status,
-      });
-    this.assertVersionMatch(contract.rowVersion, dto.version);
+    const customer = await tx.customer.update({
+      where: { id: contract.customerId },
+      data: {
+        customerStatus: 'CONTRACTED',
+        contractedAt: contract.customer?.contractedAt ?? completedAt,
+        // 등록 절차를 거치지 않고 계약까지 온 경우를 보정한다 (계약 고객은 반드시 고객 목록에 있어야 한다)
+        ...(contract.customer?.registeredAt ? {} : { registeredAt: completedAt }),
+        rowVersion: { increment: 1 },
+      },
+    });
 
-    return this.runWithIdempotency(idempotencyKey, async () =>
-      this.prisma.$transaction(async (tx) => {
-        const draft = await tx.contractVersion.findFirst({
-          where: { contractId: id, versionStatus: 'DRAFT' },
-          orderBy: { versionNo: 'desc' },
-        });
-        if (!draft) throw new BusinessException('CONTRACT_NOT_DRAFT', '확정할 초안 버전이 없습니다.');
-        // 서명은 확정의 전제조건이 아니다 — 흐름이 뒤집혔다(현업 확정 2026-07-28).
-        // 계약서 등록(확정) → 스타일 컨설팅 → 서명 → 계약 완료 순서이며, 서명 검증은 complete()가 한다.
+    const orders = await this.syncOrders(tx, contract.id, {
+      completionDueDate: version.completionDueDate,
+      photoDate: version.photoDate,
+      weddingDate: version.weddingDate,
+      cancelReason: null,
+    });
 
-        const confirmedAt = dto.confirmedDate ? new Date(dto.confirmedDate) : new Date();
-        await tx.contractVersion.update({
-          where: { id: draft.id },
-          data: { versionStatus: 'CONFIRMED', confirmedBy: actor.id, confirmedAt },
-        });
-        await this.updateContractGuarded(tx, id, dto.version, {
-          status: 'CONFIRMED',
-          currentVersionId: draft.id,
-          contractedAt: confirmedAt,
-        });
-        const customer = await tx.customer.update({
-          where: { id: contract.customerId },
-          data: {
-            customerStatus: 'CONTRACTED',
-            contractedAt: contract.customer?.contractedAt ?? confirmedAt,
-            // 등록 절차를 거치지 않고 계약까지 온 경우를 보정한다 (계약 고객은 반드시 고객 목록에 있어야 한다)
-            ...(contract.customer?.registeredAt ? {} : { registeredAt: confirmedAt }),
-            rowVersion: { increment: 1 },
-          },
-        });
+    // AUTO 진행단계 훅 (설계서 02 §9.2 / 03 §6 / 07 §7.1).
+    // (1) 주문별 진행을 보장하고 — 없으면 계약 단계에서 시작시킨다.
+    // (2) 그 밖에 남은 ACTIVE 진행을 계약 단계로 전진시킨다.
+    await this.ensureJourneysForOrders(tx, contract.customerId, orders, completedAt, actor.id);
+    await this.advanceJourneysToContractConfirmed(tx, contract.customerId, completedAt, actor.id);
 
-        const orders = await this.syncOrdersToVersion(tx, id, draft.id, {
-          completionDueDate: draft.completionDueDate,
-          photoDate: draft.photoDate,
-          weddingDate: draft.weddingDate,
-          cancelReason: null,
-        });
-
-        // AUTO 진행단계 훅 (설계서 02 §9.2 / 03 §6 / 07 §7.1).
-        // (1) 주문별 진행을 보장하고 — 없으면 계약 확정 단계에서 시작시킨다.
-        // (2) 그 밖에 남은 ACTIVE 진행을 계약 확정 단계로 전진시킨다.
-        await this.ensureJourneysForOrders(tx, contract.customerId, orders, confirmedAt, actor.id);
-        await this.advanceJourneysToContractConfirmed(tx, contract.customerId, confirmedAt, actor.id);
-
-        const response = {
-          contractId: id,
-          contractNo: contract.contractNo,
-          status: 'CONFIRMED',
-          customerStatus: customer.customerStatus,
-          orders,
-        };
-        await this.audit.log(
-          {
-            userId: actor.id,
-            action: 'CONFIRM',
-            entityType: 'CONTRACT',
-            entityId: id,
-            before: { status: contract.status },
-            after: response,
-          },
-          asAuditClient(tx),
-        );
-        await this.saveIdempotencyKey(tx, idempotencyKey, endpoint, actor.id, response);
-        return response;
-      }),
-    );
+    return { orders, customerStatus: customer.customerStatus };
   }
 
   // ---------------------------------------------------------------------------
-  // 변경계약 (설계서 6.3, 데이터 규칙 15.2)
+  // 수정하기(버전업) — 계약서 문서의 버전업 (현업 확정 2026-07-30)
   // ---------------------------------------------------------------------------
 
-  /** 현재 확정 버전을 복사한 신규 DRAFT 버전을 만든다. body로 라인·금액을 함께 수정할 수 있다. */
+  /**
+   * 완료된 계약을 다시 고친다 — 계약서 스냅샷만 새 버전으로 복사하고 상태를 작성중으로 되돌린다.
+   *
+   * **계약이 변경된 것이고 취소·재계약이 아니다.** 품목은 계약 소유이므로 여기서 건드리지 않는다
+   * → 컨설팅 선택·주문·주문품목·작업지시서·입출고·채촌이 그대로 이어진다. 수량을 실제로 바꾸면
+   * 이후 임시저장(update)에서 syncContractItems 가 **차이만** 반영한다(늘어난 것만 새 품목).
+   * 서명은 복사하지 않는다 — 고친 계약서에는 다시 서명을 받아야 한다.
+   */
   async createRevision(id: string, dto: CreateRevisionDto, actor: AuthUser) {
     const contract = await this.getContractOrThrow(id);
-    if (!['CONFIRMED', 'CHANGED'].includes(contract.status))
-      throw new BusinessException('INVALID_STATUS_TRANSITION', '확정된 계약만 변경할 수 있습니다.', undefined, {
+    if (contract.status !== 'COMPLETED')
+      throw new BusinessException('INVALID_STATUS_TRANSITION', '완료된 계약만 수정할 수 있습니다.', undefined, {
         status: contract.status,
       });
     const existingDraft = await this.prisma.contractVersion.findFirst({
       where: { contractId: id, versionStatus: 'DRAFT' },
     });
     if (existingDraft)
-      throw new BusinessException('INVALID_STATUS_TRANSITION', '이미 작성 중인 변경계약 초안이 있습니다.', undefined, {
+      throw new BusinessException('INVALID_STATUS_TRANSITION', '이미 수정 중인 계약서가 있습니다.', undefined, {
         revisionId: existingDraft.id,
       });
     const base = await this.prisma.contractVersion.findFirst({
@@ -514,7 +491,12 @@ export class ContractsService {
       orderBy: { versionNo: 'desc' },
       include: VERSION_INCLUDE,
     });
-    if (!base) throw new BusinessException('INVALID_STATUS_TRANSITION', '확정 버전이 없어 변경계약을 만들 수 없습니다.');
+    if (!base) throw new BusinessException('INVALID_STATUS_TRANSITION', '확정 버전이 없어 수정할 수 없습니다.');
+    // 수정하기는 이력을 남기는 기능이다 — 무엇 때문에 고쳤는지 없으면 이력이 쓸모없다.
+    if (!dto.changeReason?.trim())
+      throw new BusinessException('VALIDATION_ERROR', '수정 사유는 필수입니다.', [
+        { field: 'changeReason', reason: 'REQUIRED' },
+      ]);
 
     const lines: ContractLineDto[] =
       dto.lines ??
@@ -546,8 +528,13 @@ export class ContractsService {
         },
         include: VERSION_INCLUDE,
       });
-      // 변경계약 초안도 컨설팅 대상 품목을 갖는다 (확정 전 재컨설팅 가능).
-      await this.syncContractItemsToVersion(tx, created.id, null);
+      // 품목은 계약 소유라 손대지 않는다 — 새 버전 라인으로 참조만 다시 걸고 수량 차이를 반영한다.
+      await this.syncContractItems(tx, id, created.id, dto.changeReason ?? null);
+      // 수정 중에는 계약서를 다시 작성하는 상태다 → 작성중으로 되돌리고 이 버전을 현재로 잡는다.
+      await this.updateContractGuarded(tx, id, contract.rowVersion, {
+        status: 'DRAFT',
+        currentVersionId: created.id,
+      });
       return created;
     });
 
@@ -574,110 +561,47 @@ export class ContractsService {
     return revision;
   }
 
-  /**
-   * 변경계약 확정: 수량 증가는 다음 sequence_no 신규 품목, 감소는 뒤 순번부터 CANCELLED(물리 삭제 금지),
-   * 이전 확정 버전은 SUPERSEDED. 변경 사유 필수.
-   */
-  async confirmRevision(id: string, revisionId: string, dto: ConfirmRevisionDto, actor: AuthUser, headerKey?: string) {
-    const idempotencyKey = headerKey ?? dto.idempotencyKey;
-    const endpoint = `POST /contracts/${id}/revisions/${revisionId}/confirm`;
-    const replayed = await this.findIdempotentResponse(idempotencyKey, endpoint);
-    if (replayed !== undefined) return replayed;
-
-    const contract = await this.getContractOrThrow(id);
-    this.assertVersionMatch(contract.rowVersion, dto.version);
-
-    const revision = await this.prisma.contractVersion.findUnique({ where: { id: revisionId } });
-    if (!revision || revision.contractId !== id) throw new NotFoundException('변경계약 버전이 없습니다.');
-    if (revision.versionStatus !== 'DRAFT')
-      throw new BusinessException('CONTRACT_NOT_DRAFT', '초안 상태의 변경계약만 확정할 수 있습니다.', undefined, {
-        versionStatus: revision.versionStatus,
-      });
-    // 변경계약을 확정하면 새 확정 버전에는 서명이 없다(복사하지 않는다).
-    // 컨설팅 재확정 → 재서명 → 재완료 순서를 다시 밟는다(현업 확정 2026-07-28).
-
-    const changeReason = dto.changeReason ?? revision.changeReason;
-    if (!changeReason)
-      throw new BusinessException('VALIDATION_ERROR', '변경 사유는 필수입니다.', [
-        { field: 'changeReason', reason: 'REQUIRED' },
-      ]);
-
-    return this.runWithIdempotency(idempotencyKey, async () =>
-      this.prisma.$transaction(async (tx) => {
-        const confirmedAt = new Date();
-
-        // 확정 직전 revision 반영: 라인 교체·금액 갱신 (연동정합화 계약 §3)
-        if (dto.lines) {
-          await tx.contractLine.deleteMany({ where: { contractVersionId: revisionId } });
-          await tx.contractLine.createMany({
-            data: dto.lines.map((l, i) => ({ ...this.toLineData(l, i), contractVersionId: revisionId })),
-          });
-          await this.syncContractItemsToVersion(tx, revisionId, changeReason);
-        }
-        const amountData: Prisma.ContractVersionUncheckedUpdateInput = {};
-        if (dto.totalAmount !== undefined) amountData.totalAmount = dto.totalAmount;
-
-        await tx.contractVersion.update({
-          where: { id: revisionId },
-          data: { ...amountData, versionStatus: 'CONFIRMED', changeReason, confirmedBy: actor.id, confirmedAt },
-        });
-        // 이전 확정 버전 보존: SUPERSEDED (설계서 6.3)
-        await tx.contractVersion.updateMany({
-          where: { contractId: id, versionStatus: 'CONFIRMED', id: { not: revisionId } },
-          data: { versionStatus: 'SUPERSEDED' },
-        });
-        await this.updateContractGuarded(tx, id, dto.version, {
-          status: 'CHANGED',
-          currentVersionId: revisionId,
-        });
-
-        const orders = await this.syncOrdersToVersion(tx, id, revisionId, {
-          completionDueDate: revision.completionDueDate,
-          photoDate: revision.photoDate,
-          weddingDate: revision.weddingDate,
-          cancelReason: changeReason,
-        });
-
-        const response = {
-          contractId: id,
-          contractNo: contract.contractNo,
-          status: 'CHANGED',
-          versionNo: revision.versionNo,
-          changeReason,
-          orders,
-        };
-        await this.audit.log(
-          {
-            userId: actor.id,
-            action: 'REVISE',
-            entityType: 'CONTRACT',
-            entityId: id,
-            before: { currentVersionId: contract.currentVersionId },
-            after: response,
-            reason: changeReason,
-          },
-          asAuditClient(tx),
-        );
-        await this.saveIdempotencyKey(tx, idempotencyKey, endpoint, actor.id, response);
-        return response;
-      }),
-    );
-  }
-
   // ---------------------------------------------------------------------------
   // 취소·계약서 출력
   // ---------------------------------------------------------------------------
 
-  /** 계약 취소: 사유 필수, 미진행(CREATED) 품목만 CANCELLED. 물리 삭제 금지. */
+  /**
+   * 계약 취소: 사유 필수, 미진행(CREATED) 품목만 CANCELLED. 물리 삭제 금지.
+   * **작성중에서만 취소한다**(현업 확정 2026-07-30) — 서명·완료까지 간 계약은 취소가 아니라
+   * 수정하기(버전업)로 정리한다.
+   */
   async cancel(id: string, dto: CancelContractDto, actor: AuthUser) {
     const contract = await this.getContractOrThrow(id);
-    if (contract.status === 'CANCELLED')
-      throw new BusinessException('INVALID_STATUS_TRANSITION', '이미 취소된 계약입니다.');
+    if (contract.status !== 'DRAFT')
+      throw new BusinessException(
+        'INVALID_STATUS_TRANSITION',
+        contract.status === 'CANCELLED' ? '이미 취소된 계약입니다.' : '작성중인 계약만 취소할 수 있습니다.',
+        undefined,
+        { status: contract.status },
+      );
     this.assertVersionMatch(contract.rowVersion, dto.version);
 
     await this.prisma.$transaction(async (tx) => {
       const cancelledAt = new Date();
       await this.updateContractGuarded(tx, id, dto.version ?? contract.rowVersion, { status: 'CANCELLED' });
+
+      // 계약 품목(컨설팅 앵커)을 먼저 취소한다 — 물리화 전이면 이게 유일한 품목이다.
+      const liveItems = await tx.contractItem.findMany({
+        where: { contractId: id, status: { not: 'CANCELLED' } },
+        select: { id: true },
+      });
+      const liveItemIds = liveItems.map((i) => i.id);
+      if (liveItemIds.length > 0) {
+        await tx.contractItem.updateMany({
+          where: { id: { in: liveItemIds } },
+          data: { status: 'CANCELLED', cancelledReason: dto.reason, cancelledAt, rowVersion: { increment: 1 } },
+        });
+        await tx.contractItemComponent.updateMany({
+          where: { contractItemId: { in: liveItemIds }, status: 'CREATED' },
+          data: { status: 'CANCELLED' },
+        });
+      }
+
       const orders = await tx.order.findMany({ where: { contractId: id }, select: { id: true } });
       const orderIds = orders.map((o) => o.id);
       if (orderIds.length > 0) {
@@ -779,39 +703,14 @@ export class ContractsService {
       });
       const versionIds = versions.map((v) => v.id);
 
-      // 가계약 컨설팅 산출물(계약 품목·부위·옵션/렌탈 선택 세션)을 함께 정리한다.
+      // 컨설팅 산출물(계약 품목·부위·옵션/렌탈 선택 세션)을 함께 정리한다.
       const contractItemIds = (
         await tx.contractItem.findMany({
-          where: { contractVersionId: { in: versionIds } },
+          where: { contractId: id },
           select: { id: true },
         })
       ).map((c) => c.id);
-      if (contractItemIds.length > 0) {
-        const optionSessionIds = (
-          await tx.optionSelectionSession.findMany({
-            where: { contractItemId: { in: contractItemIds } },
-            select: { id: true },
-          })
-        ).map((s) => s.id);
-        const rentalSessionIds = (
-          await tx.rentalSelectionSession.findMany({
-            where: { contractItemId: { in: contractItemIds } },
-            select: { id: true },
-          })
-        ).map((s) => s.id);
-        if (rentalSessionIds.length > 0)
-          await tx.rentalSelectionLine.deleteMany({ where: { sessionId: { in: rentalSessionIds } } });
-        await tx.rentalSelectionSession.deleteMany({ where: { contractItemId: { in: contractItemIds } } });
-        if (optionSessionIds.length > 0) {
-          await tx.optionSelectionValue.deleteMany({ where: { selectionSessionId: { in: optionSessionIds } } });
-          await tx.optionSelectionComponentAttr.deleteMany({
-            where: { selectionSessionId: { in: optionSessionIds } },
-          });
-        }
-        await tx.optionSelectionSession.deleteMany({ where: { contractItemId: { in: contractItemIds } } });
-        await tx.contractItemComponent.deleteMany({ where: { contractItemId: { in: contractItemIds } } });
-        await tx.contractItem.deleteMany({ where: { id: { in: contractItemIds } } });
-      }
+      await this.deleteContractItemsDeep(tx, contractItemIds);
 
       // 계약 → 현재 버전 FK를 먼저 끊어야 버전을 지울 수 있다.
       await tx.contract.update({ where: { id }, data: { currentVersionId: null } });
@@ -938,28 +837,22 @@ export class ContractsService {
   // ---------------------------------------------------------------------------
 
   /**
-   * 스타일 컨설팅이 전 품목 끝났는지 본다. 컨설팅은 가계약 단계의 계약 품목(ContractItem)에서 진행한다.
+   * 스타일 컨설팅이 전 품목 끝났는지 본다. 컨설팅은 작성중 단계의 계약 품목(ContractItem)에서 진행한다.
    *
    * 맞춤(CUSTOM) 품목은 옵션 선택 세션이, 렌탈(RENTAL) 품목은 렌탈 선택 세션이 각각 CONFIRMED여야 한다.
-   * 취소된 품목은 대상에서 뺀다. 현재 버전에 품목이 없으면(라인 미입력) 준비된 것으로 보지 않는다.
+   * 취소된 품목은 대상에서 뺀다. 품목이 없으면(라인 미입력) 준비된 것으로 보지 않는다.
    */
   async consultingReadiness(contractId: string) {
-    const contract = await this.prisma.contract.findUnique({
-      where: { id: contractId },
-      select: { currentVersionId: true },
+    const items = await this.prisma.contractItem.findMany({
+      where: { contractId, status: { not: 'CANCELLED' } },
+      select: {
+        id: true,
+        displayName: true,
+        transactionType: true,
+        optionSelectionSessions: { where: { isCurrent: true }, select: { status: true } },
+        rentalSelectionSessions: { where: { isCurrent: true }, select: { status: true } },
+      },
     });
-    const items = contract?.currentVersionId
-      ? await this.prisma.contractItem.findMany({
-          where: { contractVersionId: contract.currentVersionId, status: { not: 'CANCELLED' } },
-          select: {
-            id: true,
-            displayName: true,
-            transactionType: true,
-            optionSelectionSessions: { where: { isCurrent: true }, select: { status: true } },
-            rentalSelectionSessions: { where: { isCurrent: true }, select: { status: true } },
-          },
-        })
-      : [];
 
     const pending: { contractItemId: string; displayName: string; transactionType: string }[] = [];
     let targetCount = 0;
@@ -988,7 +881,6 @@ export class ContractsService {
       ? await this.prisma.contractVersion.findUnique({ where: { id: contract.currentVersionId } })
       : null;
     const consulting = await this.consultingReadiness(id);
-    const registered = ['CONFIRMED', 'CHANGED'].includes(contract.status);
     const signed = !!version?.signatureFileId && !!version.signedAt;
 
     return {
@@ -996,8 +888,7 @@ export class ContractsService {
       status: contract.status,
       version: contract.rowVersion,
       currentVersionId: contract.currentVersionId,
-      /** 계약서 등록(확정) 완료 — 주문·품목이 생겨 컨설팅을 할 수 있는 상태 */
-      registered,
+      versionNo: version?.versionNo ?? null,
       consulting: {
         ready: consulting.ready,
         targetCount: consulting.targetCount,
@@ -1006,31 +897,35 @@ export class ContractsService {
       signed,
       signedAt: version?.signedAt ?? null,
       signerName: version?.signerName ?? null,
-      /** 서명 가능 = 등록됨 + 컨설팅 전 품목 확정 + 아직 완료 전 */
-      canSign: registered && consulting.ready && contract.status !== 'COMPLETED',
-      /** 완료 가능 = 등록됨 + 서명됨 */
-      canComplete: registered && signed,
+      /** 서명 가능 = 작성중 + 컨설팅 전 품목 확정 */
+      canSign: contract.status === 'DRAFT' && consulting.ready,
+      /** 완료 가능 = 서명완료 */
+      canComplete: contract.status === 'SIGNED',
       completed: contract.status === 'COMPLETED',
+      /** 수정하기(버전업) 가능 = 완료된 계약 */
+      canRevise: contract.status === 'COMPLETED',
       excelStored: !!version?.excelFileId,
     };
   }
 
-  /** 서명 가능 조건 검사 — 현재 확정 버전 + 컨설팅 전 품목 확정. */
+  /** 서명 가능 조건 검사 — 작성중인 현재 버전 + 컨설팅 전 품목 확정. */
   private async assertSignable(
     contract: { id: string; status: string; currentVersionId: string | null },
     version: { id: string; versionStatus: string },
   ) {
-    if (!['CONFIRMED', 'CHANGED'].includes(contract.status))
+    if (contract.status !== 'DRAFT')
       throw new BusinessException(
         'CONTRACT_NOT_DRAFT',
-        '계약서를 등록(확정)한 뒤에 서명할 수 있습니다.',
+        contract.status === 'SIGNED'
+          ? '이미 서명을 받은 계약입니다.'
+          : '작성중인 계약에만 서명할 수 있습니다.',
         undefined,
         { status: contract.status },
       );
-    if (version.versionStatus !== 'CONFIRMED' || contract.currentVersionId !== version.id)
+    if (version.versionStatus !== 'DRAFT' || contract.currentVersionId !== version.id)
       throw new BusinessException(
         'CONTRACT_NOT_DRAFT',
-        '현재 확정 버전에만 서명할 수 있습니다.',
+        '현재 작성중인 계약서 버전에만 서명할 수 있습니다.',
         undefined,
         { versionStatus: version.versionStatus },
       );
@@ -1046,13 +941,16 @@ export class ContractsService {
   }
 
   /**
-   * 계약 완료. 서명이 끝난 확정 계약만 완료할 수 있고, 완료 시점의 계약서 엑셀을
-   * 구워 버전에 보관한다(설계서 03 M3). 이후 다운로드는 이 보관본을 그대로 내려준다.
+   * 계약 완료 — 계약이 성립하는 시점 (현업 확정 2026-07-30).
+   *
+   * 서명완료 계약만 완료할 수 있다. 여기서 서명한 버전을 확정본으로 굳히고,
+   * 주문·주문품목·고객 전환·진행단계를 한 트랜잭션으로 물리화한다(physicalizeOnComplete).
+   * 완료 시점의 계약서 엑셀을 구워 버전에 보관한다(설계서 03 M3) — 이후 다운로드는 보관본.
    */
   async complete(id: string, dto: CompleteContractDto, actor: AuthUser) {
     const contract = await this.getContractOrThrow(id);
-    if (!['CONFIRMED', 'CHANGED'].includes(contract.status))
-      throw new BusinessException('CONTRACT_NOT_COMPLETABLE', '확정된 계약만 완료할 수 있습니다.', undefined, {
+    if (contract.status !== 'SIGNED')
+      throw new BusinessException('CONTRACT_NOT_COMPLETABLE', '서명을 받은 계약만 완료할 수 있습니다.', undefined, {
         status: contract.status,
       });
     const version = contract.currentVersionId
@@ -1071,13 +969,24 @@ export class ContractsService {
     );
 
     const completedAt = new Date();
-    await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
+      const { orders, customerStatus } = await this.physicalizeOnComplete(
+        tx,
+        contract,
+        version,
+        actor,
+        completedAt,
+      );
       await tx.contractVersion.update({
         where: { id: version.id },
         data: { excelFileId: file.id },
       });
       // version 미지정이면 현재 값으로 진행한다(단건 화면에서 낙관적 잠금 없이 누르는 경우).
-      await this.updateContractGuarded(tx, id, dto.version ?? contract.rowVersion, { status: 'COMPLETED' });
+      await this.updateContractGuarded(tx, id, dto.version ?? contract.rowVersion, {
+        status: 'COMPLETED',
+        // 계약일은 처음 완료한 날로 고정한다 — 수정하기로 다시 완료해도 갱신하지 않는다.
+        contractedAt: contract.contractedAt ?? completedAt,
+      });
       await this.audit.log(
         {
           userId: actor.id,
@@ -1091,10 +1000,13 @@ export class ContractsService {
             excelFileId: file.id,
             signedAt: version.signedAt,
             completedAt,
+            customerStatus,
+            orders,
           },
         },
         asAuditClient(tx),
       );
+      return { orders, customerStatus };
     });
 
     return {
@@ -1102,6 +1014,8 @@ export class ContractsService {
       contractNo: contract.contractNo,
       status: 'COMPLETED',
       versionNo: version.versionNo,
+      customerStatus: result.customerStatus,
+      orders: result.orders,
       excelFileId: file.id,
       downloadUrl: `/api/v1/contracts/${id}/excel`,
     };
@@ -1112,11 +1026,11 @@ export class ContractsService {
   // ---------------------------------------------------------------------------
 
   /**
-   * 서명 저장·교체 (현업 확정 2026-07-28).
+   * 서명 저장·교체 (현업 확정 2026-07-30).
    *
-   * 서명은 **스타일 컨설팅까지 끝난 현재 확정 버전**에 한다. 옵션 추가금액이 서명 전에
-   * 총액에 반영되므로, 서명본 금액과 이후 재출력 금액이 어긋나지 않는다(설계서 03 M1).
-   * 이미지는 files 모듈에 저장하고 버전에 연결한다.
+   * 서명은 **스타일 컨설팅까지 끝난 작성중 계약서**에 받고, 받으면 상태가 서명완료가 된다.
+   * 옵션 추가금액이 서명 전에 총액에 반영되므로, 서명본 금액과 이후 재출력 금액이
+   * 어긋나지 않는다(설계서 03 M1). 이미지는 files 모듈에 저장하고 버전에 연결한다.
    */
   async saveSignature(id: string, versionId: string, dto: SaveSignatureDto, actor: AuthUser) {
     const contract = await this.getContractOrThrow(id);
@@ -1138,13 +1052,15 @@ export class ContractsService {
         where: { id: versionId },
         data: { signatureFileId: file.id, signedAt, signerName: dto.signerName },
       });
+      // 서명을 받으면 상태가 서명완료로 넘어간다 → 그 뒤로는 계약완료만 남는다.
+      await this.updateContractGuarded(tx, id, contract.rowVersion, { status: 'SIGNED' });
       await this.audit.log(
         {
           userId: actor.id,
           action: 'SIGN',
           entityType: 'CONTRACT_VERSION',
           entityId: versionId,
-          after: { signerName: dto.signerName, signedAt },
+          after: { signerName: dto.signerName, signedAt, status: 'SIGNED' },
         },
         asAuditClient(tx),
       );
@@ -1159,7 +1075,7 @@ export class ContractsService {
     };
   }
 
-  /** 서명 제거 (다시 받기용). 완료된 계약의 서명은 지울 수 없다. */
+  /** 서명 제거 — 서명완료를 작성중으로 되돌린다. 완료된 계약의 서명은 지울 수 없다. */
   async removeSignature(id: string, versionId: string, actor: AuthUser) {
     const contract = await this.getContractOrThrow(id);
     const version = await this.prisma.contractVersion.findUnique({ where: { id: versionId } });
@@ -1168,18 +1084,24 @@ export class ContractsService {
       throw new BusinessException('CONTRACT_NOT_COMPLETABLE', '완료된 계약의 서명은 지울 수 없습니다.', undefined, {
         status: contract.status,
       });
-    void contract;
 
-    await this.prisma.contractVersion.update({
-      where: { id: versionId },
-      data: { signatureFileId: null, signedAt: null, signerName: null },
-    });
-    await this.audit.log({
-      userId: actor.id,
-      action: 'DELETE',
-      entityType: 'CONTRACT_VERSION',
-      entityId: versionId,
-      before: { signatureFileId: version.signatureFileId },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.contractVersion.update({
+        where: { id: versionId },
+        data: { signatureFileId: null, signedAt: null, signerName: null },
+      });
+      if (contract.status === 'SIGNED')
+        await this.updateContractGuarded(tx, id, contract.rowVersion, { status: 'DRAFT' });
+      await this.audit.log(
+        {
+          userId: actor.id,
+          action: 'DELETE',
+          entityType: 'CONTRACT_VERSION',
+          entityId: versionId,
+          before: { signatureFileId: version.signatureFileId, status: contract.status },
+        },
+        asAuditClient(tx),
+      );
     });
     return { versionId, signed: false };
   }
@@ -1275,15 +1197,21 @@ export class ContractsService {
   // ---------------------------------------------------------------------------
 
   /**
-   * 가계약(초안) 품목 정합 — 계약 라인(거래방식×품목×수량)을 벌 단위 ContractItem으로 펼친다.
+   * 계약 품목 정합 — 계약 라인(거래방식×품목×수량)을 벌 단위 ContractItem으로 펼친다.
    * 컨설팅(옵션·렌탈 선택)이 이 품목·부위(ContractItemComponent)에 붙는다.
-   * 초안 저장/수정마다 수량에 맞춰 증분·취소한다. **주문(Order)은 만들지 않는다** —
-   * 확정 시 syncOrdersToVersion이 이 품목을 주문으로 물리화한다.
-   * - 수량 증가: 다음 sequence_no로 신규 품목 + 기본 구성품 생성
-   * - 수량 감소: 뒤 순번부터 CANCELLED (사유 기록, 물리 삭제 금지 → 컨설팅 보존)
+   *
+   * **품목은 계약 소유다**(현업 확정 2026-07-30). 수정하기(버전업)로 새 버전이 생겨도 품목은
+   * 그대로 이어지고, 여기서 수량 차이만 반영한다. **주문(Order)은 만들지 않는다** —
+   * 계약완료 시 syncOrdersToVersion이 이 품목을 주문으로 물리화한다.
+   * - 수량 증가: 다음 sequence_no로 신규 품목 + 기본 구성품 생성 (그 품목만 컨설팅 미선택)
+   * - 수량 감소:
+   *   · 작성중이고 아직 물리화(주문)되지 않았으면 → 지우고 순번을 다시 채운다(#1…#n 연속).
+   *     계약 성립 전이라 이력을 남길 대상이 아니고, 번호가 튀면 현장에서 헷갈린다.
+   *   · 그 밖에는 뒤 순번부터 CANCELLED (사유 기록, 물리 삭제 금지 → 주문·작업지시서 보존)
    */
-  private async syncContractItemsToVersion(
+  private async syncContractItems(
     tx: Prisma.TransactionClient,
+    contractId: string,
     versionId: string,
     cancelReason: string | null,
   ): Promise<void> {
@@ -1303,7 +1231,11 @@ export class ContractsService {
         });
     }
 
-    const existingItems = await tx.contractItem.findMany({ where: { contractVersionId: versionId } });
+    const existingItems = await tx.contractItem.findMany({
+      where: { contractId },
+      // 물리화(주문품목) 여부가 '지워도 되는 품목'을 가른다.
+      include: { orderItems: { select: { id: true } } },
+    });
     const keys = new Set<string>([
       ...targets.keys(),
       ...existingItems.map((i) => `${i.transactionType}|${i.productCategory}`),
@@ -1313,25 +1245,55 @@ export class ContractsService {
       const [transactionType, productCategory] = key.split('|');
       const target = targets.get(key);
       const targetQty = target?.quantity ?? 0;
-      const itemsOfKey = existingItems.filter(
+      let itemsOfKey = existingItems.filter(
         (i) => i.transactionType === transactionType && i.productCategory === productCategory,
       );
       const activeItems = itemsOfKey
         .filter((i) => i.status !== 'CANCELLED')
         .sort((a, b) => a.sequenceNo - b.sequenceNo);
-      const maxSeq = itemsOfKey.reduce((m, i) => Math.max(m, i.sequenceNo), 0);
 
-      if (targetQty > activeItems.length) {
+      if (targetQty < activeItems.length) {
+        const surplus = activeItems.slice(targetQty).reverse(); // 뒤 순번부터
+        // 아직 주문으로 물리화되지 않은 품목은 지운다 → 순번이 #1…#n 연속으로 유지된다.
+        const removable = surplus.filter((i) => i.orderItems.length === 0);
+        const cancellable = surplus.filter((i) => i.orderItems.length > 0);
+
+        if (removable.length > 0) {
+          await this.deleteContractItemsDeep(
+            tx,
+            removable.map((i) => i.id),
+          );
+          const removedIds = new Set(removable.map((i) => i.id));
+          itemsOfKey = itemsOfKey.filter((i) => !removedIds.has(i.id));
+        }
+        for (const item of cancellable) {
+          await tx.contractItem.update({
+            where: { id: item.id },
+            data: {
+              status: 'CANCELLED',
+              cancelledReason: cancelReason ?? '계약 변경',
+              cancelledAt: new Date(),
+              rowVersion: { increment: 1 },
+            },
+          });
+          await tx.contractItemComponent.updateMany({
+            where: { contractItemId: item.id, status: 'CREATED' },
+            data: { status: 'CANCELLED' },
+          });
+        }
+      } else if (targetQty > activeItems.length) {
         const label =
           transactionType === 'RENTAL'
             ? `렌탈 ${CATEGORY_LABEL[productCategory] ?? productCategory}`
             : CATEGORY_LABEL[productCategory] ?? productCategory;
+        // 취소된 품목이 차지한 순번은 비켜 간다(이력 보존). 남은 품목 기준으로 다음 번호를 뽑는다.
+        const maxSeq = itemsOfKey.reduce((m, i) => Math.max(m, i.sequenceNo), 0);
         for (let n = 1; n <= targetQty - activeItems.length; n += 1) {
           const seq = maxSeq + n;
           await tx.contractItem.create({
             data: {
               id: randomUUID(),
-              contractVersionId: versionId,
+              contractId,
               sourceContractLineId: target?.lineId ?? null,
               transactionType,
               productCategory,
@@ -1349,34 +1311,16 @@ export class ContractsService {
             },
           });
         }
-      } else if (targetQty < activeItems.length) {
-        const toCancel = activeItems.slice(targetQty).reverse(); // 뒤 순번부터
-        for (const item of toCancel) {
-          await tx.contractItem.update({
-            where: { id: item.id },
-            data: {
-              status: 'CANCELLED',
-              cancelledReason: cancelReason ?? '계약 변경',
-              cancelledAt: new Date(),
-              rowVersion: { increment: 1 },
-            },
-          });
-          await tx.contractItemComponent.updateMany({
-            where: { contractItemId: item.id, status: 'CREATED' },
-            data: { status: 'CANCELLED' },
-          });
-        }
       }
 
-      // 초안 수정 시 라인이 삭제·재생성되어 참조가 끊길 수 있다 → 살아남은 품목을 현재 라인으로 재지정.
+      // 계약 수정·버전업으로 라인이 새로 생겨 참조가 끊긴다 → 살아남은 품목을 현재 버전 라인으로 재지정.
       if (target) {
         await tx.contractItem.updateMany({
           where: {
-            contractVersionId: versionId,
+            contractId,
             transactionType,
             productCategory,
             status: { not: 'CANCELLED' },
-            sourceContractLineId: null,
           },
           data: { sourceContractLineId: target.lineId },
         });
@@ -1385,14 +1329,49 @@ export class ContractsService {
   }
 
   /**
-   * 확정 시 물리화 — 가계약 품목(ContractItem)을 거래방식별 주문(Order)과 주문품목(OrderItem)으로 옮긴다.
-   * 흐름: 계약(가계약) → 옵션(컨설팅) → **계약확정(여기)** → 주문. 옵션 선택 결과는 ContractItem에
-   * 남아 있고, OrderItem은 sourceContractItemId로 그 품목을 되짚어 작업지시서·엑셀이 옵션을 읽는다.
+   * 계약 품목과 그에 딸린 컨설팅 산출물을 물리 삭제한다.
+   * 주문으로 물리화되지 않은 품목에만 쓴다 — 주문품목이 있으면 취소로 남겨야 한다.
    */
-  private async syncOrdersToVersion(
+  private async deleteContractItemsDeep(tx: Prisma.TransactionClient, itemIds: string[]): Promise<void> {
+    if (itemIds.length === 0) return;
+    const rentalSessionIds = (
+      await tx.rentalSelectionSession.findMany({
+        where: { contractItemId: { in: itemIds } },
+        select: { id: true },
+      })
+    ).map((s) => s.id);
+    if (rentalSessionIds.length > 0)
+      await tx.rentalSelectionLine.deleteMany({ where: { sessionId: { in: rentalSessionIds } } });
+    await tx.rentalSelectionSession.deleteMany({ where: { contractItemId: { in: itemIds } } });
+
+    const optionSessionIds = (
+      await tx.optionSelectionSession.findMany({
+        where: { contractItemId: { in: itemIds } },
+        select: { id: true },
+      })
+    ).map((s) => s.id);
+    if (optionSessionIds.length > 0) {
+      await tx.optionSelectionValue.deleteMany({ where: { selectionSessionId: { in: optionSessionIds } } });
+      await tx.optionSelectionComponentAttr.deleteMany({
+        where: { selectionSessionId: { in: optionSessionIds } },
+      });
+    }
+    await tx.optionSelectionSession.deleteMany({ where: { contractItemId: { in: itemIds } } });
+    await tx.contractItemComponent.deleteMany({ where: { contractItemId: { in: itemIds } } });
+    await tx.contractItem.deleteMany({ where: { id: { in: itemIds } } });
+  }
+
+  /**
+   * 계약완료 시 물리화 — 계약 품목(ContractItem)을 거래방식별 주문(Order)과 주문품목(OrderItem)으로 옮긴다.
+   * 흐름: 계약(작성중) → 컨설팅 → 서명 → **계약완료(여기)** → 주문. 옵션 선택 결과는 ContractItem에
+   * 남아 있고, OrderItem은 sourceContractItemId로 그 품목을 되짚어 작업지시서·엑셀이 옵션을 읽는다.
+   *
+   * 품목은 계약 소유이므로 수정하기(버전업)로 다시 완료해도 **같은 품목 = 같은 주문품목**이다.
+   * 늘어난 품목만 주문품목이 새로 생기고, 취소된 품목의 주문품목만 취소된다.
+   */
+  private async syncOrders(
     tx: Prisma.TransactionClient,
     contractId: string,
-    versionId: string,
     opts: {
       completionDueDate: Date | null;
       photoDate: Date | null;
@@ -1401,7 +1380,7 @@ export class ContractsService {
     },
   ): Promise<OrderSummary[]> {
     const items = await tx.contractItem.findMany({
-      where: { contractVersionId: versionId },
+      where: { contractId },
       include: { components: true },
       orderBy: { sequenceNo: 'asc' },
     });
@@ -1579,7 +1558,7 @@ export class ContractsService {
       where: {
         selectionSession: {
           isCurrent: true,
-          contractItem: { contractVersion: { currentOfContracts: { some: { id: contractId } } } },
+          contractItem: { contractId },
         },
       },
       include: { optionChoice: { select: { choiceName: true } } },
@@ -1600,13 +1579,10 @@ export class ContractsService {
    * - 부위 행은 유료 옵션이 없어도 항상 남긴다 (구성품 자체가 계약서 정보).
    */
   private async loadContractOptionTree(contractId: string) {
-    // 컨설팅은 가계약 품목(ContractItem)에서 하므로 확정 전에도 계약서 옵션을 보여줄 수 있다.
-    // 확정 후에는 이 품목이 주문품목으로 물리화되며, 주문번호는 그때 붙는다(sourceContractItem 되짚기).
+    // 컨설팅은 계약 품목(ContractItem)에서 하므로 계약완료 전에도 계약서 옵션을 보여줄 수 있다.
+    // 완료 후에는 이 품목이 주문품목으로 물리화되며, 주문번호는 그때 붙는다(sourceContractItem 되짚기).
     const items = await this.prisma.contractItem.findMany({
-      where: {
-        contractVersion: { currentOfContracts: { some: { id: contractId } } },
-        status: { not: 'CANCELLED' },
-      },
+      where: { contractId, status: { not: 'CANCELLED' } },
       include: {
         components: {
           orderBy: [{ componentType: 'asc' }, { sequenceNo: 'asc' }],
@@ -1627,7 +1603,7 @@ export class ContractsService {
       where: {
         selectionSession: {
           isCurrent: true,
-          contractItem: { contractVersion: { currentOfContracts: { some: { id: contractId } } } },
+          contractItem: { contractId },
         },
         extraPriceSnapshot: { gt: 0 },
       },

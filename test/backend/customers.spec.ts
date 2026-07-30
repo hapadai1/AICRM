@@ -270,12 +270,25 @@ describe('고객 관리 (Phase 2)', () => {
           status: 'CREATED',
         },
       });
+      // 주문품목은 계약 품목(계약 소유)의 물리화 결과다 → 앵커 품목을 먼저 만든다.
+      const anchorItemId = randomUUID();
+      await ctx.prisma.contractItem.create({
+        data: {
+          id: anchorItemId,
+          contractId,
+          sourceContractLineId: lineId,
+          transactionType: 'CUSTOM',
+          productCategory: 'SUIT',
+          sequenceNo: 1,
+          displayName: '정장 #1',
+        },
+      });
       const orderItemId = randomUUID();
       await ctx.prisma.orderItem.create({
         data: {
           id: orderItemId,
           orderId,
-          sourceContractLineId: lineId,
+          sourceContractItemId: anchorItemId,
           productCategory: 'SUIT',
           sequenceNo: 1,
           displayName: '정장 #1',

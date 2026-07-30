@@ -36,11 +36,23 @@ async function seedOrderItem(
   const order = await prisma.order.create({
     data: { id: randomUUID(), orderNo: `ORD-${suffix}`, contractId: contract.id, transactionType: 'CUSTOM' },
   });
+  // 주문품목은 계약 품목(계약 소유)의 물리화 결과다 → 앵커 품목을 먼저 만든다.
+  const anchor = await prisma.contractItem.create({
+    data: {
+      id: randomUUID(),
+      contractId: contract.id,
+      sourceContractLineId: line.id,
+      transactionType: 'CUSTOM',
+      productCategory: 'SUIT',
+      sequenceNo: 1,
+      displayName: '정장 #1',
+    },
+  });
   const item = await prisma.orderItem.create({
     data: {
       id: randomUUID(),
       orderId: order.id,
-      sourceContractLineId: line.id,
+      sourceContractItemId: anchor.id,
       productCategory: 'SUIT',
       sequenceNo: 1,
       displayName: '정장 #1',

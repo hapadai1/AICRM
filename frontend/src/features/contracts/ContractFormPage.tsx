@@ -1,8 +1,8 @@
 import {
-  CheckOutlined,
-  FileExcelOutlined,
+  HighlightOutlined,
   SaveOutlined,
   SkinOutlined,
+  StopOutlined,
   UserOutlined,
 } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -18,7 +18,6 @@ import {
   Form,
   Input,
   InputNumber,
-  List,
   Modal,
   Row,
   Select,
@@ -38,18 +37,20 @@ import { CustomerPickerModal, type PickedCustomer } from '../../shared/CustomerP
 import { CustomerRegisterModal } from '../customers/CustomerRegisterModal';
 import { CustomerInfoGateModal, isCustomerInfoIncomplete } from './CustomerInfoGateModal';
 import {
-  confirmContract,
+  cancelContract,
   createContractDraft,
-  downloadContractExcel,
   fetchContract,
+  fetchContractFlow,
   fetchContractTypes,
   fetchCustomerSummary,
+  saveSignature,
   updateContractDraft,
-  type ContractConfirmResult,
   type ContractDetail,
   type ContractDraftInput,
 } from '../../api/contracts';
+import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
+import { ContractSignPad } from './ContractSignPad';
 import {
   ContractLineEditor,
   createLine,
@@ -57,10 +58,15 @@ import {
   THOUSANDS,
   type EditableLine,
 } from './ContractLineEditor';
-import { formatKrw, TRANSACTION_TYPE_LABEL, TRANSACTION_TYPE_TAG_COLOR } from './labels';
+import { formatKrw } from './labels';
 import { useUnsavedWarning } from './use-unsaved-warning';
 
-/** CONT-002 계약서 작성 — 고객 자동 연결, 계약 구분 기본 품목 복사, 임시저장·계약 확정 */
+/**
+ * CONT-002 계약서 작성·수정 — 작성중 계약의 유일한 화면 (현업 확정 2026-07-30).
+ *
+ * 버튼: 임시저장 · 서명하기 · 계약 취소. 스타일 컨설팅은 하단 이동 버튼.
+ * 서명을 받으면 상태가 서명완료로 넘어가고, 이후 계약완료는 계약 상세에서 한다.
+ */
 
 interface FormValues {
   contractTypeId?: string;
@@ -78,7 +84,7 @@ const fmt = (v?: Dayjs): string | undefined => (v ? v.format('YYYY-MM-DD') : und
 export function ContractFormPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { message, modal } = App.useApp();
+  const { message } = App.useApp();
   const [searchParams, setSearchParams] = useSearchParams();
   const customerIdParam = searchParams.get('customerId') ?? undefined;
   const appointmentId = searchParams.get('appointmentId') ?? undefined;
@@ -90,7 +96,11 @@ export function ContractFormPage() {
   // 서명 대상 DRAFT 버전 id·낙관적 잠금 값을 얻기 위해 마지막으로 확인된 상세를 보관한다.
   const [draftDetail, setDraftDetail] = useState<ContractDetail | null>(null);
   const [dirty, setDirty] = useState(false);
-  const [confirmResult, setConfirmResult] = useState<ContractConfirmResult | null>(null);
+  const [signOpen, setSignOpen] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
+  // 서명을 마치면 이 화면을 떠난다(서명완료는 계약 상세에서 다룬다) → 이탈 경고를 끈다.
+  const [signedDone, setSignedDone] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [registerOpen, setRegisterOpen] = useState(false);
   // 고객 정보 보완 게이트를 통과(저장)했는지. 통과 후 재조회 전까지 모달이 다시 뜨지 않게 잡아둔다.
@@ -209,7 +219,7 @@ export function ContractFormPage() {
     setDirty(true);
   };
 
-  useUnsavedWarning(dirty && !confirmResult);
+  useUnsavedWarning(dirty && !signedDone);
 
   const buildPayload = (values: FormValues): ContractDraftInput => {
     const selectedType = types?.find((t) => t.id === values.contractTypeId);
@@ -259,25 +269,46 @@ export function ContractFormPage() {
     onError: onApiError,
   });
 
-  // 확정은 서명 후 별도 액션이다. 재저장하면 서명이 무효화되므로 여기서는 저장하지 않고 확정만 호출한다.
-  const confirmMutation = useMutation({
-    mutationFn: async () =>
-      confirmContract(draftId!, {
-        version: draftDetail?.version ?? 1,
-        confirmedDate: fmt(form.getFieldValue('contractedAt')),
+  /**
+   * 계약 흐름 — [서명하기]를 켤 수 있는지(컨설팅 전 품목 확정) 서버 판단을 그대로 쓴다.
+   * 서명을 받으면 상태가 서명완료가 되고, 계약완료는 계약 상세에서 한다.
+   */
+  const flowQuery = useQuery({
+    queryKey: ['contracts', draftId, 'flow'],
+    queryFn: () => fetchContractFlow(draftId!),
+    enabled: !!draftId,
+  });
+  const flow = flowQuery.data;
+
+  // 서명은 작성중인 현재 버전에 붙는다. 내용을 고친 뒤에는 먼저 임시저장해야 한다.
+  const signMutation = useMutation({
+    mutationFn: (input: { imageDataUrl: string; signerName: string }) =>
+      saveSignature(draftId!, flow!.currentVersionId!, {
+        ...input,
+        version: draftDetail?.version,
       }),
-    onSuccess: (result) => {
+    onSuccess: () => {
+      setSignOpen(false);
+      setSignedDone(true);
       setDirty(false);
-      setConfirmResult(result);
+      message.success('서명이 저장되었습니다. 계약 상세에서 계약완료를 진행해 주세요.');
       void queryClient.invalidateQueries({ queryKey: ['contracts'] });
-      void queryClient.invalidateQueries({ queryKey: ['orders'] });
-      void queryClient.invalidateQueries({ queryKey: ['customers'] });
+      navigate(`/contracts/${draftId}`);
     },
     onError: onApiError,
   });
 
-  const excelMutation = useMutation({
-    mutationFn: () => downloadContractExcel(draftDetail!.id, draftDetail!.contractNo),
+  const cancelMutation = useMutation({
+    mutationFn: () =>
+      cancelContract(draftId!, { reason: cancelReason.trim(), version: draftDetail?.version ?? 1 }),
+    onSuccess: () => {
+      setCancelOpen(false);
+      setDirty(false);
+      setSignedDone(true);
+      message.success('계약을 취소했습니다.');
+      void queryClient.invalidateQueries({ queryKey: ['contracts'] });
+      navigate('/contracts');
+    },
     onError: onApiError,
   });
 
@@ -297,51 +328,39 @@ export function ContractFormPage() {
     setDirty(true);
   };
 
-  const handleConfirm = () => {
-    modal.confirm({
-      title: '계약서 등록',
-      okText: '등록',
-      cancelText: '취소',
-      width: 480,
-      content: (
-        <Flex vertical gap={8}>
-          <Typography.Text>
-            계약서를 등록하면 고객이 계약 고객으로 전환되고, 거래 방식별(맞춤/렌탈) 주문과 수량만큼의 주문
-            품목이 생성됩니다. 이후 품목·수량 수정은 변경 계약에서만 가능합니다.
-          </Typography.Text>
-          <Typography.Text type="secondary">
-            다음 순서는 스타일 컨설팅 → 서명 → 계약 완료입니다. 서명은 컨설팅을 모두 확정한 뒤
-            계약 상세에서 받습니다.
-          </Typography.Text>
-          <Typography.Text>
-            품목 {lines.length}건 · 품목 합계 {formatKrw(lineTotal)} · 계약 금액 {formatKrw(totalAmount)}
-          </Typography.Text>
-          {manualTotal && totalDiff !== 0 && (
-            <Alert
-              type="warning"
-              showIcon
-              message={`직접 입력한 합계 금액이 품목 합계(${formatKrw(lineTotal)})와 ${formatKrw(
-                Math.abs(totalDiff),
-              )} 차이납니다. 입력한 금액으로 저장됩니다.`}
-            />
-          )}
-        </Flex>
-      ),
-      onOk: async () => {
-        await confirmMutation.mutateAsync();
-      },
-    });
+  /** [서명하기] — 미저장 내용이 있으면 먼저 저장한 뒤 서명 캔버스를 연다. */
+  const handleOpenSign = async () => {
+    const values = await form.validateFields();
+    if (lines.length === 0) {
+      message.error('품목을 1개 이상 입력해 주세요.');
+      return;
+    }
+    if (totalAmount <= 0) {
+      message.error('합계 금액이 0원입니다. 품목 단가·수량을 확인해 주세요.');
+      return;
+    }
+    try {
+      if (dirty || !draftId) {
+        await persistDraft(values);
+        setDirty(false);
+        void queryClient.invalidateQueries({ queryKey: ['contracts'] });
+      }
+      await flowQuery.refetch();
+      setSignOpen(true);
+    } catch (e) {
+      onApiError(e);
+    }
   };
 
-  // 확정된 계약을 쿼리로 연 경우: 수정 불가 안내
+  // 작성중이 아닌 계약을 쿼리로 연 경우: 수정 불가 안내
   if (draft && draft.status !== 'DRAFT') {
     return (
       <Card>
         <Alert
           type="warning"
           showIcon
-          message="확정된 계약입니다"
-          description="확정 후 품목·수량 수정은 계약 상세의 변경 계약에서만 가능합니다."
+          message="작성중인 계약이 아닙니다"
+          description="서명·완료된 계약은 계약 상세에서 [수정하기]로 새 버전을 만든 뒤 고칠 수 있습니다."
           action={
             <Button type="primary" onClick={() => navigate(`/contracts/${draft.id}`)}>
               계약 상세로 이동
@@ -377,32 +396,47 @@ export function ContractFormPage() {
             <Button
               icon={<SaveOutlined />}
               loading={saveMutation.isPending}
-              disabled={!customerId || confirmMutation.isPending}
+              disabled={!customerId || signMutation.isPending}
               onClick={() => saveMutation.mutate()}
             >
               임시저장
             </Button>
-            <Button
-              icon={<FileExcelOutlined />}
-              loading={excelMutation.isPending}
-              disabled={!draftDetail}
-              onClick={() => excelMutation.mutate()}
-            >
-              Excel 출력
-            </Button>
             {/*
-              서명은 여기서 받지 않는다. 흐름이 계약서 등록 → 스타일 컨설팅 → 서명 →
-              계약 완료로 확정됐다(2026-07-28). 서명·완료는 계약 상세에서 한다.
+              작성중 화면의 기능 버튼은 임시저장·서명하기·계약 취소만 둔다 (현업 확정 2026-07-30).
+              계약서 출력은 서명완료·계약완료에서만, 스타일 컨설팅은 화면 하단 이동 버튼으로 간다.
             */}
-            <Button
-              type="primary"
-              icon={<CheckOutlined />}
-              loading={confirmMutation.isPending}
-              disabled={!customerId || saveMutation.isPending}
-              onClick={handleConfirm}
-            >
-              계약서 등록
-            </Button>
+            {draftId && (
+              <>
+                <Can permission="CONTRACT_SIGN">
+                  <Tooltip
+                    title={
+                      flow && !flow.consulting.ready
+                        ? flow.consulting.targetCount === 0
+                          ? '품목을 입력하고 스타일 컨설팅을 확정한 뒤 서명할 수 있습니다.'
+                          : `스타일 컨설팅 미확정 ${flow.consulting.pending.length}건: ${flow.consulting.pending
+                              .map((item) => item.displayName)
+                              .join(', ')}`
+                        : ''
+                    }
+                  >
+                    <Button
+                      type="primary"
+                      icon={<HighlightOutlined />}
+                      loading={signMutation.isPending}
+                      disabled={!customerId || saveMutation.isPending || !flow?.consulting.ready}
+                      onClick={() => void handleOpenSign()}
+                    >
+                      서명하기
+                    </Button>
+                  </Tooltip>
+                </Can>
+                <Can permission="CONTRACT_CANCEL">
+                  <Button danger icon={<StopOutlined />} onClick={() => setCancelOpen(true)}>
+                    계약 취소
+                  </Button>
+                </Can>
+              </>
+            )}
           </Space>
         </Flex>
       </Card>
@@ -646,43 +680,43 @@ export function ContractFormPage() {
         </Flex>
       </Card>
 
-      {/* 계약 확정 결과: 생성된 주문 목록 표시 후 주문 상세 이동 */}
+      {/* 서명 — 받으면 상태가 서명완료가 되고 계약 상세로 넘어간다 */}
       <Modal
-        open={!!confirmResult}
-        closable={false}
-        maskClosable={false}
-        title="계약이 확정되었습니다"
-        footer={
-          <Button type="primary" onClick={() => navigate(`/contracts/${confirmResult?.contractId}`)}>
-            계약 상세로 이동
-          </Button>
-        }
+        open={signOpen}
+        title="계약서 서명"
+        footer={null}
+        width={560}
+        destroyOnClose
+        onCancel={() => setSignOpen(false)}
+      >
+        {flow?.currentVersionId && (
+          <ContractSignPad
+            defaultSignerName={customer?.name}
+            saving={signMutation.isPending}
+            onCancel={() => setSignOpen(false)}
+            onSave={(imageDataUrl, signerName) => signMutation.mutate({ imageDataUrl, signerName })}
+          />
+        )}
+      </Modal>
+
+      {/* 계약 취소 — 작성중에서만 (사유 필수) */}
+      <Modal
+        open={cancelOpen}
+        title="계약 취소"
+        okText="계약 취소"
+        okButtonProps={{ danger: true, disabled: !cancelReason.trim() }}
+        cancelText="닫기"
+        confirmLoading={cancelMutation.isPending}
+        onOk={() => cancelMutation.mutate()}
+        onCancel={() => setCancelOpen(false)}
       >
         <Flex vertical gap={12}>
-          <Typography.Text>
-            계약번호 <Typography.Text strong>{confirmResult?.contractNo}</Typography.Text> 계약이
-            확정되었습니다.
-          </Typography.Text>
-          <Typography.Text strong>생성된 주문</Typography.Text>
-          <List
-            size="small"
-            bordered
-            dataSource={confirmResult?.orders ?? []}
-            locale={{ emptyText: '생성된 주문이 없습니다.' }}
-            renderItem={(o) => (
-              <List.Item
-                actions={[
-                  <Button key="open" type="link" onClick={() => navigate(`/orders/${o.id}`)}>
-                    주문 상세
-                  </Button>,
-                ]}
-              >
-                <Space>
-                  <Tag color={TRANSACTION_TYPE_TAG_COLOR[o.tradeType]}>{TRANSACTION_TYPE_LABEL[o.tradeType]}</Tag>
-                  <Typography.Text strong>{o.orderNo}</Typography.Text>
-                </Space>
-              </List.Item>
-            )}
+          <Typography.Text>작성중인 계약을 취소합니다. 취소 사유를 남겨 주세요.</Typography.Text>
+          <Input.TextArea
+            rows={3}
+            value={cancelReason}
+            onChange={(e) => setCancelReason(e.target.value)}
+            placeholder="예: 고객 요청으로 계약 진행 중단"
           />
         </Flex>
       </Modal>

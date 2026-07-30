@@ -43,6 +43,171 @@ export function auth(ctx: TestContext): { Authorization: string } {
   return { Authorization: `Bearer ${ctx.adminToken}` };
 }
 
+/** 1×1 투명 PNG dataURL — 서명 픽스처 */
+export const SIGN_PNG =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
+/**
+ * 계약을 실제 흐름대로 완료시켜 주문·주문품목을 만든다 (현업 확정 2026-07-30).
+ *
+ * 작성중 → **컨설팅 전 품목 확정** → 서명(서명완료) → 계약완료(주문 물리화).
+ * 예전에는 `POST /contracts/:id/confirm` 한 번으로 주문이 생겼지만, 등록 단계가 없어져
+ * 주문을 얻으려면 이 순서를 밟아야 한다. 컨설팅 확정은 픽스처 편의를 위해 세션을 직접
+ * CONFIRMED로 만든다(옵션 선택 화면 흐름 자체는 options.spec 이 검증한다).
+ *
+ * @returns 계약완료 응답(생성된 주문 목록 포함)
+ */
+export async function signAndCompleteContract(
+  ctx: TestContext,
+  contractId: string,
+): Promise<{ orders: { id: string; orderNo: string; tradeType: string }[]; versionNo: number }> {
+  const items = await ctx.prisma.contractItem.findMany({
+    where: { contractId, status: { not: 'CANCELLED' } },
+  });
+  const adminId = (await ctx.prisma.user.findFirstOrThrow({ where: { loginId: 'admin' } })).id;
+
+  for (const item of items) {
+    const existing =
+      item.transactionType === 'RENTAL'
+        ? await ctx.prisma.rentalSelectionSession.findFirst({
+            where: { contractItemId: item.id, isCurrent: true, status: 'CONFIRMED' },
+          })
+        : await ctx.prisma.optionSelectionSession.findFirst({
+            where: { contractItemId: item.id, isCurrent: true, status: 'CONFIRMED' },
+          });
+    if (existing) continue;
+
+    if (item.transactionType === 'RENTAL') {
+      await ctx.prisma.rentalSelectionSession.create({
+        data: {
+          id: randomUUID(),
+          contractItemId: item.id,
+          status: 'CONFIRMED',
+          confirmedAt: new Date(),
+          isCurrent: true,
+        },
+      });
+      continue;
+    }
+    // 맞춤 품목: 해당 카테고리의 ACTIVE 옵션 버전이 있어야 세션을 만들 수 있다.
+    const optionSet = await ctx.prisma.optionSet.findUniqueOrThrow({
+      where: { productCategory: item.productCategory },
+    });
+    let versionId = optionSet.activeVersionId;
+    if (!versionId) {
+      versionId = randomUUID();
+      await ctx.prisma.optionSetVersion.create({
+        data: {
+          id: versionId,
+          optionSetId: optionSet.id,
+          versionNo: 1,
+          status: 'ACTIVE',
+          createdBy: adminId,
+        },
+      });
+      await ctx.prisma.optionSet.update({
+        where: { id: optionSet.id },
+        data: { activeVersionId: versionId },
+      });
+    }
+    await ctx.prisma.optionSelectionSession.create({
+      data: {
+        id: randomUUID(),
+        contractItemId: item.id,
+        optionSetVersionId: versionId,
+        selectionVersionNo: 1,
+        status: 'CONFIRMED',
+        confirmedAt: new Date(),
+        isCurrent: true,
+      },
+    });
+  }
+
+  const contract = await ctx.prisma.contract.findUniqueOrThrow({ where: { id: contractId } });
+  const signRes = await request(ctx.app.getHttpServer())
+    .post(`/api/v1/contracts/${contractId}/versions/${contract.currentVersionId}/signature`)
+    .set(auth(ctx))
+    .send({ imageDataUrl: SIGN_PNG, signerName: '테스트서명' });
+  if (signRes.status !== 201 && signRes.status !== 200)
+    throw new Error(`서명 실패(${signRes.status}): ${JSON.stringify(signRes.body)}`);
+
+  const after = await ctx.prisma.contract.findUniqueOrThrow({ where: { id: contractId } });
+  const completeRes = await request(ctx.app.getHttpServer())
+    .post(`/api/v1/contracts/${contractId}/complete`)
+    .set(auth(ctx))
+    .send({ version: after.rowVersion });
+  if (completeRes.status !== 200)
+    throw new Error(`계약완료 실패(${completeRes.status}): ${JSON.stringify(completeRes.body)}`);
+  return completeRes.body.data;
+}
+
+/**
+ * 계약 품목 + 주문품목을 한 쌍으로 만든다 (픽스처 공용).
+ *
+ * 계약 품목(ContractItem)은 **계약 소유**이고 컨설팅(옵션·렌탈 선택)의 앵커다.
+ * 주문품목(OrderItem)은 계약완료 시 그 품목을 물리화한 결과이며 sourceContractItemId로 되짚는다.
+ * 실제 흐름(계약완료)을 거치지 않고 진행 단계 데이터를 바로 만들 때 쓴다.
+ */
+export async function seedItemPair(
+  prisma: PrismaService,
+  args: {
+    contractId: string;
+    orderId: string;
+    /** 계약 라인 참조(있으면 연결) */
+    lineId?: string | null;
+    transactionType?: 'CUSTOM' | 'RENTAL';
+    productCategory: string;
+    sequenceNo?: number;
+    displayName: string;
+    /** 주문품목 상태 (계약 품목은 항상 CREATED) */
+    status?: string;
+    /** 만들 구성품 코드 — 주문품목·계약품목 양쪽에 같은 축으로 만든다 */
+    components?: string[];
+  },
+): Promise<{ contractItemId: string; orderItemId: string; componentIds: string[] }> {
+  const sequenceNo = args.sequenceNo ?? 1;
+  const contractItemId = randomUUID();
+  const componentIds: string[] = [];
+  await prisma.contractItem.create({
+    data: {
+      id: contractItemId,
+      contractId: args.contractId,
+      sourceContractLineId: args.lineId ?? null,
+      transactionType: args.transactionType ?? 'CUSTOM',
+      productCategory: args.productCategory,
+      sequenceNo,
+      displayName: args.displayName,
+      components: {
+        create: (args.components ?? []).map((componentType) => ({
+          id: randomUUID(),
+          componentType,
+          sequenceNo: 1,
+        })),
+      },
+    },
+  });
+  const orderItemId = randomUUID();
+  await prisma.orderItem.create({
+    data: {
+      id: orderItemId,
+      orderId: args.orderId,
+      sourceContractItemId: contractItemId,
+      productCategory: args.productCategory,
+      sequenceNo,
+      displayName: args.displayName,
+      ...(args.status ? { status: args.status } : {}),
+      components: {
+        create: (args.components ?? []).map((componentType) => {
+          const id = randomUUID();
+          componentIds.push(id);
+          return { id, componentType, sequenceNo: 1 };
+        }),
+      },
+    },
+  });
+  return { contractItemId, orderItemId, componentIds };
+}
+
 /**
  * 업무 데이터 전체 삭제 (시드 데이터는 유지: users/roles/permissions,
  * appointment_purposes, option_sets, contract_types, contract_type_lines).

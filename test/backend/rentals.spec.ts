@@ -55,11 +55,23 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
       data: { id: randomUUID(), orderNo: 'ORD-260721-901', contractId: contract.id, transactionType: 'RENTAL' },
     });
     orderId = order.id;
+    // 주문품목은 계약 품목(계약 소유)의 물리화 결과다. 렌탈 선택 세션도 이 품목에 붙는다.
+    const anchorItem = await ctx.prisma.contractItem.create({
+      data: {
+        id: randomUUID(),
+        contractId: contract.id,
+        sourceContractLineId: line.id,
+        transactionType: 'RENTAL',
+        productCategory: 'SUIT',
+        sequenceNo: 1,
+        displayName: '렌탈 정장 #1',
+      },
+    });
     const orderItem = await ctx.prisma.orderItem.create({
       data: {
         id: randomUUID(),
         orderId: order.id,
-        sourceContractLineId: line.id,
+        sourceContractItemId: anchorItem.id,
         productCategory: 'SUIT',
         sequenceNo: 1,
         displayName: '렌탈 정장 #1',
@@ -832,7 +844,8 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
 
 describe('렌탈 스타일 선택·기준정보 (v2 D3)', () => {
   let ctx: TestContext;
-  let orderItemId: string;
+  // 렌탈 선택은 계약 품목(ContractItem)·그 부위에 붙는다 (컨설팅은 작성중 단계)
+  let contractItemId: string;
   let jacketComponentId: string;
   let sessionId: string;
   let sessionVersion = 0;
@@ -863,14 +876,33 @@ describe('렌탈 스타일 선택·기준정보 (v2 D3)', () => {
     const order = await ctx.prisma.order.create({
       data: { id: randomUUID(), orderNo: 'ORD-260721-950', contractId: contract.id, transactionType: 'RENTAL' },
     });
-    const orderItem = await ctx.prisma.orderItem.create({
-      data: { id: randomUUID(), orderId: order.id, sourceContractLineId: line.id, productCategory: 'SUIT', sequenceNo: 1, displayName: '렌탈 정장' },
+    const contractItem = await ctx.prisma.contractItem.create({
+      data: {
+        id: randomUUID(),
+        contractId: contract.id,
+        sourceContractLineId: line.id,
+        transactionType: 'RENTAL',
+        productCategory: 'SUIT',
+        sequenceNo: 1,
+        displayName: '렌탈 정장',
+      },
     });
-    orderItemId = orderItem.id;
-    const jacket = await ctx.prisma.orderItemComponent.create({
-      data: { id: randomUUID(), orderItemId: orderItem.id, componentType: 'JACKET' },
+    contractItemId = contractItem.id;
+    const jacket = await ctx.prisma.contractItemComponent.create({
+      data: { id: randomUUID(), contractItemId: contractItem.id, componentType: 'JACKET' },
     });
     jacketComponentId = jacket.id;
+    // 물리화(계약완료) 결과인 주문품목 — 배정 흐름에서 쓴다.
+    await ctx.prisma.orderItem.create({
+      data: {
+        id: randomUUID(),
+        orderId: order.id,
+        sourceContractItemId: contractItem.id,
+        productCategory: 'SUIT',
+        sequenceNo: 1,
+        displayName: '렌탈 정장',
+      },
+    });
 
     // 후보가 될 AVAILABLE 실물 2건 (JACKET / NAVY / L)
     await api(ctx)
@@ -917,7 +949,7 @@ describe('렌탈 스타일 선택·기준정보 (v2 D3)', () => {
 
   it('RENTAL 품목의 렌탈 선택 세션을 시작하고 부위 슬롯을 반환한다', async () => {
     const res = await api(ctx)
-      .post(`/api/v1/order-items/${orderItemId}/rental-selection`)
+      .post(`/api/v1/contract-items/${contractItemId}/rental-selection`)
       .set(auth(ctx))
       .expect(201);
     expect(res.body.data.status).toBe('IN_PROGRESS');
@@ -928,7 +960,7 @@ describe('렌탈 스타일 선택·기준정보 (v2 D3)', () => {
 
     // 재호출 시 동일 현재 세션 반환
     const again = await api(ctx)
-      .post(`/api/v1/order-items/${orderItemId}/rental-selection`)
+      .post(`/api/v1/contract-items/${contractItemId}/rental-selection`)
       .set(auth(ctx))
       .expect(201);
     expect(again.body.data.sessionId).toBe(sessionId);
@@ -941,7 +973,7 @@ describe('렌탈 스타일 선택·기준정보 (v2 D3)', () => {
       .send({ colorCode: 'NAVY', sizeCode: '50', notes: '기장 -2cm', version: sessionVersion })
       .expect(200);
     const jacket = res.body.data.components.find(
-      (c: { orderItemComponentId: string }) => c.orderItemComponentId === jacketComponentId,
+      (c: { contractItemComponentId: string }) => c.contractItemComponentId === jacketComponentId,
     );
     expect(jacket).toMatchObject({ colorCode: 'NAVY', sizeCode: '50', notes: '기장 -2cm' });
     sessionVersion = res.body.data.version;
@@ -1009,7 +1041,7 @@ describe('렌탈 스타일 선택·기준정보 (v2 D3)', () => {
       .send({ inventoryItemId: pick.id, version: sessionVersion })
       .expect(200);
     const jacket = selected.body.data.components.find(
-      (c: { orderItemComponentId: string }) => c.orderItemComponentId === jacketComponentId,
+      (c: { contractItemComponentId: string }) => c.contractItemComponentId === jacketComponentId,
     );
     expect(jacket.selectedInventoryItemId).toBe(pick.id);
     sessionVersion = selected.body.data.version;
@@ -1046,11 +1078,11 @@ describe('렌탈 스타일 선택·기준정보 (v2 D3)', () => {
   it('기간이 겹치는 배정이 있는 실물은 후보에서 빠지고, 기간을 바꾸면 고른 실물이 해제된다', async () => {
     // 새 세션(2번째 버전)으로 검증한다 — 앞 테스트에서 현재 세션은 확정됐다.
     await ctx.prisma.rentalSelectionSession.updateMany({
-      where: { orderItemId },
+      where: { contractItemId },
       data: { isCurrent: false },
     });
     const started = await api(ctx)
-      .post(`/api/v1/order-items/${orderItemId}/rental-selection`)
+      .post(`/api/v1/contract-items/${contractItemId}/rental-selection`)
       .set(auth(ctx))
       .expect(201);
     const sid = started.body.data.sessionId as string;
@@ -1087,8 +1119,12 @@ describe('렌탈 스타일 선택·기준정보 (v2 D3)', () => {
     const occupied = await ctx.prisma.rentalInventoryItem.findFirstOrThrow({
       where: { managementCode: 'RJ-NV-L-001' },
     });
-    const component = await ctx.prisma.orderItemComponent.findUniqueOrThrow({
-      where: { id: jacketComponentId },
+    // 배정(RentalAllocation)은 주문품목 부위에 붙는다 — 계약 품목 부위와 축은 같고 물리화 결과다.
+    const physicalItem = await ctx.prisma.orderItem.findFirstOrThrow({
+      where: { sourceContractItemId: contractItemId },
+    });
+    const component = await ctx.prisma.orderItemComponent.create({
+      data: { id: randomUUID(), orderItemId: physicalItem.id, componentType: 'JACKET' },
     });
     await ctx.prisma.rentalAllocation.create({
       data: {
@@ -1141,11 +1177,29 @@ describe('렌탈 스타일 선택·기준정보 (v2 D3)', () => {
     const order = await ctx.prisma.order.create({
       data: { id: randomUUID(), orderNo: 'ORD-260721-951', contractId: contract.id, transactionType: 'CUSTOM' },
     });
-    const item = await ctx.prisma.orderItem.create({
-      data: { id: randomUUID(), orderId: order.id, sourceContractLineId: cl.id, productCategory: 'SUIT', sequenceNo: 1, displayName: '맞춤 정장' },
+    const customItem = await ctx.prisma.contractItem.create({
+      data: {
+        id: randomUUID(),
+        contractId: contract.id,
+        sourceContractLineId: cl.id,
+        transactionType: 'CUSTOM',
+        productCategory: 'SUIT',
+        sequenceNo: 1,
+        displayName: '맞춤 정장',
+      },
+    });
+    await ctx.prisma.orderItem.create({
+      data: {
+        id: randomUUID(),
+        orderId: order.id,
+        sourceContractItemId: customItem.id,
+        productCategory: 'SUIT',
+        sequenceNo: 1,
+        displayName: '맞춤 정장',
+      },
     });
     const res = await api(ctx)
-      .post(`/api/v1/order-items/${item.id}/rental-selection`)
+      .post(`/api/v1/contract-items/${customItem.id}/rental-selection`)
       .set(auth(ctx))
       .expect(400);
     expect(res.body.error.code).toBe('VALIDATION_ERROR');
