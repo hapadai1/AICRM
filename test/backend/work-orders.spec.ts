@@ -140,11 +140,23 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
         transactionType: 'CUSTOM',
       },
     });
+    // 주문품목은 계약 품목(계약 소유)의 물리화 결과다. 컨설팅(옵션 세션)도 이 품목에 붙는다.
+    const anchorItem = await ctx.prisma.contractItem.create({
+      data: {
+        id: randomUUID(),
+        contractId: contract.id,
+        sourceContractLineId: contractLine.id,
+        transactionType: 'CUSTOM',
+        productCategory,
+        sequenceNo: 1,
+        displayName: productCategory === 'SHOES' ? '구두 #1' : '정장 #1',
+      },
+    });
     const orderItem = await ctx.prisma.orderItem.create({
       data: {
         id: randomUUID(),
         orderId: order.id,
-        sourceContractLineId: contractLine.id,
+        sourceContractItemId: anchorItem.id,
         productCategory,
         sequenceNo: 1,
         displayName: productCategory === 'SHOES' ? '구두 #1' : '정장 #1',
@@ -157,7 +169,7 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
       await ctx.prisma.optionSelectionSession.create({
         data: {
           id: optionSessionId,
-          orderItemId: orderItem.id,
+          contractItemId: anchorItem.id,
           optionSetVersionId,
           selectionVersionNo: 1,
           status: 'CONFIRMED',

@@ -2,11 +2,8 @@ import {
   CheckOutlined,
   DeleteOutlined,
   DiffOutlined,
-  EditOutlined,
   FileExcelOutlined,
-  HighlightOutlined,
   SkinOutlined,
-  StopOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -18,11 +15,8 @@ import {
   Descriptions,
   Flex,
   Input,
-  InputNumber,
-  List,
   Modal,
   Space,
-  Switch,
   Table,
   Tag,
   Tooltip,
@@ -34,8 +28,6 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ApiError } from '../../api/client';
 import { useModeStore } from '../../app/mode-store';
 import {
-  cancelContract,
-  confirmContractRevision,
   createContractRevision,
   deleteContract,
   downloadContractExcel,
@@ -43,24 +35,14 @@ import {
   completeContract,
   fetchContractFlow,
   fetchContractVersions,
-  saveSignature,
   type ContractVersion,
   type ProductCategory,
-  type RevisionConfirmResult,
   type TransactionType,
 } from '../../api/contracts';
 import { BackButton } from '../../shared/BackButton';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { ContractDocumentView } from './ContractDocumentView';
-import {
-  ContractLineEditor,
-  createLine,
-  linesTotal,
-  THOUSANDS,
-  type EditableLine,
-} from './ContractLineEditor';
-import { ContractSignPad } from './ContractSignPad';
 import {
   CONTRACT_STATUS_META,
   CONTRACT_VERSION_STATUS_META,
@@ -70,7 +52,6 @@ import {
   TRANSACTION_TYPE_LABEL,
   TRANSACTION_TYPE_TAG_COLOR,
 } from './labels';
-import { useUnsavedWarning } from './use-unsaved-warning';
 import { usePageTitle } from '../../shared/page-title-store';
 
 /** CONT-003 계약 상세·변경 계약 — 버전 목록, 변경 초안·비교·영향 미리보기·확정, 계약 취소 */
@@ -153,56 +134,9 @@ export function ContractDetailPage() {
   // 고객모드에서 들어온 계약 상세에는 버전 이력을 노출하지 않는다 (고객 화면은 최종 계약서만).
   const customerMode = useModeStore((s) => s.mode) === 'CUSTOMER';
 
-  // 버전 상태 필드는 versionStatus 다 (status 아님).
-  // 변경 초안 편집기는 '변경할 수 있는 계약'에만 띄운다. 작성 중(DRAFT)·취소된 계약에도 v1이
-  // DRAFT로 남아 있는데, 이걸 변경 초안으로 취급하면 계약서 + 편집기로 화면이 쪼개진다.
-  const revisable = detail?.status === 'CONFIRMED' || detail?.status === 'CHANGED';
-  const draftRevision = revisable ? versions?.find((v) => v.versionStatus === 'DRAFT') : undefined;
-  const baseline = versions?.find(
-    (v) => v.versionNo === detail?.currentVersionNo && v.versionStatus === 'CONFIRMED',
-  );
-
   // 버전 목록에서 고른 버전 — 목록 하단에 그 버전의 변경 전후를 편다.
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
 
-  // 변경 초안 품목 편집 상태
-  const [revLines, setRevLines] = useState<EditableLine[]>([]);
-  const [revManualTotal, setRevManualTotal] = useState(false);
-  const [revManualAmount, setRevManualAmount] = useState(0);
-  const [revDirty, setRevDirty] = useState(false);
-
-  useEffect(() => {
-    if (!draftRevision) {
-      setRevLines([]);
-      setRevDirty(false);
-      return;
-    }
-    const loaded = draftRevision.lines.map((l) =>
-      createLine({
-        id: l.id,
-        transactionType: l.transactionType,
-        productCategory: l.productCategory,
-        quantity: l.quantity,
-        unitPrice: l.unitPrice,
-        amount: l.amount,
-        note: l.note,
-      }),
-    );
-    setRevLines(loaded);
-    // 저장된 합계가 품목 합계와 다르면(할인 등) 직접 입력 모드로 열어 그 값을 지킨다.
-    setRevManualAmount(draftRevision.totalAmount);
-    setRevManualTotal(draftRevision.totalAmount > 0 && draftRevision.totalAmount !== linesTotal(loaded));
-    setRevDirty(false);
-  }, [draftRevision?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useUnsavedWarning(revDirty);
-
-  const compareRows = useMemo(
-    () => (draftRevision ? buildCompareRows(baseline?.lines ?? [], revLines) : []),
-    [draftRevision, baseline, revLines],
-  );
-  const createdPreview = compareRows.filter((r) => r.afterQty > r.beforeQty);
-  const cancelledPreview = compareRows.filter((r) => r.afterQty < r.beforeQty);
   // 선택 버전 ↔ 직전 버전 비교 (버전 목록 하단)
   const orderedVersions = useMemo(
     () => [...(versions ?? [])].sort((a, b) => a.versionNo - b.versionNo),
@@ -219,27 +153,18 @@ export function ContractDetailPage() {
     [selectedVersion, previousVersion],
   );
 
-  const revLineTotal = linesTotal(revLines);
-  // 합계 금액은 품목 합계 자동. [직접 입력]을 켰을 때만 수기 값을 쓴다.
-  const revTotal = revManualTotal ? revManualAmount : revLineTotal;
-  const revDiff = revTotal - revLineTotal;
-
   // 변경 사유·취소 사유 입력 모달
   const [revisionModalOpen, setRevisionModalOpen] = useState(false);
   const [revisionReason, setRevisionReason] = useState('');
-  const [cancelModalOpen, setCancelModalOpen] = useState(false);
-  const [cancelReason, setCancelReason] = useState('');
-  const [revisionResult, setRevisionResult] = useState<RevisionConfirmResult | null>(null);
-  const [signOpen, setSignOpen] = useState(false);
 
   const onApiError = (e: unknown) => {
     message.error(e instanceof ApiError ? e.message : '처리 중 오류가 발생했습니다.');
   };
 
   /**
-   * 계약 흐름 게이팅 (현업 확정 2026-07-28).
-   * 계약서 등록 → 스타일 컨설팅(전 품목 확정) → 서명 → 계약 완료.
-   * 서명은 **현재 확정 버전**에 붙는다. 변경계약을 확정하면 서명이 풀려 다시 받아야 한다.
+   * 계약 흐름 게이팅 (현업 확정 2026-07-30).
+   * 작성중(수정·컨설팅·서명) → 서명완료 → 계약완료 → 수정하기(버전업) → 작성중 …
+   * 서명은 작성 화면에서 받으므로 이 화면에는 [계약완료]·[수정하기]만 있다.
    */
   const flowQuery = useQuery({
     queryKey: ['contracts', id, 'flow'],
@@ -251,21 +176,12 @@ export function ContractDetailPage() {
     void queryClient.invalidateQueries({ queryKey: ['contracts', id, 'flow'] });
   };
 
-  const signMutation = useMutation({
-    mutationFn: (input: { imageDataUrl: string; signerName: string }) =>
-      saveSignature(id, flow!.currentVersionId!, { ...input, version: detail?.version }),
-    onSuccess: () => {
-      setSignOpen(false);
-      message.success('서명이 저장되었습니다. 이제 계약을 완료할 수 있습니다.');
-      invalidateFlow();
-    },
-    onError: onApiError,
-  });
-
   const completeMutation = useMutation({
     mutationFn: () => completeContract(id, { version: detail?.version }),
     onSuccess: (result) => {
-      message.success(`계약이 완료되었습니다. 계약서 v${result.versionNo}를 보관했습니다.`);
+      message.success(
+        `계약이 완료되었습니다. 계약서 v${result.versionNo} 보관 · 주문 ${result.orders.length}건 생성.`,
+      );
       invalidateFlow();
       invalidateAll();
     },
@@ -282,37 +198,18 @@ export function ContractDetailPage() {
     void queryClient.invalidateQueries({ queryKey: ['orders'] });
   };
 
+  /**
+   * 수정하기(버전업) — 계약서를 새 버전으로 복사하고 작성중으로 되돌린다.
+   * 품목·컨설팅·주문·작업지시서·입출고는 그대로 이어지고, 곧바로 작성 화면으로 넘어간다.
+   */
   const createRevisionMutation = useMutation({
     mutationFn: (reason: string) => createContractRevision(id, { changeReason: reason }),
-    onSuccess: () => {
-      message.success('변경 초안을 생성했습니다. 품목을 수정한 뒤 변경 확정해 주세요.');
+    onSuccess: (revision) => {
+      message.success(`v${revision.versionNo} 계약서를 만들었습니다. 수정 후 다시 서명해 주세요.`);
       setRevisionModalOpen(false);
       setRevisionReason('');
-      void queryClient.invalidateQueries({ queryKey: ['contracts', id, 'versions'] });
-    },
-    onError: onApiError,
-  });
-
-  const confirmRevisionMutation = useMutation({
-    mutationFn: (revision: ContractVersion) =>
-      confirmContractRevision(id, revision.id, {
-        changeReason: revision.changeReason,
-        version: detail?.version ?? 1,
-        totalAmount: revTotal,
-        lines: revLines.map((l) => ({
-          id: l.id,
-          transactionType: l.transactionType,
-          productCategory: l.productCategory,
-          quantity: l.quantity,
-          unitPrice: l.unitPrice,
-          amount: l.amount,
-          note: l.note?.trim() || undefined,
-        })),
-      }),
-    onSuccess: (result) => {
-      setRevDirty(false);
-      setRevisionResult(result);
       invalidateAll();
+      navigate(`/contracts/new?contractId=${id}`);
     },
     onError: onApiError,
   });
@@ -350,81 +247,19 @@ export function ContractDetailPage() {
     });
   };
 
-  const cancelMutation = useMutation({
-    mutationFn: (reason: string) => cancelContract(id, { reason, version: detail?.version ?? 1 }),
-    onSuccess: () => {
-      message.success('계약을 취소했습니다. 미진행 품목이 함께 취소되었습니다.');
-      setCancelModalOpen(false);
-      setCancelReason('');
-      invalidateAll();
-    },
-    onError: onApiError,
-  });
-
-  const handleConfirmRevision = () => {
-    if (!draftRevision) return;
-    if (revLines.length === 0) {
-      message.error('품목을 1개 이상 입력해 주세요.');
-      return;
-    }
-    modal.confirm({
-      title: '변경 계약 확정',
-      okText: '변경 확정',
-      cancelText: '취소',
-      width: 520,
-      content: (
-        <Flex vertical gap={8}>
-          <Typography.Text>
-            v{draftRevision.versionNo} 버전으로 확정합니다. 수량 증가는 신규 주문 품목을 생성하고, 수량 감소
-            대상 품목은 삭제 대신 취소 처리됩니다.
-          </Typography.Text>
-          {createdPreview.length > 0 && (
-            <Typography.Text type="success">
-              생성:{' '}
-              {createdPreview
-                .map(
-                  (r) =>
-                    `${TRANSACTION_TYPE_LABEL[r.transactionType]} ${PRODUCT_CATEGORY_LABEL[r.productCategory]} +${r.afterQty - r.beforeQty}`,
-                )
-                .join(', ')}
-            </Typography.Text>
-          )}
-          {cancelledPreview.length > 0 && (
-            <Typography.Text type="danger">
-              취소:{' '}
-              {cancelledPreview
-                .map(
-                  (r) =>
-                    `${TRANSACTION_TYPE_LABEL[r.transactionType]} ${PRODUCT_CATEGORY_LABEL[r.productCategory]} -${r.beforeQty - r.afterQty}`,
-                )
-                .join(', ')}
-            </Typography.Text>
-          )}
-          {cancelledPreview.length > 0 && (
-            <Alert
-              type="warning"
-              showIcon
-              message="작업지시서 출력·렌탈 배정 등 진행 이력이 있는 품목이 취소 대상에 포함될 수 있습니다. 진행이 덜 된 품목부터 취소됩니다."
-            />
-          )}
-          {revManualTotal && revDiff !== 0 && (
-            <Alert
-              type="warning"
-              showIcon
-              message={`직접 입력한 합계 금액이 품목 합계(${formatKrw(revLineTotal)})와 ${formatKrw(
-                Math.abs(revDiff),
-              )} 차이납니다.`}
-            />
-          )}
-        </Flex>
-      ),
-      onOk: async () => {
-        await confirmRevisionMutation.mutateAsync(draftRevision);
-      },
-    });
-  };
-
   usePageTitle(detail?.contractNo ? `계약 ${detail.contractNo}` : null);
+
+  /**
+   * 작성중(DRAFT) 계약은 상세를 보여 주지 않는다 — 아직 작성 중인 계약서이므로
+   * 곧바로 수정(작성) 화면으로 보낸다. 목록에서도 같은 곳으로 이동하지만,
+   * 링크·뒤로가기 등 다른 경로로 들어온 경우를 여기서 받는다.
+   * 고객모드는 예외 — 고객 화면에서 작성 폼을 열지는 않는다.
+   */
+  useEffect(() => {
+    if (detail?.status === 'DRAFT' && !customerMode) {
+      navigate(`/contracts/new?contractId=${detail.id}`, { replace: true });
+    }
+  }, [detail?.status, detail?.id, customerMode, navigate]);
 
   if (error) {
     return (
@@ -441,22 +276,8 @@ export function ContractDetailPage() {
   }
 
   const statusMeta = metaOf(CONTRACT_STATUS_META, detail?.status ?? '');
-  const canRevise = detail?.status === 'CONFIRMED' || detail?.status === 'CHANGED';
-
-  /** [서명하기]가 잠긴 이유를 그 자리에서 알려준다 — 왜 못 누르는지 찾아다니지 않게. */
-  const signHint = !flow
-    ? ''
-    : flow.completed
-      ? '완료된 계약입니다.'
-      : !flow.registered
-        ? '계약서를 등록(확정)한 뒤 서명할 수 있습니다.'
-        : flow.consulting.ready
-          ? ''
-          : flow.consulting.targetCount === 0
-            ? '주문 품목이 없습니다.'
-            : `스타일 컨설팅 미확정 ${flow.consulting.pending.length}건: ${flow.consulting.pending
-                .map((item) => item.displayName)
-                .join(', ')}`;
+  /** 완료된 계약만 제작·입출고로 이어진다 — 주문이 계약완료 시점에 생기기 때문. */
+  const physicalized = detail?.status === 'COMPLETED';
 
   const handleComplete = () => {
     modal.confirm({
@@ -483,9 +304,8 @@ export function ContractDetailPage() {
       },
     });
   };
-  const canCancel = detail && detail.status !== 'CANCELLED' && detail.status !== 'COMPLETED';
-  // 삭제는 아직 확정되지 않았거나(임시저장) 이미 취소된 계약만 — 확정 계약은 취소로만 정리한다.
-  const canDelete = detail?.status === 'DRAFT' || detail?.status === 'CANCELLED';
+  // 삭제는 취소된 계약만 — 오작성 정리용이다. 취소는 작성중 화면에서 한다.
+  const canDelete = detail?.status === 'CANCELLED';
 
   const versionColumns: ColumnsType<ContractVersion> = [
     {
@@ -569,73 +389,36 @@ export function ContractDetailPage() {
               disabled={!detail}
               onClick={() => excelMutation.mutate()}
             >
-              Excel 출력
+              계약서 출력
             </Button>
-            {detail?.status === 'DRAFT' && (
-              <Can permission="CONTRACT_EDIT">
+            {/*
+              헤더 우상단은 기능 버튼만 (현업 확정 2026-07-30).
+              서명완료 → [계약완료], 계약완료 → [수정하기]. 스타일 컨설팅·제작·입출고 이동은 화면 하단.
+            */}
+            {flow?.canComplete && (
+              <Can permission="CONTRACT_CONFIRM">
                 <Button
-                  icon={<EditOutlined />}
-                  onClick={() => navigate(`/contracts/new?contractId=${detail.id}`)}
+                  type="primary"
+                  icon={<CheckOutlined />}
+                  loading={completeMutation.isPending}
+                  onClick={handleComplete}
                 >
-                  계약서 이어서 작성
+                  계약완료
                 </Button>
               </Can>
             )}
-            {canRevise && (
-              <Button
-                type="primary"
-                icon={<SkinOutlined />}
-                onClick={() => navigate(`/contracts/${id}/options`)}
-              >
-                스타일 컨설팅
-              </Button>
-            )}
-            {canRevise && (
-              <Button icon={<ToolOutlined />} onClick={() => navigate(`/contracts/${id}/production`)}>
-                제작·입출고
-              </Button>
-            )}
-            {/* 서명 → 계약 완료 (현업 확정 2026-07-28). 컨설팅이 끝나야 서명이 열린다. */}
-            {canRevise && (
-              <Can permission="CONTRACT_SIGN">
-                <Tooltip title={signHint}>
-                  <Button
-                    icon={<HighlightOutlined />}
-                    disabled={!flow?.canSign}
-                    onClick={() => setSignOpen(true)}
-                  >
-                    {flow?.signed ? '다시 서명' : '서명하기'}
-                  </Button>
-                </Tooltip>
-              </Can>
-            )}
-            {canRevise && (
-              <Can permission="CONTRACT_CONFIRM">
-                <Tooltip title={flow?.canComplete ? '' : '서명을 받은 뒤 완료할 수 있습니다.'}>
+            {flow?.canRevise && (
+              <Can permission="CONTRACT_REVISE">
+                <Tooltip title="계약서를 새 버전으로 복사해 다시 작성합니다. 컨설팅·제작 진행은 그대로 이어집니다.">
                   <Button
                     type="primary"
-                    icon={<CheckOutlined />}
-                    loading={completeMutation.isPending}
-                    disabled={!flow?.canComplete}
-                    onClick={handleComplete}
+                    icon={<DiffOutlined />}
+                    loading={createRevisionMutation.isPending}
+                    onClick={() => setRevisionModalOpen(true)}
                   >
-                    계약 완료
+                    수정하기
                   </Button>
                 </Tooltip>
-              </Can>
-            )}
-            {canRevise && !draftRevision && (
-              <Can permission="CONTRACT_REVISE">
-                <Button icon={<DiffOutlined />} onClick={() => setRevisionModalOpen(true)}>
-                  변경 초안 생성
-                </Button>
-              </Can>
-            )}
-            {canCancel && (
-              <Can permission="CONTRACT_CANCEL">
-                <Button danger icon={<StopOutlined />} onClick={() => setCancelModalOpen(true)}>
-                  계약 취소
-                </Button>
               </Can>
             )}
             {canDelete && (
@@ -671,116 +454,6 @@ export function ContractDetailPage() {
       {/* 계약서 웹 표시 — 품목(벌) × 부위 × 유료옵션 계층·서명 상태 (설계서 v2 03 §6) */}
       {id && <ContractDocumentView contractId={id} />}
 
-      {draftRevision && (
-        <Card
-          title={
-            <Space>
-              <DiffOutlined />
-              변경 계약 초안 (v{draftRevision.versionNo})
-              <Tag color="gold">확정 전</Tag>
-            </Space>
-          }
-          extra={
-            <Space wrap>
-              {/* 변경 확정 후에는 서명이 풀린다 — 컨설팅 재확정 → 재서명 → 재완료 순서다. */}
-              <Can permission="CONTRACT_REVISE">
-                <Button
-                  type="primary"
-                  icon={<CheckOutlined />}
-                  loading={confirmRevisionMutation.isPending}
-                  onClick={handleConfirmRevision}
-                >
-                  변경 확정
-                </Button>
-              </Can>
-            </Space>
-          }
-        >
-          <Flex vertical gap={16}>
-            <Alert type="info" showIcon message={`변경 사유: ${draftRevision.changeReason ?? '-'}`} />
-            <div>
-              <Typography.Title level={5}>품목 편집</Typography.Title>
-              <ContractLineEditor
-                value={revLines}
-                onChange={(next) => {
-                  setRevLines(next);
-                  setRevDirty(true);
-                }}
-              />
-            </div>
-            {/* 합계 금액은 품목 합계 자동. 할인 등으로 조정할 때만 [직접 입력]을 켠다. */}
-            <Flex justify="space-between" align="flex-end" wrap gap={16}>
-              <Flex vertical gap={4}>
-                <Typography.Text type="secondary">합계 금액 (변경 후)</Typography.Text>
-                {revManualTotal ? (
-                  <InputNumber
-                    className="num-input"
-                    size="large"
-                    min={0}
-                    step={100000}
-                    style={{ width: 220, fontWeight: 700 }}
-                    value={revManualAmount}
-                    formatter={THOUSANDS}
-                    onChange={(v) => {
-                      setRevManualAmount(v ?? 0);
-                      setRevDirty(true);
-                    }}
-                  />
-                ) : (
-                  <Typography.Title level={3} style={{ margin: 0 }}>
-                    {formatKrw(revLineTotal)}
-                  </Typography.Title>
-                )}
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  {revManualTotal
-                    ? `품목 합계 ${formatKrw(revLineTotal)} · 품목을 고쳐도 이 금액은 따라가지 않습니다`
-                    : `품목 ${revLines.length}건 자동 합계`}
-                </Typography.Text>
-              </Flex>
-              <Space size={8}>
-                <Typography.Text type="secondary">직접 입력</Typography.Text>
-                <Switch
-                  size="small"
-                  checked={revManualTotal}
-                  onChange={(on) => {
-                    setRevManualTotal(on);
-                    if (on) setRevManualAmount(revLineTotal);
-                    setRevDirty(true);
-                  }}
-                />
-              </Space>
-            </Flex>
-            {revManualTotal && revDiff !== 0 && (
-              <Alert
-                type={revDiff < 0 ? 'info' : 'warning'}
-                showIcon
-                message={`계약 금액이 품목 합계보다 ${formatKrw(Math.abs(revDiff))} ${
-                  revDiff < 0 ? '적습니다 (할인)' : '많습니다 (추가)'
-                }`}
-                description="의도한 금액이면 그대로 두세요."
-                action={
-                  <Button
-                    size="small"
-                    onClick={() => {
-                      // 불일치를 한 번에 해소: 품목 합계로 되돌리고 자동 모드로 복귀한다.
-                      setRevManualAmount(revLineTotal);
-                      setRevManualTotal(false);
-                      setRevDirty(true);
-                    }}
-                  >
-                    품목 합계로 맞추기
-                  </Button>
-                }
-              />
-            )}
-
-            {/*
-              변경 전후 비교·영향 미리보기는 화면에 상시 펴지 않는다.
-              전후 내용은 [버전 목록]에서 버전을 눌러 보고, 생성·취소 품목은 확정 직전 확인 창에서 알린다.
-            */}
-          </Flex>
-        </Card>
-      )}
 
       {/*
         계약 상세는 최종 계약 내용만 보여준다(위 계약서 카드).
@@ -842,16 +515,33 @@ export function ContractDetailPage() {
         </Card>
       )}
 
-      {/* 목록·고객 상세·칸반 등 여러 경로로 들어오므로 뒤로가기로 통일 */}
+      {/* 화면 하단은 이동 전용 — 기능 버튼은 헤더 우상단에 둔다 */}
       <Card>
-        <BackButton />
+        <Flex justify="space-between" align="center" wrap gap={12}>
+          <BackButton />
+          <Space wrap>
+            <Button icon={<SkinOutlined />} onClick={() => navigate(`/contracts/${id}/options`)}>
+              스타일 컨설팅으로 이동
+            </Button>
+            {/* 주문은 계약완료 시점에 생긴다 → 그 전에는 제작·입출고로 갈 것이 없다. */}
+            {physicalized && (
+              <Button
+                type="primary"
+                icon={<ToolOutlined />}
+                onClick={() => navigate(`/contracts/${id}/production`)}
+              >
+                제작·입출고로 이동
+              </Button>
+            )}
+          </Space>
+        </Flex>
       </Card>
 
-      {/* 변경 초안 생성 — 사유 필수 */}
+      {/* 수정하기(버전업) — 사유 필수 */}
       <Modal
-        title="변경 초안 생성"
+        title="계약서 수정하기"
         open={revisionModalOpen}
-        okText="초안 생성"
+        okText="수정 시작"
         cancelText="취소"
         okButtonProps={{ disabled: !revisionReason.trim() }}
         confirmLoading={createRevisionMutation.isPending}
@@ -860,8 +550,9 @@ export function ContractDetailPage() {
       >
         <Flex vertical gap={8}>
           <Typography.Text>
-            현재 적용 버전(v{detail?.currentVersionNo})을 복사해 변경 초안을 만듭니다. 품목·수량 변경은 변경
-            계약에서만 가능합니다.
+            현재 계약서(v{detail?.currentVersionNo})를 v{(detail?.currentVersionNo ?? 1) + 1}로 복사해 작성중
+            상태로 되돌립니다. 컨설팅 선택·제작·입출고는 그대로 이어지고, 수량을 늘리면 늘어난 품목만 새로
+            컨설팅합니다. 수정 후 다시 서명해야 합니다.
           </Typography.Text>
           <Typography.Text strong>
             변경 사유 <Typography.Text type="danger">*</Typography.Text>
@@ -876,99 +567,6 @@ export function ContractDetailPage() {
         </Flex>
       </Modal>
 
-      {/* 계약 취소 — 사유 필수 */}
-      <Modal
-        title="계약 취소"
-        open={cancelModalOpen}
-        okText="계약 취소"
-        okButtonProps={{ danger: true, disabled: !cancelReason.trim() }}
-        cancelText="닫기"
-        confirmLoading={cancelMutation.isPending}
-        onOk={() => cancelMutation.mutate(cancelReason.trim())}
-        onCancel={() => setCancelModalOpen(false)}
-      >
-        <Flex vertical gap={8}>
-          <Alert
-            type="warning"
-            showIcon
-            message="계약과 미진행 품목이 취소됩니다. 진행 이력이 있는 품목은 상태를 유지하며 별도 처리가 필요합니다."
-          />
-          <Typography.Text strong>
-            취소 사유 <Typography.Text type="danger">*</Typography.Text>
-          </Typography.Text>
-          <Input.TextArea
-            rows={3}
-            value={cancelReason}
-            maxLength={200}
-            placeholder="취소 사유를 입력해 주세요."
-            onChange={(e) => setCancelReason(e.target.value)}
-          />
-        </Flex>
-      </Modal>
-
-      {/* 변경 확정 결과 */}
-      <Modal
-        open={!!revisionResult}
-        title="변경 계약이 확정되었습니다"
-        footer={
-          <Button type="primary" onClick={() => setRevisionResult(null)}>
-            확인
-          </Button>
-        }
-        onCancel={() => setRevisionResult(null)}
-      >
-        {/*
-          응답에는 생성·취소된 품목 목록이 없다. 백엔드가 주는 값(적용 버전·변경 사유·영향 주문)만 보여준다.
-          품목 단위 결과는 아래 주문 상세에서 확인한다 (docs/dev/08 §4).
-        */}
-        <Flex vertical gap={12}>
-          <Typography.Text>
-            계약 {revisionResult?.contractNo} · v{revisionResult?.versionNo} 버전이 적용되었습니다.
-          </Typography.Text>
-          <Typography.Text type="secondary">변경 사유: {revisionResult?.changeReason ?? '-'}</Typography.Text>
-          <Typography.Text strong>영향 주문</Typography.Text>
-          <List
-            size="small"
-            bordered
-            dataSource={revisionResult?.orders ?? []}
-            locale={{ emptyText: '변경된 주문이 없습니다.' }}
-            renderItem={(o) => (
-              <List.Item
-                actions={[
-                  <Button key="open" type="link" onClick={() => navigate(`/orders/${o.id}`)}>
-                    주문 상세
-                  </Button>,
-                ]}
-              >
-                <Space>
-                  <Tag color={TRANSACTION_TYPE_TAG_COLOR[o.tradeType]}>{TRANSACTION_TYPE_LABEL[o.tradeType]}</Tag>
-                  <Typography.Text strong>{o.orderNo}</Typography.Text>
-                </Space>
-              </List.Item>
-            )}
-          />
-        </Flex>
-      </Modal>
-
-      {/* 계약서 서명 캔버스 — 열 때마다 새로 마운트 */}
-      <Modal
-        open={signOpen}
-        title="계약서 서명"
-        footer={null}
-        width={680}
-        destroyOnClose
-        maskClosable={false}
-        onCancel={() => setSignOpen(false)}
-      >
-        {flow?.currentVersionId && (
-          <ContractSignPad
-            defaultSignerName={detail?.customerName}
-            saving={signMutation.isPending}
-            onCancel={() => setSignOpen(false)}
-            onSave={(imageDataUrl, signerName) => signMutation.mutate({ imageDataUrl, signerName })}
-          />
-        )}
-      </Modal>
     </Flex>
   );
 }

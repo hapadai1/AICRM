@@ -17,8 +17,6 @@ import { AuthUser, CurrentUser, RequirePermission } from '../../common/decorator
 import {
   CancelContractDto,
   CompleteContractDto,
-  ConfirmContractDto,
-  ConfirmRevisionDto,
   ContractListQueryDto,
   CreateContractDto,
   CreateRevisionDto,
@@ -69,40 +67,19 @@ export class ContractsController {
     return this.contracts.getVersions(id);
   }
 
-  @Post(':id/confirm')
-  @HttpCode(HttpStatus.OK)
-  @RequirePermission('CONTRACT_CONFIRM')
-  confirm(
-    @Param('id') id: string,
-    @Body() dto: ConfirmContractDto,
-    @CurrentUser() actor: AuthUser,
-    @Headers('idempotency-key') idempotencyKey?: string,
-  ) {
-    return this.contracts.confirm(id, dto, actor, idempotencyKey);
-  }
-
+  /**
+   * 수정하기(버전업) — 완료된 계약서를 새 버전으로 복사하고 작성중으로 되돌린다.
+   * 품목·컨설팅·주문·작업지시서·입출고는 계약에 매달려 있어 그대로 이어진다.
+   */
   @Post(':id/revisions')
   @RequirePermission('CONTRACT_REVISE')
   createRevision(@Param('id') id: string, @Body() dto: CreateRevisionDto, @CurrentUser() actor: AuthUser) {
     return this.contracts.createRevision(id, dto, actor);
   }
 
-  @Post(':id/revisions/:revisionId/confirm')
-  @HttpCode(HttpStatus.OK)
-  @RequirePermission('CONTRACT_REVISE')
-  confirmRevision(
-    @Param('id') id: string,
-    @Param('revisionId') revisionId: string,
-    @Body() dto: ConfirmRevisionDto,
-    @CurrentUser() actor: AuthUser,
-    @Headers('idempotency-key') idempotencyKey?: string,
-  ) {
-    return this.contracts.confirmRevision(id, revisionId, dto, actor, idempotencyKey);
-  }
-
   /**
-   * 계약 완료 (현업 확정 2026-07-28). 서명이 끝난 확정 계약만 완료할 수 있고,
-   * 완료 시점의 계약서 엑셀을 구워 보관한다.
+   * 계약 완료 (현업 확정 2026-07-30). 서명완료 계약만 완료할 수 있다.
+   * 여기서 주문·주문품목·고객 전환·진행단계를 물리화하고, 완료 시점 계약서 엑셀을 보관한다.
    */
   @Post(':id/complete')
   @HttpCode(HttpStatus.OK)

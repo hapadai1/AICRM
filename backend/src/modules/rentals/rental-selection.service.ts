@@ -25,16 +25,12 @@ const SESSION_INCLUDE = {
       displayName: true,
       productCategory: true,
       transactionType: true,
-      // 이 세션이 붙은 계약 버전이 현재 버전인 계약(대개 1건)에서 계약번호·고객을 되짚는다.
-      contractVersion: {
+      // 품목은 계약 소유다 → 계약번호·고객을 바로 되짚는다.
+      contract: {
         select: {
-          currentOfContracts: {
-            select: {
-              id: true,
-              contractNo: true,
-              customer: { select: { id: true, name: true } },
-            },
-          },
+          id: true,
+          contractNo: true,
+          customer: { select: { id: true, name: true } },
         },
       },
       components: {
@@ -113,22 +109,15 @@ export class RentalSelectionService {
         where: {
           status: { not: 'CANCELLED' },
           transactionType: 'RENTAL',
-          // contractId 스코프: 이 품목의 계약 버전이 현재 버전인 계약 중 해당 id가 있는 것.
-          ...(contractId
-            ? { contractVersion: { currentOfContracts: { some: { id: contractId } } } }
-            : {}),
+          ...(contractId ? { contractId } : {}),
         },
         include: {
-          contractVersion: {
+          contract: {
             select: {
-              completionDueDate: true,
-              currentOfContracts: {
-                select: {
-                  id: true,
-                  contractNo: true,
-                  customer: { select: { id: true, name: true, phone: true } },
-                },
-              },
+              id: true,
+              contractNo: true,
+              customer: { select: { id: true, name: true, phone: true } },
+              currentVersion: { select: { completionDueDate: true } },
             },
           },
           components: {
@@ -149,7 +138,7 @@ export class RentalSelectionService {
 
     return items.map((item) => {
       const session = item.rentalSelectionSessions[0];
-      const contract = item.contractVersion.currentOfContracts[0] ?? null;
+      const contract = item.contract;
       const lineByComponent = new Map(
         (session?.lines ?? []).map((l) => [l.contractItemComponentId, l]),
       );
@@ -162,7 +151,7 @@ export class RentalSelectionService {
         customerId: contract?.customer.id ?? null,
         customerName: contract?.customer.name ?? null,
         customerPhone: contract?.customer.phone ?? null,
-        completionDueDate: item.contractVersion.completionDueDate?.toISOString() ?? null,
+        completionDueDate: contract?.currentVersion?.completionDueDate?.toISOString() ?? null,
         sessionId: session?.id ?? null,
         status: session?.status ?? 'NOT_STARTED',
         version: session?.rowVersion ?? 0,
@@ -231,7 +220,7 @@ export class RentalSelectionService {
   /** GET /rental-selections/:id — 부위 슬롯(구성품) + 저장값 */
   async detail(sessionId: string) {
     const session = await this.load(sessionId);
-    const contract = session.contractItem.contractVersion.currentOfContracts[0] ?? null;
+    const contract = session.contractItem.contract ?? null;
     const lineByComponent = new Map(session.lines.map((l) => [l.contractItemComponentId, l]));
     return {
       sessionId: session.id,
@@ -537,7 +526,7 @@ export class RentalSelectionService {
     ]);
     const colorName = new Map(colors.map((c) => [c.code, c.name]));
     const sizeName = new Map(sizes.map((s) => [s.code, s.name]));
-    const contract = session.contractItem.contractVersion.currentOfContracts[0] ?? null;
+    const contract = session.contractItem.contract ?? null;
     const lineByComponent = new Map(session.lines.map((l) => [l.contractItemComponentId, l]));
 
     return {

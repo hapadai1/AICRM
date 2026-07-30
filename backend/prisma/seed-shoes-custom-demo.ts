@@ -193,14 +193,14 @@ async function main(): Promise<void> {
       }): Promise<string> => {
         const line = await tx.contractLine.findUniqueOrThrow({
           where: { id: args.lineId },
-          select: { contractVersionId: true, transactionType: true },
+          select: { transactionType: true, contractVersion: { select: { contractId: true } } },
         });
         const contractItemId = uuid();
         contractItemSeq += 1;
         await tx.contractItem.create({
           data: {
             id: contractItemId,
-            contractVersionId: line.contractVersionId,
+            contractId: line.contractVersion.contractId,
             sourceContractLineId: args.lineId,
             transactionType: line.transactionType,
             productCategory: args.productCategory,
@@ -303,7 +303,7 @@ async function main(): Promise<void> {
       });
       const kto = await createContract({
         contractNo: MARKER_CONTRACT_NO, customerId: 강태오, typeCode: 'SHOES_CUSTOM',
-        status: 'CONFIRMED', contractedAt: at(-11, 15),
+        status: 'COMPLETED', contractedAt: at(-11, 15),
         versionNo: 1, total: 1700000, confirmedAt: at(-11, 15),
         completionDueDate: dateOnly(25),
         lines: [
@@ -349,7 +349,7 @@ async function main(): Promise<void> {
       });
       const ljh = await createContract({
         contractNo: 'CTR-260723-202', customerId: 임재현, typeCode: 'SUIT_SHOES_CUSTOM',
-        status: 'CONFIRMED', contractedAt: at(-4, 16),
+        status: 'COMPLETED', contractedAt: at(-4, 16),
         versionNo: 1, total: 2350000, confirmedAt: at(-4, 16),
         completionDueDate: dateOnly(30),
         lines: [

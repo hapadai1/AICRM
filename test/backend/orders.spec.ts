@@ -1,7 +1,14 @@
 import { randomUUID } from 'crypto';
 import { ContractsModule } from '../../backend/src/modules/contracts/contracts.module';
 import { OrdersModule } from '../../backend/src/modules/orders/orders.module';
-import { api, auth, createTestContext, TestContext, truncateBusinessData } from './helpers';
+import {
+  api,
+  auth,
+  createTestContext,
+  signAndCompleteContract,
+  TestContext,
+  truncateBusinessData,
+} from './helpers';
 
 describe('주문·품목·구성품 (Phase 2)', () => {
   let ctx: TestContext;
@@ -12,7 +19,7 @@ describe('주문·품목·구성품 (Phase 2)', () => {
     ctx = await createTestContext([ContractsModule, OrdersModule]);
     await truncateBusinessData(ctx.prisma);
 
-    // 고객 → 계약 초안 → 확정으로 주문·품목·구성품을 만든다
+    // 고객 → 작성중 계약 → 컨설팅 확정 → 서명 → 계약완료로 주문·품목·구성품을 만든다
     const customer = await ctx.prisma.customer.create({
       data: {
         id: randomUUID(),
@@ -33,13 +40,9 @@ describe('주문·품목·구성품 (Phase 2)', () => {
         ],
       })
       .expect(201);
-    // v2 확정 2026-07-28: 서명은 확정의 전제조건이 아니다(계약서 등록 → 컨설팅 → 서명 → 완료).
-    const confirmed = await api(ctx)
-      .post(`/api/v1/contracts/${created.body.data.id}/confirm`)
-      .set(auth(ctx))
-      .send({ version: 0 })
-      .expect(200);
-    orderId = confirmed.body.data.orders.find((o: { tradeType: string }) => o.tradeType === 'CUSTOM').id;
+    // 주문은 계약완료 시점에 생긴다 (현업 확정 2026-07-30).
+    const completed = await signAndCompleteContract(ctx, created.body.data.id);
+    orderId = completed.orders.find((o) => o.tradeType === 'CUSTOM')!.id;
   });
 
   afterAll(async () => {

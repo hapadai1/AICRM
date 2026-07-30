@@ -29,6 +29,23 @@ import {
 const ITEM_WITH_SKU = { rentalSku: true } as const;
 
 /**
+ * 감사로그용 실물 식별 정보.
+ * 상태만 남기면 "렌탈 재고의 상태를 바꿨습니다"가 되어 어느 옷인지 알 수 없다 —
+ * 전/후 양쪽에 같은 값으로 넣어 변경 항목은 늘리지 않으면서 대상만 드러낸다.
+ */
+function itemIdentity(item: {
+  managementCode: string;
+  rentalSku: { componentType: string; color: string; size: string };
+}) {
+  return {
+    managementCode: item.managementCode,
+    componentType: item.rentalSku.componentType,
+    color: item.rentalSku.color,
+    size: item.rentalSku.size,
+  };
+}
+
+/**
  * 코드가 활성 목록에 있는지 + 그 코드가 이 품목에서 쓰이는지 확인한다.
  * componentTypes가 빈 배열이면 품목을 가리지 않는 공통 코드로 본다.
  */
@@ -534,8 +551,8 @@ export class RentalInventoryService {
       action: 'STATUS_CHANGE',
       entityType: 'RENTAL_INVENTORY_ITEM',
       entityId: id,
-      before: { status: item.status, availableFrom: item.availableFrom },
-      after: { status: updated.status, availableFrom: updated.availableFrom },
+      before: { ...itemIdentity(updated), status: item.status, availableFrom: item.availableFrom },
+      after: { ...itemIdentity(updated), status: updated.status, availableFrom: updated.availableFrom },
       reason: dto.reason,
     });
     return updated;
@@ -579,8 +596,8 @@ export class RentalInventoryService {
       action: 'STATUS_CHANGE',
       entityType: 'RENTAL_INVENTORY_ITEM',
       entityId: id,
-      before: { status: item.status, active: item.active },
-      after: { status: 'RETIRED', active: false },
+      before: { ...itemIdentity(updated), status: item.status, active: item.active },
+      after: { ...itemIdentity(updated), status: 'RETIRED', active: false },
       reason: dto.reason,
     });
     return updated;

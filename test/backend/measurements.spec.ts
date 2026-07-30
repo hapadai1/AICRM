@@ -8,6 +8,8 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
   let customerId: string;
   let orderId: string;
   let orderItemId: string;
+  /** 주문품목의 원천인 계약 품목(컨설팅 앵커) */
+  let anchorItemId: string;
 
   // 세션 상태 (테스트 순서 의존)
   let sessionV1: string; // CHEST_UPPER 98.0 / SLEEVE_LEFT 61.0 / SHOE_SIZE 270
@@ -54,11 +56,25 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
       data: { id: orderId, orderNo: 'ORD-MEAS-001', contractId, transactionType: 'CUSTOM' },
     });
     orderItemId = randomUUID();
+    // 주문품목은 계약 품목(계약 소유)의 물리화 결과다 → 앵커 품목을 먼저 만든다.
+    anchorItemId = randomUUID();
+    await ctx.prisma.contractItem.create({
+      data: {
+        id: anchorItemId,
+        contractId,
+        sourceContractLineId: contractLineId,
+        transactionType: 'CUSTOM',
+        productCategory: 'SUIT',
+        sequenceNo: 1,
+        displayName: '정장 #1',
+      },
+    });
+
     await ctx.prisma.orderItem.create({
       data: {
         id: orderItemId,
         orderId,
-        sourceContractLineId: contractLineId,
+        sourceContractItemId: anchorItemId,
         productCategory: 'SUIT',
         sequenceNo: 1,
         displayName: 'SUIT-01',
@@ -502,7 +518,7 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
     const optionSession = await ctx.prisma.optionSelectionSession.create({
       data: {
         id: randomUUID(),
-        orderItemId,
+        contractItemId: anchorItemId,
         optionSetVersionId: optionSetVersion.id,
         selectionVersionNo: 1,
         status: 'CONFIRMED',

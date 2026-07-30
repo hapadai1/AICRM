@@ -13,9 +13,9 @@ interface StageView {
 describe('옵션 마스터·선택 세션 (Phase 3)', () => {
   let ctx: TestContext;
   let optionSetId: string;
-  let orderItem1: string;
-  let orderItem2: string;
-  let orderItem4: string; // 세션 없는 신규 품목 (진행 목록·fabric 테스트용)
+  let contractItem1: string;
+  let contractItem2: string;
+  let contractItem4: string; // 세션 없는 신규 품목 (진행 목록·fabric 테스트용)
 
   // 마스터 흐름에서 채워지는 상태
   let versionV1: string;
@@ -82,22 +82,25 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
     await ctx.prisma.order.create({
       data: { id: orderId, orderNo: 'ORD-OPT-001', contractId, transactionType: 'CUSTOM' },
     });
-    orderItem1 = randomUUID();
-    orderItem2 = randomUUID();
-    await ctx.prisma.orderItem.createMany({
+    // 컨설팅(옵션 선택)은 계약 품목(ContractItem)에서 한다 — 계약 소유이며 작성중 단계부터 존재한다.
+    contractItem1 = randomUUID();
+    contractItem2 = randomUUID();
+    await ctx.prisma.contractItem.createMany({
       data: [
         {
-          id: orderItem1,
-          orderId,
+          id: contractItem1,
+          contractId,
           sourceContractLineId: lineId,
+          transactionType: 'CUSTOM',
           productCategory: 'SUIT',
           sequenceNo: 1,
           displayName: '정장 #1',
         },
         {
-          id: orderItem2,
-          orderId,
+          id: contractItem2,
+          contractId,
           sourceContractLineId: lineId,
+          transactionType: 'CUSTOM',
           productCategory: 'SUIT',
           sequenceNo: 2,
           displayName: '정장 #2',
@@ -310,7 +313,7 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
 
   it('세션 시작 시 ACTIVE 버전으로 NOT_STARTED 세션을 생성한다', async () => {
     const res = await api(ctx)
-      .post(`/api/v1/order-items/${orderItem1}/option-sessions`)
+      .post(`/api/v1/contract-items/${contractItem1}/option-sessions`)
       .set(auth(ctx))
       .expect(201);
     expect(res.body.data.status).toBe('NOT_STARTED');
@@ -324,7 +327,7 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
 
   it('미확정 세션이 있으면 재시작 시 동일 세션을 반환한다', async () => {
     const res = await api(ctx)
-      .post(`/api/v1/order-items/${orderItem1}/option-sessions`)
+      .post(`/api/v1/contract-items/${contractItem1}/option-sessions`)
       .set(auth(ctx))
       .expect(201);
     expect(res.body.data.sessionId).toBe(sessionId);
@@ -433,7 +436,7 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
 
   it('확정 후 재시작하면 선택값이 복사된 새 selection_version_no 세션이 생성된다', async () => {
     const res = await api(ctx)
-      .post(`/api/v1/order-items/${orderItem1}/option-sessions`)
+      .post(`/api/v1/contract-items/${contractItem1}/option-sessions`)
       .set(auth(ctx))
       .expect(201);
     expect(res.body.data.sessionId).not.toBe(confirmedSessionId);
@@ -444,7 +447,7 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
 
     // is_current는 품목당 1개만 유지된다
     const currents = await ctx.prisma.optionSelectionSession.findMany({
-      where: { orderItemId: orderItem1, isCurrent: true },
+      where: { contractItemId: contractItem1, isCurrent: true },
     });
     expect(currents).toHaveLength(1);
     expect(currents[0].id).toBe(res.body.data.sessionId);
@@ -458,9 +461,9 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
     const res = await api(ctx)
       .post(`/api/v1/option-sessions/${confirmedSessionId}/copy`)
       .set(auth(ctx))
-      .send({ targetOrderItemId: orderItem2 })
+      .send({ targetContractItemId: contractItem2 })
       .expect(201);
-    expect(res.body.data.orderItemId).toBe(orderItem2);
+    expect(res.body.data.contractItemId).toBe(contractItem2);
     expect(res.body.data.completedStages).toBe(3);
     expect(res.body.data.status).toBe('REVIEW');
     expect(res.body.data.stages.every((s: StageView) => s.selectedChoiceId)).toBe(true);
@@ -471,24 +474,26 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
   // -------------------------------------------------------------------------
 
   it('option-progress는 맞춤 품목별 진행 현황을 반환하고 취소 품목은 제외한다', async () => {
-    const base = await ctx.prisma.orderItem.findUniqueOrThrow({ where: { id: orderItem1 } });
+    const base = await ctx.prisma.contractItem.findUniqueOrThrow({ where: { id: contractItem1 } });
     const cancelledId = randomUUID();
-    orderItem4 = randomUUID();
-    await ctx.prisma.orderItem.createMany({
+    contractItem4 = randomUUID();
+    await ctx.prisma.contractItem.createMany({
       data: [
         {
           id: cancelledId,
-          orderId: base.orderId,
+          contractId: base.contractId,
           sourceContractLineId: base.sourceContractLineId,
+          transactionType: 'CUSTOM',
           productCategory: 'SUIT',
           sequenceNo: 3,
           displayName: '취소된 정장',
           status: 'CANCELLED',
         },
         {
-          id: orderItem4,
-          orderId: base.orderId,
+          id: contractItem4,
+          contractId: base.contractId,
           sourceContractLineId: base.sourceContractLineId,
+          transactionType: 'CUSTOM',
           productCategory: 'SUIT',
           sequenceNo: 4,
           displayName: '정장 #4',
@@ -496,21 +501,22 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
       ],
     });
 
-    const res = await api(ctx).get('/api/v1/order-items/option-progress').set(auth(ctx)).expect(200);
+    const res = await api(ctx).get('/api/v1/contract-items/option-progress').set(auth(ctx)).expect(200);
     const rows = res.body.data as Array<Record<string, unknown>>;
-    const ids = rows.map((r) => r.orderItemId);
-    expect(ids).toContain(orderItem1);
-    expect(ids).toContain(orderItem2);
-    expect(ids).toContain(orderItem4);
+    const ids = rows.map((r) => r.contractItemId);
+    expect(ids).toContain(contractItem1);
+    expect(ids).toContain(contractItem2);
+    expect(ids).toContain(contractItem4);
     expect(ids).not.toContain(cancelledId); // 취소 품목 제외
 
     // 진행 중(is_current) 세션 기준의 상태·단계 수
-    const row1 = rows.find((r) => r.orderItemId === orderItem1) as Record<string, unknown>;
+    const row1 = rows.find((r) => r.contractItemId === contractItem1) as Record<string, unknown>;
     expect(row1).toMatchObject({
       displayName: '정장 #1',
       productCategory: 'SUIT',
       customerName: '옵션 테스트 고객',
-      orderNo: 'ORD-OPT-001',
+      // 컨설팅은 계약완료(주문 생성) 전 단계다 → 진행 목록에 주문번호가 없다.
+      contractNo: 'CTR-OPT-001',
       status: 'REVIEW',
       completedStages: 3,
       totalStages: 3,
@@ -519,7 +525,7 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
     expect(row1.sessionId).not.toBe(confirmedSessionId); // 확정 세션이 아닌 현재 세션
 
     // 세션이 없는 품목: NOT_STARTED + 활성 버전 단계 수
-    const fresh = rows.find((r) => r.orderItemId === orderItem4) as Record<string, unknown>;
+    const fresh = rows.find((r) => r.contractItemId === contractItem4) as Record<string, unknown>;
     expect(fresh).toMatchObject({
       status: 'NOT_STARTED',
       completedStages: 0,
@@ -531,12 +537,12 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
 
   it('품목의 현재 옵션 세션을 조회하고 없으면 session: null을 반환한다', async () => {
     const res = await api(ctx)
-      .get(`/api/v1/order-items/${orderItem1}/option-session`)
+      .get(`/api/v1/contract-items/${contractItem1}/option-session`)
       .set(auth(ctx))
       .expect(200);
     const session = res.body.data.session;
     expect(session).not.toBeNull();
-    expect(session.orderItemId).toBe(orderItem1);
+    expect(session.contractItemId).toBe(contractItem1);
     expect(session.isCurrent).toBe(true);
     expect(session.stages).toHaveLength(3);
     expect(session.completedStages).toBe(3);
@@ -544,17 +550,17 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
     expect(session.resumeStageId).toBeTruthy(); // 재개 지점 포함
 
     const none = await api(ctx)
-      .get(`/api/v1/order-items/${orderItem4}/option-session`)
+      .get(`/api/v1/contract-items/${contractItem4}/option-session`)
       .set(auth(ctx))
       .expect(200);
     expect(none.body.data.session).toBeNull();
 
-    await api(ctx).get(`/api/v1/order-items/${randomUUID()}/option-session`).set(auth(ctx)).expect(404);
+    await api(ctx).get(`/api/v1/contract-items/${randomUUID()}/option-session`).set(auth(ctx)).expect(404);
   });
 
   it('세션 시작 body의 fabric이 fabricName으로 저장된다', async () => {
     const res = await api(ctx)
-      .post(`/api/v1/order-items/${orderItem4}/option-sessions`)
+      .post(`/api/v1/contract-items/${contractItem4}/option-sessions`)
       .set(auth(ctx))
       .send({ fabric: '캐시미어 네이비' })
       .expect(201);
@@ -565,9 +571,9 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
     expect(row.fabricName).toBe('캐시미어 네이비');
 
     // 진행 목록에 fabric·세션 반영
-    const progress = await api(ctx).get('/api/v1/order-items/option-progress').set(auth(ctx)).expect(200);
+    const progress = await api(ctx).get('/api/v1/contract-items/option-progress').set(auth(ctx)).expect(200);
     const row4 = progress.body.data.find(
-      (r: { orderItemId: string }) => r.orderItemId === orderItem4,
+      (r: { contractItemId: string }) => r.contractItemId === contractItem4,
     );
     expect(row4.fabric).toBe('캐시미어 네이비');
     expect(row4.status).toBe('NOT_STARTED');
@@ -579,9 +585,9 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
   // -------------------------------------------------------------------------
 
   it('부위별 component-attrs를 upsert하고 detail/review의 components[]에 반영된다', async () => {
-    // orderItem4의 현재(NOT_STARTED) 세션 사용
+    // contractItem4의 현재(NOT_STARTED) 세션 사용
     const cur = await api(ctx)
-      .get(`/api/v1/order-items/${orderItem4}/option-session`)
+      .get(`/api/v1/contract-items/${contractItem4}/option-session`)
       .set(auth(ctx))
       .expect(200);
     const sid = cur.body.data.session.sessionId as string;
@@ -635,20 +641,21 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
   });
 
   it('세션 start body의 componentAttrs 배열로 부위별 값을 저장한다', async () => {
-    const base = await ctx.prisma.orderItem.findUniqueOrThrow({ where: { id: orderItem1 } });
+    const base = await ctx.prisma.contractItem.findUniqueOrThrow({ where: { id: contractItem1 } });
     const item5 = randomUUID();
-    await ctx.prisma.orderItem.create({
+    await ctx.prisma.contractItem.create({
       data: {
         id: item5,
-        orderId: base.orderId,
+        contractId: base.contractId,
         sourceContractLineId: base.sourceContractLineId,
+        transactionType: 'CUSTOM',
         productCategory: 'SUIT',
         sequenceNo: 5,
         displayName: '정장 #5',
       },
     });
     const res = await api(ctx)
-      .post(`/api/v1/order-items/${item5}/option-sessions`)
+      .post(`/api/v1/contract-items/${item5}/option-sessions`)
       .set(auth(ctx))
       .send({
         fabric: '기본원단',
@@ -668,16 +675,16 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
   });
 
   it('copy 시 부위별 component-attrs도 함께 복사된다', async () => {
-    // orderItem4 세션(자켓 원단 저장됨)을 orderItem2로 복사
+    // contractItem4 세션(자켓 원단 저장됨)을 contractItem2로 복사
     const cur = await api(ctx)
-      .get(`/api/v1/order-items/${orderItem4}/option-session`)
+      .get(`/api/v1/contract-items/${contractItem4}/option-session`)
       .set(auth(ctx))
       .expect(200);
     const sourceSid = cur.body.data.session.sessionId as string;
     const copied = await api(ctx)
       .post(`/api/v1/option-sessions/${sourceSid}/copy`)
       .set(auth(ctx))
-      .send({ targetOrderItemId: orderItem2 })
+      .send({ targetContractItemId: contractItem2 })
       .expect(201);
     const jacket = copied.body.data.components.find(
       (c: { componentGroup: string }) => c.componentGroup === 'JACKET',

@@ -22,18 +22,13 @@ const SESSION_INCLUDE = {
       id: true,
       displayName: true,
       productCategory: true,
-      contractVersion: {
+      // 품목은 계약 소유다 → 계약번호·고객·금액 반영 대상 계약을 바로 되짚는다.
+      contract: {
         select: {
-          // 이 세션이 붙은 계약 버전이 현재 버전인 계약(대개 1건). 계약번호·고객·
-          // 금액 반영 대상 계약을 여기서 되짚는다.
-          currentOfContracts: {
-            select: {
-              id: true,
-              contractNo: true,
-              currentVersionId: true,
-              customer: { select: { id: true, name: true } },
-            },
-          },
+          id: true,
+          contractNo: true,
+          currentVersionId: true,
+          customer: { select: { id: true, name: true } },
         },
       },
     },
@@ -246,23 +241,15 @@ export class OptionSessionsService {
         where: {
           status: { not: 'CANCELLED' },
           transactionType: 'CUSTOM',
-          contractVersion: {
-            currentOfContracts: {
-              some: contractId ? { id: contractId } : {},
-            },
-          },
+          ...(contractId ? { contractId } : {}),
         },
         include: {
-          contractVersion: {
+          contract: {
             select: {
-              completionDueDate: true,
-              currentOfContracts: {
-                select: {
-                  id: true,
-                  contractNo: true,
-                  customer: { select: { id: true, name: true, phone: true } },
-                },
-              },
+              id: true,
+              contractNo: true,
+              customer: { select: { id: true, name: true, phone: true } },
+              currentVersion: { select: { completionDueDate: true } },
             },
           },
           optionSelectionSessions: {
@@ -304,8 +291,7 @@ export class OptionSessionsService {
     return items.map((item) => {
       const session = item.optionSelectionSessions[0];
       const activeStageIds = new Set(session?.optionSetVersion.stages.map((s) => s.id) ?? []);
-      // 이 계약 버전이 현재 버전인 계약. where 절이 some으로 걸러 항상 1건 이상이다.
-      const contract = item.contractVersion.currentOfContracts[0];
+      const contract = item.contract;
       return {
         // 부위(상의/하의/베스트) 슬롯 — 목록을 부위 단위 행으로 펼치기 위한 축.
         // 세션이 없는 품목도 카테고리의 ACTIVE 버전 단계로 부위별 총 단계 수를 채운다.
@@ -318,7 +304,7 @@ export class OptionSessionsService {
         customerId: contract.customer.id,
         customerName: contract.customer.name,
         customerPhone: contract.customer.phone,
-        completionDueDate: item.contractVersion.completionDueDate?.toISOString() ?? null,
+        completionDueDate: contract.currentVersion?.completionDueDate?.toISOString() ?? null,
         fabric: session?.fabricName ?? null,
         status: session?.status ?? 'NOT_STARTED',
         completedStages: session
@@ -927,7 +913,7 @@ export class OptionSessionsService {
    * 옛 버전 품목의 세션이면 없을 수 있어 null 반환.
    */
   private contractOf(session: SessionWithDetail) {
-    return session.contractItem.contractVersion.currentOfContracts[0] ?? null;
+    return session.contractItem.contract ?? null;
   }
 
   /** 부위 슬롯(카테고리별) + 저장값을 병합한 components[] (설계서 04 §2.3) */

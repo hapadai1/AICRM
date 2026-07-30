@@ -487,6 +487,13 @@ export class ProductionService {
       action: 'EXPORT',
       entityType: 'FITTING_SESSION',
       entityId: fittingId,
+      // 세션이 나중에 지워져도 "누구의 어떤 품목을 출력했나"는 남아야 한다.
+      after: {
+        customerName: session.orderItem.order.contract.customer.name,
+        orderNo: session.orderItem.order.orderNo,
+        displayName: session.orderItem.displayName,
+        fittingDate: session.fittingDate,
+      },
     });
 
     const fileName = `fitting-${session.orderItem.order.orderNo}-${session.fittingDate
@@ -503,7 +510,7 @@ export class ProductionService {
 
   /** 가봉 세션에 파일 첨부. File 저장(FilesService 재사용) + EntityFile(FITTING_SESSION/FACTORY_SENT) 연결. */
   async uploadFittingFile(fittingId: string, file: UploadedMulterFile | undefined, actor: AuthUser) {
-    await this.assertFittingExists(fittingId);
+    const identity = await this.assertFittingExists(fittingId);
     const uploaded = await this.files.upload(file, actor);
     await this.prisma.entityFile.create({
       data: {
@@ -520,7 +527,12 @@ export class ProductionService {
       action: 'UPLOAD',
       entityType: 'FITTING_SESSION',
       entityId: fittingId,
-      after: { fileId: uploaded.id, purpose: FITTING_FILE_PURPOSE, originalName: uploaded.originalName },
+      after: {
+        ...identity,
+        fileId: uploaded.id,
+        purpose: FITTING_FILE_PURPOSE,
+        originalName: uploaded.originalName,
+      },
     });
     return { ...uploaded, purpose: FITTING_FILE_PURPOSE };
   }
@@ -552,6 +564,11 @@ export class ProductionService {
       where: { entityType: 'FITTING_SESSION', entityId: fittingId, fileId },
     });
     if (!link) throw new NotFoundException('가봉 첨부 파일이 없습니다.');
+    const identity = await this.assertFittingExists(fittingId);
+    const file = await this.prisma.file.findUnique({
+      where: { id: fileId },
+      select: { originalName: true },
+    });
     // 참조 중인 File은 삭제되지 않으므로(FilesService.remove 규칙) 링크를 먼저 제거한다.
     await this.prisma.entityFile.delete({ where: { id: link.id } });
     await this.files.remove(fileId, actor);
@@ -560,17 +577,43 @@ export class ProductionService {
       action: 'DELETE',
       entityType: 'FITTING_SESSION',
       entityId: fittingId,
-      before: { fileId, purpose: link.purpose },
+      // 파일은 곧 지워진다 — 이름을 로그에 남겨야 "무엇을 뗐는지" 알 수 있다.
+      before: {
+        ...identity,
+        fileId,
+        purpose: link.purpose,
+        originalName: file?.originalName ?? null,
+      },
     });
     return { id: fileId, deleted: true };
   }
 
-  private async assertFittingExists(fittingId: string): Promise<void> {
+  /**
+   * 가봉 세션 존재 확인 + 감사로그용 식별 정보.
+   * 파일 첨부·삭제 로그에 세션 UUID만 남기면 나중에 세션이 지워졌을 때
+   * "누구의 어떤 품목에 붙인 파일인지" 되짚을 수 없다.
+   */
+  private async assertFittingExists(fittingId: string): Promise<Record<string, unknown>> {
     const session = await this.prisma.fittingSession.findUnique({
       where: { id: fittingId },
-      select: { id: true },
+      select: {
+        id: true,
+        orderItem: {
+          select: {
+            displayName: true,
+            order: {
+              select: { orderNo: true, contract: { select: { customer: { select: { name: true } } } } },
+            },
+          },
+        },
+      },
     });
     if (!session) throw new NotFoundException('가봉 기록이 없습니다.');
+    return {
+      customerName: session.orderItem.order.contract.customer.name,
+      orderNo: session.orderItem.order.orderNo,
+      displayName: session.orderItem.displayName,
+    };
   }
 
   private async findComponent(componentId: string) {
