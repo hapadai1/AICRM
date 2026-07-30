@@ -143,5 +143,5 @@ export class ConfirmSessionDto {
 }
 
 export class CopySessionDto {
-  @IsUUID() targetOrderItemId: string;
+  @IsUUID() targetContractItemId: string;
 }

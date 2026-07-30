@@ -16,8 +16,8 @@ import {
 
 interface Props {
   open: boolean;
-  orderItemId: string;
-  orderItemComponentId: string;
+  contractItemId: string;
+  contractItemComponentId: string;
   /** 팝업 제목 — "렌탈 정장 #1 · 상의(자켓)" */
   title: string;
   /** 행에서 지정한 조건 (표시용) */
@@ -29,8 +29,8 @@ interface Props {
 
 export function RentalCandidateModal({
   open,
-  orderItemId,
-  orderItemComponentId,
+  contractItemId,
+  contractItemComponentId,
   title,
   colorName,
   sizeName,
@@ -41,27 +41,27 @@ export function RentalCandidateModal({
 
   // 세션 시작 API는 현재본이 있으면 그대로 돌려준다(멱등) — 목록에서 바로 열어도 안전하다.
   const sessionQuery = useQuery({
-    queryKey: ['rental-selection', 'session', orderItemId],
-    queryFn: () => startRentalSelection(orderItemId),
-    enabled: open && !!orderItemId,
+    queryKey: ['rental-selection', 'session', contractItemId],
+    queryFn: () => startRentalSelection(contractItemId),
+    enabled: open && !!contractItemId,
     retry: false,
   });
   const session = sessionQuery.data ?? null;
 
   const candidatesQuery = useQuery({
-    queryKey: ['rental-selection', 'candidates', session?.sessionId, orderItemComponentId],
-    queryFn: () => fetchRentalLineCandidates(session!.sessionId, orderItemComponentId),
+    queryKey: ['rental-selection', 'candidates', session?.sessionId, contractItemComponentId],
+    queryFn: () => fetchRentalLineCandidates(session!.sessionId, contractItemComponentId),
     enabled: open && !!session?.sessionId,
   });
 
   const selectMutation = useMutation({
     mutationFn: (inventoryItemId: string | null) =>
-      selectRentalLineItem(session!.sessionId, orderItemComponentId, {
+      selectRentalLineItem(session!.sessionId, contractItemComponentId, {
         inventoryItemId,
         version: session!.version,
       }),
     onSuccess: (detail, inventoryItemId) => {
-      queryClient.setQueryData(['rental-selection', 'session', orderItemId], detail);
+      queryClient.setQueryData(['rental-selection', 'session', contractItemId], detail);
       void queryClient.invalidateQueries({ queryKey: ['rental-selection', 'progress'] });
       message.success(inventoryItemId ? '실물을 선택했습니다.' : '선택을 해제했습니다.');
       if (inventoryItemId) onClose();

@@ -387,6 +387,7 @@ model ContractVersion {
   signatureFile      File?          @relation("ContractVersionSignature", fields: [signatureFileId], references: [id])
   excelFile          File?          @relation("ContractVersionExcel", fields: [excelFileId], references: [id])
   lines              ContractLine[]
+  items              ContractItem[]
 
   @@unique([contractId, versionNo])
   @@map("contract_versions")
@@ -406,10 +407,61 @@ model ContractLine {
   createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   contractVersion ContractVersion @relation(fields: [contractVersionId], references: [id])
-  orderItems      OrderItem[]
+  contractItems   ContractItem[]
 
   @@index([contractVersionId, transactionType, productCategory])
   @@map("contract_lines")
+}
+
+// -----------------------------------------------------------------------------
+// 1-b. 가계약(초안) 품목·부위 — 컨설팅(옵션·렌탈 선택)의 앵커.
+//   흐름: 계약(가계약) → 옵션(컨설팅) → 계약확정 → 주문.
+//   주문(Order/OrderItem)은 확정 후에만 생기고, 컨설팅은 이 계약 품목에 붙는다.
+//   계약 라인(카테고리×수량)을 벌 단위(정장 #1, #2)로 펼친 것이며 부위(상의/하의)를 갖는다.
+// -----------------------------------------------------------------------------
+
+model ContractItem {
+  id                   String    @id @db.Uuid
+  contractVersionId    String    @map("contract_version_id") @db.Uuid
+  // 초안 수정 시 계약 라인은 삭제·재생성되지만 품목(과 컨설팅)은 보존한다 → 라인 참조는 nullable·SetNull.
+  sourceContractLineId String?   @map("source_contract_line_id") @db.Uuid
+  transactionType      String    @map("transaction_type") @db.VarChar(20)
+  productCategory      String    @map("product_category") @db.VarChar(20)
+  sequenceNo           Int       @map("sequence_no")
+  displayName          String    @map("display_name") @db.VarChar(100)
+  status               String    @default("CREATED") @map("status") @db.VarChar(30)
+  cancelledReason      String?   @map("cancelled_reason")
+  cancelledAt          DateTime? @map("cancelled_at") @db.Timestamptz(6)
+  rowVersion           Int       @default(0) @map("row_version")
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  contractVersion         ContractVersion          @relation(fields: [contractVersionId], references: [id])
+  sourceContractLine      ContractLine?            @relation(fields: [sourceContractLineId], references: [id], onDelete: SetNull)
+  components              ContractItemComponent[]
+  optionSelectionSessions OptionSelectionSession[]
+  rentalSelectionSessions RentalSelectionSession[]
+  orderItems              OrderItem[]
+
+  @@unique([contractVersionId, transactionType, productCategory, sequenceNo])
+  @@index([contractVersionId])
+  @@map("contract_items")
+}
+
+model ContractItemComponent {
+  id             String   @id @db.Uuid
+  contractItemId String   @map("contract_item_id") @db.Uuid
+  componentType  String   @map("component_type") @db.VarChar(20)
+  sequenceNo     Int      @default(1) @map("sequence_no")
+  status         String   @default("CREATED") @map("status") @db.VarChar(30)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  contractItem         ContractItem          @relation(fields: [contractItemId], references: [id])
+  rentalSelectionLines RentalSelectionLine[]
+
+  @@index([contractItemId, componentType])
+  @@map("contract_item_components")
 }
 
 // -----------------------------------------------------------------------------
@@ -443,7 +495,7 @@ model Order {
 model OrderItem {
   id                   String    @id @db.Uuid
   orderId              String    @map("order_id") @db.Uuid
-  sourceContractLineId String    @map("source_contract_line_id") @db.Uuid
+  sourceContractItemId String    @map("source_contract_item_id") @db.Uuid
   productCategory      String    @map("product_category") @db.VarChar(20)
   sequenceNo           Int       @map("sequence_no")
   displayName          String    @map("display_name") @db.VarChar(100)
@@ -454,16 +506,14 @@ model OrderItem {
   createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt            DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  order                   Order                    @relation(fields: [orderId], references: [id])
-  sourceContractLine      ContractLine             @relation(fields: [sourceContractLineId], references: [id])
-  components              OrderItemComponent[]
-  optionSelectionSessions OptionSelectionSession[]
-  rentalSelectionSessions RentalSelectionSession[]
-  measurementLinks        OrderItemMeasurement[]
-  workOrder               WorkOrder?
-  productionEvents        ProductionEvent[]
-  fittingSessions         FittingSession[]
-  repairRequests          RepairRequest[]
+  order              Order                @relation(fields: [orderId], references: [id])
+  sourceContractItem ContractItem         @relation(fields: [sourceContractItemId], references: [id])
+  components         OrderItemComponent[]
+  measurementLinks   OrderItemMeasurement[]
+  workOrder          WorkOrder?
+  productionEvents   ProductionEvent[]
+  fittingSessions    FittingSession[]
+  repairRequests     RepairRequest[]
 
   @@unique([orderId, productCategory, sequenceNo])
   @@map("order_items")
@@ -483,12 +533,11 @@ model OrderItemComponent {
   createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  orderItem            OrderItem             @relation(fields: [orderItemId], references: [id])
-  productionEvents     ProductionEvent[]
-  fittingAdjustments   FittingAdjustment[]
-  rentalAllocations    RentalAllocation[]
-  rentalSelectionLines RentalSelectionLine[]
-  repairRequests       RepairRequest[]
+  orderItem          OrderItem           @relation(fields: [orderItemId], references: [id])
+  productionEvents   ProductionEvent[]
+  fittingAdjustments FittingAdjustment[]
+  rentalAllocations  RentalAllocation[]
+  repairRequests     RepairRequest[]
 
   @@index([orderItemId, componentType])
   @@map("order_item_components")
@@ -582,7 +631,7 @@ model OptionChoice {
 
 model OptionSelectionSession {
   id                 String    @id @db.Uuid
-  orderItemId        String    @map("order_item_id") @db.Uuid
+  contractItemId     String    @map("contract_item_id") @db.Uuid
   optionSetVersionId String    @map("option_set_version_id") @db.Uuid
   selectionVersionNo Int       @map("selection_version_no")
   status             String    @default("NOT_STARTED") @map("status") @db.VarChar(20)
@@ -603,15 +652,15 @@ model OptionSelectionSession {
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  orderItem         OrderItem                      @relation(fields: [orderItemId], references: [id])
+  contractItem      ContractItem                   @relation(fields: [contractItemId], references: [id])
   optionSetVersion  OptionSetVersion               @relation(fields: [optionSetVersionId], references: [id])
   currentStage      OptionStage?                   @relation("OptionSelectionSessionCurrentStage", fields: [currentStageId], references: [id])
   values            OptionSelectionValue[]
   workOrderVersions WorkOrderVersion[]
   componentAttrs    OptionSelectionComponentAttr[]
 
-  @@unique([orderItemId, selectionVersionNo])
-  @@index([orderItemId, isCurrent, status])
+  @@unique([contractItemId, selectionVersionNo])
+  @@index([contractItemId, isCurrent, status])
   @@map("option_selection_sessions")
 }
 
@@ -984,7 +1033,7 @@ model RentalSize {
 /// 맞춤 옵션 세션과 분리된 렌탈 전용 흐름. transactionType=RENTAL 품목에만.
 model RentalSelectionSession {
   id                 String    @id @db.Uuid
-  orderItemId        String    @map("order_item_id") @db.Uuid
+  contractItemId     String    @map("contract_item_id") @db.Uuid
   selectionVersionNo Int       @default(1) @map("selection_version_no")
   status             String    @default("IN_PROGRESS") @map("status") @db.VarChar(20)
   /// 대여 기간 (현업 확정 2026-07-28: 대여 날짜는 필수값).
@@ -998,11 +1047,11 @@ model RentalSelectionSession {
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  orderItem OrderItem             @relation(fields: [orderItemId], references: [id])
-  lines     RentalSelectionLine[]
+  contractItem ContractItem          @relation(fields: [contractItemId], references: [id])
+  lines        RentalSelectionLine[]
 
-  @@unique([orderItemId, selectionVersionNo])
-  @@index([orderItemId, isCurrent])
+  @@unique([contractItemId, selectionVersionNo])
+  @@index([contractItemId, isCurrent])
   @@map("rental_selection_sessions")
 }
 
@@ -1010,8 +1059,9 @@ model RentalSelectionSession {
 model RentalSelectionLine {
   id                      String   @id @db.Uuid
   sessionId               String   @map("session_id") @db.Uuid
-  /// 어느 구성품에 대한 선택인지 — OrderItemComponent와 연결(배정 대상 앵커)
-  orderItemComponentId    String   @map("order_item_component_id") @db.Uuid
+  /// 어느 구성품에 대한 선택인지 — 가계약 품목 부위(ContractItemComponent)와 연결.
+  /// 확정 후 실물 배정은 OrderItemComponent에서 이 선택을 참조한다.
+  contractItemComponentId String   @map("contract_item_component_id") @db.Uuid
   componentType           String   @map("component_type") @db.VarChar(20)
   /// 기준정보 rental_colors.code (12색)
   colorCode               String?  @map("color_code") @db.VarChar(30)
@@ -1024,11 +1074,11 @@ model RentalSelectionLine {
   createdAt               DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt               DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  session               RentalSelectionSession @relation(fields: [sessionId], references: [id])
-  orderItemComponent    OrderItemComponent     @relation(fields: [orderItemComponentId], references: [id])
-  selectedInventoryItem RentalInventoryItem?   @relation(fields: [selectedInventoryItemId], references: [id])
+  session                RentalSelectionSession @relation(fields: [sessionId], references: [id])
+  contractItemComponent  ContractItemComponent  @relation(fields: [contractItemComponentId], references: [id])
+  selectedInventoryItem  RentalInventoryItem?   @relation(fields: [selectedInventoryItemId], references: [id])
 
-  @@unique([sessionId, orderItemComponentId])
+  @@unique([sessionId, contractItemComponentId])
   @@map("rental_selection_lines")
 }
 

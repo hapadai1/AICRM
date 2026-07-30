@@ -558,7 +558,7 @@ export interface ContractFlow {
   consulting: {
     ready: boolean;
     targetCount: number;
-    pending: { orderItemId: string; displayName: string; transactionType: TransactionType }[];
+    pending: { contractItemId: string; displayName: string; transactionType: TransactionType }[];
   };
   signed: boolean;
   signedAt: string | null;
@@ -645,10 +645,10 @@ export interface ContractDocumentComponent {
   options: ContractDocumentComponentOption[];
 }
 
-/** 계약 라인 아래의 주문품목 (정장 #1, 정장 #2 …) */
+/** 계약 라인 아래의 계약품목 (정장 #1, 정장 #2 …) */
 export interface ContractDocumentItem {
-  orderItemId: string;
-  orderNo: string;
+  contractItemId: string;
+  orderNo: string | null;
   displayName: string;
   sequenceNo: number;
   components: ContractDocumentComponent[];
@@ -714,8 +714,8 @@ interface ContractDocumentLineApiRow {
 }
 
 interface ContractDocumentItemApiRow {
-  orderItemId: string;
-  orderNo: string;
+  contractItemId: string;
+  orderNo: string | null;
   displayName: string;
   sequenceNo: number;
   components?:
@@ -771,8 +771,8 @@ export function fetchContractDocument(id: string): Promise<ContractDocument> {
       lineAmount: toNumber(l.lineAmount) ?? 0,
       notes: l.notes ?? undefined,
       items: (l.items ?? []).map((it) => ({
-        orderItemId: it.orderItemId,
-        orderNo: it.orderNo,
+        contractItemId: it.contractItemId,
+        orderNo: it.orderNo ?? null,
         displayName: it.displayName,
         sequenceNo: it.sequenceNo,
         components: (it.components ?? []).map((c) => ({

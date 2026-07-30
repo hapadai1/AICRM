@@ -7,9 +7,10 @@ import { randomUUID } from 'crypto';
  * TRUNCATE CASCADE 하는데 journey_stages가 이를 FK로 참조하므로 함께 지워진다.
  * 스위트마다 이 함수로 복원한다.
  *
- * 연락 문구는 매장이 확정한 고정메시지 2종(완성복 입고 / 가봉 입고)뿐이다
- * (docs/data/질문list_0728.Txt 5번). 초안 문구는 두지 않는다 — 나머지 단계는
- * 템플릿 없이 두고, 필요하면 관리자 화면에서 문구를 만들어 단계에 매핑한다.
+ * 연락 문구는 매장이 확정한 고정메시지 3종(완성복 입고 / 가봉 입고 / 수선 입고)이다
+ * (docs/data/질문list_0728.Txt 5번, 수선 입고는 2026-07-30 현업 요청). 초안 문구는
+ * 두지 않는다 — 나머지 단계는 템플릿 없이 두고, 필요하면 관리자 화면에서 문구를 만들어
+ * 단계에 매핑한다.
  *
  * 원문에는 없던 `#{고객명}`만 첫 인사에 넣는다(2026-07-29 매장 요청) — 서버가 발송할 때
  * 고객 이름으로 채운다. 그 밖의 본문은 매장이 준 원문 그대로 나가야 하므로, 시드는
@@ -96,6 +97,28 @@ https://naver.me/Grgxhtqs
 
 -슈트에이전시 드림-`,
   },
+  {
+    code: 'JOURNEY_REPAIR_CHECKED_IN',
+    name: '수선 입고 안내',
+    body: `안녕하세요, #{고객명} 고객님🤗
+맡겨주신 수선이 완료되어 본점에 입고되었습니다.
+
+네이버 통해서 금일 제외 편하신 시간에 예약주시고 방문해 주시면 됩니다.
+
+◆카톡 및 문자는 답변을 드릴수 없으니 꼭!’꼭! 카톡 채널’을 통해 문의 부탁드립니다🥹◆
+◆평일은 건물주차가 불가하니 꼭! 참고 부탁 드립니다.
+
+[방문 예약]
+https://naver.me/Grgxhtqs
+
+❖슈트에이전시 쇼룸 : 02-6409-4799
+
+❖슈트에이전시 카카오 채널: http://pf.kakao.com/_VUxaAX
+
+감사합니다.
+
+-슈트에이전시 드림-`,
+  },
 ];
 
 /**
@@ -108,7 +131,6 @@ export const RETIRED_TEMPLATE_CODES: string[] = [
   'JOURNEY_RENTAL_CHECKED_OUT',
   'JOURNEY_RENTAL_RETURNED',
   'JOURNEY_RENTAL_REPAIR_RECEIVED',
-  'JOURNEY_REPAIR_CHECKED_IN',
   'REPAIR_RECEIVED_NOTICE',
   'REPAIR_READY_NOTICE',
 ];
@@ -160,7 +182,15 @@ export const JOURNEY_STAGES: Array<{
   // REPAIR — 수선 (설계 PDF 2페이지, v2 신규 트랙)
   { trackType: 'REPAIR', code: 'REPAIR_RECEIVED', name: '수선 접수', completionMode: 'AUTO', targetScope: 'NONE' },
   { trackType: 'REPAIR', code: 'REPAIR_REQUESTED', name: '수선 요청', completionMode: 'GATED', targetScope: 'REPAIR_ITEMS' },
-  { trackType: 'REPAIR', code: 'REPAIR_CHECKED_IN', name: '수선 입고', completionMode: 'GATED', targetScope: 'REPAIR_ITEMS' },
+  {
+    trackType: 'REPAIR',
+    code: 'REPAIR_CHECKED_IN',
+    name: '수선 입고',
+    completionMode: 'GATED',
+    targetScope: 'REPAIR_ITEMS',
+    // 수선 입고 = 고객 연락 시점. 수선 메뉴의 '고객연락'(CUSTOMER_NOTIFIED)과 같은 문구를 공유한다.
+    templateCode: 'JOURNEY_REPAIR_CHECKED_IN',
+  },
   { trackType: 'REPAIR', code: 'REPAIR_RELEASED', name: '수선 출고/완료', completionMode: 'GATED', targetScope: 'REPAIR_ITEMS' },
 ];
 

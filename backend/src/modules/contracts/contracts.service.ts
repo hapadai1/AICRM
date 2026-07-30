@@ -50,8 +50,9 @@ const COMPONENT_LABEL: Record<string, string> = {
 
 /** 계약서 웹 표시용 주문품목 계층 (품목 → 부위 → 유료 옵션) */
 interface ContractDocumentItem {
-  orderItemId: string;
-  orderNo: string;
+  contractItemId: string;
+  /** 확정 후 물리화된 주문번호. 가계약(확정 전)에는 아직 주문이 없어 null. */
+  orderNo: string | null;
   displayName: string;
   sequenceNo: number;
   components: Array<{
@@ -182,6 +183,8 @@ export class ContractsService {
           lines: { create: lines.map((l, i) => this.toLineData(l, i)) },
         },
       });
+      // 가계약 저장 즉시 컨설팅 대상 품목을 만든다 (계약-옵션-확정-주문 흐름).
+      await this.syncContractItemsToVersion(tx, versionId, null);
       return tx.contract.update({
         where: { id: contractId },
         data: { currentVersionId: versionId },
@@ -360,6 +363,8 @@ export class ContractsService {
         await tx.contractLine.createMany({
           data: dto.lines.map((l, i) => ({ ...this.toLineData(l, i), contractVersionId: draft.id })),
         });
+        // 라인이 바뀌면 컨설팅 대상 품목도 수량에 맞춰 정합한다 (기존 선택은 보존).
+        await this.syncContractItemsToVersion(tx, draft.id, null);
       }
       const updatedDraft = await tx.contractVersion.update({
         where: { id: draft.id },
@@ -524,21 +529,26 @@ export class ContractsService {
         sortOrder: l.sortOrder,
       }));
 
-    const revision = await this.prisma.contractVersion.create({
-      data: {
-        id: randomUUID(),
-        contractId: id,
-        versionNo: base.versionNo + 1,
-        versionStatus: 'DRAFT',
-        changeReason: dto.changeReason ?? null,
-        totalAmount: dto.totalAmount ?? base.totalAmount,
-        completionDueDate: dto.completionDueDate !== undefined ? toDate(dto.completionDueDate) : base.completionDueDate,
-        photoDate: dto.photoDate !== undefined ? toDate(dto.photoDate) : base.photoDate,
-        weddingDate: dto.weddingDate !== undefined ? toDate(dto.weddingDate) : base.weddingDate,
-        createdBy: actor.id,
-        lines: { create: lines.map((l, i) => this.toLineData(l, i)) },
-      },
-      include: VERSION_INCLUDE,
+    const revision = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.contractVersion.create({
+        data: {
+          id: randomUUID(),
+          contractId: id,
+          versionNo: base.versionNo + 1,
+          versionStatus: 'DRAFT',
+          changeReason: dto.changeReason ?? null,
+          totalAmount: dto.totalAmount ?? base.totalAmount,
+          completionDueDate: dto.completionDueDate !== undefined ? toDate(dto.completionDueDate) : base.completionDueDate,
+          photoDate: dto.photoDate !== undefined ? toDate(dto.photoDate) : base.photoDate,
+          weddingDate: dto.weddingDate !== undefined ? toDate(dto.weddingDate) : base.weddingDate,
+          createdBy: actor.id,
+          lines: { create: lines.map((l, i) => this.toLineData(l, i)) },
+        },
+        include: VERSION_INCLUDE,
+      });
+      // 변경계약 초안도 컨설팅 대상 품목을 갖는다 (확정 전 재컨설팅 가능).
+      await this.syncContractItemsToVersion(tx, created.id, null);
+      return created;
     });
 
     await this.audit.log({
@@ -602,6 +612,7 @@ export class ContractsService {
           await tx.contractLine.createMany({
             data: dto.lines.map((l, i) => ({ ...this.toLineData(l, i), contractVersionId: revisionId })),
           });
+          await this.syncContractItemsToVersion(tx, revisionId, changeReason);
         }
         const amountData: Prisma.ContractVersionUncheckedUpdateInput = {};
         if (dto.totalAmount !== undefined) amountData.totalAmount = dto.totalAmount;
@@ -766,11 +777,45 @@ export class ContractsService {
         where: { contractId: id },
         select: { id: true },
       });
+      const versionIds = versions.map((v) => v.id);
+
+      // 가계약 컨설팅 산출물(계약 품목·부위·옵션/렌탈 선택 세션)을 함께 정리한다.
+      const contractItemIds = (
+        await tx.contractItem.findMany({
+          where: { contractVersionId: { in: versionIds } },
+          select: { id: true },
+        })
+      ).map((c) => c.id);
+      if (contractItemIds.length > 0) {
+        const optionSessionIds = (
+          await tx.optionSelectionSession.findMany({
+            where: { contractItemId: { in: contractItemIds } },
+            select: { id: true },
+          })
+        ).map((s) => s.id);
+        const rentalSessionIds = (
+          await tx.rentalSelectionSession.findMany({
+            where: { contractItemId: { in: contractItemIds } },
+            select: { id: true },
+          })
+        ).map((s) => s.id);
+        if (rentalSessionIds.length > 0)
+          await tx.rentalSelectionLine.deleteMany({ where: { sessionId: { in: rentalSessionIds } } });
+        await tx.rentalSelectionSession.deleteMany({ where: { contractItemId: { in: contractItemIds } } });
+        if (optionSessionIds.length > 0) {
+          await tx.optionSelectionValue.deleteMany({ where: { selectionSessionId: { in: optionSessionIds } } });
+          await tx.optionSelectionComponentAttr.deleteMany({
+            where: { selectionSessionId: { in: optionSessionIds } },
+          });
+        }
+        await tx.optionSelectionSession.deleteMany({ where: { contractItemId: { in: contractItemIds } } });
+        await tx.contractItemComponent.deleteMany({ where: { contractItemId: { in: contractItemIds } } });
+        await tx.contractItem.deleteMany({ where: { id: { in: contractItemIds } } });
+      }
+
       // 계약 → 현재 버전 FK를 먼저 끊어야 버전을 지울 수 있다.
       await tx.contract.update({ where: { id }, data: { currentVersionId: null } });
-      await tx.contractLine.deleteMany({
-        where: { contractVersionId: { in: versions.map((v) => v.id) } },
-      });
+      await tx.contractLine.deleteMany({ where: { contractVersionId: { in: versionIds } } });
       await tx.contractVersion.deleteMany({ where: { contractId: id } });
       await tx.contract.delete({ where: { id } });
 
@@ -802,29 +847,26 @@ export class ContractsService {
       await this.prisma.orderItemComponent.findMany({ where, select: { id: true } })
     ).map((c) => c.id);
 
-    const [workOrders, production, fittings, measurements, options, rentalSelections, repairs, allocations] =
-      await Promise.all([
-        this.prisma.workOrder.count({ where }),
-        this.prisma.productionEvent.count({ where }),
-        this.prisma.fittingSession.count({ where }),
-        this.prisma.orderItemMeasurement.count({ where }),
-        this.prisma.optionSelectionSession.count({ where }),
-        this.prisma.rentalSelectionSession.count({ where }),
-        this.prisma.repairRequest.count({ where }),
-        componentIds.length
-          ? this.prisma.rentalAllocation.count({
-              where: { orderItemComponentId: { in: componentIds } },
-            })
-          : Promise.resolve(0),
-      ]);
+    // 옵션·렌탈 선택은 가계약 컨설팅 산출물이라 삭제 시 함께 정리한다 → 삭제 차단 사유가 아니다.
+    // 실제 진행 산출물(작업지시서·제작·가봉·채촌·수선·렌탈배정)만 삭제를 막는다.
+    const [workOrders, production, fittings, measurements, repairs, allocations] = await Promise.all([
+      this.prisma.workOrder.count({ where }),
+      this.prisma.productionEvent.count({ where }),
+      this.prisma.fittingSession.count({ where }),
+      this.prisma.orderItemMeasurement.count({ where }),
+      this.prisma.repairRequest.count({ where }),
+      componentIds.length
+        ? this.prisma.rentalAllocation.count({
+            where: { orderItemComponentId: { in: componentIds } },
+          })
+        : Promise.resolve(0),
+    ]);
 
     return [
       [workOrders, '작업지시서'],
       [production, '제작 이력'],
       [fittings, '가봉'],
       [measurements, '채촌 연결'],
-      [options, '옵션 선택'],
-      [rentalSelections, '렌탈 스타일 선택'],
       [repairs, '수선'],
       [allocations, '렌탈 배정'],
     ]
@@ -896,43 +938,41 @@ export class ContractsService {
   // ---------------------------------------------------------------------------
 
   /**
-   * 스타일 컨설팅이 전 품목 끝났는지 본다.
+   * 스타일 컨설팅이 전 품목 끝났는지 본다. 컨설팅은 가계약 단계의 계약 품목(ContractItem)에서 진행한다.
    *
-   * 맞춤(CUSTOM) 주문의 품목은 옵션 선택 세션이, 렌탈(RENTAL) 주문의 품목은 렌탈 선택
-   * 세션이 각각 CONFIRMED여야 한다. 취소된 품목은 대상에서 뺀다.
-   * 주문이 아직 없으면(확정 전) 대상이 없으므로 준비된 것으로 보지 않는다.
+   * 맞춤(CUSTOM) 품목은 옵션 선택 세션이, 렌탈(RENTAL) 품목은 렌탈 선택 세션이 각각 CONFIRMED여야 한다.
+   * 취소된 품목은 대상에서 뺀다. 현재 버전에 품목이 없으면(라인 미입력) 준비된 것으로 보지 않는다.
    */
   async consultingReadiness(contractId: string) {
-    const orders = await this.prisma.order.findMany({
-      where: { contractId },
-      select: {
-        transactionType: true,
-        items: {
-          where: { status: { not: 'CANCELLED' } },
+    const contract = await this.prisma.contract.findUnique({
+      where: { id: contractId },
+      select: { currentVersionId: true },
+    });
+    const items = contract?.currentVersionId
+      ? await this.prisma.contractItem.findMany({
+          where: { contractVersionId: contract.currentVersionId, status: { not: 'CANCELLED' } },
           select: {
             id: true,
             displayName: true,
+            transactionType: true,
             optionSelectionSessions: { where: { isCurrent: true }, select: { status: true } },
             rentalSelectionSessions: { where: { isCurrent: true }, select: { status: true } },
           },
-        },
-      },
-    });
+        })
+      : [];
 
-    const pending: { orderItemId: string; displayName: string; transactionType: string }[] = [];
+    const pending: { contractItemId: string; displayName: string; transactionType: string }[] = [];
     let targetCount = 0;
-    for (const order of orders) {
-      for (const item of order.items) {
-        targetCount += 1;
-        const sessions =
-          order.transactionType === 'RENTAL' ? item.rentalSelectionSessions : item.optionSelectionSessions;
-        if (!sessions.some((x) => x.status === 'CONFIRMED')) {
-          pending.push({
-            orderItemId: item.id,
-            displayName: item.displayName,
-            transactionType: order.transactionType,
-          });
-        }
+    for (const item of items) {
+      targetCount += 1;
+      const sessions =
+        item.transactionType === 'RENTAL' ? item.rentalSelectionSessions : item.optionSelectionSessions;
+      if (!sessions.some((x) => x.status === 'CONFIRMED')) {
+        pending.push({
+          contractItemId: item.id,
+          displayName: item.displayName,
+          transactionType: item.transactionType,
+        });
       }
     }
     return { ready: targetCount > 0 && pending.length === 0, targetCount, pending };
@@ -1235,24 +1275,20 @@ export class ContractsService {
   // ---------------------------------------------------------------------------
 
   /**
-   * 계약 버전 라인을 transaction_type별 주문과 개별 품목으로 동기화한다.
+   * 가계약(초안) 품목 정합 — 계약 라인(거래방식×품목×수량)을 벌 단위 ContractItem으로 펼친다.
+   * 컨설팅(옵션·렌탈 선택)이 이 품목·부위(ContractItemComponent)에 붙는다.
+   * 초안 저장/수정마다 수량에 맞춰 증분·취소한다. **주문(Order)은 만들지 않는다** —
+   * 확정 시 syncOrdersToVersion이 이 품목을 주문으로 물리화한다.
    * - 수량 증가: 다음 sequence_no로 신규 품목 + 기본 구성품 생성
-   * - 수량 감소: 뒤 순번부터 CANCELLED (사유 기록, 물리 삭제 금지)
+   * - 수량 감소: 뒤 순번부터 CANCELLED (사유 기록, 물리 삭제 금지 → 컨설팅 보존)
    */
-  private async syncOrdersToVersion(
+  private async syncContractItemsToVersion(
     tx: Prisma.TransactionClient,
-    contractId: string,
     versionId: string,
-    opts: {
-      completionDueDate: Date | null;
-      photoDate: Date | null;
-      weddingDate: Date | null;
-      cancelReason: string | null;
-    },
-  ): Promise<OrderSummary[]> {
+    cancelReason: string | null,
+  ): Promise<void> {
     const lines = await tx.contractLine.findMany({ where: { contractVersionId: versionId } });
 
-    // (거래방식|품목) 단위 목표 수량 집계
     const targets = new Map<string, { transactionType: string; productCategory: string; quantity: number; lineId: string }>();
     for (const line of lines) {
       const key = `${line.transactionType}|${line.productCategory}`;
@@ -1267,16 +1303,118 @@ export class ContractsService {
         });
     }
 
-    const existingOrders = await tx.order.findMany({
-      where: { contractId },
-      include: { items: true },
+    const existingItems = await tx.contractItem.findMany({ where: { contractVersionId: versionId } });
+    const keys = new Set<string>([
+      ...targets.keys(),
+      ...existingItems.map((i) => `${i.transactionType}|${i.productCategory}`),
+    ]);
+
+    for (const key of keys) {
+      const [transactionType, productCategory] = key.split('|');
+      const target = targets.get(key);
+      const targetQty = target?.quantity ?? 0;
+      const itemsOfKey = existingItems.filter(
+        (i) => i.transactionType === transactionType && i.productCategory === productCategory,
+      );
+      const activeItems = itemsOfKey
+        .filter((i) => i.status !== 'CANCELLED')
+        .sort((a, b) => a.sequenceNo - b.sequenceNo);
+      const maxSeq = itemsOfKey.reduce((m, i) => Math.max(m, i.sequenceNo), 0);
+
+      if (targetQty > activeItems.length) {
+        const label =
+          transactionType === 'RENTAL'
+            ? `렌탈 ${CATEGORY_LABEL[productCategory] ?? productCategory}`
+            : CATEGORY_LABEL[productCategory] ?? productCategory;
+        for (let n = 1; n <= targetQty - activeItems.length; n += 1) {
+          const seq = maxSeq + n;
+          await tx.contractItem.create({
+            data: {
+              id: randomUUID(),
+              contractVersionId: versionId,
+              sourceContractLineId: target?.lineId ?? null,
+              transactionType,
+              productCategory,
+              sequenceNo: seq,
+              displayName: `${label} #${seq}`,
+              status: 'CREATED',
+              components: {
+                create: (COMPONENT_MAP[productCategory] ?? [productCategory]).map((componentType) => ({
+                  id: randomUUID(),
+                  componentType,
+                  sequenceNo: 1,
+                  status: 'CREATED',
+                })),
+              },
+            },
+          });
+        }
+      } else if (targetQty < activeItems.length) {
+        const toCancel = activeItems.slice(targetQty).reverse(); // 뒤 순번부터
+        for (const item of toCancel) {
+          await tx.contractItem.update({
+            where: { id: item.id },
+            data: {
+              status: 'CANCELLED',
+              cancelledReason: cancelReason ?? '계약 변경',
+              cancelledAt: new Date(),
+              rowVersion: { increment: 1 },
+            },
+          });
+          await tx.contractItemComponent.updateMany({
+            where: { contractItemId: item.id, status: 'CREATED' },
+            data: { status: 'CANCELLED' },
+          });
+        }
+      }
+
+      // 초안 수정 시 라인이 삭제·재생성되어 참조가 끊길 수 있다 → 살아남은 품목을 현재 라인으로 재지정.
+      if (target) {
+        await tx.contractItem.updateMany({
+          where: {
+            contractVersionId: versionId,
+            transactionType,
+            productCategory,
+            status: { not: 'CANCELLED' },
+            sourceContractLineId: null,
+          },
+          data: { sourceContractLineId: target.lineId },
+        });
+      }
+    }
+  }
+
+  /**
+   * 확정 시 물리화 — 가계약 품목(ContractItem)을 거래방식별 주문(Order)과 주문품목(OrderItem)으로 옮긴다.
+   * 흐름: 계약(가계약) → 옵션(컨설팅) → **계약확정(여기)** → 주문. 옵션 선택 결과는 ContractItem에
+   * 남아 있고, OrderItem은 sourceContractItemId로 그 품목을 되짚어 작업지시서·엑셀이 옵션을 읽는다.
+   */
+  private async syncOrdersToVersion(
+    tx: Prisma.TransactionClient,
+    contractId: string,
+    versionId: string,
+    opts: {
+      completionDueDate: Date | null;
+      photoDate: Date | null;
+      weddingDate: Date | null;
+      cancelReason: string | null;
+    },
+  ): Promise<OrderSummary[]> {
+    const items = await tx.contractItem.findMany({
+      where: { contractVersionId: versionId },
+      include: { components: true },
+      orderBy: { sequenceNo: 'asc' },
     });
-    const ordersByType = new Map(existingOrders.map((o) => [o.transactionType, o]));
+    const neededTypes = new Set(items.filter((i) => i.status !== 'CANCELLED').map((i) => i.transactionType));
+
+    const existingOrders = await tx.order.findMany({ where: { contractId }, include: { items: true } });
+    const ordersByType = new Map<string, { id: string; orderNo: string; transactionType: string; items: { id: string; status: string; sourceContractItemId: string }[] }>(
+      existingOrders.map((o) => [o.transactionType, o]),
+    );
 
     // 필요한 거래방식 주문 생성 (계약당 CUSTOM·RENTAL 각 최대 1건)
     for (const type of ['CUSTOM', 'RENTAL']) {
-      const needed = [...targets.values()].some((t) => t.transactionType === type && t.quantity > 0);
-      if (!needed || ordersByType.has(type)) continue;
+      if (!neededTypes.has(type) || ordersByType.has(type)) continue;
       const order = await tx.order.create({
         data: {
           id: randomUUID(),
@@ -1304,62 +1442,56 @@ export class ContractsService {
       });
     }
 
-    for (const [type, order] of ordersByType) {
-      const categories = new Set<string>([
-        ...order.items.map((i) => i.productCategory),
-        ...[...targets.values()].filter((t) => t.transactionType === type).map((t) => t.productCategory),
-      ]);
-      for (const category of categories) {
-        const target = targets.get(`${type}|${category}`);
-        const targetQty = target?.quantity ?? 0;
-        const itemsOfCategory = order.items.filter((i) => i.productCategory === category);
-        const activeItems = itemsOfCategory
-          .filter((i) => i.status !== 'CANCELLED')
-          .sort((a, b) => a.sequenceNo - b.sequenceNo);
-        const maxSeq = itemsOfCategory.reduce((m, i) => Math.max(m, i.sequenceNo), 0);
+    // 이미 물리화된 주문품목을 계약 품목 기준으로 매핑
+    const orderItemByContractItem = new Map<string, { id: string; status: string }>();
+    for (const order of ordersByType.values()) {
+      for (const it of order.items) orderItemByContractItem.set(it.sourceContractItemId, it);
+    }
 
-        if (targetQty > activeItems.length && target) {
-          const label = type === 'RENTAL' ? `렌탈 ${CATEGORY_LABEL[category]}` : CATEGORY_LABEL[category];
-          for (let n = 1; n <= targetQty - activeItems.length; n += 1) {
-            const seq = maxSeq + n;
-            await tx.orderItem.create({
-              data: {
-                id: randomUUID(),
-                orderId: order.id,
-                sourceContractLineId: target.lineId,
-                productCategory: category,
-                sequenceNo: seq,
-                displayName: `${label} #${seq}`,
-                status: 'CREATED',
-                components: {
-                  create: (COMPONENT_MAP[category] ?? [category]).map((componentType) => ({
-                    id: randomUUID(),
-                    componentType,
-                    sequenceNo: 1,
-                    status: 'CREATED',
-                  })),
-                },
-              },
-            });
-          }
-        } else if (targetQty < activeItems.length) {
-          const toCancel = activeItems.slice(targetQty).reverse(); // 뒤 순번부터
-          for (const item of toCancel) {
-            await tx.orderItem.update({
-              where: { id: item.id },
-              data: {
-                status: 'CANCELLED',
-                cancelledReason: opts.cancelReason ?? '계약 변경',
-                cancelledAt: new Date(),
-                rowVersion: { increment: 1 },
-              },
-            });
-            await tx.orderItemComponent.updateMany({
-              where: { orderItemId: item.id, status: 'CREATED' },
-              data: { status: 'CANCELLED' },
-            });
-          }
+    for (const ci of items) {
+      const order = ordersByType.get(ci.transactionType);
+      if (!order) continue;
+      const existing = orderItemByContractItem.get(ci.id);
+      if (ci.status === 'CANCELLED') {
+        if (existing && existing.status !== 'CANCELLED') {
+          await tx.orderItem.update({
+            where: { id: existing.id },
+            data: {
+              status: 'CANCELLED',
+              cancelledReason: opts.cancelReason ?? '계약 변경',
+              cancelledAt: new Date(),
+              rowVersion: { increment: 1 },
+            },
+          });
+          await tx.orderItemComponent.updateMany({
+            where: { orderItemId: existing.id, status: 'CREATED' },
+            data: { status: 'CANCELLED' },
+          });
         }
+        continue;
+      }
+      if (!existing) {
+        await tx.orderItem.create({
+          data: {
+            id: randomUUID(),
+            orderId: order.id,
+            sourceContractItemId: ci.id,
+            productCategory: ci.productCategory,
+            sequenceNo: ci.sequenceNo,
+            displayName: ci.displayName,
+            status: 'CREATED',
+            components: {
+              create: ci.components
+                .filter((c) => c.status !== 'CANCELLED')
+                .map((c) => ({
+                  id: randomUUID(),
+                  componentType: c.componentType,
+                  sequenceNo: c.sequenceNo,
+                  status: 'CREATED',
+                })),
+            },
+          },
+        });
       }
     }
 
@@ -1445,7 +1577,10 @@ export class ContractsService {
   ): Promise<Array<{ optionName: string; extraPrice: number }>> {
     const values = await this.prisma.optionSelectionValue.findMany({
       where: {
-        selectionSession: { isCurrent: true, orderItem: { order: { contractId } } },
+        selectionSession: {
+          isCurrent: true,
+          contractItem: { contractVersion: { currentOfContracts: { some: { id: contractId } } } },
+        },
       },
       include: { optionChoice: { select: { choiceName: true } } },
       orderBy: { selectedAt: 'asc' },
@@ -1465,14 +1600,21 @@ export class ContractsService {
    * - 부위 행은 유료 옵션이 없어도 항상 남긴다 (구성품 자체가 계약서 정보).
    */
   private async loadContractOptionTree(contractId: string) {
-    const items = await this.prisma.orderItem.findMany({
-      where: { order: { contractId }, status: { not: 'CANCELLED' } },
+    // 컨설팅은 가계약 품목(ContractItem)에서 하므로 확정 전에도 계약서 옵션을 보여줄 수 있다.
+    // 확정 후에는 이 품목이 주문품목으로 물리화되며, 주문번호는 그때 붙는다(sourceContractItem 되짚기).
+    const items = await this.prisma.contractItem.findMany({
+      where: {
+        contractVersion: { currentOfContracts: { some: { id: contractId } } },
+        status: { not: 'CANCELLED' },
+      },
       include: {
-        order: { select: { transactionType: true, orderNo: true } },
         components: {
-          where: { active: true },
           orderBy: [{ componentType: 'asc' }, { sequenceNo: 'asc' }],
           select: { componentType: true },
+        },
+        orderItems: {
+          where: { status: { not: 'CANCELLED' } },
+          select: { order: { select: { orderNo: true } } },
         },
       },
       orderBy: [{ productCategory: 'asc' }, { sequenceNo: 'asc' }],
@@ -1483,26 +1625,29 @@ export class ContractsService {
 
     const values = await this.prisma.optionSelectionValue.findMany({
       where: {
-        selectionSession: { isCurrent: true, orderItem: { order: { contractId } } },
+        selectionSession: {
+          isCurrent: true,
+          contractItem: { contractVersion: { currentOfContracts: { some: { id: contractId } } } },
+        },
         extraPriceSnapshot: { gt: 0 },
       },
       include: {
         optionChoice: { select: { choiceName: true } },
         optionStage: { select: { componentGroup: true, stageName: true, sequenceNo: true } },
-        selectionSession: { select: { orderItemId: true } },
+        selectionSession: { select: { contractItemId: true } },
       },
       orderBy: [{ optionStage: { sequenceNo: 'asc' } }],
     });
     const valuesByItem = new Map<string, typeof values>();
     for (const v of values) {
-      const list = valuesByItem.get(v.selectionSession.orderItemId) ?? [];
+      const list = valuesByItem.get(v.selectionSession.contractItemId) ?? [];
       list.push(v);
-      valuesByItem.set(v.selectionSession.orderItemId, list);
+      valuesByItem.set(v.selectionSession.contractItemId, list);
     }
 
     for (const item of items) {
       const groupCodes =
-        item.order.transactionType === 'RENTAL'
+        item.transactionType === 'RENTAL'
           ? item.components.map((c) => c.componentType)
           : componentGroupsFor(item.productCategory);
       const components = (groupCodes.length > 0 ? groupCodes : [item.productCategory]).map(
@@ -1531,11 +1676,11 @@ export class ContractsService {
         });
       }
 
-      const key = `${item.order.transactionType}|${item.productCategory}`;
+      const key = `${item.transactionType}|${item.productCategory}`;
       const list = tree.get(key) ?? [];
       list.push({
-        orderItemId: item.id,
-        orderNo: item.order.orderNo,
+        contractItemId: item.id,
+        orderNo: item.orderItems[0]?.order.orderNo ?? null,
         displayName: item.displayName,
         sequenceNo: item.sequenceNo,
         components,

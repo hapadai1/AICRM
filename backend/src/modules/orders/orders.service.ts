@@ -14,11 +14,18 @@ const ITEMS_INCLUDE = {
 /** getItems 진행지표 집계용 include — 옵션 세션·채촌 연결·작업지시서 버전 */
 const ITEMS_PROGRESS_INCLUDE = {
   components: { orderBy: [{ componentType: 'asc' }, { sequenceNo: 'asc' }] },
-  optionSelectionSessions: {
-    where: { isCurrent: true },
-    include: {
-      values: { select: { optionStageId: true } },
-      optionSetVersion: { select: { stages: { where: { active: true }, select: { id: true } } } },
+  // 옵션 세션은 ContractItem에 붙는다 → sourceContractItem 경유(REACH-BACK).
+  sourceContractItem: {
+    select: {
+      optionSelectionSessions: {
+        where: { isCurrent: true },
+        include: {
+          values: { select: { optionStageId: true } },
+          optionSetVersion: {
+            select: { stages: { where: { active: true }, select: { id: true } } },
+          },
+        },
+      },
     },
   },
   measurementLinks: {
@@ -73,8 +80,8 @@ export class OrdersService {
 
     // 진행지표를 평면 필드로 덧붙인다: 옵션 진행률·채촌 연결·작업지시서 버전 수 (docs/dev/08 §4)
     return items.map((item) => {
-      const { optionSelectionSessions, measurementLinks, workOrder, ...rest } = item;
-      const session = optionSelectionSessions[0];
+      const { sourceContractItem, measurementLinks, workOrder, ...rest } = item;
+      const session = sourceContractItem.optionSelectionSessions[0];
       const totalStages = session?.optionSetVersion.stages.length ?? 0;
       const stageIds = new Set(session?.optionSetVersion.stages.map((s) => s.id) ?? []);
       const completedStages = session

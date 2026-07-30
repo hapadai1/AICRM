@@ -284,10 +284,15 @@ export class CustomersService {
                 id: true,
                 displayName: true,
                 status: true,
-                optionSelectionSessions: {
-                  where: { isCurrent: true },
-                  orderBy: { selectionVersionNo: 'desc' },
-                  select: { status: true },
+                // 옵션 세션은 ContractItem에 붙는다 → sourceContractItem 경유(REACH-BACK).
+                sourceContractItem: {
+                  select: {
+                    optionSelectionSessions: {
+                      where: { isCurrent: true },
+                      orderBy: { selectionVersionNo: 'desc' },
+                      select: { status: true },
+                    },
+                  },
                 },
                 measurementLinks: { where: { isCurrent: true }, select: { id: true } },
                 workOrder: { select: { versions: { select: { id: true } } } },
@@ -409,7 +414,7 @@ export class CustomersService {
           id: i.id,
           displayName: i.displayName,
           status: i.status,
-          optionStatus: i.optionSelectionSessions[0]?.status ?? 'NOT_STARTED',
+          optionStatus: i.sourceContractItem.optionSelectionSessions[0]?.status ?? 'NOT_STARTED',
           measurementLinked: i.measurementLinks.length > 0,
           workOrderVersionCount: i.workOrder?.versions.length ?? 0,
         })),

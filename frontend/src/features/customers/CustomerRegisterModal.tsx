@@ -7,15 +7,18 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { App, DatePicker, Form, Input, Modal } from 'antd';
 import type { Dayjs } from 'dayjs';
 import { ApiError } from '../../api/client';
-import { createCustomer, type CustomerSaveBody } from '../../api/customers';
+import { createCustomer, type CustomerBase, type CustomerSaveBody } from '../../api/customers';
 
 interface Props {
   open: boolean;
   onClose: () => void;
   /** 전화번호 중복으로 막혔을 때 기존 고객 상세로 보낸다 */
   onGoDetail: (customerId: string) => void;
-  /** 등록 성공 알림 — 호출부가 목록 조회 범위를 넓히는 데 쓴다 */
-  onRegistered?: () => void;
+  /**
+   * 등록 성공 알림 — 방금 만든 고객을 넘긴다.
+   * 목록 조회 범위를 넓히거나(고객관리), 계약서에 바로 연결하는 데(계약 작성) 쓴다.
+   */
+  onRegistered?: (created: CustomerBase) => void;
 }
 
 interface FormValues {
@@ -41,7 +44,7 @@ export function CustomerRegisterModal({ open, onClose, onGoDetail, onRegistered 
     onSuccess: (created) => {
       message.success(`고객 "${created.name}"을(를) 등록했습니다.`);
       void queryClient.invalidateQueries({ queryKey: ['customers'] });
-      onRegistered?.();
+      onRegistered?.(created);
       close();
     },
     onError: (e) => {

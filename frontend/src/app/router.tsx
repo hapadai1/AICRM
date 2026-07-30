@@ -83,8 +83,8 @@ export const router = createBrowserRouter([
       { path: 'measurements/:id', element: <MeasurementEditPage /> },
       // 옵션·작업지시서
       { path: 'options', element: <OptionProgressListPage /> },
-      { path: 'options/:orderItemId', element: <OptionStagePage /> },
-      { path: 'options/:orderItemId/review', element: <OptionReviewPage /> },
+      { path: 'options/:contractItemId', element: <OptionStagePage /> },
+      { path: 'options/:contractItemId/review', element: <OptionReviewPage /> },
       // 작업지시서 목록은 제작 관리로 통합됨 — 구 링크는 리다이렉트. 미리보기/출력 화면은 유지.
       { path: 'work-orders', element: <Navigate to="/production" replace /> },
       { path: 'work-orders/:orderItemId', element: <WorkOrderPreviewPage /> },
@@ -94,7 +94,7 @@ export const router = createBrowserRouter([
       { path: 'rentals/allocate', element: <RentalAllocatePage /> },
       { path: 'rentals/handover', element: <RentalHandoverPage /> },
       // 렌탈 스타일 선택(컨설팅) — 품목 단위. :id보다 먼저 선언.
-      { path: 'rentals/selection/:orderItemId', element: <RentalSelectionPage /> },
+      { path: 'rentals/selection/:contractItemId', element: <RentalSelectionPage /> },
       { path: 'repairs', element: <RepairsPage /> },
       // 연락
       { path: 'notifications', element: <NotificationsPage /> },

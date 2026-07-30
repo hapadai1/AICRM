@@ -28,10 +28,10 @@ const emptyDraft: AttrDraft = { fabricName: '', colorName: '', patternName: '', 
 
 export function ComponentAttrsPanel({
   session,
-  orderItemId,
+  contractItemId,
 }: {
   session: OptionSessionDetail;
-  orderItemId: string;
+  contractItemId: string;
 }) {
   const queryClient = useQueryClient();
   const components = session.components;
@@ -52,7 +52,7 @@ export function ComponentAttrsPanel({
       }),
     onSuccess: (res) => {
       message.success(`${componentGroupLabel(res.componentGroup)} 저장되었습니다.`);
-      queryClient.setQueryData<OptionSessionDetail>(['options', 'session', orderItemId], (prev) =>
+      queryClient.setQueryData<OptionSessionDetail>(['options', 'session', contractItemId], (prev) =>
         prev
           ? {
               ...prev,

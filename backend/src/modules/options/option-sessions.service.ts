@@ -17,15 +17,16 @@ import {
 } from './options.dto';
 
 const SESSION_INCLUDE = {
-  orderItem: {
+  contractItem: {
     select: {
       id: true,
       displayName: true,
       productCategory: true,
-      order: {
+      contractVersion: {
         select: {
-          orderNo: true,
-          contract: {
+          // 이 세션이 붙은 계약 버전이 현재 버전인 계약(대개 1건). 계약번호·고객·
+          // 금액 반영 대상 계약을 여기서 되짚는다.
+          currentOfContracts: {
             select: {
               id: true,
               contractNo: true,
@@ -90,17 +91,17 @@ export class OptionSessionsService {
   ) {}
 
   /**
-   * POST /order-items/:id/option-sessions — body { fabric? }
+   * POST /contract-items/:id/option-sessions — body { fabric? }
    * - 미확정 현재 세션이 있으면 그대로 반환(fabric 전달 시 갱신)
    * - 확정 세션만 있으면 신규 selection_version_no로 선택값을 복사해 생성
    * - 세션이 없으면 품목 카테고리의 ACTIVE 버전으로 신규 생성
    */
-  async start(orderItemId: string, dto: StartOptionSessionDto, actor: AuthUser) {
-    const item = await this.prisma.orderItem.findUnique({ where: { id: orderItemId } });
-    if (!item) throw new NotFoundException('주문 품목이 없습니다.');
+  async start(contractItemId: string, dto: StartOptionSessionDto, actor: AuthUser) {
+    const item = await this.prisma.contractItem.findUnique({ where: { id: contractItemId } });
+    if (!item) throw new NotFoundException('계약 품목이 없습니다.');
 
     const sessions = await this.prisma.optionSelectionSession.findMany({
-      where: { orderItemId },
+      where: { contractItemId },
       orderBy: { selectionVersionNo: 'desc' },
     });
     const current = sessions.find((s) => s.isCurrent);
@@ -129,13 +130,13 @@ export class OptionSessionsService {
       const activeVersionId = set.activeVersionId;
       const created = await this.prisma.$transaction(async (tx) => {
         await tx.optionSelectionSession.updateMany({
-          where: { orderItemId, isCurrent: true },
+          where: { contractItemId, isCurrent: true },
           data: { isCurrent: false },
         });
         return tx.optionSelectionSession.create({
           data: {
             id: randomUUID(),
-            orderItemId,
+            contractItemId,
             optionSetVersionId: activeVersionId,
             selectionVersionNo: (sessions[0]?.selectionVersionNo ?? 0) + 1,
             status: 'NOT_STARTED',
@@ -174,13 +175,13 @@ export class OptionSessionsService {
       const now = new Date();
 
       await tx.optionSelectionSession.updateMany({
-        where: { orderItemId, isCurrent: true },
+        where: { contractItemId, isCurrent: true },
         data: { isCurrent: false },
       });
       const session = await tx.optionSelectionSession.create({
         data: {
           id: randomUUID(),
-          orderItemId,
+          contractItemId,
           optionSetVersionId: targetVersionId,
           selectionVersionNo: (sessions[0]?.selectionVersionNo ?? 0) + 1,
           status: values.length === 0 ? 'NOT_STARTED' : complete ? 'REVIEW' : 'IN_PROGRESS',
@@ -233,25 +234,31 @@ export class OptionSessionsService {
   }
 
   /**
-   * GET /order-items/option-progress — 맞춤 품목별 옵션 진행 현황 (연동정합화 계약 §6)
+   * GET /contract-items/option-progress — 맞춤 품목별 옵션 진행 현황 (연동정합화 계약 §6)
+   * 컨설팅은 계약 품목(ContractItem)에 붙으므로 CUSTOM 품목을 대상으로 조회하되,
+   * 그 계약 버전이 현재 버전인 계약(currentOfContracts)만 센다(옛 버전 품목 제외).
    * 취소 품목은 제외한다. 세션이 없는 품목은 NOT_STARTED로, totalStages는 해당
    * 카테고리의 ACTIVE 옵션 버전 단계 수를 사용한다(활성 버전이 없으면 0).
    */
   async progress(contractId?: string) {
     const [items, optionSets] = await Promise.all([
-      this.prisma.orderItem.findMany({
+      this.prisma.contractItem.findMany({
         where: {
           status: { not: 'CANCELLED' },
-          order: { transactionType: 'CUSTOM', ...(contractId ? { contractId } : {}) },
+          transactionType: 'CUSTOM',
+          contractVersion: {
+            currentOfContracts: {
+              some: contractId ? { id: contractId } : {},
+            },
+          },
         },
         include: {
-          order: {
+          contractVersion: {
             select: {
-              orderNo: true,
-              contractId: true,
               completionDueDate: true,
-              contract: {
+              currentOfContracts: {
                 select: {
+                  id: true,
                   contractNo: true,
                   customer: { select: { id: true, name: true, phone: true } },
                 },
@@ -297,20 +304,21 @@ export class OptionSessionsService {
     return items.map((item) => {
       const session = item.optionSelectionSessions[0];
       const activeStageIds = new Set(session?.optionSetVersion.stages.map((s) => s.id) ?? []);
+      // 이 계약 버전이 현재 버전인 계약. where 절이 some으로 걸러 항상 1건 이상이다.
+      const contract = item.contractVersion.currentOfContracts[0];
       return {
         // 부위(상의/하의/베스트) 슬롯 — 목록을 부위 단위 행으로 펼치기 위한 축.
         // 세션이 없는 품목도 카테고리의 ACTIVE 버전 단계로 부위별 총 단계 수를 채운다.
         components: this.progressComponents(item, session, activeStages),
-        orderItemId: item.id,
+        contractItemId: item.id,
         displayName: item.displayName,
         productCategory: item.productCategory,
-        contractId: item.order.contractId,
-        contractNo: item.order.contract.contractNo,
-        customerId: item.order.contract.customer.id,
-        customerName: item.order.contract.customer.name,
-        customerPhone: item.order.contract.customer.phone,
-        orderNo: item.order.orderNo,
-        completionDueDate: item.order.completionDueDate?.toISOString() ?? null,
+        contractId: contract.id,
+        contractNo: contract.contractNo,
+        customerId: contract.customer.id,
+        customerName: contract.customer.name,
+        customerPhone: contract.customer.phone,
+        completionDueDate: item.contractVersion.completionDueDate?.toISOString() ?? null,
         fabric: session?.fabricName ?? null,
         status: session?.status ?? 'NOT_STARTED',
         completedStages: session
@@ -370,15 +378,15 @@ export class OptionSessionsService {
   }
 
   /**
-   * GET /order-items/:id/option-session — 품목의 현재(is_current) 세션 상세.
+   * GET /contract-items/:id/option-session — 품목의 현재(is_current) 세션 상세.
    * 세션이 없으면 { session: null }을 반환한다.
    */
-  async currentSession(orderItemId: string) {
-    const item = await this.prisma.orderItem.findUnique({ where: { id: orderItemId } });
-    if (!item) throw new NotFoundException('주문 품목이 없습니다.');
+  async currentSession(contractItemId: string) {
+    const item = await this.prisma.contractItem.findUnique({ where: { id: contractItemId } });
+    if (!item) throw new NotFoundException('계약 품목이 없습니다.');
 
     const current = await this.prisma.optionSelectionSession.findFirst({
-      where: { orderItemId, isCurrent: true },
+      where: { contractItemId, isCurrent: true },
       select: { id: true },
     });
     if (!current) return { session: null };
@@ -392,15 +400,15 @@ export class OptionSessionsService {
     const session = await this.load(sessionId);
     const activeStages = this.activeStages(session);
     const valueByStage = new Map(session.values.map((v) => [v.optionStageId, v]));
+    const contract = this.contractOf(session);
     return {
       sessionId: session.id,
-      orderItemId: session.orderItemId,
-      orderItemName: session.orderItem.displayName,
-      displayName: session.orderItem.displayName,
-      productCategory: session.orderItem.productCategory,
-      orderNo: session.orderItem.order.orderNo,
-      customerId: session.orderItem.order.contract.customer.id,
-      customerName: session.orderItem.order.contract.customer.name,
+      contractItemId: session.contractItemId,
+      contractItemName: session.contractItem.displayName,
+      displayName: session.contractItem.displayName,
+      productCategory: session.contractItem.productCategory,
+      customerId: contract?.customer.id ?? null,
+      customerName: contract?.customer.name ?? null,
       optionSetName: session.optionSetVersion.optionSet.name,
       optionSetVersionNo: session.optionSetVersion.versionNo,
       optionSetVersion: {
@@ -429,7 +437,7 @@ export class OptionSessionsService {
         // 부위(상의/하의/베스트) 축 — 화면이 부위별로 단계를 나눠 띄운다.
         componentGroup: bucketGroup(
           s.componentGroup,
-          componentGroupsFor(session.orderItem.productCategory),
+          componentGroupsFor(session.contractItem.productCategory),
         ),
         choices: s.choices
           .filter((c) => c.active)
@@ -454,7 +462,7 @@ export class OptionSessionsService {
         : (session.currentStageId ?? firstIncomplete?.id ?? activeStages[0]?.id ?? null);
     return {
       sessionId: session.id,
-      orderItemId: session.orderItemId,
+      contractItemId: session.contractItemId,
       status: session.status,
       resumeStageId,
       currentStageId: session.currentStageId,
@@ -599,10 +607,9 @@ export class OptionSessionsService {
     const missing = items.filter((i) => !i.selected);
     return {
       sessionId: session.id,
-      orderItemId: session.orderItemId,
-      displayName: session.orderItem.displayName,
-      customerName: session.orderItem.order.contract.customer.name,
-      orderNo: session.orderItem.order.orderNo,
+      contractItemId: session.contractItemId,
+      displayName: session.contractItem.displayName,
+      customerName: this.contractOf(session)?.customer.name ?? null,
       optionSetName: session.optionSetVersion.optionSet.name,
       optionSetVersionNo: session.optionSetVersion.versionNo,
       status: session.status,
@@ -654,7 +661,7 @@ export class OptionSessionsService {
         surchargeApplied: state.applied,
       });
 
-    const versionId = session.orderItem.order.contract.currentVersionId!;
+    const versionId = this.contractOf(session)!.currentVersionId!;
     const { pending } = state;
     const before = state.contract;
 
@@ -678,9 +685,9 @@ export class OptionSessionsService {
             totalAmount: before.totalAmount + pending,
             optionSurcharge: pending,
             optionSessionId: sessionId,
-            orderItemId: session.orderItemId,
+            contractItemId: session.contractItemId,
           },
-          reason: `옵션 추가금액 반영 (${session.orderItem.displayName})`,
+          reason: `옵션 추가금액 반영 (${session.contractItem.displayName})`,
         },
         tx,
       );
@@ -753,7 +760,7 @@ export class OptionSessionsService {
           after: {
             status: 'CONFIRMED',
             selectionVersionNo: session.selectionVersionNo,
-            orderItemId: session.orderItemId,
+            contractItemId: session.contractItemId,
             optionSummary: summary,
             componentAttrs: this.buildComponents(session),
           },
@@ -777,21 +784,21 @@ export class OptionSessionsService {
   /** POST /option-sessions/:id/copy — 동일 카테고리의 다른 품목으로 선택값 복사 */
   async copy(sessionId: string, dto: CopySessionDto, actor: AuthUser) {
     const source = await this.load(sessionId);
-    const target = await this.prisma.orderItem.findUnique({
-      where: { id: dto.targetOrderItemId },
+    const target = await this.prisma.contractItem.findUnique({
+      where: { id: dto.targetContractItemId },
     });
     if (!target) throw new NotFoundException('복사 대상 품목이 없습니다.');
-    if (target.id === source.orderItemId)
+    if (target.id === source.contractItemId)
       throw new BusinessException('VALIDATION_ERROR', '같은 품목으로는 복사할 수 없습니다.', [
-        { field: 'targetOrderItemId', reason: 'SAME_ORDER_ITEM' },
+        { field: 'targetContractItemId', reason: 'SAME_CONTRACT_ITEM' },
       ]);
-    if (target.productCategory !== source.orderItem.productCategory)
+    if (target.productCategory !== source.contractItem.productCategory)
       throw new BusinessException(
         'VALIDATION_ERROR',
         '같은 품목 대분류로만 옵션을 복사할 수 있습니다.',
-        [{ field: 'targetOrderItemId', reason: 'CATEGORY_MISMATCH' }],
+        [{ field: 'targetContractItemId', reason: 'CATEGORY_MISMATCH' }],
         {
-          sourceCategory: source.orderItem.productCategory,
+          sourceCategory: source.contractItem.productCategory,
           targetCategory: target.productCategory,
         },
       );
@@ -804,17 +811,17 @@ export class OptionSessionsService {
 
     const created = await this.prisma.$transaction(async (tx) => {
       const last = await tx.optionSelectionSession.aggregate({
-        where: { orderItemId: target.id },
+        where: { contractItemId: target.id },
         _max: { selectionVersionNo: true },
       });
       await tx.optionSelectionSession.updateMany({
-        where: { orderItemId: target.id, isCurrent: true },
+        where: { contractItemId: target.id, isCurrent: true },
         data: { isCurrent: false },
       });
       const session = await tx.optionSelectionSession.create({
         data: {
           id: randomUUID(),
-          orderItemId: target.id,
+          contractItemId: target.id,
           optionSetVersionId: source.optionSetVersionId,
           selectionVersionNo: (last._max.selectionVersionNo ?? 0) + 1,
           status:
@@ -872,13 +879,13 @@ export class OptionSessionsService {
     this.ensureEditable(session);
     this.ensureVersion(session, dto.version);
 
-    const validGroups = componentGroupsFor(session.orderItem.productCategory);
+    const validGroups = componentGroupsFor(session.contractItem.productCategory);
     if (!validGroups.includes(group))
       throw new BusinessException(
         'VALIDATION_ERROR',
         '이 품목에 해당하지 않는 부위입니다.',
         [{ field: 'group', reason: 'INVALID_COMPONENT_GROUP' }],
-        { productCategory: session.orderItem.productCategory, validGroups },
+        { productCategory: session.contractItem.productCategory, validGroups },
       );
 
     const attrData = {
@@ -915,9 +922,17 @@ export class OptionSessionsService {
 
   // -------------------------------------------------------------------------
 
+  /**
+   * 세션이 붙은 계약 버전이 현재 버전인 계약(대개 1건)을 되짚는다.
+   * 옛 버전 품목의 세션이면 없을 수 있어 null 반환.
+   */
+  private contractOf(session: SessionWithDetail) {
+    return session.contractItem.contractVersion.currentOfContracts[0] ?? null;
+  }
+
   /** 부위 슬롯(카테고리별) + 저장값을 병합한 components[] (설계서 04 §2.3) */
   private buildComponents(session: SessionWithDetail) {
-    const groups = componentGroupsFor(session.orderItem.productCategory);
+    const groups = componentGroupsFor(session.contractItem.productCategory);
     const byGroup = new Map(session.componentAttrs.map((a) => [a.componentGroup, a]));
     return groups.map((group) => {
       const attr = byGroup.get(group);
@@ -1000,9 +1015,9 @@ export class OptionSessionsService {
     const total = this.surchargeTotal(session);
     const applied = Number(session.surchargeApplied);
     const pending = total - applied;
-    const { contract } = session.orderItem.order;
+    const contract = this.contractOf(session);
 
-    const version = contract.currentVersionId
+    const version = contract?.currentVersionId
       ? await this.prisma.contractVersion.findUnique({
           where: { id: contract.currentVersionId },
           select: { versionNo: true, totalAmount: true },
@@ -1011,8 +1026,8 @@ export class OptionSessionsService {
 
     return {
       sessionId: session.id,
-      orderItemId: session.orderItemId,
-      displayName: session.orderItem.displayName,
+      contractItemId: session.contractItemId,
+      displayName: session.contractItem.displayName,
       status: session.status,
       /** 이 품목 옵션의 추가금액 합계 */
       total,
@@ -1023,7 +1038,7 @@ export class OptionSessionsService {
       appliedAt: session.surchargeAppliedAt,
       /** 확정 세션만 반영할 수 있다 */
       appliable: session.status === 'CONFIRMED' && pending !== 0 && !!version,
-      contract: version
+      contract: version && contract
         ? {
             contractId: contract.id,
             contractNo: contract.contractNo,

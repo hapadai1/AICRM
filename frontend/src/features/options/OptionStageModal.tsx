@@ -13,7 +13,7 @@ import { ChoiceMedia } from './ChoiceMedia';
 
 interface Props {
   open: boolean;
-  orderItemId: string;
+  contractItemId: string;
   /** 부위 코드. null이면 세션의 모든 단계를 보여준다. */
   componentGroup: string | null;
   /** 팝업 제목에 쓰는 라벨 — "맞춤 정장 #1 · 상의(자켓)" */
@@ -21,7 +21,7 @@ interface Props {
   onClose: () => void;
 }
 
-export function OptionStageModal({ open, orderItemId, componentGroup, title, onClose }: Props) {
+export function OptionStageModal({ open, contractItemId, componentGroup, title, onClose }: Props) {
   const queryClient = useQueryClient();
   const screens = Grid.useBreakpoint();
   const [index, setIndex] = useState(0);
@@ -29,9 +29,9 @@ export function OptionStageModal({ open, orderItemId, componentGroup, title, onC
   const [modal, modalContextHolder] = Modal.useModal();
 
   const sessionQuery = useQuery({
-    queryKey: ['options', 'session', orderItemId],
-    queryFn: () => fetchOptionSessionByItem(orderItemId),
-    enabled: open && !!orderItemId,
+    queryKey: ['options', 'session', contractItemId],
+    queryFn: () => fetchOptionSessionByItem(contractItemId),
+    enabled: open && !!contractItemId,
     retry: false,
   });
   const session = sessionQuery.data ?? null;
@@ -39,9 +39,9 @@ export function OptionStageModal({ open, orderItemId, componentGroup, title, onC
   // 목록에서 바로 띄우므로 원단 입력 화면을 거치지 않는다 — 세션이 없으면 조용히 만든다.
   // 원단·컬러·패턴은 목록의 부위 행에서 따로 입력한다.
   const startMutation = useMutation({
-    mutationFn: () => startOptionSession(orderItemId),
+    mutationFn: () => startOptionSession(contractItemId),
     onSuccess: (created) => {
-      queryClient.setQueryData(['options', 'session', orderItemId], created);
+      queryClient.setQueryData(['options', 'session', contractItemId], created);
       void queryClient.invalidateQueries({ queryKey: ['options', 'progress'] });
     },
     onError: (e: Error) => message.error(e.message),
@@ -80,7 +80,7 @@ export function OptionStageModal({ open, orderItemId, componentGroup, title, onC
       }),
     // 연속 저장 시 낙관적 잠금 충돌을 막기 위해 응답의 version·선택값을 캐시에 즉시 반영한다.
     onSuccess: (res, input) => {
-      queryClient.setQueryData<OptionSessionDetail>(['options', 'session', orderItemId], (prev) =>
+      queryClient.setQueryData<OptionSessionDetail>(['options', 'session', contractItemId], (prev) =>
         prev
           ? {
               ...prev,
@@ -99,9 +99,9 @@ export function OptionStageModal({ open, orderItemId, componentGroup, title, onC
 
   // 확정 세션 재선택(설계서 §8.5): 확정본은 그대로 두고 선택값을 복사한 새 선택 버전을 만든다.
   const reopenMutation = useMutation({
-    mutationFn: () => startOptionSession(orderItemId, session?.fabric ?? undefined),
+    mutationFn: () => startOptionSession(contractItemId, session?.fabric ?? undefined),
     onSuccess: (created) => {
-      queryClient.setQueryData(['options', 'session', orderItemId], created);
+      queryClient.setQueryData(['options', 'session', contractItemId], created);
       void queryClient.invalidateQueries({ queryKey: ['options'] });
       void queryClient.invalidateQueries({ queryKey: ['workorders'] });
     },

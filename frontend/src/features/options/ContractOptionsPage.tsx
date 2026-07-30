@@ -84,9 +84,8 @@ const EMPTY_RENTAL: RentalDraft = { colorCode: null, sizeCode: null, notes: '' }
 interface ComponentRow {
   key: string;
   kind: 'CUSTOM' | 'RENTAL';
-  orderItemId: string;
+  contractItemId: string;
   displayName: string;
-  orderNo: string;
   status: string;
   /** 품목 셀 rowSpan — 그 품목의 첫 행만 부위 수, 나머지는 0 */
   itemRowSpan: number;
@@ -97,7 +96,7 @@ interface ComponentRow {
   completedStages?: number;
   totalStages?: number;
   // 렌탈
-  orderItemComponentId?: string;
+  contractItemComponentId?: string;
   colorName?: string | null;
   sizeName?: string | null;
   selectedItemCode?: string | null;
@@ -151,7 +150,7 @@ export function ContractOptionsPage() {
   const colorsQuery = useQuery({ queryKey: ['rental-colors'], queryFn: () => fetchRentalColors() });
   const sizesQuery = useQuery({ queryKey: ['rental-sizes'], queryFn: () => fetchRentalSizes() });
 
-  // 부위별 입력 초안 — 키는 `${orderItemId}:${부위}`
+  // 부위별 입력 초안 — 키는 `${contractItemId}:${부위}`
   const [attrDrafts, setAttrDrafts] = useState<Record<string, AttrDraft>>({});
   const [rentalDrafts, setRentalDrafts] = useState<Record<string, RentalDraft>>({});
 
@@ -170,7 +169,7 @@ export function ContractOptionsPage() {
       const next = { ...prev };
       for (const item of customItems)
         for (const c of item.components) {
-          const key = `${item.orderItemId}:${c.componentGroup}`;
+          const key = `${item.contractItemId}:${c.componentGroup}`;
           if (!(key in next))
             next[key] = {
               fabricName: c.fabricName ?? '',
@@ -188,7 +187,7 @@ export function ContractOptionsPage() {
       const next = { ...prev };
       for (const item of rentalItems)
         for (const c of item.components) {
-          const key = `${item.orderItemId}:${c.orderItemComponentId}`;
+          const key = `${item.contractItemId}:${c.contractItemComponentId}`;
           if (!(key in next))
             next[key] = {
               colorCode: c.colorCode,
@@ -207,16 +206,16 @@ export function ContractOptionsPage() {
    */
   const attrMutation = useMutation({
     mutationFn: ({
-      orderItemId,
+      contractItemId,
       group,
       draft,
     }: {
-      orderItemId: string;
+      contractItemId: string;
       group: string;
       draft: AttrDraft;
       label: string;
     }) =>
-      startOptionSession(orderItemId, undefined, [
+      startOptionSession(contractItemId, undefined, [
         {
           componentGroup: group,
           fabricName: draft.fabricName.trim() || undefined,
@@ -247,8 +246,8 @@ export function ContractOptionsPage() {
       label: string;
     }) => {
       let sessionId = row.sessionId ?? null;
-      if (!sessionId) sessionId = (await startRentalSelection(row.orderItemId)).sessionId;
-      return saveRentalLine(sessionId, row.orderItemComponentId!, {
+      if (!sessionId) sessionId = (await startRentalSelection(row.contractItemId)).sessionId;
+      return saveRentalLine(sessionId, row.contractItemComponentId!, {
         colorCode: draft.colorCode ?? undefined,
         sizeCode: draft.sizeCode ?? undefined,
         notes: draft.notes.trim() || undefined,
@@ -277,7 +276,7 @@ export function ContractOptionsPage() {
     customItems.filter(
       (row) =>
         source &&
-        row.orderItemId !== source.orderItemId &&
+        row.contractItemId !== source.contractItemId &&
         row.productCategory === source.productCategory &&
         row.status !== 'CONFIRMED',
     );
@@ -303,11 +302,10 @@ export function ContractOptionsPage() {
             ];
       groups.forEach((c, i) => {
         out.push({
-          key: `${item.orderItemId}:${c.componentGroup}`,
+          key: `${item.contractItemId}:${c.componentGroup}`,
           kind: 'CUSTOM',
-          orderItemId: item.orderItemId,
+          contractItemId: item.contractItemId,
           displayName: item.displayName,
-          orderNo: item.orderNo,
           status: item.status,
           itemRowSpan: i === 0 ? groups.length : 0,
           group: c.componentGroup,
@@ -321,11 +319,10 @@ export function ContractOptionsPage() {
       // 구성품이 아직 없는 렌탈 품목도 목록에는 보여야 한다(주문에서 구성품을 추가하면 채워진다).
       if (item.components.length === 0) {
         out.push({
-          key: `${item.orderItemId}:none`,
+          key: `${item.contractItemId}:none`,
           kind: 'RENTAL',
-          orderItemId: item.orderItemId,
+          contractItemId: item.contractItemId,
           displayName: item.displayName,
-          orderNo: item.orderNo,
           status: item.status,
           itemRowSpan: 1,
           group: '',
@@ -336,16 +333,15 @@ export function ContractOptionsPage() {
       }
       item.components.forEach((c, i) => {
         out.push({
-          key: `${item.orderItemId}:${c.orderItemComponentId}`,
+          key: `${item.contractItemId}:${c.contractItemComponentId}`,
           kind: 'RENTAL',
-          orderItemId: item.orderItemId,
+          contractItemId: item.contractItemId,
           displayName: item.displayName,
-          orderNo: item.orderNo,
           status: item.status,
           itemRowSpan: i === 0 ? item.components.length : 0,
           group: c.componentType,
           sessionId: item.sessionId,
-          orderItemComponentId: c.orderItemComponentId,
+          contractItemComponentId: c.contractItemComponentId,
           colorName: c.colorName,
           sizeName: c.sizeName,
           selectedItemCode: c.selectedItemCode,
@@ -357,7 +353,7 @@ export function ContractOptionsPage() {
   }, [customItems, rentalItems]);
 
   const itemOf = (row: ComponentRow) =>
-    customItems.find((i) => i.orderItemId === row.orderItemId) ?? null;
+    customItems.find((i) => i.contractItemId === row.contractItemId) ?? null;
 
   const patchAttr = (key: string, field: keyof AttrDraft, value: string) =>
     setAttrDrafts((prev) => ({ ...prev, [key]: { ...(prev[key] ?? EMPTY_ATTR), [field]: value } }));
@@ -373,7 +369,7 @@ export function ContractOptionsPage() {
       draft.notes.trim() === (saved?.notes ?? '');
     if (unchanged) return;
     attrMutation.mutate({
-      orderItemId: row.orderItemId,
+      contractItemId: row.contractItemId,
       group: row.group,
       draft,
       label: `${row.displayName} ${componentGroupLabel(row.group)}`,
@@ -403,7 +399,6 @@ export function ContractOptionsPage() {
           <Typography.Text strong style={{ fontSize: 15 }}>
             {row.displayName}
           </Typography.Text>
-          <Typography.Text type="secondary">{row.orderNo}</Typography.Text>
           <StatusBadge
             label={
               row.kind === 'CUSTOM'
@@ -511,8 +506,8 @@ export function ContractOptionsPage() {
         if (row.kind === 'RENTAL') {
           const draft = rentalDrafts[row.key] ?? EMPTY_RENTAL;
           const saved = rentalItems
-            .find((i) => i.orderItemId === row.orderItemId)
-            ?.components.find((c) => c.orderItemComponentId === row.orderItemComponentId);
+            .find((i) => i.contractItemId === row.contractItemId)
+            ?.components.find((c) => c.contractItemComponentId === row.contractItemComponentId);
           if (isLocked(row)) return <Typography.Text>{draft.notes || '-'}</Typography.Text>;
           return (
             <Input
@@ -582,7 +577,7 @@ export function ContractOptionsPage() {
           <Button
             type={row.selectedItemCode ? 'default' : 'primary'}
             icon={<SearchOutlined />}
-            disabled={!row.orderItemComponentId}
+            disabled={!row.contractItemComponentId}
             onClick={() => setRentalTarget(row)}
           >
             실물 검색
@@ -616,7 +611,7 @@ export function ContractOptionsPage() {
               <Button
                 icon={<FileTextOutlined />}
                 disabled={!done}
-                onClick={() => navigate(`/options/${item.orderItemId}/review`)}
+                onClick={() => navigate(`/options/${item.contractItemId}/review`)}
               >
                 확인서 보기
               </Button>
@@ -726,7 +721,7 @@ export function ContractOptionsPage() {
       {optionTarget && (
         <OptionStageModal
           open
-          orderItemId={optionTarget.orderItemId}
+          contractItemId={optionTarget.contractItemId}
           componentGroup={optionTarget.group}
           title={`${optionTarget.displayName} · ${componentGroupLabel(optionTarget.group)} 옵션`}
           onClose={() => setOptionTarget(null)}
@@ -736,16 +731,16 @@ export function ContractOptionsPage() {
       {rentalTarget && (
         <RentalCandidateModal
           open
-          orderItemId={rentalTarget.orderItemId}
-          orderItemComponentId={rentalTarget.orderItemComponentId!}
+          contractItemId={rentalTarget.contractItemId}
+          contractItemComponentId={rentalTarget.contractItemComponentId!}
           title={`${rentalTarget.displayName} · ${componentGroupLabel(rentalTarget.group)} 실물 검색`}
           colorName={rentalTarget.colorName ?? null}
           sizeName={rentalTarget.sizeName ?? null}
           selectedInventoryItemId={
             rentalItems
-              .find((i) => i.orderItemId === rentalTarget.orderItemId)
+              .find((i) => i.contractItemId === rentalTarget.contractItemId)
               ?.components.find(
-                (c) => c.orderItemComponentId === rentalTarget.orderItemComponentId,
+                (c) => c.contractItemComponentId === rentalTarget.contractItemComponentId,
               )?.selectedInventoryItemId ?? null
           }
           onClose={() => setRentalTarget(null)}
@@ -777,10 +772,9 @@ export function ContractOptionsPage() {
             style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
           >
             {copyTargets(copySource).map((t) => (
-              <Radio key={t.orderItemId} value={t.orderItemId} style={{ minHeight: 40, alignItems: 'center' }}>
+              <Radio key={t.contractItemId} value={t.contractItemId} style={{ minHeight: 40, alignItems: 'center' }}>
                 <Space>
                   <Typography.Text strong>{t.displayName}</Typography.Text>
-                  <Typography.Text type="secondary">{t.orderNo}</Typography.Text>
                   <StatusBadge
                     label={metaOf(OPTION_STATUS_META, t.status).label}
                     color={metaOf(OPTION_STATUS_META, t.status).color}

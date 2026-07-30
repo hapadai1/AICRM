@@ -14,17 +14,17 @@ export class RentalSelectionController {
   constructor(private readonly service: RentalSelectionService) {}
 
   /** 렌탈 선택 세션 시작/현재본 반환 (RENTAL 품목만) */
-  @Post('order-items/:id/rental-selection')
+  @Post('contract-items/:id/rental-selection')
   @RequirePermission('RENTAL_ALLOCATE')
-  start(@Param('id') orderItemId: string) {
-    return this.service.startSession(orderItemId);
+  start(@Param('id') contractItemId: string) {
+    return this.service.startSession(contractItemId);
   }
 
   /** 품목의 현재 렌탈 선택 세션 상세 — 없으면 { session: null } */
-  @Get('order-items/:id/rental-selection')
+  @Get('contract-items/:id/rental-selection')
   @RequirePermission('RENTAL_VIEW')
-  currentSession(@Param('id') orderItemId: string) {
-    return this.service.currentSession(orderItemId);
+  currentSession(@Param('id') contractItemId: string) {
+    return this.service.currentSession(contractItemId);
   }
 
   /**

@@ -1,4 +1,10 @@
-import { CheckOutlined, FileExcelOutlined, SaveOutlined, UserOutlined } from '@ant-design/icons';
+import {
+  CheckOutlined,
+  FileExcelOutlined,
+  SaveOutlined,
+  SkinOutlined,
+  UserOutlined,
+} from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
@@ -19,6 +25,7 @@ import {
   Space,
   Switch,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
 import dayjs, { type Dayjs } from 'dayjs';
@@ -28,6 +35,7 @@ import { ApiError } from '../../api/client';
 import { fetchCustomers } from '../../api/customers';
 import { BackButton } from '../../shared/BackButton';
 import { CustomerPickerModal, type PickedCustomer } from '../../shared/CustomerPickerModal';
+import { CustomerRegisterModal } from '../customers/CustomerRegisterModal';
 import { CustomerInfoGateModal, isCustomerInfoIncomplete } from './CustomerInfoGateModal';
 import {
   confirmContract,
@@ -84,6 +92,7 @@ export function ContractFormPage() {
   const [dirty, setDirty] = useState(false);
   const [confirmResult, setConfirmResult] = useState<ContractConfirmResult | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [registerOpen, setRegisterOpen] = useState(false);
   // 고객 정보 보완 게이트를 통과(저장)했는지. 통과 후 재조회 전까지 모달이 다시 뜨지 않게 잡아둔다.
   const [gateDismissed, setGateDismissed] = useState(false);
   // 상단 고객 선택 필드의 검색어 — 이름·전화번호로 전 고객을 찾는다.
@@ -427,25 +436,34 @@ export function ContractFormPage() {
         ) : (
           // 고객 선택은 팝업이 아니라 계약서 상단 필드에서 한다.
           // 이름을 넣어 고르면 곧바로 연결되고, 신체 정보가 비어 있을 때만 보완 팝업이 이어진다.
-          <Flex align="center" gap={12} wrap>
-            <Typography.Text strong>고객</Typography.Text>
-            <Select
-              showSearch
-              autoFocus
-              style={{ minWidth: 320, flex: '1 1 320px' }}
-              placeholder="고객명 또는 전화번호로 검색"
-              suffixIcon={<UserOutlined />}
-              filterOption={false}
-              notFoundContent={customerSearchQuery.isFetching ? '검색 중...' : '검색 결과가 없습니다.'}
-              loading={customerSearchQuery.isFetching}
-              onSearch={setCustomerKeyword}
-              onChange={(v: string) => selectCustomer(v)}
-              options={(customerSearchQuery.data?.data ?? []).map((c) => ({
-                value: c.id,
-                label: `${c.name} (${c.phone})`,
-              }))}
-            />
-            <Button onClick={() => setPickerOpen(true)}>목록에서 찾기</Button>
+          <Flex vertical gap={8}>
+            <Flex align="center" gap={12} wrap>
+              <Typography.Text strong>고객</Typography.Text>
+              <Select
+                showSearch
+                autoFocus
+                style={{ minWidth: 320, flex: '1 1 320px' }}
+                placeholder="고객명 또는 전화번호로 검색"
+                suffixIcon={<UserOutlined />}
+                filterOption={false}
+                notFoundContent={customerSearchQuery.isFetching ? '검색 중...' : '검색 결과가 없습니다.'}
+                loading={customerSearchQuery.isFetching}
+                onSearch={setCustomerKeyword}
+                onChange={(v: string) => selectCustomer(v)}
+                options={(customerSearchQuery.data?.data ?? []).map((c) => ({
+                  value: c.id,
+                  label: `${c.name} (${c.phone})`,
+                }))}
+              />
+              <Button onClick={() => setPickerOpen(true)}>목록에서 찾기</Button>
+              <Button type="dashed" onClick={() => setRegisterOpen(true)}>
+                신규 등록
+              </Button>
+            </Flex>
+            <Typography.Text type="secondary">
+              고객을 선택하면 계약서에 연결됩니다. 목록에 없으면 신규 등록으로 바로 만들 수 있고, 작업지시서에 필요한
+              정보가 비어 있으면 이어서 입력받습니다.
+            </Typography.Text>
           </Flex>
         )}
       </Card>
@@ -604,7 +622,28 @@ export function ContractFormPage() {
 
       {/* 목록·계약 상세 등 여러 경로로 들어오므로 뒤로가기로 통일 */}
       <Card>
-        <BackButton />
+        <Flex justify="space-between" align="center" wrap gap={12}>
+          <BackButton />
+          {/* 임시저장으로 계약(초안)이 만들어진 뒤에만 스타일 컨설팅으로 이어간다. */}
+          <Tooltip
+            title={
+              !draftId
+                ? '먼저 임시저장하면 스타일 컨설팅으로 이어갈 수 있습니다.'
+                : dirty
+                  ? '변경사항을 임시저장한 뒤 이동할 수 있습니다.'
+                  : ''
+            }
+          >
+            <Button
+              type="primary"
+              icon={<SkinOutlined />}
+              disabled={!draftId || dirty}
+              onClick={() => draftId && navigate(`/contracts/${draftId}/options`)}
+            >
+              스타일 컨설팅으로 이동
+            </Button>
+          </Tooltip>
+        </Flex>
       </Card>
 
       {/* 계약 확정 결과: 생성된 주문 목록 표시 후 주문 상세 이동 */}
@@ -653,6 +692,14 @@ export function ContractFormPage() {
         onCancel={() => setPickerOpen(false)}
         onSelect={handlePickCustomer}
         title="고객 선택 — 계약서 작성"
+      />
+
+      {/* 목록에 없는 고객은 여기서 바로 등록하고, 성공하면 곧장 계약서에 연결한다. */}
+      <CustomerRegisterModal
+        open={registerOpen}
+        onClose={() => setRegisterOpen(false)}
+        onGoDetail={(id) => navigate(`/customers/${id}`)}
+        onRegistered={(created) => selectCustomer(created.id)}
       />
 
       {/* 고객 선택 직후 신체 정보가 비어 있으면 채우고 넘어간다 (설계서 07 §4) */}

@@ -19,20 +19,25 @@ function parseDateOnly(value: string): Date {
 }
 
 const SESSION_INCLUDE = {
-  orderItem: {
+  contractItem: {
     select: {
       id: true,
       displayName: true,
       productCategory: true,
-      order: {
+      transactionType: true,
+      // 이 세션이 붙은 계약 버전이 현재 버전인 계약(대개 1건)에서 계약번호·고객을 되짚는다.
+      contractVersion: {
         select: {
-          orderNo: true,
-          transactionType: true,
-          contract: { select: { id: true, contractNo: true, customer: { select: { id: true, name: true } } } },
+          currentOfContracts: {
+            select: {
+              id: true,
+              contractNo: true,
+              customer: { select: { id: true, name: true } },
+            },
+          },
         },
       },
       components: {
-        where: { active: true },
         orderBy: [{ componentType: 'asc' as const }, { sequenceNo: 'asc' as const }],
       },
     },
@@ -60,34 +65,34 @@ export class RentalSelectionService {
     private readonly audit: AuditService,
   ) {}
 
-  /** POST /order-items/:id/rental-selection — 렌탈 선택 세션 시작/현재본 반환 (RENTAL 품목만) */
-  async startSession(orderItemId: string) {
-    const item = await this.prisma.orderItem.findUnique({
-      where: { id: orderItemId },
-      include: { order: { select: { transactionType: true } } },
+  /** POST /contract-items/:id/rental-selection — 렌탈 선택 세션 시작/현재본 반환 (RENTAL 품목만) */
+  async startSession(contractItemId: string) {
+    const item = await this.prisma.contractItem.findUnique({
+      where: { id: contractItemId },
+      select: { transactionType: true },
     });
-    if (!item) throw new NotFoundException('주문 품목이 없습니다.');
-    if (item.order.transactionType !== 'RENTAL')
+    if (!item) throw new NotFoundException('계약 품목이 없습니다.');
+    if (item.transactionType !== 'RENTAL')
       throw new BusinessException(
         'VALIDATION_ERROR',
-        '렌탈 주문 품목만 렌탈 스타일 선택을 시작할 수 있습니다.',
-        [{ field: 'orderItemId', reason: 'NOT_RENTAL_ITEM' }],
+        '렌탈 계약 품목만 렌탈 스타일 선택을 시작할 수 있습니다.',
+        [{ field: 'contractItemId', reason: 'NOT_RENTAL_ITEM' }],
       );
 
     const current = await this.prisma.rentalSelectionSession.findFirst({
-      where: { orderItemId, isCurrent: true },
+      where: { contractItemId, isCurrent: true },
       select: { id: true },
     });
     if (current) return this.detail(current.id);
 
     const last = await this.prisma.rentalSelectionSession.aggregate({
-      where: { orderItemId },
+      where: { contractItemId },
       _max: { selectionVersionNo: true },
     });
     const created = await this.prisma.rentalSelectionSession.create({
       data: {
         id: randomUUID(),
-        orderItemId,
+        contractItemId,
         selectionVersionNo: (last._max.selectionVersionNo ?? 0) + 1,
         status: 'IN_PROGRESS',
         isCurrent: true,
@@ -104,19 +109,22 @@ export class RentalSelectionService {
    */
   async progress(contractId?: string) {
     const [items, colors, sizes] = await Promise.all([
-      this.prisma.orderItem.findMany({
+      this.prisma.contractItem.findMany({
         where: {
           status: { not: 'CANCELLED' },
-          order: { transactionType: 'RENTAL', ...(contractId ? { contractId } : {}) },
+          transactionType: 'RENTAL',
+          // contractId 스코프: 이 품목의 계약 버전이 현재 버전인 계약 중 해당 id가 있는 것.
+          ...(contractId
+            ? { contractVersion: { currentOfContracts: { some: { id: contractId } } } }
+            : {}),
         },
         include: {
-          order: {
+          contractVersion: {
             select: {
-              orderNo: true,
-              contractId: true,
               completionDueDate: true,
-              contract: {
+              currentOfContracts: {
                 select: {
+                  id: true,
                   contractNo: true,
                   customer: { select: { id: true, name: true, phone: true } },
                 },
@@ -124,7 +132,6 @@ export class RentalSelectionService {
             },
           },
           components: {
-            where: { active: true },
             orderBy: [{ componentType: 'asc' }, { sequenceNo: 'asc' }],
           },
           rentalSelectionSessions: {
@@ -142,27 +149,27 @@ export class RentalSelectionService {
 
     return items.map((item) => {
       const session = item.rentalSelectionSessions[0];
+      const contract = item.contractVersion.currentOfContracts[0] ?? null;
       const lineByComponent = new Map(
-        (session?.lines ?? []).map((l) => [l.orderItemComponentId, l]),
+        (session?.lines ?? []).map((l) => [l.contractItemComponentId, l]),
       );
       return {
-        orderItemId: item.id,
+        contractItemId: item.id,
         displayName: item.displayName,
         productCategory: item.productCategory,
-        contractId: item.order.contractId,
-        contractNo: item.order.contract.contractNo,
-        customerId: item.order.contract.customer.id,
-        customerName: item.order.contract.customer.name,
-        customerPhone: item.order.contract.customer.phone,
-        orderNo: item.order.orderNo,
-        completionDueDate: item.order.completionDueDate?.toISOString() ?? null,
+        contractId: contract?.id ?? null,
+        contractNo: contract?.contractNo ?? null,
+        customerId: contract?.customer.id ?? null,
+        customerName: contract?.customer.name ?? null,
+        customerPhone: contract?.customer.phone ?? null,
+        completionDueDate: item.contractVersion.completionDueDate?.toISOString() ?? null,
         sessionId: session?.id ?? null,
         status: session?.status ?? 'NOT_STARTED',
         version: session?.rowVersion ?? 0,
         components: item.components.map((c) => {
           const line = lineByComponent.get(c.id);
           return {
-            orderItemComponentId: c.id,
+            contractItemComponentId: c.id,
             componentType: c.componentType,
             sequenceNo: c.sequenceNo,
             colorCode: line?.colorCode ?? null,
@@ -209,12 +216,12 @@ export class RentalSelectionService {
     return { colors: colors.map(toRow), sizes: sizes.map(toRow) };
   }
 
-  /** GET /order-items/:id/rental-selection — 현재 세션 상세 (없으면 { session: null }) */
-  async currentSession(orderItemId: string) {
-    const item = await this.prisma.orderItem.findUnique({ where: { id: orderItemId } });
-    if (!item) throw new NotFoundException('주문 품목이 없습니다.');
+  /** GET /contract-items/:id/rental-selection — 현재 세션 상세 (없으면 { session: null }) */
+  async currentSession(contractItemId: string) {
+    const item = await this.prisma.contractItem.findUnique({ where: { id: contractItemId } });
+    if (!item) throw new NotFoundException('계약 품목이 없습니다.');
     const current = await this.prisma.rentalSelectionSession.findFirst({
-      where: { orderItemId, isCurrent: true },
+      where: { contractItemId, isCurrent: true },
       select: { id: true },
     });
     if (!current) return { session: null };
@@ -224,15 +231,15 @@ export class RentalSelectionService {
   /** GET /rental-selections/:id — 부위 슬롯(구성품) + 저장값 */
   async detail(sessionId: string) {
     const session = await this.load(sessionId);
-    const lineByComponent = new Map(session.lines.map((l) => [l.orderItemComponentId, l]));
+    const contract = session.contractItem.contractVersion.currentOfContracts[0] ?? null;
+    const lineByComponent = new Map(session.lines.map((l) => [l.contractItemComponentId, l]));
     return {
       sessionId: session.id,
-      orderItemId: session.orderItemId,
-      displayName: session.orderItem.displayName,
-      productCategory: session.orderItem.productCategory,
-      orderNo: session.orderItem.order.orderNo,
-      customerId: session.orderItem.order.contract.customer.id,
-      customerName: session.orderItem.order.contract.customer.name,
+      contractItemId: session.contractItemId,
+      displayName: session.contractItem.displayName,
+      productCategory: session.contractItem.productCategory,
+      customerId: contract?.customer.id ?? null,
+      customerName: contract?.customer.name ?? null,
       status: session.status,
       isCurrent: session.isCurrent,
       confirmedAt: session.confirmedAt,
@@ -240,10 +247,10 @@ export class RentalSelectionService {
       // 대여 기간 (필수값). 이게 없으면 후보 검색·확정을 할 수 없다.
       pickupDate: session.pickupDate,
       returnDueDate: session.returnDueDate,
-      components: session.orderItem.components.map((c) => {
+      components: session.contractItem.components.map((c) => {
         const line = lineByComponent.get(c.id);
         return {
-          orderItemComponentId: c.id,
+          contractItemComponentId: c.id,
           componentType: c.componentType,
           sequenceNo: c.sequenceNo,
           colorCode: line?.colorCode ?? null,
@@ -343,12 +350,12 @@ export class RentalSelectionService {
     await this.prisma.$transaction(async (tx) => {
       await tx.rentalSelectionLine.upsert({
         where: {
-          sessionId_orderItemComponentId: { sessionId, orderItemComponentId: componentId },
+          sessionId_contractItemComponentId: { sessionId, contractItemComponentId: componentId },
         },
         create: {
           id: randomUUID(),
           sessionId,
-          orderItemComponentId: componentId,
+          contractItemComponentId: componentId,
           ...lineData,
         },
         // 컬러·사이즈가 바뀌면 이미 고른 후보 실물은 조건 불일치일 수 있어 선택을 비운다.
@@ -372,7 +379,7 @@ export class RentalSelectionService {
   async candidates(sessionId: string, componentId: string) {
     const session = await this.load(sessionId);
     const component = this.requireComponent(session, componentId);
-    const line = session.lines.find((l) => l.orderItemComponentId === componentId);
+    const line = session.lines.find((l) => l.contractItemComponentId === componentId);
     const { pickup, end } = this.requirePeriod(session);
 
     const items = await this.prisma.rentalInventoryItem.findMany({
@@ -400,7 +407,7 @@ export class RentalSelectionService {
 
     return {
       sessionId,
-      orderItemComponentId: componentId,
+      contractItemComponentId: componentId,
       componentType: component.componentType,
       pickupDate: session.pickupDate,
       returnDueDate: session.returnDueDate,
@@ -454,12 +461,12 @@ export class RentalSelectionService {
     await this.prisma.$transaction(async (tx) => {
       await tx.rentalSelectionLine.upsert({
         where: {
-          sessionId_orderItemComponentId: { sessionId, orderItemComponentId: componentId },
+          sessionId_contractItemComponentId: { sessionId, contractItemComponentId: componentId },
         },
         create: {
           id: randomUUID(),
           sessionId,
-          orderItemComponentId: componentId,
+          contractItemComponentId: componentId,
           componentType: component.componentType,
           selectedInventoryItemId: inventoryItemId,
         },
@@ -484,7 +491,7 @@ export class RentalSelectionService {
 
     const now = new Date();
     const summary = session.lines.map((l) => ({
-      orderItemComponentId: l.orderItemComponentId,
+      contractItemComponentId: l.contractItemComponentId,
       componentType: l.componentType,
       colorCode: l.colorCode,
       sizeCode: l.sizeCode,
@@ -506,7 +513,7 @@ export class RentalSelectionService {
           before: { status: session.status, rowVersion: session.rowVersion },
           after: {
             status: 'CONFIRMED',
-            orderItemId: session.orderItemId,
+            contractItemId: session.contractItemId,
             selectionVersionNo: session.selectionVersionNo,
             pickupDate: session.pickupDate,
             returnDueDate: session.returnDueDate,
@@ -530,20 +537,20 @@ export class RentalSelectionService {
     ]);
     const colorName = new Map(colors.map((c) => [c.code, c.name]));
     const sizeName = new Map(sizes.map((s) => [s.code, s.name]));
-    const lineByComponent = new Map(session.lines.map((l) => [l.orderItemComponentId, l]));
+    const contract = session.contractItem.contractVersion.currentOfContracts[0] ?? null;
+    const lineByComponent = new Map(session.lines.map((l) => [l.contractItemComponentId, l]));
 
     return {
       sessionId: session.id,
-      orderItemId: session.orderItemId,
-      displayName: session.orderItem.displayName,
-      customerName: session.orderItem.order.contract.customer.name,
-      orderNo: session.orderItem.order.orderNo,
+      contractItemId: session.contractItemId,
+      displayName: session.contractItem.displayName,
+      customerName: contract?.customer.name ?? null,
       status: session.status,
       confirmedAt: session.confirmedAt,
-      components: session.orderItem.components.map((c) => {
+      components: session.contractItem.components.map((c) => {
         const line = lineByComponent.get(c.id);
         return {
-          orderItemComponentId: c.id,
+          contractItemComponentId: c.id,
           componentType: c.componentType,
           colorCode: line?.colorCode ?? null,
           colorName: line?.colorCode ? (colorName.get(line.colorCode) ?? line.colorCode) : null,
@@ -574,7 +581,7 @@ export class RentalSelectionService {
   }
 
   private requireComponent(session: SessionWithDetail, componentId: string) {
-    const component = session.orderItem.components.find((c) => c.id === componentId);
+    const component = session.contractItem.components.find((c) => c.id === componentId);
     if (!component)
       throw new BusinessException(
         'VALIDATION_ERROR',

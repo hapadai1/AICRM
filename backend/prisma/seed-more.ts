@@ -279,23 +279,51 @@ async function main(): Promise<void> {
         return id;
       };
 
+      // 주문 품목 id → 앵커 ContractItem id. 옵션 세션이 이 맵으로 contractItem을 되짚는다.
+      // 컨설팅(옵션/렌탈 선택)이 이제 ContractItem에 붙으므로 주문 품목마다 앵커 품목을 물리화한다.
+      const contractItemByOrderItem = new Map<string, string>();
+      let contractItemSeq = 0;
       const orderItem = async (args: {
         orderId: string; lineId: string; productCategory: string; sequenceNo: number;
         displayName: string; status: string;
       }): Promise<string> => {
+        const line = await tx.contractLine.findUniqueOrThrow({
+          where: { id: args.lineId },
+          select: { contractVersionId: true, transactionType: true },
+        });
+        const contractItemId = uuid();
+        contractItemSeq += 1;
+        await tx.contractItem.create({
+          data: {
+            id: contractItemId,
+            contractVersionId: line.contractVersionId,
+            sourceContractLineId: args.lineId,
+            transactionType: line.transactionType,
+            productCategory: args.productCategory,
+            sequenceNo: contractItemSeq,
+            displayName: args.displayName,
+          },
+        });
         const id = uuid();
         await tx.orderItem.create({
           data: {
             id,
             orderId: args.orderId,
-            sourceContractLineId: args.lineId,
+            sourceContractItemId: contractItemId,
             productCategory: args.productCategory,
             sequenceNo: args.sequenceNo,
             displayName: args.displayName,
             status: args.status,
           },
         });
+        contractItemByOrderItem.set(id, contractItemId);
         return id;
+      };
+      /** 옵션 세션 생성 시 주문 품목의 앵커 ContractItem을 되짚는다. */
+      const contractItemOf = (orderItemId: string): string => {
+        const ci = contractItemByOrderItem.get(orderItemId);
+        if (!ci) throw new Error(`contractItem 매핑 누락: ${orderItemId}`);
+        return ci;
       };
 
       const component = async (args: {
@@ -321,6 +349,7 @@ async function main(): Promise<void> {
 
       type OptionVersion = typeof suitVersion;
       const optionSession = async (args: {
+        // 옵션 세션은 이제 ContractItem에 붙는다. 호출부는 주문 품목 id를 넘기고, 여기서 되짚는다.
         orderItemId: string; version: OptionVersion; picks: Array<'A' | 'B'>;
         status: 'IN_PROGRESS' | 'REVIEW' | 'CONFIRMED'; fabricName?: string;
         startedAt: Date; lastSavedAt: Date; reviewedAt?: Date; confirmedAt?: Date;
@@ -330,7 +359,7 @@ async function main(): Promise<void> {
         await tx.optionSelectionSession.create({
           data: {
             id: sessionId,
-            orderItemId: args.orderItemId,
+            contractItemId: contractItemOf(args.orderItemId),
             optionSetVersionId: args.version.id,
             selectionVersionNo: 1,
             status: args.status,

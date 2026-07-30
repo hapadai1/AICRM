@@ -60,7 +60,7 @@ interface Draft {
  * 대여 날짜는 필수값이다(현업 확정 2026-07-28) — 기간 없이는 후보 검색·확정이 막힌다.
  */
 export function RentalSelectionPage() {
-  const { orderItemId } = useParams<{ orderItemId: string }>();
+  const { contractItemId } = useParams<{ contractItemId: string }>();
   const { message } = App.useApp();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -69,11 +69,11 @@ export function RentalSelectionPage() {
   const [candidateFor, setCandidateFor] = useState<string | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
 
-  const sessionKey = ['rentals', 'selection', orderItemId];
+  const sessionKey = ['rentals', 'selection', contractItemId];
   const sessionQuery = useQuery({
     queryKey: sessionKey,
-    queryFn: () => fetchCurrentRentalSelection(orderItemId!),
-    enabled: !!orderItemId,
+    queryFn: () => fetchCurrentRentalSelection(contractItemId!),
+    enabled: !!contractItemId,
   });
   const detail = sessionQuery.data?.session ?? null;
   const sessionId = detail?.sessionId;
@@ -99,7 +99,7 @@ export function RentalSelectionPage() {
     if (!detail) return;
     const next: Record<string, Draft> = {};
     for (const c of detail.components) {
-      next[c.orderItemComponentId] = {
+      next[c.contractItemComponentId] = {
         colorCode: c.colorCode ?? undefined,
         sizeCode: c.sizeCode ?? undefined,
         notes: c.notes ?? undefined,
@@ -113,7 +113,7 @@ export function RentalSelectionPage() {
   };
 
   const startMut = useMutation({
-    mutationFn: () => startRentalSelection(orderItemId!),
+    mutationFn: () => startRentalSelection(contractItemId!),
     onSuccess: applyDetail,
     onError: (e) => message.error(e instanceof ApiError ? e.message : '세션을 시작할 수 없습니다.'),
   });
@@ -185,7 +185,7 @@ export function RentalSelectionPage() {
     enabled: !!sessionId && reviewOpen,
   });
 
-  if (!orderItemId) {
+  if (!contractItemId) {
     return <Alert type="warning" showIcon message="주문 품목이 지정되지 않았습니다." />;
   }
 
@@ -231,10 +231,10 @@ export function RentalSelectionPage() {
           loading={colorsQuery.isLoading}
           placeholder="컬러 선택"
           style={{ width: '100%' }}
-          value={drafts[r.orderItemComponentId]?.colorCode}
+          value={drafts[r.contractItemComponentId]?.colorCode}
           options={colorOptionsFor(r.componentType)}
           onChange={(v) =>
-            setDrafts((d) => ({ ...d, [r.orderItemComponentId]: { ...d[r.orderItemComponentId], colorCode: v } }))
+            setDrafts((d) => ({ ...d, [r.contractItemComponentId]: { ...d[r.contractItemComponentId], colorCode: v } }))
           }
         />
       ),
@@ -249,10 +249,10 @@ export function RentalSelectionPage() {
           loading={sizesQuery.isLoading}
           placeholder="사이즈 선택"
           style={{ width: '100%' }}
-          value={drafts[r.orderItemComponentId]?.sizeCode}
+          value={drafts[r.contractItemComponentId]?.sizeCode}
           options={sizeOptionsFor(r.componentType)}
           onChange={(v) =>
-            setDrafts((d) => ({ ...d, [r.orderItemComponentId]: { ...d[r.orderItemComponentId], sizeCode: v } }))
+            setDrafts((d) => ({ ...d, [r.contractItemComponentId]: { ...d[r.contractItemComponentId], sizeCode: v } }))
           }
         />
       ),
@@ -263,11 +263,11 @@ export function RentalSelectionPage() {
         <Input
           disabled={!editable}
           placeholder="수선명령·수치 등"
-          value={drafts[r.orderItemComponentId]?.notes}
+          value={drafts[r.contractItemComponentId]?.notes}
           onChange={(e) =>
             setDrafts((d) => ({
               ...d,
-              [r.orderItemComponentId]: { ...d[r.orderItemComponentId], notes: e.target.value },
+              [r.contractItemComponentId]: { ...d[r.contractItemComponentId], notes: e.target.value },
             }))
           }
         />
@@ -300,8 +300,8 @@ export function RentalSelectionPage() {
           <Button
             size="small"
             disabled={!editable}
-            loading={saveLineMut.isPending && saveLineMut.variables === r.orderItemComponentId}
-            onClick={() => saveLineMut.mutate(r.orderItemComponentId)}
+            loading={saveLineMut.isPending && saveLineMut.variables === r.contractItemComponentId}
+            onClick={() => saveLineMut.mutate(r.contractItemComponentId)}
           >
             저장
           </Button>
@@ -310,7 +310,7 @@ export function RentalSelectionPage() {
               size="small"
               icon={<SearchOutlined />}
               disabled={!editable || !hasPeriod}
-              onClick={() => setCandidateFor(r.orderItemComponentId)}
+              onClick={() => setCandidateFor(r.contractItemComponentId)}
             >
               후보 조회
             </Button>
@@ -321,7 +321,7 @@ export function RentalSelectionPage() {
               danger
               disabled={!editable}
               onClick={() =>
-                selectItemMut.mutate({ componentId: r.orderItemComponentId, inventoryItemId: null })
+                selectItemMut.mutate({ componentId: r.contractItemComponentId, inventoryItemId: null })
               }
             >
               해제
@@ -337,8 +337,8 @@ export function RentalSelectionPage() {
     items: detail.components
       .filter((c) => c.selectedItem)
       .map((c) => ({
-        componentId: c.orderItemComponentId,
-        orderNo: detail.orderNo,
+        componentId: c.contractItemComponentId,
+        orderNo: '',
         customerName: detail.customerName,
         item: {
           id: c.selectedItem!.id,
@@ -411,11 +411,10 @@ export function RentalSelectionPage() {
             </Button>
           </Space>
         </Space>
-        <Descriptions size="small" bordered column={3} style={{ marginTop: 16 }}>
+        <Descriptions size="small" bordered column={2} style={{ marginTop: 16 }}>
           <Descriptions.Item label="고객">{detail.customerName}</Descriptions.Item>
-          <Descriptions.Item label="주문번호">{detail.orderNo}</Descriptions.Item>
           <Descriptions.Item label="품목">{detail.displayName}</Descriptions.Item>
-          <Descriptions.Item label="대여 기간" span={3}>
+          <Descriptions.Item label="대여 기간" span={2}>
             <Space wrap>
               <DatePicker.RangePicker
                 value={period}
@@ -445,7 +444,7 @@ export function RentalSelectionPage() {
 
       <Card title="구성품별 컬러·사이즈·후보 실물">
         <Table<RentalSelectionComponent>
-          rowKey="orderItemComponentId"
+          rowKey="contractItemComponentId"
           size="middle"
           scroll={{ x: 'max-content' }}
           dataSource={detail.components}
@@ -506,7 +505,7 @@ export function RentalSelectionPage() {
               </Descriptions.Item>
             </Descriptions>
             <Table
-              rowKey="orderItemComponentId"
+              rowKey="contractItemComponentId"
               size="small"
               pagination={false}
               scroll={{ x: 'max-content' }}

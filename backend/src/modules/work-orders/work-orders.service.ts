@@ -32,17 +32,22 @@ const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.s
 /** 품목 1건에 대해 판정·스냅샷에 필요한 원본을 한 번에 로드하는 include */
 const orderItemInclude = Prisma.validator<Prisma.OrderItemInclude>()({
   order: { include: { contract: { include: { customer: true } } } },
-  optionSelectionSessions: {
-    where: { isCurrent: true, status: 'CONFIRMED' },
-    orderBy: { selectionVersionNo: Prisma.SortOrder.desc },
-    take: 1,
+  // 옵션 세션은 ContractItem에 붙는다 → 확정 후 되짚기(REACH-BACK): sourceContractItem 경유.
+  sourceContractItem: {
     include: {
-      values: {
-        include: { optionStage: true, optionChoice: true },
-        orderBy: { optionStage: { sequenceNo: Prisma.SortOrder.asc } },
+      optionSelectionSessions: {
+        where: { isCurrent: true, status: 'CONFIRMED' },
+        orderBy: { selectionVersionNo: Prisma.SortOrder.desc },
+        take: 1,
+        include: {
+          values: {
+            include: { optionStage: true, optionChoice: true },
+            orderBy: { optionStage: { sequenceNo: Prisma.SortOrder.asc } },
+          },
+          // 부위별 원단·컬러·패턴 (v2 D3 / 설계서 04 §2.5)
+          componentAttrs: true,
+        },
       },
-      // 부위별 원단·컬러·패턴 (v2 D3 / 설계서 04 §2.5)
-      componentAttrs: true,
     },
   },
   measurementLinks: {
@@ -66,7 +71,8 @@ const orderItemInclude = Prisma.validator<Prisma.OrderItemInclude>()({
 });
 
 type OrderItemWithSources = Prisma.OrderItemGetPayload<{ include: typeof orderItemInclude }>;
-type ConfirmedOptionSession = OrderItemWithSources['optionSelectionSessions'][number];
+type ConfirmedOptionSession =
+  OrderItemWithSources['sourceContractItem']['optionSelectionSessions'][number];
 type MeasurementSessionWithValues =
   OrderItemWithSources['measurementLinks'][number]['measurementSession'];
 
@@ -121,7 +127,11 @@ export class WorkOrdersService {
         status: { not: 'CANCELLED' },
         OR: [
           { workOrder: { isNot: null } },
-          { optionSelectionSessions: { some: { isCurrent: true, status: 'CONFIRMED' } } },
+          {
+            sourceContractItem: {
+              optionSelectionSessions: { some: { isCurrent: true, status: 'CONFIRMED' } },
+            },
+          },
         ],
       },
       include: orderItemInclude,
@@ -530,7 +540,7 @@ export class WorkOrdersService {
     link: OrderItemWithSources['measurementLinks'][number] | null;
     measurementSession: MeasurementSessionWithValues;
   } {
-    const session = item.optionSelectionSessions[0] ?? null;
+    const session = item.sourceContractItem.optionSelectionSessions[0] ?? null;
     const link = item.measurementLinks[0] ?? null;
     const missing: string[] = [];
     if (!session) missing.push('OPTION_SESSION_CONFIRMED');
@@ -626,7 +636,7 @@ export class WorkOrdersService {
         value: v.value != null ? String(v.value) : (v.textValue ?? '-'),
         unit: v.unit,
       })),
-      components: this.buildComponentAttrs(item.optionSelectionSessions[0]),
+      components: this.buildComponentAttrs(item.sourceContractItem.optionSelectionSessions[0]),
     };
   }
 
@@ -685,7 +695,7 @@ export class WorkOrdersService {
   }
 
   private toListRow(item: OrderItemWithSources) {
-    const session = item.optionSelectionSessions[0] ?? null;
+    const session = item.sourceContractItem.optionSelectionSessions[0] ?? null;
     const link = item.measurementLinks[0] ?? null;
     const currentVersion = item.workOrder?.currentVersion ?? null;
     return {

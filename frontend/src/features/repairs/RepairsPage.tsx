@@ -1,13 +1,14 @@
 import {
   MinusCircleOutlined,
   PlusOutlined,
-  StopOutlined,
+  RollbackOutlined,
   SwapOutlined,
 } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   App,
   Button,
+  Checkbox,
   DatePicker,
   Form,
   Input,
@@ -37,6 +38,7 @@ import {
   fetchRepairs,
   isTargetProductRequired,
   nextRepairStatus,
+  prevRepairStatus,
   postRepairStatusEvent,
   repairStatusMeta,
   repairTypeLabel,
@@ -88,6 +90,8 @@ export function RepairsPage() {
   const queryClient = useQueryClient();
 
   const [statusFilter, setStatusFilter] = useState<string | undefined>();
+  // 완료된 건은 기본적으로 숨긴다 (상태를 직접 고르면 그 선택이 우선한다).
+  const [excludeReleased, setExcludeReleased] = useState(true);
   const [customerFilter, setCustomerFilter] = useState<string | undefined>();
   const [customerKeyword, setCustomerKeyword] = useState('');
   const [page, setPage] = useState(1);
@@ -103,9 +107,15 @@ export function RepairsPage() {
   const [noteForm] = Form.useForm<{ notes?: string }>();
 
   const listQuery = useQuery({
-    queryKey: ['repairs', 'list', { statusFilter, customerFilter, page, size }],
+    queryKey: ['repairs', 'list', { statusFilter, customerFilter, excludeReleased, page, size }],
     queryFn: () =>
-      fetchRepairs({ status: statusFilter, customerId: customerFilter, page, size }),
+      fetchRepairs({
+        status: statusFilter,
+        customerId: customerFilter,
+        excludeReleased,
+        page,
+        size,
+      }),
   });
 
   // 고객 검색 — 필터·접수 모달 공용 (전화번호로도 검색된다).
@@ -253,7 +263,11 @@ export function RepairsPage() {
     },
   ];
 
-  const isCancel = statusTarget?.toStatus === 'CANCELLED';
+  // 되돌리기 = 목표 상태가 현재 상태보다 앞 단계(진행 확인창과 같은 모달을 공유한다)
+  const isRevert =
+    !!statusTarget &&
+    REPAIR_STATUS_FLOW.indexOf(statusTarget.toStatus) <
+      REPAIR_STATUS_FLOW.indexOf(statusTarget.repair.status as RepairStatus);
 
   return (
     <PageShell>
@@ -288,6 +302,15 @@ export function RepairsPage() {
                 }}
                 options={STATUS_FILTER_OPTIONS}
               />
+              <Checkbox
+                checked={excludeReleased}
+                onChange={(e) => {
+                  setExcludeReleased(e.target.checked);
+                  setPage(1);
+                }}
+              >
+                출고완료 제외
+              </Checkbox>
             </>
           }
           actions={
@@ -326,10 +349,12 @@ export function RepairsPage() {
             expandedRowRender: (r) => {
               const detail = detailQuery.data?.id === r.id ? detailQuery.data : undefined;
               const events = detail?.events ?? r.events;
-              // 단계별 완료(전이) 이벤트를 상태 코드로 매핑 — 가장 이른 전이만 남긴다.
+              // 단계별 이벤트를 상태 코드로 매핑 — 되돌리기로 같은 단계를 여러 번 거치면
+              // 가장 최근 전이를 남긴다(그 단계의 최신 날짜·담당자·사유가 보이도록).
+              // events는 백엔드에서 시간순(오름차순)으로 오므로 그냥 덮어쓰면 최신이 남는다.
               const eventByStatus = new Map<string, RepairEvent>();
               for (const ev of events) {
-                if (!eventByStatus.has(ev.newStatus)) eventByStatus.set(ev.newStatus, ev);
+                eventByStatus.set(ev.newStatus, ev);
               }
               const cancelled = r.status === 'CANCELLED';
               const cancelEvent = eventByStatus.get('CANCELLED');
@@ -343,16 +368,16 @@ export function RepairsPage() {
                   title: repairStatusMeta(status).label,
                   description: ev ? (
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {ev.eventDate}
-                      <br />
-                      {ev.actorName}
+                      {ev.eventDate} · {ev.actorName}
+                      {ev.notes ? ` · 비고: ${ev.notes}` : ''}
                     </Typography.Text>
                   ) : undefined,
                 };
               });
 
               const next = nextRepairStatus(r.status);
-              const closed = cancelled || r.status === 'RELEASED';
+              // 취소된 건은 되돌릴 수 없고, 접수(첫 단계)는 이전 단계가 없다.
+              const prev = cancelled ? undefined : prevRepairStatus(r.status);
               const pending =
                 statusMutation.isPending && statusMutation.variables?.repair.id === r.id;
 
@@ -363,7 +388,7 @@ export function RepairsPage() {
                   ) : (
                     <Steps
                       size="small"
-                      labelPlacement="vertical"
+                      direction="vertical"
                       current={cancelled ? -1 : currentIndex}
                       status={cancelled ? 'error' : r.status === 'RELEASED' ? 'finish' : 'process'}
                       items={stepItems}
@@ -403,13 +428,13 @@ export function RepairsPage() {
                           {repairStatusMeta(r.status).label} → {repairStatusMeta(next).label} 처리
                         </Button>
                       )}
-                      {!closed && (
+                      {prev && (
                         <Button
-                          danger
-                          icon={<StopOutlined />}
-                          onClick={() => openStatusChange(r, 'CANCELLED')}
+                          icon={<RollbackOutlined />}
+                          loading={pending}
+                          onClick={() => openStatusChange(r, prev)}
                         >
-                          취소
+                          이전 단계로 ({repairStatusMeta(prev).label})
                         </Button>
                       )}
                     </Space>
@@ -610,7 +635,7 @@ export function RepairsPage() {
         </Form>
       </Modal>
 
-      {/* 상태 변경 확인 — 취소는 사유 필수 */}
+      {/* 상태 변경 확인 — 진행/되돌리기 공용, 사유는 선택 */}
       <Modal
         title={
           statusTarget
@@ -620,9 +645,8 @@ export function RepairsPage() {
         open={!!statusTarget}
         onCancel={() => setStatusTarget(null)}
         onOk={() => noteForm.submit()}
-        okText="변경"
+        okText={isRevert ? '되돌리기' : '변경'}
         cancelText="닫기"
-        okButtonProps={{ danger: isCancel }}
         confirmLoading={statusMutation.isPending}
         destroyOnClose
       >
@@ -643,10 +667,13 @@ export function RepairsPage() {
           </Typography.Paragraph>
           <Form.Item
             name="notes"
-            label={isCancel ? '취소 사유' : '메모 (선택)'}
-            rules={isCancel ? [{ required: true, message: '취소 사유를 입력해 주세요.' }] : []}
+            label={isRevert ? '되돌리기 사유' : '메모 (선택)'}
+            rules={isRevert ? [{ required: true, message: '되돌리기 사유를 입력해 주세요.' }] : []}
           >
-            <Input.TextArea rows={2} placeholder={isCancel ? '취소 사유 (필수)' : '상태 변경 메모'} />
+            <Input.TextArea
+              rows={2}
+              placeholder={isRevert ? '되돌리기 사유 (필수)' : '상태 변경 메모'}
+            />
           </Form.Item>
         </Form>
       </Modal>

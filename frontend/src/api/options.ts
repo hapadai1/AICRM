@@ -7,7 +7,7 @@ import { toDateTime } from './transform';
  * 백엔드는 Prisma raw row를 그대로 내보내므로 여기서 화면용 뷰로 변환한다.
  */
 
-/** 옵션 진행 상태 (core-data orderItems.status와 동일) */
+/** 옵션 진행 상태 (core-data contractItems.status와 동일) */
 export type OptionStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'REVIEW' | 'CONFIRMED';
 export type ProductCategory = 'SUIT' | 'SHIRT' | 'SHOES';
 
@@ -74,12 +74,11 @@ export interface OptionProgressComponent extends OptionComponentAttr {
 
 /** OPT-001 목록 행 — 백엔드 progress()가 이미 평면 형태로 내려준다. */
 export interface OptionProgressItem {
-  orderItemId: string;
+  contractItemId: string;
   displayName: string;
   productCategory: ProductCategory;
   contractId: string;
   contractNo: string;
-  orderNo: string;
   customerName: string;
   /** 고객 전화번호 (목록에서 고객 식별용) */
   customerPhone: string;
@@ -150,8 +149,8 @@ export type OptionSessionStatus = OptionStatus;
 /** OPT-002 선택 세션 상세 (화면용) */
 export interface OptionSessionDetail {
   sessionId: string;
-  orderItemId: string;
-  /** 백엔드 orderItemName */
+  contractItemId: string;
+  /** 백엔드 contractItemName */
   displayName: string;
   productCategory: ProductCategory;
   /** 백엔드 optionSetVersion.versionNo */
@@ -199,8 +198,8 @@ interface OptionStageApiRow {
 
 interface OptionSessionApiRow {
   sessionId: string;
-  orderItemId: string;
-  orderItemName: string;
+  contractItemId: string;
+  contractItemName: string;
   productCategory: ProductCategory;
   optionSetVersion: { id: string; versionNo: number; status: string };
   selectionVersionNo: number;
@@ -246,8 +245,8 @@ function toOptionSession(row: OptionSessionApiRow): OptionSessionDetail {
   const lastSelected = stages.filter((s) => s.selectedChoiceId);
   return {
     sessionId: row.sessionId,
-    orderItemId: row.orderItemId,
-    displayName: row.orderItemName,
+    contractItemId: row.contractItemId,
+    displayName: row.contractItemName,
     productCategory: row.productCategory,
     optionSetVersionNo: row.optionSetVersion?.versionNo ?? 0,
     selectionVersionNo: row.selectionVersionNo,
@@ -293,7 +292,7 @@ export interface OptionReviewStage {
 /** OPT-003 확인서 (화면용) */
 export interface OptionReviewData {
   sessionId: string;
-  orderItemId: string;
+  contractItemId: string;
   fabric: string | null;
   status: OptionSessionStatus;
   totalStages: number;
@@ -315,7 +314,7 @@ export interface OptionReviewData {
 
 interface OptionReviewApiRow {
   sessionId: string;
-  orderItemId: string;
+  contractItemId: string;
   status: OptionSessionStatus;
   fabricName: string | null;
   totalStages: number;
@@ -344,7 +343,7 @@ function toOptionReview(row: OptionReviewApiRow): OptionReviewData {
   const missing = row.missingStages ?? [];
   return {
     sessionId: row.sessionId,
-    orderItemId: row.orderItemId,
+    contractItemId: row.contractItemId,
     fabric: row.fabricName ?? null,
     status: row.status,
     totalStages: row.totalStages,
@@ -380,18 +379,18 @@ export interface OptionConfirmResult {
 /** OPT-001 품목별 옵션 진행 목록. contractId 지정 시 해당 계약 품목만 조회. */
 export function fetchOptionProgress(contractId?: string): Promise<OptionProgressItem[]> {
   return request<OptionProgressItem[]>({
-    url: '/order-items/option-progress',
+    url: '/contract-items/option-progress',
     params: contractId ? { contractId } : undefined,
   });
 }
 
 /**
- * 주문 품목의 현재 옵션 세션 조회 (ORD-001 §6.4).
+ * 계약 품목의 현재 옵션 세션 조회 (ORD-001 §6.4).
  * 백엔드는 `{ session: {...} }` 또는 `{ session: null }`을 반환한다 — 세션이 없어도 200이다.
  */
-export function fetchOptionSessionByItem(orderItemId: string): Promise<OptionSessionDetail | null> {
+export function fetchOptionSessionByItem(contractItemId: string): Promise<OptionSessionDetail | null> {
   return request<{ session: OptionSessionApiRow | null }>({
-    url: `/order-items/${orderItemId}/option-session`,
+    url: `/contract-items/${contractItemId}/option-session`,
   }).then((res) => (res.session ? toOptionSession(res.session) : null));
 }
 
@@ -405,12 +404,12 @@ export interface StartComponentAttrInput extends ComponentAttrInput {
  * componentAttrs를 함께 보내면 부위별 원단·컬러·패턴을 시작 시점에 upsert한다(설계서 04 §2.4).
  */
 export function startOptionSession(
-  orderItemId: string,
+  contractItemId: string,
   fabric?: string,
   componentAttrs?: StartComponentAttrInput[],
 ): Promise<OptionSessionDetail> {
   return request<OptionSessionApiRow>({
-    url: `/order-items/${orderItemId}/option-sessions`,
+    url: `/contract-items/${contractItemId}/option-sessions`,
     method: 'POST',
     data: { fabric, componentAttrs },
   }).then(toOptionSession);
@@ -510,12 +509,12 @@ export function applyOptionSurcharge(sessionId: string): Promise<OptionSurcharge
 /** 동일 옵션 적용 (같은 대분류 품목으로 선택값 복사) — 응답은 새 세션 상세 */
 export function copyOptionSession(
   sessionId: string,
-  targetOrderItemId: string,
+  targetContractItemId: string,
 ): Promise<OptionSessionDetail> {
   return request<OptionSessionApiRow>({
     url: `/option-sessions/${sessionId}/copy`,
     method: 'POST',
-    data: { targetOrderItemId },
+    data: { targetContractItemId },
   }).then(toOptionSession);
 }
 

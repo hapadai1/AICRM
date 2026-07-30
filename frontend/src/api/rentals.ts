@@ -494,7 +494,7 @@ export interface RentalCalendarItem {
  * 자동 배정이 아니라, 배정 모달을 선택 실물·구성품 기본값으로 열기 위한 값만 담는다(날짜는 배정에서 입력).
  */
 export interface RentalAllocatePrefillEntry {
-  /** 배정 대상 주문 구성품(orderItemComponentId = 배정 API의 componentId) */
+  /** 배정 대상 구성품(contractItemComponentId = 배정 API의 componentId) */
   componentId: string;
   orderNo: string;
   customerName: string;
@@ -557,7 +557,7 @@ export interface RentalSelectedItem {
 
 /** 부위(구성품)별 선택 슬롯 (GET /rental-selections/:id) */
 export interface RentalSelectionComponent {
-  orderItemComponentId: string;
+  contractItemComponentId: string;
   componentType: RentalComponentType;
   sequenceNo?: number;
   colorCode: string | null;
@@ -570,10 +570,9 @@ export interface RentalSelectionComponent {
 /** 렌탈 선택 세션 상세 (start / current.session / detail 공통 형태) */
 export interface RentalSelectionDetail {
   sessionId: string;
-  orderItemId: string;
+  contractItemId: string;
   displayName: string;
   productCategory?: string;
-  orderNo: string;
   customerId: string;
   customerName: string;
   status: RentalSelectionStatus;
@@ -598,7 +597,7 @@ export interface RentalCandidate {
 /** GET /rental-selections/:id/lines/:componentId/candidates */
 export interface RentalLineCandidates {
   sessionId: string;
-  orderItemComponentId: string;
+  contractItemComponentId: string;
   componentType: RentalComponentType;
   pickupDate: string | null;
   returnDueDate: string | null;
@@ -609,7 +608,7 @@ export interface RentalLineCandidates {
 
 /** 확인서 부위별 행 (GET /rental-selections/:id/review — 코드→표시명 병기) */
 export interface RentalReviewComponent {
-  orderItemComponentId: string;
+  contractItemComponentId: string;
   componentType: RentalComponentType;
   colorCode: string | null;
   colorName: string | null;
@@ -622,7 +621,7 @@ export interface RentalReviewComponent {
 /** 확인서 (GET /rental-selections/:id/review) */
 export interface RentalSelectionReview {
   sessionId: string;
-  orderItemId: string;
+  contractItemId: string;
   displayName: string;
   customerName: string;
   orderNo: string;
@@ -634,7 +633,7 @@ export interface RentalSelectionReview {
 
 /** 목록의 부위 슬롯 (GET /rental-selections/progress) — 코드+표시명 병기 */
 export interface RentalProgressComponent {
-  orderItemComponentId: string;
+  contractItemComponentId: string;
   componentType: RentalComponentType;
   sequenceNo: number;
   colorCode: string | null;
@@ -651,7 +650,7 @@ export interface RentalProgressComponent {
  * 세션이 없으면 sessionId=null, status='NOT_STARTED'이고 부위 슬롯만 채워진다.
  */
 export interface RentalProgressItem {
-  orderItemId: string;
+  contractItemId: string;
   displayName: string;
   productCategory: string;
   contractId: string;
@@ -659,7 +658,6 @@ export interface RentalProgressItem {
   customerId: string;
   customerName: string;
   customerPhone: string;
-  orderNo: string;
   completionDueDate: string | null;
   sessionId: string | null;
   status: RentalSelectionStatus | 'NOT_STARTED';
@@ -675,20 +673,20 @@ export function fetchRentalSelectionProgress(contractId?: string): Promise<Renta
   });
 }
 
-/** 세션 시작/현재본 반환 — POST /order-items/:id/rental-selection (RENTAL 품목만) */
-export function startRentalSelection(orderItemId: string): Promise<RentalSelectionDetail> {
+/** 세션 시작/현재본 반환 — POST /contract-items/:id/rental-selection (RENTAL 품목만) */
+export function startRentalSelection(contractItemId: string): Promise<RentalSelectionDetail> {
   return request<RentalSelectionDetail>({
-    url: `/order-items/${orderItemId}/rental-selection`,
+    url: `/contract-items/${contractItemId}/rental-selection`,
     method: 'POST',
   });
 }
 
-/** 현재 세션 상세 — GET /order-items/:id/rental-selection (없으면 { session: null }) */
+/** 현재 세션 상세 — GET /contract-items/:id/rental-selection (없으면 { session: null }) */
 export function fetchCurrentRentalSelection(
-  orderItemId: string,
+  contractItemId: string,
 ): Promise<{ session: RentalSelectionDetail | null }> {
   return request<{ session: RentalSelectionDetail | null }>({
-    url: `/order-items/${orderItemId}/rental-selection`,
+    url: `/contract-items/${contractItemId}/rental-selection`,
   });
 }
 

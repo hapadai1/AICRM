@@ -3,7 +3,7 @@
  * - 진입점은 고객과 기간: 기간 기준 선택 + 통합검색 + 고객 검색 팝업
  * - 필터는 URL 쿼리에 동기화한다(새로고침·뒤로가기·링크 공유 보존)
  */
-import { PlusOutlined, ReloadOutlined, SettingOutlined, UserOutlined } from '@ant-design/icons';
+import { FilterOutlined, PlusOutlined, ReloadOutlined, SettingOutlined, UserOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import {
   Button,
@@ -11,6 +11,7 @@ import {
   DatePicker,
   Flex,
   Input,
+  Radio,
   Row,
   Select,
   Space,
@@ -227,7 +228,36 @@ export function ContractListPage({
       render: (v: string | undefined, row) =>
         v ?? (row.createdAt ? <Typography.Text type="secondary">{row.createdAt} (작성)</Typography.Text> : '-'),
     },
-    { title: '계약 구분', dataIndex: 'contractTypeName', ...autoWidth(110) },
+    {
+      title: '계약 구분',
+      dataIndex: 'contractTypeName',
+      ...autoWidth(110),
+      // 필터 버튼을 제목 글자 바로 옆에 배치 (index.css의 tx-type-filter-col) — 서버(contractTypeId)로 필터링
+      className: 'tx-type-filter-col',
+      filteredValue: filters.contractTypeId ? [filters.contractTypeId] : null,
+      filterIcon: (filtered) => <FilterOutlined style={{ color: filtered ? '#1677ff' : undefined }} />,
+      filterDropdown: ({ confirm }) => (
+        <div style={{ padding: 8, maxHeight: 320, overflowY: 'auto' }}>
+          <Radio.Group
+            value={filters.contractTypeId ?? 'ALL'}
+            onChange={(e) => {
+              const v = e.target.value as string;
+              update({ contractTypeId: v === 'ALL' ? undefined : v });
+              confirm({ closeDropdown: true });
+            }}
+          >
+            <Space direction="vertical">
+              <Radio value="ALL">전체</Radio>
+              {(typesQuery.data ?? []).map((t) => (
+                <Radio key={t.id} value={t.id}>
+                  {t.name}
+                </Radio>
+              ))}
+            </Space>
+          </Radio.Group>
+        </div>
+      ),
+    },
     {
       title: '상태',
       dataIndex: 'status',

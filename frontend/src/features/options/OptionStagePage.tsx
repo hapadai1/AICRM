@@ -22,7 +22,7 @@ function firstIncompleteOrder(session: OptionSessionDetail): number {
 }
 
 export function OptionStagePage() {
-  const { orderItemId } = useParams<{ orderItemId: string }>();
+  const { contractItemId } = useParams<{ contractItemId: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -34,9 +34,9 @@ export function OptionStagePage() {
   const [modal, modalContextHolder] = Modal.useModal();
 
   const sessionQuery = useQuery({
-    queryKey: ['options', 'session', orderItemId],
-    queryFn: () => fetchOptionSessionByItem(orderItemId ?? ''),
-    enabled: !!orderItemId,
+    queryKey: ['options', 'session', contractItemId],
+    queryFn: () => fetchOptionSessionByItem(contractItemId ?? ''),
+    enabled: !!contractItemId,
     retry: false,
   });
   // 백엔드는 세션이 없어도 200 + `session: null`로 응답한다 (에러 코드가 아니다).
@@ -44,9 +44,9 @@ export function OptionStagePage() {
   const notStarted = sessionQuery.isSuccess && session === null;
 
   const startMutation = useMutation({
-    mutationFn: (fabric: string) => startOptionSession(orderItemId ?? '', fabric),
+    mutationFn: (fabric: string) => startOptionSession(contractItemId ?? '', fabric),
     onSuccess: (created) => {
-      queryClient.setQueryData(['options', 'session', orderItemId], created);
+      queryClient.setQueryData(['options', 'session', contractItemId], created);
       void queryClient.invalidateQueries({ queryKey: ['options', 'progress'] });
     },
     onError: (e: Error) => message.error(e.message),
@@ -61,7 +61,7 @@ export function OptionStagePage() {
       }),
     // 연속 저장 시 낙관적 잠금 충돌을 막기 위해 응답의 version·선택값을 캐시에 즉시 반영한다.
     onSuccess: (res, input) => {
-      queryClient.setQueryData<OptionSessionDetail>(['options', 'session', orderItemId], (prev) =>
+      queryClient.setQueryData<OptionSessionDetail>(['options', 'session', contractItemId], (prev) =>
         prev
           ? {
               ...prev,
@@ -81,9 +81,9 @@ export function OptionStagePage() {
   // 확정 세션 재선택(설계서 §8.5): 확정본은 그대로 두고 선택값을 복사한 새 선택 버전을 만든다.
   // 시작 API가 이 분기를 담당하므로 원단만 그대로 넘기면 된다.
   const reopenMutation = useMutation({
-    mutationFn: () => startOptionSession(orderItemId ?? '', session?.fabric ?? undefined),
+    mutationFn: () => startOptionSession(contractItemId ?? '', session?.fabric ?? undefined),
     onSuccess: (created) => {
-      queryClient.setQueryData(['options', 'session', orderItemId], created);
+      queryClient.setQueryData(['options', 'session', contractItemId], created);
       void queryClient.invalidateQueries({ queryKey: ['options'] });
       void queryClient.invalidateQueries({ queryKey: ['workorders'] });
     },
@@ -113,7 +113,7 @@ export function OptionStagePage() {
     setChoiceId(stage?.selectedChoiceId ?? null);
   }, [stage?.stageId, stage?.selectedChoiceId]);
 
-  if (!orderItemId) return <Alert type="error" showIcon message="품목 정보가 없습니다." />;
+  if (!contractItemId) return <Alert type="error" showIcon message="품목 정보가 없습니다." />;
 
   if (sessionQuery.isLoading) {
     return <Spin style={{ display: 'block', margin: '80px auto' }} size="large" />;
@@ -199,7 +199,7 @@ export function OptionStagePage() {
   const handleNext = async () => {
     // 확정 세션: 저장 없이 이동만 (마지막 단계에서는 확인서로 복귀)
     if (isConfirmed) {
-      if (isLast) navigate(`/options/${orderItemId}/review`);
+      if (isLast) navigate(`/options/${contractItemId}/review`);
       else setCurrentOrder(currentOrder + 1);
       return;
     }
@@ -208,7 +208,7 @@ export function OptionStagePage() {
       // 이동 시 임시저장 (§7.3: 각 이동 시 임시저장)
       await saveMutation.mutateAsync({ stageId: stage.stageId, choiceId, order: currentOrder });
       if (isLast) {
-        navigate(`/options/${orderItemId}/review`);
+        navigate(`/options/${contractItemId}/review`);
       } else {
         setCurrentOrder(currentOrder + 1);
       }
@@ -281,7 +281,7 @@ export function OptionStagePage() {
                   size="large"
                   style={{ height: 48 }}
                   icon={<LeftOutlined />}
-                  onClick={() => navigate(`/options/${orderItemId}/review`)}
+                  onClick={() => navigate(`/options/${contractItemId}/review`)}
                 >
                   확인서로
                 </Button>
@@ -319,7 +319,7 @@ export function OptionStagePage() {
         </Space>
       </Card>
 
-      <ComponentAttrsPanel session={session} orderItemId={orderItemId} />
+      <ComponentAttrsPanel session={session} contractItemId={contractItemId} />
 
       <div style={{ display: 'grid', gridTemplateColumns: `repeat(${perRow}, minmax(0, 1fr))`, gap: 16 }}>
         {stage.choices.map((choice) => {

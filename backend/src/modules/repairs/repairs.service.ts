@@ -7,6 +7,7 @@ import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { JourneysService } from '../journeys/journeys.service';
+import { NotificationSuggestionService } from '../notifications/notification-suggestion.service';
 import {
   CreateRepairDto,
   CreateRepairStatusEventDto,
@@ -87,11 +88,17 @@ export class RepairsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly journeys: JourneysService,
+    private readonly suggestions: NotificationSuggestionService,
   ) {}
 
   async list(query: ListRepairsQueryDto) {
     const where: Prisma.RepairRequestWhereInput = {
-      ...(query.status ? { status: query.status } : {}),
+      // 상태를 지정하면 그대로, 아니면 excludeReleased일 때 출고완료만 뺀다.
+      ...(query.status
+        ? { status: query.status }
+        : query.excludeReleased
+          ? { status: { not: 'RELEASED' } }
+          : {}),
       ...(query.customerId ? { customerId: query.customerId } : {}),
     };
     const [totalElements, items] = await this.prisma.$transaction([
@@ -205,8 +212,8 @@ export class RepairsService {
   }
 
   /**
-   * 수선 상태 변경. 허용 전이는 순서상 바로 다음 단계만 가능하며
-   * CANCELLED는 어느 상태에서든 진입할 수 있다. 위반 시 INVALID_STATUS_TRANSITION.
+   * 수선 상태 변경. 허용 전이는 순서상 바로 다음 단계(진행) 또는 바로 이전 단계(되돌리기)이며,
+   * 취소된 건은 더 이상 변경할 수 없다. 위반 시 INVALID_STATUS_TRANSITION.
    */
   async createStatusEvent(id: string, dto: CreateRepairStatusEventDto, actor: AuthUser) {
     const repair = await this.prisma.repairRequest.findUnique({ where: { id } });
@@ -251,11 +258,42 @@ export class RepairsService {
       return event;
     });
 
-    // D8 일원화(설계서 02 §8·§10.3 #5): 수선 고객 연락 제안은 REPAIR 진행(journey)
-    // REPAIR_CHECKED_IN 단계 진입에서만 만든다. 상태변경 기반 자동 제안은 제거해 이중 노출을 없앤다.
-    // 연락 문구를 매장 고정메시지 2종으로 줄이면서 REPAIR:* 규칙·초안 템플릿은 시드에서 제거됐다.
-    // 응답 필드는 하위호환을 위해 유지하되 항상 null(연락은 진행 카드에서).
-    return { ...result, suggestedNotification: null };
+    // '고객 연락'(CUSTOMER_NOTIFIED) 전이 시 연락 문구를 준비해 확인창 재료로 돌려준다.
+    // 수선 메뉴에서 직접 연락할 수 있게 복원한 경로다(2026-07-30 현업 요청) — 담당자가
+    // 확인창에서 [발송]을 눌러야 실제로 나가며, 카카오톡 연동이 없어도 CRM 연락 이력은 남는다.
+    // 진행 카드(REPAIR_CHECKED_IN)와 같은 고정 문구를 공유하고, triggerKey로 중복 발송을 막는다.
+    return {
+      ...result,
+      suggestedNotification: await this.buildNotifiedSuggestion(repair, dto.newStatus),
+    };
+  }
+
+  /**
+   * 수선 입고 안내(고객 연락) 문구 준비 (개발설계서 05 G-06).
+   *
+   * '고객 연락'(CUSTOMER_NOTIFIED)으로 전이할 때만 REPAIR_CHECKED_IN 진행 단계의 고정 문구를
+   * 치환해 확인창 재료로 돌려준다. 실제 발송은 화면 확인창에서 별도 요청(POST /notifications/send)
+   * 으로 이뤄지며, 그때 발송 이력(NotificationHistory)이 남는다 — 외부 알림톡 연동이 없어도
+   * SMS 스텁으로 발송·이력이 기록된다. 단계에 문구가 없으면(관리자가 지웠으면) null이라
+   * 확인창이 뜨지 않는다(기존 동작과 동일).
+   */
+  private async buildNotifiedSuggestion(
+    repair: { id: string; customerId: string; orderId: string | null },
+    newStatus: string,
+  ) {
+    if (newStatus !== 'CUSTOMER_NOTIFIED') return null;
+    const stage = await this.prisma.journeyStage.findUnique({
+      where: { trackType_code: { trackType: 'REPAIR', code: 'REPAIR_CHECKED_IN' } },
+      select: { templateId: true },
+    });
+    if (!stage?.templateId) return null;
+    return this.suggestions.build({
+      templateId: stage.templateId,
+      customerId: repair.customerId,
+      orderId: repair.orderId,
+      // 같은 수선의 고객 연락은 한 번만 나간다(되돌렸다 다시 전진해도 재발송하지 않는다).
+      triggerKey: `repair:${repair.id}:CUSTOMER_NOTIFIED`,
+    });
   }
 
   /**
@@ -293,7 +331,9 @@ export class RepairsService {
 
   private validateStatusTransition(current: string, next: string): void {
     const flow: readonly string[] = REPAIR_STATUS_FLOW;
-    if (!flow.includes(next) && next !== CANCELLED)
+    // CANCELLED는 더 이상 진입 대상이 아니다 — 흐름 밖 코드는 모두 거절한다.
+    // (과거에 취소된 건은 CANCELLED로 남지만, 어떤 상태로도 다시 전이할 수 없다.)
+    if (!flow.includes(next))
       throw new BusinessException('VALIDATION_ERROR', `허용되지 않은 수선 상태 코드입니다: ${next}`, [
         { field: 'newStatus', reason: 'UNKNOWN_STATUS' },
       ]);
@@ -304,13 +344,14 @@ export class RepairsService {
         undefined,
         { current, next },
       );
-    if (next === CANCELLED) return;
-    if (flow.indexOf(next) !== flow.indexOf(current) + 1)
+    // 바로 다음 단계로 진행하거나 바로 이전 단계로 되돌리는 것만 허용한다.
+    const delta = flow.indexOf(next) - flow.indexOf(current);
+    if (delta !== 1 && delta !== -1)
       throw new BusinessException(
         'INVALID_STATUS_TRANSITION',
         `수선 상태를 ${current}에서 ${next}(으)로 변경할 수 없습니다.`,
         undefined,
-        { current, next, allowed: flow[flow.indexOf(current) + 1] ?? null },
+        { current, next },
       );
   }
 

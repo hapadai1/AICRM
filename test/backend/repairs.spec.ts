@@ -256,7 +256,7 @@ describe('수선 (RepairsModule)', () => {
       expect(detail.body.data.statusEvents.length).toBe(5); // 접수 + 4회 전이
     });
 
-    it('CANCELLED는 어느 상태에서든 가능하고 이후 전이는 차단된다', async () => {
+    it('바로 이전 단계로 되돌릴 수 있다', async () => {
       const { customer } = await seedRepairCustomer(ctx.prisma);
       const repairId = await createGeneralRepair(customer.id);
       await api(ctx)
@@ -264,17 +264,42 @@ describe('수선 (RepairsModule)', () => {
         .set(auth(ctx))
         .send({ newStatus: 'REQUESTED' })
         .expect(201);
-      await api(ctx)
+      // 수선 요청 → 접수로 한 단계 되돌리기
+      const back = await api(ctx)
+        .post(`/api/v1/repairs/${repairId}/status-events`)
+        .set(auth(ctx))
+        .send({ newStatus: 'RECEIVED', notes: '잘못 눌러 되돌림' })
+        .expect(201);
+      expect(back.body.data.newStatus).toBe('RECEIVED');
+      const detail = await api(ctx).get(`/api/v1/repairs/${repairId}`).set(auth(ctx)).expect(200);
+      expect(detail.body.data.status).toBe('RECEIVED');
+    });
+
+    it('두 단계 이상 되돌리거나 취소(CANCELLED)로 전이할 수 없다', async () => {
+      const { customer } = await seedRepairCustomer(ctx.prisma);
+      const repairId = await createGeneralRepair(customer.id);
+      for (const status of ['REQUESTED', 'RETURNED_TO_SHOP']) {
+        await api(ctx)
+          .post(`/api/v1/repairs/${repairId}/status-events`)
+          .set(auth(ctx))
+          .send({ newStatus: status })
+          .expect(201);
+      }
+      // 수선 입고 → 접수로 두 단계 되돌리기 차단
+      const jump = await api(ctx)
+        .post(`/api/v1/repairs/${repairId}/status-events`)
+        .set(auth(ctx))
+        .send({ newStatus: 'RECEIVED' })
+        .expect(409);
+      expect(jump.body.error.code).toBe('INVALID_STATUS_TRANSITION');
+
+      // 취소 전이는 더 이상 허용되지 않는다 (흐름 밖 코드)
+      const cancel = await api(ctx)
         .post(`/api/v1/repairs/${repairId}/status-events`)
         .set(auth(ctx))
         .send({ newStatus: 'CANCELLED', notes: '고객 취소' })
-        .expect(201);
-      const res = await api(ctx)
-        .post(`/api/v1/repairs/${repairId}/status-events`)
-        .set(auth(ctx))
-        .send({ newStatus: 'RETURNED_TO_SHOP' })
-        .expect(409);
-      expect(res.body.error.code).toBe('INVALID_STATUS_TRANSITION');
+        .expect(400);
+      expect(cancel.body.error.code).toBe('VALIDATION_ERROR');
     });
 
     it('상태 변경 시 감사로그가 남는다', async () => {
@@ -321,6 +346,34 @@ describe('수선 (RepairsModule)', () => {
       expect(none.body.page.totalElements).toBe(0);
     });
 
+    it('excludeReleased=true면 출고완료 건은 목록에서 빠진다(상태 지정 시 예외)', async () => {
+      const { customer } = await seedRepairCustomer(ctx.prisma);
+      const repairId = await createGeneralRepair(customer.id);
+      for (const status of ['REQUESTED', 'RETURNED_TO_SHOP', 'CUSTOMER_NOTIFIED', 'RELEASED']) {
+        await api(ctx)
+          .post(`/api/v1/repairs/${repairId}/status-events`)
+          .set(auth(ctx))
+          .send({ newStatus: status })
+          .expect(201);
+      }
+
+      // 완료건 제외 — 목록에서 빠진다
+      const excluded = await api(ctx)
+        .get(`/api/v1/repairs?customerId=${customer.id}&excludeReleased=true`)
+        .set(auth(ctx))
+        .expect(200);
+      expect(excluded.body.data.find((r: { id: string }) => r.id === repairId)).toBeUndefined();
+
+      // 상태를 직접 고르면 제외 옵션보다 우선한다
+      const explicit = await api(ctx)
+        .get(`/api/v1/repairs?customerId=${customer.id}&status=RELEASED&excludeReleased=true`)
+        .set(auth(ctx))
+        .expect(200);
+      expect(
+        explicit.body.data.find((r: { id: string; status: string }) => r.id === repairId)?.status,
+      ).toBe('RELEASED');
+    });
+
     it('PATCH로 완료예정일·내용을 수정한다', async () => {
       const { customer } = await seedRepairCustomer(ctx.prisma);
       const created = await api(ctx)
@@ -345,27 +398,46 @@ describe('수선 (RepairsModule)', () => {
     });
   });
 
-  /** 개발설계서 05 G-06 — 상태를 바꾸면 문구를 준비해 확인창 재료로 돌려준다. */
-  // D8 일원화(설계서 02 §8·§10.3 #5): 수선 고객 연락 제안은 상태변경(status-events)이
-  // 아니라 REPAIR 진행(journey) REPAIR_CHECKED_IN 단계 진입에서만 만든다.
-  // status-events 응답의 suggestedNotification은 하위호환용으로 남되 항상 null이다.
-  // 진행 경로의 실제 연락 제안 검증은 journeys.spec.ts(REPAIR 트랙)에서 한다.
-  describe('고객 연락 제안 (진행 경로로 일원화)', () => {
-    it('상태변경은 어떤 상태에서도 연락 제안을 만들지 않는다 (항상 null)', async () => {
+  /**
+   * 개발설계서 05 G-06 — 상태를 바꾸면 문구를 준비해 확인창 재료로 돌려준다.
+   *
+   * 수선 메뉴에서 '고객 연락'(CUSTOMER_NOTIFIED)으로 전이할 때만 연락 제안이 실린다
+   * (2026-07-30 현업 요청으로 복원). 문구는 REPAIR_CHECKED_IN 진행 단계의 고정 문구를
+   * 공유하고, 실제 발송·이력은 화면 확인창의 POST /notifications/send에서 남는다.
+   */
+  describe('고객 연락 제안', () => {
+    it("'고객 연락' 전이에만 연락 제안이 실리고, 다른 전이에는 null이다", async () => {
       const { customer } = await seedRepairCustomer(ctx.prisma);
       const repairId = await createGeneralRepair(customer.id);
 
-      // 과거 연락 대상이던 상태(RETURNED_TO_SHOP, CUSTOMER_NOTIFIED)까지 전이해도 제안이 없어야 한다.
-      for (const status of ['REQUESTED', 'RETURNED_TO_SHOP', 'CUSTOMER_NOTIFIED']) {
+      // 연락 시점이 아닌 전이는 제안이 없다.
+      for (const status of ['REQUESTED', 'RETURNED_TO_SHOP']) {
         const res = await api(ctx)
           .post(`/api/v1/repairs/${repairId}/status-events`)
           .set(auth(ctx))
           .send({ newStatus: status })
           .expect(201);
         expect(res.body.data.suggestedNotification).toBeNull();
-        // 상태변경 자체는 그대로 동작한다(하위호환).
         expect(res.body.data.newStatus).toBe(status);
       }
+
+      // 고객 연락 전이에는 수선 입고 안내 문구가 실린다.
+      const notified = await api(ctx)
+        .post(`/api/v1/repairs/${repairId}/status-events`)
+        .set(auth(ctx))
+        .send({ newStatus: 'CUSTOMER_NOTIFIED' })
+        .expect(201);
+      expect(notified.body.data.newStatus).toBe('CUSTOMER_NOTIFIED');
+      expect(notified.body.data.suggestedNotification).toMatchObject({
+        templateCode: 'JOURNEY_REPAIR_CHECKED_IN',
+        // 알림톡 미승인 템플릿이라 실제로는 SMS로 나간다.
+        channel: 'SMS',
+        recipientPhone: customer.phone,
+        customerId: customer.id,
+        triggerKey: `repair:${repairId}:CUSTOMER_NOTIFIED`,
+      });
+      // 고객명이 치환돼 본문에 들어간다.
+      expect(notified.body.data.suggestedNotification.renderedBody).toContain(customer.name);
     });
   });
   /** 개발설계서 05 G-07 — 설계 PDF 1페이지 "수선 물품 방문" 대응 */

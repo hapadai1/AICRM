@@ -7,11 +7,16 @@ import { WorkOrderListStatus } from './work-orders.dto';
  * work-orders 목록과 production 목록이 같은 판정을 공유하기 위한 단일 출처.
  */
 export const workOrderStatusSelect = Prisma.validator<Prisma.OrderItemSelect>()({
-  optionSelectionSessions: {
-    where: { isCurrent: true, status: 'CONFIRMED' },
-    orderBy: { selectionVersionNo: Prisma.SortOrder.desc },
-    take: 1,
-    select: { confirmedAt: true },
+  // 옵션 세션은 이제 ContractItem에 붙는다 → 확정 후 되짚기(REACH-BACK): sourceContractItem 경유.
+  sourceContractItem: {
+    select: {
+      optionSelectionSessions: {
+        where: { isCurrent: true, status: 'CONFIRMED' },
+        orderBy: { selectionVersionNo: Prisma.SortOrder.desc },
+        take: 1,
+        select: { confirmedAt: true },
+      },
+    },
   },
   measurementLinks: {
     where: { isCurrent: true },
@@ -74,7 +79,7 @@ export interface WorkOrderView {
 
 /** 위 workOrderStatusSelect를 포함한 OrderItem에서 작업지시서 뷰를 만든다 */
 export function buildWorkOrderView(item: OrderItemWithWorkOrderStatus): WorkOrderView {
-  const session = item.optionSelectionSessions[0] ?? null;
+  const session = item.sourceContractItem.optionSelectionSessions[0] ?? null;
   const link = item.measurementLinks[0] ?? null;
   const currentVersion = item.workOrder?.currentVersion ?? null;
   const status = resolveWorkOrderStatus(session, link, currentVersion);

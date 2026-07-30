@@ -245,7 +245,10 @@ export class DashboardService {
     const items = await this.prisma.orderItem.findMany({
       where: {
         status: { not: 'CANCELLED' },
-        optionSelectionSessions: { some: { isCurrent: true, status: 'CONFIRMED' } },
+        // 옵션 세션은 ContractItem에 붙는다 → sourceContractItem 경유(REACH-BACK).
+        sourceContractItem: {
+          optionSelectionSessions: { some: { isCurrent: true, status: 'CONFIRMED' } },
+        },
         measurementLinks: { some: { isCurrent: true } },
         OR: [{ workOrder: null }, { workOrder: { versions: { none: {} } } }],
       },
@@ -273,14 +276,21 @@ export class DashboardService {
       where: {
         status: { not: 'CANCELLED' },
         workOrder: { versions: { some: {} } },
-        optionSelectionSessions: { some: { isCurrent: true, status: 'CONFIRMED' } },
+        sourceContractItem: {
+          optionSelectionSessions: { some: { isCurrent: true, status: 'CONFIRMED' } },
+        },
         measurementLinks: { some: { isCurrent: true } },
       },
       include: {
         order: { include: { contract: { include: { customer: true } } } },
-        optionSelectionSessions: {
-          where: { isCurrent: true, status: 'CONFIRMED' },
-          select: { confirmedAt: true },
+        // 옵션 세션은 ContractItem에 붙는다 → sourceContractItem 경유(REACH-BACK).
+        sourceContractItem: {
+          select: {
+            optionSelectionSessions: {
+              where: { isCurrent: true, status: 'CONFIRMED' },
+              select: { confirmedAt: true },
+            },
+          },
         },
         measurementLinks: { where: { isCurrent: true }, select: { linkedAt: true } },
         workOrder: {
@@ -294,7 +304,7 @@ export class DashboardService {
       const lastIssuedAt = item.workOrder?.versions[0]?.issuedAt;
       if (!lastIssuedAt) continue;
       const sourceTimes = [
-        ...item.optionSelectionSessions.map((s) => s.confirmedAt?.getTime() ?? 0),
+        ...item.sourceContractItem.optionSelectionSessions.map((s) => s.confirmedAt?.getTime() ?? 0),
         ...item.measurementLinks.map((l) => l.linkedAt.getTime()),
       ];
       const latestSourceAt = Math.max(0, ...sourceTimes);

@@ -37,7 +37,7 @@ export function isTargetProductRequired(type: string): boolean {
   return CUSTOM_TYPES.includes(type);
 }
 
-/** 수선 진행 상태 — 접수→수선 요청→수선 입고→고객 연락→출고 완료 (+취소) */
+/** 수선 진행 상태 — 접수→수선 요청→수선 입고→고객 연락→출고 완료 (CANCELLED는 과거 데이터 표시용) */
 export type RepairStatus =
   | 'RECEIVED'
   | 'REQUESTED'
@@ -47,7 +47,7 @@ export type RepairStatus =
   | 'CANCELLED';
 
 /**
- * 정방향 전이 순서. 백엔드는 "바로 다음 단계" 또는 CANCELLED만 허용한다.
+ * 진행 단계 순서. 백엔드는 "바로 다음 단계"(진행) 또는 "바로 이전 단계"(되돌리기)만 허용한다.
  * 상태는 "그 단계를 끝낸 시점"을 뜻한다 — 접수 등록이 곧 접수 완료다.
  */
 export const REPAIR_STATUS_FLOW: RepairStatus[] = [
@@ -96,6 +96,12 @@ export function repairTypeLabel(type: string): string {
 export function nextRepairStatus(status: string): RepairStatus | undefined {
   const idx = REPAIR_STATUS_FLOW.indexOf(status as RepairStatus);
   return idx >= 0 ? REPAIR_STATUS_FLOW[idx + 1] : undefined;
+}
+
+/** 이전 단계 상태(한 단계 되돌리기). 첫 단계(접수)·흐름 밖 코드면 없음. */
+export function prevRepairStatus(status: string): RepairStatus | undefined {
+  const idx = REPAIR_STATUS_FLOW.indexOf(status as RepairStatus);
+  return idx > 0 ? REPAIR_STATUS_FLOW[idx - 1] : undefined;
 }
 
 /** 백엔드 원본 행 (REPAIR_SUMMARY_SELECT) */
@@ -247,6 +253,8 @@ function toRepair(row: RepairApiRow): Repair {
 export interface RepairListParams {
   status?: string;
   customerId?: string;
+  /** 출고완료(RELEASED) 건 제외 — 상태를 지정하지 않았을 때만 적용된다 */
+  excludeReleased?: boolean;
   page?: number;
   size?: number;
 }
@@ -258,6 +266,7 @@ export function fetchRepairs(params: RepairListParams): Promise<ListResult<Repai
     params: {
       status: params.status || undefined,
       customerId: params.customerId || undefined,
+      excludeReleased: params.excludeReleased ? true : undefined,
       page: params.page ?? 1,
       size: params.size ?? 30,
     },

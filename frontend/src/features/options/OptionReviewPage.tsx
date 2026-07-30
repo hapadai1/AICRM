@@ -203,15 +203,15 @@ function SurchargePanel({ surcharge }: { surcharge: OptionSurcharge }) {
 }
 
 export function OptionReviewPage() {
-  const { orderItemId } = useParams<{ orderItemId: string }>();
+  const { contractItemId } = useParams<{ contractItemId: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [modal, modalContextHolder] = Modal.useModal();
 
   const sessionQuery = useQuery({
-    queryKey: ['options', 'session', orderItemId],
-    queryFn: () => fetchOptionSessionByItem(orderItemId ?? ''),
-    enabled: !!orderItemId,
+    queryKey: ['options', 'session', contractItemId],
+    queryFn: () => fetchOptionSessionByItem(contractItemId ?? ''),
+    enabled: !!contractItemId,
     retry: false,
   });
   // 확인서 응답에는 품목명·옵션 버전이 없어 세션 상세에서 가져온다.
@@ -233,16 +233,18 @@ export function OptionReviewPage() {
       void queryClient.invalidateQueries({ queryKey: ['workorders'] });
       // 반영할 추가금액이 남아 있으면 목록으로 나가지 않고 이 화면에서 안내한다.
       if (result.surcharge?.pending) return;
-      navigate('/options');
+      // 확정 후에는 전체 목록이 아니라 방금 온 계약(고객)의 품목 리스트로 돌아간다.
+      const contractId = result.surcharge?.contract?.contractId;
+      navigate(contractId ? `/contracts/${contractId}/options` : '/options');
     },
     onError: (e: Error) => message.error(e.message),
   });
 
   // 확정 세션 재선택(설계서 §8.5) — 시작 API가 확정본을 복사한 새 선택 버전을 만든다.
   const reopenMutation = useMutation({
-    mutationFn: () => startOptionSession(orderItemId ?? '', session?.fabric ?? undefined),
+    mutationFn: () => startOptionSession(contractItemId ?? '', session?.fabric ?? undefined),
     onSuccess: (created) => {
-      queryClient.setQueryData(['options', 'session', orderItemId], created);
+      queryClient.setQueryData(['options', 'session', contractItemId], created);
       void queryClient.invalidateQueries({ queryKey: ['options'] });
       void queryClient.invalidateQueries({ queryKey: ['workorders'] });
       message.success('새 선택 버전으로 변경을 시작했습니다. 수정 후 다시 확정해 주세요.');
@@ -304,7 +306,7 @@ export function OptionReviewPage() {
         showIcon
         message="아직 스타일 컨설팅을 시작하지 않은 품목입니다."
         action={
-          <Button size="large" onClick={() => navigate(`/options/${orderItemId}`)}>
+          <Button size="large" onClick={() => navigate(`/options/${contractItemId}`)}>
             선택 시작
           </Button>
         }
@@ -351,7 +353,7 @@ export function OptionReviewPage() {
       <Col xs={12} md={8} lg={6} key={st.stageId}>
         <Card
           hoverable
-          onClick={() => navigate(`/options/${orderItemId}?stage=${st.order}`)}
+          onClick={() => navigate(`/options/${contractItemId}?stage=${st.order}`)}
           style={{
             marginBottom: 16,
             border: missing ? '2px dashed #ff4d4f' : '1px solid #d9d9d9',

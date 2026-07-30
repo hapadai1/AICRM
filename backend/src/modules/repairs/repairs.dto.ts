@@ -1,7 +1,8 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
+  IsBoolean,
   IsDateString,
   IsIn,
   IsInt,
@@ -51,6 +52,11 @@ class RepairMethodDto {
 export class ListRepairsQueryDto extends PageQueryDto {
   @IsOptional() @IsString() status?: string;
   @IsOptional() @IsUUID() customerId?: string;
+  /** 출고완료(RELEASED) 제외 — 상태 필터를 지정하지 않았을 때만 적용된다(기본 목록에서 완료건 숨김). */
+  @IsOptional()
+  @Transform(({ value }) => (value === 'true' ? true : value === 'false' ? false : value))
+  @IsBoolean()
+  excludeReleased?: boolean;
 }
 
 /** 대상 품목 한 줄 (품목·개수) */

@@ -114,7 +114,9 @@ export function StageContactCard({ onEdit }: Props) {
       key: 'body',
       render: (_, r) =>
         r.message ? (
-          <Typography.Text style={{ maxWidth: 460 }} ellipsis={{ tooltip: r.message.body }}>
+          // 미리보기만 한 줄로 자른다. 전문은 행을 펼치면 라인 하단에 뜬다(아래 expandable).
+          // 예전엔 잘린 글자에 마우스를 올리면 툴팁이 떠 아래 행들을 통째로 덮었다.
+          <Typography.Text style={{ maxWidth: 460 }} ellipsis>
             {r.message.body}
           </Typography.Text>
         ) : (
@@ -147,7 +149,8 @@ export function StageContactCard({ onEdit }: Props) {
       render: (_, r) => {
         if (!canEdit) return null;
         return (
-          <Space size={4}>
+          // 행 클릭이 펼침을 겸하므로(expandRowByClick), 버튼 클릭은 행까지 번지지 않게 막는다.
+          <Space size={4} onClick={(e) => e.stopPropagation()}>
             <Button size="small" onClick={() => onEdit({ id: r.id, name: r.name, message: r.message })}>
               {r.message ? '수정' : '문구 작성'}
             </Button>
@@ -204,6 +207,19 @@ export function StageContactCard({ onEdit }: Props) {
         loading={stagesQuery.isLoading}
         dataSource={rows}
         columns={columns}
+        expandable={{
+          // 전문은 툴팁으로 띄우지 않고 행 아래로 펼친다 — 아래 행을 덮지 않고 밀어낸다.
+          // +아이콘 없이 행을 클릭하면 열린다(expandRowByClick + showExpandColumn:false).
+          expandRowByClick: true,
+          showExpandColumn: false,
+          rowExpandable: (r) => !!r.message,
+          expandedRowRender: (r) =>
+            r.message ? (
+              <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', margin: 0 }}>
+                {r.message.body}
+              </Typography.Paragraph>
+            ) : null,
+        }}
       />
     </PageCard>
   );

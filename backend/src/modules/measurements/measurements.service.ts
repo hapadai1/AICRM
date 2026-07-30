@@ -175,7 +175,12 @@ export class MeasurementsService {
             },
           },
         },
-        optionSelectionSessions: { where: { isCurrent: true }, select: { status: true } },
+        // 옵션 세션은 ContractItem에 붙는다 → sourceContractItem 경유(REACH-BACK).
+        sourceContractItem: {
+          select: {
+            optionSelectionSessions: { where: { isCurrent: true }, select: { status: true } },
+          },
+        },
       },
       orderBy: [{ createdAt: 'asc' }, { sequenceNo: 'asc' }],
     });
@@ -234,7 +239,8 @@ export class MeasurementsService {
       };
       row.itemCount += 1;
       row.categoryCounts[item.productCategory] = (row.categoryCounts[item.productCategory] ?? 0) + 1;
-      if (item.optionSelectionSessions[0]?.status === 'CONFIRMED') row.consultingConfirmedCount += 1;
+      if (item.sourceContractItem.optionSelectionSessions[0]?.status === 'CONFIRMED')
+        row.consultingConfirmedCount += 1;
       const due = order.completionDueDate ? toDateString(order.completionDueDate) : null;
       if (due && (!row.dueDate || due < row.dueDate)) row.dueDate = due;
       rows.set(order.contractId, row);

@@ -17,24 +17,24 @@ export class OptionSessionsController {
   constructor(private readonly service: OptionSessionsService) {}
 
   /** 맞춤 품목별 옵션 진행 현황 (:id 라우트와 세그먼트 수가 달라 충돌 없음). contractId 지정 시 해당 계약으로 한정 */
-  @Get('order-items/option-progress')
+  @Get('contract-items/option-progress')
   progress(@Query('contractId') contractId?: string) {
     return this.service.progress(contractId);
   }
 
   /** 품목의 현재(is_current) 옵션 세션 상세 — 없으면 { session: null } */
-  @Get('order-items/:id/option-session')
-  currentSession(@Param('id') orderItemId: string) {
-    return this.service.currentSession(orderItemId);
+  @Get('contract-items/:id/option-session')
+  currentSession(@Param('id') contractItemId: string) {
+    return this.service.currentSession(contractItemId);
   }
 
-  @Post('order-items/:id/option-sessions')
+  @Post('contract-items/:id/option-sessions')
   start(
-    @Param('id') orderItemId: string,
+    @Param('id') contractItemId: string,
     @Body() dto: StartOptionSessionDto,
     @CurrentUser() actor: AuthUser,
   ) {
-    return this.service.start(orderItemId, dto, actor);
+    return this.service.start(contractItemId, dto, actor);
   }
 
   @Get('option-sessions/:id')

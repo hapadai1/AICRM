@@ -233,7 +233,8 @@ interface SessionTimes {
 async function createOptionSession(
   tx: Tx,
   args: {
-    orderItemId: string;
+    // 옵션 세션은 이제 ContractItem에 붙는다 (컨설팅 앵커 전환).
+    contractItemId: string;
     version: SeededOptionVersion;
     picks: Array<'A' | 'B'>;
     status: 'IN_PROGRESS' | 'REVIEW' | 'CONFIRMED';
@@ -247,7 +248,7 @@ async function createOptionSession(
   await tx.optionSelectionSession.create({
     data: {
       id: sessionId,
-      orderItemId: args.orderItemId,
+      contractItemId: args.contractItemId,
       optionSetVersionId: args.version.versionId,
       selectionVersionNo: 1,
       status: args.status,
@@ -753,23 +754,48 @@ async function main(): Promise<void> {
       const o5 = await order({ orderNo: 'ORD-260420-002', contractId: ct3, transactionType: 'RENTAL', status: 'IN_PROGRESS' });
 
       // 품목·구성품 ----------------------------------------------------------
+      // 주문 품목 id → 앵커 ContractItem id. 옵션 세션이 이 맵으로 contractItem을 되짚는다.
+      // 컨설팅(옵션/렌탈 선택)이 이제 ContractItem에 붙으므로, 주문 품목마다 앵커 품목을
+      // 물리화한다(수량>1인 라인도 벌수만큼 서로 다른 ContractItem이 생겨 세션이 충돌하지 않는다).
+      const contractItemByOrderItem = new Map<string, string>();
+      let contractItemSeq = 0;
       const orderItem = async (args: {
-        orderId: string; lineId: string; productCategory: string; sequenceNo: number;
+        orderId: string; versionId: string; lineId: string; productCategory: string; sequenceNo: number;
         displayName: string; status: string;
       }): Promise<string> => {
+        const contractItemId = uuid();
+        contractItemSeq += 1;
+        await tx.contractItem.create({
+          data: {
+            id: contractItemId,
+            contractVersionId: args.versionId,
+            sourceContractLineId: args.lineId,
+            transactionType: args.displayName.includes('렌탈') ? 'RENTAL' : 'CUSTOM',
+            productCategory: args.productCategory,
+            sequenceNo: contractItemSeq,
+            displayName: args.displayName,
+          },
+        });
         const id = uuid();
         await tx.orderItem.create({
           data: {
             id,
             orderId: args.orderId,
-            sourceContractLineId: args.lineId,
+            sourceContractItemId: contractItemId,
             productCategory: args.productCategory,
             sequenceNo: args.sequenceNo,
             displayName: args.displayName,
             status: args.status,
           },
         });
+        contractItemByOrderItem.set(id, contractItemId);
         return id;
+      };
+      /** 옵션 세션 생성 시 주문 품목의 앵커 ContractItem을 되짚는다. */
+      const contractItemOf = (orderItemId: string): string => {
+        const ci = contractItemByOrderItem.get(orderItemId);
+        if (!ci) throw new Error(`contractItem 매핑 누락: ${orderItemId}`);
+        return ci;
       };
       const component = async (args: {
         orderItemId: string; componentType: string; status: string;
@@ -793,37 +819,37 @@ async function main(): Promise<void> {
       };
 
       // 김민준 맞춤(o1): 정장 #1(주문 준비 완료) / 정장 #2(옵션 진행 중)
-      const oi1 = await orderItem({ orderId: o1, lineId: ct1v2.lineIds[0], productCategory: 'SUIT', sequenceNo: 1, displayName: '정장 #1', status: 'READY_TO_ORDER' });
-      const oi2 = await orderItem({ orderId: o1, lineId: ct1v2.lineIds[0], productCategory: 'SUIT', sequenceNo: 2, displayName: '정장 #2', status: 'OPTION_PENDING' });
+      const oi1 = await orderItem({ orderId: o1, versionId: ct1v2.versionId, lineId: ct1v2.lineIds[0], productCategory: 'SUIT', sequenceNo: 1, displayName: '정장 #1', status: 'READY_TO_ORDER' });
+      const oi2 = await orderItem({ orderId: o1, versionId: ct1v2.versionId, lineId: ct1v2.lineIds[0], productCategory: 'SUIT', sequenceNo: 2, displayName: '정장 #2', status: 'OPTION_PENDING' });
       await component({ orderItemId: oi1, componentType: 'JACKET', status: 'CREATED' });
       await component({ orderItemId: oi1, componentType: 'TROUSERS', status: 'CREATED' });
       await component({ orderItemId: oi2, componentType: 'JACKET', status: 'CREATED' });
       await component({ orderItemId: oi2, componentType: 'TROUSERS', status: 'CREATED' });
 
       // 김민준 렌탈(o2): 렌탈 정장 #1 / 렌탈 구두 #1 (오늘 픽업 예약 배정)
-      const oi3 = await orderItem({ orderId: o2, lineId: ct1v2.lineIds[1], productCategory: 'SUIT', sequenceNo: 1, displayName: '렌탈 정장 #1', status: 'CREATED' });
-      const oi4 = await orderItem({ orderId: o2, lineId: ct1v2.lineIds[2], productCategory: 'SHOES', sequenceNo: 1, displayName: '렌탈 구두 #1', status: 'CREATED' });
+      const oi3 = await orderItem({ orderId: o2, versionId: ct1v2.versionId, lineId: ct1v2.lineIds[1], productCategory: 'SUIT', sequenceNo: 1, displayName: '렌탈 정장 #1', status: 'CREATED' });
+      const oi4 = await orderItem({ orderId: o2, versionId: ct1v2.versionId, lineId: ct1v2.lineIds[2], productCategory: 'SHOES', sequenceNo: 1, displayName: '렌탈 구두 #1', status: 'CREATED' });
       const cmpMjJacket = await component({ orderItemId: oi3, componentType: 'JACKET', status: 'RESERVED' });
       const cmpMjTrousers = await component({ orderItemId: oi3, componentType: 'TROUSERS', status: 'RESERVED' });
       const cmpMjShoes = await component({ orderItemId: oi4, componentType: 'SHOES', status: 'RESERVED' });
 
       // 이서연 맞춤(o3): 정장 #1(부분 입고) / 셔츠 #1(입고) / 셔츠 #2(입고 지연)
-      const oi5 = await orderItem({ orderId: o3, lineId: ct2v1.lineIds[0], productCategory: 'SUIT', sequenceNo: 1, displayName: '정장 #1', status: 'PARTIALLY_RECEIVED' });
-      const oi6 = await orderItem({ orderId: o3, lineId: ct2v1.lineIds[1], productCategory: 'SHIRT', sequenceNo: 1, displayName: '셔츠 #1', status: 'RECEIVED' });
-      const oi7 = await orderItem({ orderId: o3, lineId: ct2v1.lineIds[1], productCategory: 'SHIRT', sequenceNo: 2, displayName: '셔츠 #2', status: 'PRODUCTION_IN_PROGRESS' });
+      const oi5 = await orderItem({ orderId: o3, versionId: ct2v1.versionId, lineId: ct2v1.lineIds[0], productCategory: 'SUIT', sequenceNo: 1, displayName: '정장 #1', status: 'PARTIALLY_RECEIVED' });
+      const oi6 = await orderItem({ orderId: o3, versionId: ct2v1.versionId, lineId: ct2v1.lineIds[1], productCategory: 'SHIRT', sequenceNo: 1, displayName: '셔츠 #1', status: 'RECEIVED' });
+      const oi7 = await orderItem({ orderId: o3, versionId: ct2v1.versionId, lineId: ct2v1.lineIds[1], productCategory: 'SHIRT', sequenceNo: 2, displayName: '셔츠 #2', status: 'PRODUCTION_IN_PROGRESS' });
       const cmpSyJacket = await component({ orderItemId: oi5, componentType: 'JACKET', status: 'RECEIVED', expectedInboundDate: dateOnly(-2), actualInboundAt: at(-1, 11) });
       const cmpSyTrousers = await component({ orderItemId: oi5, componentType: 'TROUSERS', status: 'PRODUCTION_IN_PROGRESS', expectedInboundDate: dateOnly(3) });
       const cmpSyShirt1 = await component({ orderItemId: oi6, componentType: 'SHIRT', status: 'RECEIVED', expectedInboundDate: dateOnly(-5), actualInboundAt: at(-4, 10) });
       const cmpSyShirt2 = await component({ orderItemId: oi7, componentType: 'SHIRT', status: 'PRODUCTION_IN_PROGRESS', expectedInboundDate: dateOnly(-1), notes: '공장 입고 지연 확인 필요' });
 
       // 정우성 맞춤(o4): 정장 #1 (출고 완료)
-      const oi8 = await orderItem({ orderId: o4, lineId: ct3v1.lineIds[0], productCategory: 'SUIT', sequenceNo: 1, displayName: '정장 #1', status: 'RELEASED' });
+      const oi8 = await orderItem({ orderId: o4, versionId: ct3v1.versionId, lineId: ct3v1.lineIds[0], productCategory: 'SUIT', sequenceNo: 1, displayName: '정장 #1', status: 'RELEASED' });
       await component({ orderItemId: oi8, componentType: 'JACKET', status: 'RELEASED', expectedInboundDate: dateOnly(-65), actualInboundAt: at(-63, 11), actualOutboundAt: at(-60, 15) });
       await component({ orderItemId: oi8, componentType: 'TROUSERS', status: 'RELEASED', expectedInboundDate: dateOnly(-65), actualInboundAt: at(-63, 11), actualOutboundAt: at(-60, 15) });
 
       // 정우성 렌탈(o5): 렌탈 정장 #1(대여 중) / 렌탈 구두 #1(반납 지연)
-      const oi9 = await orderItem({ orderId: o5, lineId: ct3v1.lineIds[1], productCategory: 'SUIT', sequenceNo: 1, displayName: '렌탈 정장 #1', status: 'RELEASED' });
-      const oi10 = await orderItem({ orderId: o5, lineId: ct3v1.lineIds[2], productCategory: 'SHOES', sequenceNo: 1, displayName: '렌탈 구두 #1', status: 'RELEASED' });
+      const oi9 = await orderItem({ orderId: o5, versionId: ct3v1.versionId, lineId: ct3v1.lineIds[1], productCategory: 'SUIT', sequenceNo: 1, displayName: '렌탈 정장 #1', status: 'RELEASED' });
+      const oi10 = await orderItem({ orderId: o5, versionId: ct3v1.versionId, lineId: ct3v1.lineIds[2], productCategory: 'SHOES', sequenceNo: 1, displayName: '렌탈 구두 #1', status: 'RELEASED' });
       const cmpWsJacket = await component({ orderItemId: oi9, componentType: 'JACKET', status: 'RELEASED', actualOutboundAt: at(-10, 14) });
       const cmpWsTrousers = await component({ orderItemId: oi9, componentType: 'TROUSERS', status: 'RELEASED', actualOutboundAt: at(-10, 14) });
       const cmpWsShoes = await component({ orderItemId: oi10, componentType: 'SHOES', status: 'RELEASED', actualOutboundAt: at(-10, 14) });
@@ -834,7 +860,7 @@ async function main(): Promise<void> {
       // -----------------------------------------------------------------------
       // 김민준 정장 #1: 전체 확정 (미주문 데모 — 작업지시서 출력 0건)
       await createOptionSession(tx, {
-        orderItemId: oi1, version: suitOptions,
+        contractItemId: contractItemOf(oi1), version: suitOptions,
         picks: ['A', 'B', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'B', 'A'],
         status: 'CONFIRMED', fabricName: 'VBC 110수 네이비 솔리드',
         times: { startedAt: at(-24, 14), lastSavedAt: at(-24, 15), reviewedAt: at(-24, 15, 30), confirmedAt: at(-23, 11) },
@@ -842,7 +868,7 @@ async function main(): Promise<void> {
       });
       // 김민준 정장 #2: 진행 중 (11단계 중 4단계 선택, 5단계 재개 지점)
       await createOptionSession(tx, {
-        orderItemId: oi2, version: suitOptions,
+        contractItemId: contractItemOf(oi2), version: suitOptions,
         picks: ['A', 'A', 'B', 'A'],
         status: 'IN_PROGRESS', fabricName: '제냐 트로피컬 차콜',
         times: { startedAt: at(-2, 16), lastSavedAt: at(-2, 16, 40) },
@@ -850,21 +876,21 @@ async function main(): Promise<void> {
       });
       // 이서연 품목들: 모두 확정
       const sessionSy1 = await createOptionSession(tx, {
-        orderItemId: oi5, version: suitOptions,
+        contractItemId: contractItemOf(oi5), version: suitOptions,
         picks: ['A', 'A', 'A', 'B', 'A', 'A', 'B', 'A', 'B', 'A', 'B'],
         status: 'CONFIRMED', fabricName: '캐논 120수 미디엄그레이',
         times: { startedAt: at(-12, 10), lastSavedAt: at(-12, 11), reviewedAt: at(-12, 11, 20), confirmedAt: at(-9, 10) },
         adminId,
       });
       const sessionSy2 = await createOptionSession(tx, {
-        orderItemId: oi6, version: shirtOptions,
+        contractItemId: contractItemOf(oi6), version: shirtOptions,
         picks: ['A', 'A', 'A'],
         status: 'CONFIRMED', fabricName: '토마스메이슨 화이트 옥스포드',
         times: { startedAt: at(-12, 11, 30), lastSavedAt: at(-12, 11, 50), reviewedAt: at(-12, 12), confirmedAt: at(-9, 10, 10) },
         adminId,
       });
       const sessionSy3 = await createOptionSession(tx, {
-        orderItemId: oi7, version: shirtOptions,
+        contractItemId: contractItemOf(oi7), version: shirtOptions,
         picks: ['B', 'A', 'B'],
         status: 'CONFIRMED', fabricName: '토마스메이슨 스카이블루',
         times: { startedAt: at(-12, 12, 10), lastSavedAt: at(-12, 12, 30), reviewedAt: at(-12, 12, 40), confirmedAt: at(-9, 10, 20) },
@@ -872,7 +898,7 @@ async function main(): Promise<void> {
       });
       // 정우성 정장 #1: 확정 (완료 계약 이력)
       const sessionWs = await createOptionSession(tx, {
-        orderItemId: oi8, version: suitOptions,
+        contractItemId: contractItemOf(oi8), version: suitOptions,
         picks: ['B', 'A', 'A', 'A', 'B', 'A', 'A', 'B', 'A', 'A', 'B'],
         status: 'CONFIRMED', fabricName: '레다 130수 다크네이비',
         times: { startedAt: at(-80, 14), lastSavedAt: at(-80, 15), reviewedAt: at(-80, 15, 10), confirmedAt: at(-78, 11) },

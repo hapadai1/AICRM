@@ -63,10 +63,10 @@ function buildRows(data?: ContractDocument): DocRow[] {
       // 주문품목이 있으면 벌 단위(정장 #1·#2)로 편다.
       for (const it of line.items) {
         rows.push({
-          key: it.orderItemId,
+          key: it.contractItemId,
           transactionType: line.transactionType,
           itemLabel: it.displayName,
-          orderNo: it.orderNo,
+          orderNo: it.orderNo ?? undefined,
           quantity: 1,
           amount: line.unitPrice || (line.quantity ? line.lineAmount / line.quantity : 0),
           notes: line.notes,

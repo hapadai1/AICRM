@@ -49,8 +49,17 @@ async function wipePrevious() {
   const versionIds = customer.contracts.flatMap((c) => c.versions.map((v) => v.id));
 
   await prisma.$transaction(async (tx) => {
-    await tx.optionSelectionValue.deleteMany({ where: { selectionSession: { orderItemId: { in: orderItemIds } } } });
-    await tx.optionSelectionSession.deleteMany({ where: { orderItemId: { in: orderItemIds } } });
+    // 옵션 세션은 이제 ContractItem에 붙는다 → 계약 버전 하위 ContractItem 기준으로 지운다.
+    const contractItemIds = (
+      await tx.contractItem.findMany({
+        where: { contractVersionId: { in: versionIds } },
+        select: { id: true },
+      })
+    ).map((ci) => ci.id);
+    await tx.optionSelectionValue.deleteMany({
+      where: { selectionSession: { contractItemId: { in: contractItemIds } } },
+    });
+    await tx.optionSelectionSession.deleteMany({ where: { contractItemId: { in: contractItemIds } } });
     // 다른 시드(seed:journeys 등)가 이 고객·주문에 붙였을 수 있는 여정(+이벤트)을 먼저 지운다
     await tx.journeyEvent.deleteMany({ where: { journey: { customerId: customer.id } } });
     await tx.customerJourney.deleteMany({ where: { customerId: customer.id } });
@@ -58,6 +67,8 @@ async function wipePrevious() {
     await tx.order.deleteMany({ where: { id: { in: orderIds } } });
     // 계약의 현재 버전 FK를 먼저 끊어야 버전을 지울 수 있다
     await tx.contract.updateMany({ where: { id: { in: contractIds } }, data: { currentVersionId: null } });
+    await tx.contractItemComponent.deleteMany({ where: { contractItemId: { in: contractItemIds } } });
+    await tx.contractItem.deleteMany({ where: { id: { in: contractItemIds } } });
     await tx.contractLine.deleteMany({ where: { contractVersionId: { in: versionIds } } });
     await tx.contractVersion.deleteMany({ where: { id: { in: versionIds } } });
     await tx.contract.deleteMany({ where: { id: { in: contractIds } } });
@@ -177,12 +188,25 @@ async function main() {
 
     for (let idx = 0; idx < items.length; idx += 1) {
       const item = items[idx];
+      // 컨설팅(옵션 세션)이 이제 ContractItem에 붙는다 → 라인마다 앵커 품목을 물리화한다.
+      const contractItemId = uuid();
+      await tx.contractItem.create({
+        data: {
+          id: contractItemId,
+          contractVersionId: versionId,
+          sourceContractLineId: item.lineId,
+          transactionType: 'CUSTOM',
+          productCategory: 'SUIT',
+          sequenceNo: idx + 1,
+          displayName: item.name,
+        },
+      });
       const orderItemId = uuid();
       await tx.orderItem.create({
         data: {
           id: orderItemId,
           orderId,
-          sourceContractLineId: item.lineId,
+          sourceContractItemId: contractItemId,
           productCategory: 'SUIT',
           sequenceNo: idx + 1,
           displayName: item.name,
@@ -212,7 +236,7 @@ async function main() {
       await tx.optionSelectionSession.create({
         data: {
           id: sessionId,
-          orderItemId,
+          contractItemId,
           optionSetVersionId: optionSet.activeVersionId!,
           selectionVersionNo: 1,
           status: 'CONFIRMED',
