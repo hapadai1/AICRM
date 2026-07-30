@@ -79,7 +79,6 @@ export interface RentalItem {
   id: string;
   managementCode: string;
   componentType: RentalComponentType;
-  design: string;
   color: string;
   size: string;
   status: RentalItemStatus;
@@ -94,6 +93,8 @@ export interface RentalItemEvent {
   id: string;
   at: string;
   label: string;
+  /** 전이 후 상태 코드 — 라벨 문자열을 파싱하지 않고 특정 이벤트를 집어내려고 남긴다. */
+  newStatus: string;
   detail?: string;
   reason?: string;
   by: string;
@@ -106,15 +107,24 @@ export interface RentalAllocation {
   managementCode: string;
   componentId?: string;
   componentType?: RentalComponentType;
-  componentLabel: string;
+  componentSequenceNo?: number;
+  /** 실물 속성 — 출고 시 옷을 집어 오려면 컬러·사이즈가 함께 보여야 한다 */
+  color?: string;
+  size?: string;
+  /** 주문 품목명 (예: 렌탈 정장 #1). 백엔드 뷰의 displayName */
+  displayName?: string;
   orderId: string;
   orderNo: string;
   customerId?: string;
   customerName: string;
+  customerPhone?: string;
   pickupDate: string;
   returnDueDate: string;
   availabilityEndDate: string;
   status: AllocationStatus;
+  /** 실제 출고·반납 일시 (예정일과 별개) */
+  actualPickupAt?: string | null;
+  actualReturnAt?: string | null;
   checkoutDate?: string;
   returnDate?: string;
   /** 기준일 대비 픽업/반납 지연 여부 (목록 뷰) */
@@ -155,7 +165,8 @@ export interface RentalOrderComponent {
 
 export interface RentalItemFilters {
   componentType?: RentalComponentType;
-  design?: string;
+  /** true면 폐기만, 기본은 폐기를 뺀 살아 있는 재고만 */
+  retired?: boolean;
   color?: string;
   /** SKU 사이즈 필터 — 쿼리 파라미터 skuSize (page size와 충돌 회피) */
   skuSize?: string;
@@ -176,10 +187,9 @@ interface RawRentalItem {
   rowVersion?: number;
   version?: number;
   componentType?: RentalComponentType;
-  design?: string;
   color?: string;
   size?: string;
-  rentalSku?: { componentType: RentalComponentType; design: string; color: string; size: string };
+  rentalSku?: { componentType: RentalComponentType; color: string; size: string };
   currentAllocation?: RentalAllocationSummary | null;
   allocations?: Array<{
     id: string;
@@ -216,7 +226,6 @@ export function toRentalItem(raw: RawRentalItem): RentalItem {
     id: raw.id,
     managementCode: raw.managementCode,
     componentType: raw.componentType ?? sku?.componentType ?? 'JACKET',
-    design: raw.design ?? sku?.design ?? '-',
     color: raw.color ?? sku?.color ?? '-',
     size: raw.size ?? sku?.size ?? '-',
     status: raw.status,
@@ -227,14 +236,36 @@ export function toRentalItem(raw: RawRentalItem): RentalItem {
   };
 }
 
+/** 품목 대분류별 재고 건수 (재고 화면 상단 버튼) */
+export interface RentalInventorySummary {
+  total: number;
+  byComponentType: Record<RentalComponentType, number>;
+}
+
+/**
+ * 품목별 건수 — GET /rental-inventory/summary.
+ * 품목을 뺀 나머지 검색 조건은 그대로 반영해, 버튼을 누르면 몇 건이 나올지 미리 보여 준다.
+ */
+export function fetchRentalInventorySummary(
+  filters: Omit<RentalItemFilters, 'componentType' | 'page' | 'size_'>,
+): Promise<RentalInventorySummary> {
+  const params: Record<string, string> = {};
+  if (filters.color) params.color = filters.color;
+  if (filters.skuSize) params.skuSize = filters.skuSize;
+  if (filters.status) params.status = filters.status;
+  if (filters.retired) params.retired = 'true';
+  if (filters.availableOn) params.availableOn = filters.availableOn;
+  return request<RentalInventorySummary>({ url: '/rental-inventory/summary', params });
+}
+
 /** RENT-001 실물 목록 — GET /rental-inventory (§13.6, 계약 §5) */
 export function fetchRentalItems(filters: RentalItemFilters): Promise<ListResult<RentalItem>> {
   const params: Record<string, string | number> = {};
   if (filters.componentType) params.componentType = filters.componentType;
-  if (filters.design) params.design = filters.design;
   if (filters.color) params.color = filters.color;
   if (filters.skuSize) params.skuSize = filters.skuSize;
   if (filters.status) params.status = filters.status;
+  if (filters.retired) params.retired = 'true';
   if (filters.availableOn) params.availableOn = filters.availableOn;
   params.page = filters.page ?? 1;
   params.size = filters.size_ ?? 30;
@@ -251,7 +282,6 @@ export function fetchRentalItems(filters: RentalItemFilters): Promise<ListResult
 export function createRentalItem(body: {
   managementCode: string;
   componentType: RentalComponentType;
-  design: string;
   color: string;
   size: string;
   quantity?: number;
@@ -263,7 +293,6 @@ export function createRentalItem(body: {
 export interface RentalImportRow {
   managementCode?: string;
   componentType: RentalComponentType;
-  design: string;
   color: string;
   size: string;
   quantity?: number;
@@ -305,7 +334,7 @@ export function fetchRentalItemDetail(id: string): Promise<RentalItemDetail> {
       id: a.id,
       inventoryItemId: raw.id,
       managementCode: raw.managementCode,
-      componentLabel: a.orderItemComponent?.orderItem?.displayName ?? '-',
+      displayName: a.orderItemComponent?.orderItem?.displayName ?? '-',
       orderId: '',
       orderNo: a.orderItemComponent?.orderItem?.order?.orderNo ?? '-',
       customerId: a.orderItemComponent?.orderItem?.order?.contract?.customer?.id,
@@ -320,6 +349,7 @@ export function fetchRentalItemDetail(id: string): Promise<RentalItemDetail> {
       id: e.id,
       at: e.occurredAt,
       label: `${e.previousStatus ? rentalItemStatusLabel(e.previousStatus) : '-'} → ${rentalItemStatusLabel(e.newStatus)}`,
+      newStatus: e.newStatus,
       detail: e.availableFrom ? `대여 가능 예정일 ${dateOnly(e.availableFrom)}` : undefined,
       reason: e.reason ?? undefined,
       by: e.actor?.displayName ?? '-',
@@ -330,7 +360,7 @@ export function fetchRentalItemDetail(id: string): Promise<RentalItemDetail> {
 /** 실물 속성 수정 — PATCH /rental-inventory/{id} (계약 §5: notes) */
 export function patchRentalItem(
   id: string,
-  body: { design?: string; color?: string; size?: string; notes?: string; version: number },
+  body: { color?: string; size?: string; notes?: string; version: number },
 ): Promise<RentalItem> {
   return request<RentalItem>({ url: `/rental-inventory/${id}`, method: 'PATCH', data: body });
 }
@@ -343,8 +373,8 @@ export function postRentalItemStatusEvent(
   return request<RentalItem>({ url: `/rental-inventory/${id}/status-events`, method: 'POST', data: body });
 }
 
-/** 폐기 처리 — POST /rental-inventory/{id}/retire (§13.6) */
-export function retireRentalItem(id: string, body: { reason?: string }): Promise<RentalItem> {
+/** 폐기 처리 — POST /rental-inventory/{id}/retire (§13.6). 사유는 필수(백엔드 RetireInventoryDto). */
+export function retireRentalItem(id: string, body: { reason: string }): Promise<RentalItem> {
   return request<RentalItem>({ url: `/rental-inventory/${id}/retire`, method: 'POST', data: body });
 }
 
@@ -352,7 +382,6 @@ export function retireRentalItem(id: string, body: { reason?: string }): Promise
 /** 가용 실물 조회 — 백엔드는 componentType을 필수로 요구한다(rentals.dto.ts). */
 export function fetchAvailability(params: {
   componentType: RentalComponentType;
-  design?: string;
   color?: string;
   size?: string;
   pickupDate: string;
@@ -363,7 +392,6 @@ export function fetchAvailability(params: {
     availabilityEndDate: params.availabilityEndDate,
   };
   if (params.componentType) q.componentType = params.componentType;
-  if (params.design) q.design = params.design;
   if (params.color) q.color = params.color;
   if (params.size) q.size = params.size;
   return request<RawRentalItem[]>({ url: '/rental-inventory/availability', params: q }).then((rows) =>
@@ -380,7 +408,8 @@ export function allocateRentalItem(
     itemCode?: string;
     pickupDate: string;
     returnDueDate: string;
-    availabilityEndDate: string;
+    /** 생략하면 반납 예정일과 같다 — 반납 다음 날부터 다른 예약을 받는다. */
+    availabilityEndDate?: string;
   },
 ): Promise<RentalAllocation> {
   return request<RentalAllocation>({ url: `/rental-orders/${orderId}/allocations`, method: 'POST', data: body });
@@ -398,10 +427,13 @@ export function changeAllocationItem(
   });
 }
 
-/** 렌탈 출고 — POST /rental-allocations/{id}/checkout (confirmedItemCode 그대로 전송 — 계약 §5) */
+/**
+ * 렌탈 출고 — POST /rental-allocations/{id}/checkout.
+ * 관리코드 재입력(확인 ID) 대조는 없앴다. 예약과 다른 옷을 내보냈다면 notes에 남긴다.
+ */
 export function checkoutAllocation(
   allocationId: string,
-  body: { confirmedItemCode: string; checkoutDate: string; version: number },
+  body: { checkoutDate: string; notes?: string; version: number },
 ): Promise<RentalAllocation> {
   return request<RentalAllocation>({
     url: `/rental-allocations/${allocationId}/checkout`,
@@ -453,7 +485,6 @@ export interface RentalCalendarItem {
   id: string;
   managementCode: string;
   componentType: RentalComponentType;
-  design: string;
   color: string;
   size: string;
 }
@@ -485,13 +516,10 @@ export interface RentalCalendarFilters {
   from: string;
   to: string;
   componentType?: RentalComponentType;
-  design?: string;
   color?: string;
   size?: string;
-  /** 자유 검색어(관리코드·디자인·컬러 부분일치) */
+  /** 자유 검색어(관리코드·컬러 부분일치) */
   q?: string;
-  /** SKU 설명(코드) 부분일치 */
-  sku?: string;
 }
 
 /**
@@ -501,11 +529,9 @@ export interface RentalCalendarFilters {
 export function fetchAvailabilityCalendar(filters: RentalCalendarFilters): Promise<RentalCalendarDay[]> {
   const params: Record<string, string> = { from: filters.from, to: filters.to };
   if (filters.componentType) params.componentType = filters.componentType;
-  if (filters.design) params.design = filters.design;
   if (filters.color) params.color = filters.color;
   if (filters.size) params.size = filters.size;
   if (filters.q?.trim()) params.q = filters.q.trim();
-  if (filters.sku?.trim()) params.sku = filters.sku.trim();
   return request<RentalCalendarDay[]>({ url: '/rental-inventory/availability-calendar', params });
 }
 
@@ -524,7 +550,6 @@ export const RENTAL_SELECTION_STATUS_META: Record<RentalSelectionStatus, { label
 export interface RentalSelectedItem {
   id: string;
   managementCode: string;
-  design: string;
   color: string;
   size: string;
   status: RentalItemStatus;
@@ -565,7 +590,6 @@ export interface RentalSelectionDetail {
 export interface RentalCandidate {
   id: string;
   managementCode: string;
-  design: string;
   color: string;
   size: string;
   status: RentalItemStatus;
@@ -592,7 +616,7 @@ export interface RentalReviewComponent {
   sizeCode: string | null;
   sizeName: string | null;
   notes: string | null;
-  selectedItem: { id: string; managementCode: string; design: string } | null;
+  selectedItem: { id: string; managementCode: string } | null;
 }
 
 /** 확인서 (GET /rental-selections/:id/review) */
@@ -742,19 +766,22 @@ export function fetchRentalSelectionReview(sessionId: string): Promise<RentalSel
 }
 
 // ---------------------------------------------------------------------------
-// 렌탈 기준정보 — 컬러 12색·사이즈 활성 코드 (설계서 04 §5, /admin/master)
+// 렌탈 기준정보 — 품목별 컬러·사이즈 활성 코드 (설계서 04 §5, /admin/master)
 // ---------------------------------------------------------------------------
 
 /** 렌탈 컬러·사이즈 기준정보 코드 (활성만, sortOrder 정렬) */
 export interface RentalMasterCode {
   code: string;
   name: string;
+  /** 이 코드를 쓰는 품목. 비어 있으면 전 품목 공통. */
+  componentTypes: RentalComponentType[];
   sortOrder: number;
 }
 
 interface RawMasterItem {
   code: string;
   name: string;
+  componentTypes?: RentalComponentType[];
   sortOrder: number;
   active: boolean;
 }
@@ -763,23 +790,39 @@ interface RawMasterItem {
  * 활성 코드 조회는 읽기 전용 엔드포인트를 쓴다.
  * /admin/master/* 는 ADMIN_MASTER_EDIT 권한이라 조회 권한만 있는 직원 화면에서 403이 난다.
  */
-function fetchSelectionCodes(kind: 'colors' | 'sizes'): Promise<RentalMasterCode[]> {
+function fetchSelectionCodes(
+  kind: 'colors' | 'sizes',
+  componentType?: RentalComponentType,
+): Promise<RentalMasterCode[]> {
   return request<{ colors: RawMasterItem[]; sizes: RawMasterItem[] }>({
     url: '/rental-selections/codes',
+    params: componentType ? { componentType } : undefined,
   }).then((res) =>
     (res[kind] ?? [])
       .filter((r) => r.active)
       .sort((a, b) => a.sortOrder - b.sortOrder)
-      .map((r) => ({ code: r.code, name: r.name, sortOrder: r.sortOrder })),
+      .map((r) => ({
+        code: r.code,
+        name: r.name,
+        componentTypes: r.componentTypes ?? [],
+        sortOrder: r.sortOrder,
+      })),
   );
 }
 
-/** 렌탈 컬러 12색 활성 코드 — GET /rental-selections/codes */
-export function fetchRentalColors(): Promise<RentalMasterCode[]> {
-  return fetchSelectionCodes('colors');
+/**
+ * 렌탈 컬러 활성 코드 — GET /rental-selections/codes.
+ * componentType을 주면 그 품목에 있는 색만 온다(정장 12색 / 셔츠 흰색 / 구두 검정·브라운).
+ */
+export function fetchRentalColors(componentType?: RentalComponentType): Promise<RentalMasterCode[]> {
+  return fetchSelectionCodes('colors', componentType);
 }
 
-/** 렌탈 사이즈 활성 코드 — GET /rental-selections/codes */
-export function fetchRentalSizes(): Promise<RentalMasterCode[]> {
-  return fetchSelectionCodes('sizes');
+/**
+ * 렌탈 사이즈 활성 코드 — GET /rental-selections/codes.
+ * 품목마다 체계가 달라(상의 46~60, 하의 80~104, 셔츠 95~120, 구두 250~280)
+ * componentType 없이 부르면 전 품목 사이즈가 섞여 온다.
+ */
+export function fetchRentalSizes(componentType?: RentalComponentType): Promise<RentalMasterCode[]> {
+  return fetchSelectionCodes('sizes', componentType);
 }

@@ -9,14 +9,15 @@ import {
   Descriptions,
   Empty,
   Form,
-  Input,
   Modal,
+  Radio,
   Select,
   Space,
   Typography,
 } from 'antd';
 import { DataTable } from '../../shared/DataTable';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
+import type { RadioChangeEvent } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs, { type Dayjs } from 'dayjs';
 import { useEffect, useMemo, useState } from 'react';
@@ -32,16 +33,17 @@ import {
   type RentalCalendarItem,
   type RentalComponentType,
 } from '../../api/rentals';
-import { COLOR_OPTIONS, DESIGN_OPTIONS, componentTypeOptions } from './rental-constants';
+import { componentTypeOptions } from './rental-constants';
+import { useRentalCodeNames } from './rental-codes';
 
 interface FilterValues {
-  q?: string;
-  sku?: string;
   componentType?: RentalComponentType;
-  design?: string;
   color?: string;
   size?: string;
 }
+
+/** 화면을 열었을 때의 기본 조회 조건 (현업에서 가장 많이 찾는 조합) */
+const DEFAULT_FILTERS: FilterValues = { componentType: 'JACKET', color: 'BLACK', size: '46' };
 
 /** 가용 수에 따른 배지 색 — 0건은 회색, 소량은 주황, 여유는 초록. */
 function countColor(count: number): string {
@@ -59,7 +61,6 @@ interface AllocateFormValues {
   componentId: string;
   pickupDate: Dayjs;
   returnDueDate: Dayjs;
-  availabilityEndDate: Dayjs;
 }
 
 export function RentalAllocatePage() {
@@ -71,7 +72,11 @@ export function RentalAllocatePage() {
   const [allocForm] = Form.useForm<AllocateFormValues>();
 
   const [month, setMonth] = useState<Dayjs>(dayjs());
-  const [filters, setFilters] = useState<FilterValues>({});
+  /*
+   * 예약은 언제나 한 품목을 놓고 잡는 일이라 '전체'가 필요 없다.
+   * 가장 많이 찾는 조합(상의·블랙·46호)으로 열어 두어, 들어오자마자 그 달력을 보게 한다.
+   */
+  const [filters, setFilters] = useState<FilterValues>(DEFAULT_FILTERS);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   // 배정 실행 대상 실물 (달력에서 [배정] 클릭 시 설정) — 모달을 연다.
   const [allocateItem, setAllocateItem] = useState<RentalCalendarItem | null>(null);
@@ -94,10 +99,24 @@ export function RentalAllocatePage() {
     return map;
   }, [calendarQuery.data]);
 
+  // 품목은 Form 밖에 있으므로 조회 시 덮어쓰지 않도록 이전 값을 남긴다(렌탈 재고와 동일).
   const onSearch = (values: FilterValues) => {
-    setFilters(values);
+    setFilters((prev) => ({ ...values, componentType: prev.componentType }));
     setSelectedDate(null);
   };
+
+  /**
+   * 품목 대분류 전환 — 즉시 재조회.
+   * 앞 품목에서 고른 컬러·사이즈는 새 품목에 없는 코드라(구두 260 → 상의) 함께 비운다.
+   */
+  const onComponentChange = (componentType: RentalComponentType) => {
+    form.setFieldsValue({ color: undefined, size: undefined });
+    setFilters((prev) => ({ ...prev, componentType, color: undefined, size: undefined }));
+    setSelectedDate(null);
+  };
+
+  // 컬러·사이즈 선택지와 표시명 — 고른 품목의 코드만 내려온다.
+  const codes = useRentalCodeNames(filters.componentType);
 
   // 배정 대상 렌탈 주문 구성품 — 선택한 실물과 같은 구분(componentType)의 미배정 구성품만 노출.
   const targetsQuery = useQuery({
@@ -122,7 +141,6 @@ export function RentalAllocatePage() {
         inventoryItemId: allocateItem!.id,
         pickupDate: v.pickupDate.format('YYYY-MM-DD'),
         returnDueDate: v.returnDueDate.format('YYYY-MM-DD'),
-        availabilityEndDate: v.availabilityEndDate.format('YYYY-MM-DD'),
       });
     },
     onSuccess: (alloc) => {
@@ -140,7 +158,6 @@ export function RentalAllocatePage() {
       componentId: (preselectComponentId ?? undefined) as unknown as string,
       pickupDate: pickup,
       returnDueDate: pickup.add(1, 'day'),
-      availabilityEndDate: pickup.add(3, 'day'),
     });
   };
 
@@ -162,24 +179,17 @@ export function RentalAllocatePage() {
   const selectedItems = selectedDate ? (byDate.get(selectedDate)?.items ?? []) : [];
 
   const columns: ColumnsType<RentalCalendarItem> = [
+    // 렌탈 재고와 같은 순서·표기: 관리코드가 앞, 컬러·사이즈는 코드가 아니라 표시명.
+    // 실물 상세 화면은 없앴다 — 실물은 폐기하고 다시 등록하는 방식이라 편집할 게 없다.
+    { title: '관리코드', dataIndex: 'managementCode', width: 200 },
     {
       title: '구분',
       dataIndex: 'componentType',
       width: 120,
       render: (c: RentalComponentType) => RENTAL_COMPONENT_TYPE_LABELS[c] ?? c,
     },
-    { title: '디자인', dataIndex: 'design', width: 120 },
-    { title: '컬러', dataIndex: 'color', width: 100 },
-    { title: '사이즈', dataIndex: 'size', width: 90 },
-    {
-      title: '관리 ID',
-      dataIndex: 'managementCode',
-      render: (v: string, r) => (
-        <Button type="link" style={{ padding: 0 }} onClick={() => navigate(`/rentals/${r.id}`)}>
-          {v}
-        </Button>
-      ),
-    },
+    { title: '컬러', dataIndex: 'color', width: 140, render: (v: string) => codes.colorName(v) },
+    { title: '사이즈', dataIndex: 'size', width: 100, render: (v: string) => codes.sizeName(v) },
     {
       title: '배정',
       key: 'allocate',
@@ -197,31 +207,56 @@ export function RentalAllocatePage() {
       <PageCard>
         {/* 제목은 헤더가 이미 "렌탈 예약"으로 보여 준다 — 카드 안에서 반복하지 않는다.
             화면끼리 잇던 [출고·반납으로]·[렌탈 재고로] 버튼도 좌측 메뉴와 겹쳐 뺐다. */}
+        {/*
+          품목 대분류는 매번 쓰는 축이라 [조회]를 거치지 않고 누르는 즉시 달력이 갱신된다.
+          재고 화면과 달리 '전체'는 두지 않는다 — 예약은 어느 한 품목을 놓고 잡는 일이라
+          전 품목을 섞어 센 가용 수는 쓸 데가 없다. 건수 배지도 달력 셀이 이미 날짜별로 보여 준다.
+        */}
+        <Radio.Group
+          value={filters.componentType}
+          optionType="button"
+          buttonStyle="solid"
+          style={{ marginBottom: 12 }}
+          onChange={(e: RadioChangeEvent) => onComponentChange(e.target.value as RentalComponentType)}
+        >
+          {componentTypeOptions.map((o) => (
+            <Radio.Button key={o.value} value={o.value}>
+              {o.label}
+            </Radio.Button>
+          ))}
+        </Radio.Group>
+
         <ListToolbar
           filters={
             <Form<FilterValues>
               form={form}
               layout="inline"
+              initialValues={{ color: DEFAULT_FILTERS.color, size: DEFAULT_FILTERS.size }}
               style={{ rowGap: 8, columnGap: 0 }}
               onFinish={onSearch}
             >
-              <Form.Item name="q">
-                <Input allowClear placeholder="관리코드·디자인·컬러" style={{ width: 200 }} />
-              </Form.Item>
-              <Form.Item name="sku">
-                <Input allowClear placeholder="SKU 설명" style={{ width: 150 }} />
-              </Form.Item>
-              <Form.Item name="componentType">
-                <Select allowClear placeholder="구분 전체" style={{ width: 140 }} options={componentTypeOptions} />
-              </Form.Item>
-              <Form.Item name="design">
-                <Select allowClear placeholder="디자인 전체" style={{ width: 130 }} options={DESIGN_OPTIONS} />
-              </Form.Item>
+              {/* 컬러·사이즈는 코드값이라 손으로 칠 수 없다 — 위에서 고른 품목의 코드만 목록으로 준다. */}
               <Form.Item name="color">
-                <Select allowClear placeholder="컬러 전체" style={{ width: 120 }} options={COLOR_OPTIONS} />
+                <Select
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  placeholder="컬러 전체"
+                  style={{ width: 190 }}
+                  loading={codes.isLoading}
+                  options={codes.colorOptions}
+                />
               </Form.Item>
               <Form.Item name="size">
-                <Input allowClear placeholder="사이즈 (예: 100)" style={{ width: 130 }} />
+                <Select
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  placeholder="사이즈 전체"
+                  style={{ width: 140 }}
+                  loading={codes.isLoading}
+                  options={codes.sizeOptions}
+                />
               </Form.Item>
               <Form.Item>
                 <Button type="primary" htmlType="submit" icon={<SearchOutlined />} loading={calendarQuery.isLoading}>
@@ -296,7 +331,7 @@ export function RentalAllocatePage() {
               </Descriptions.Item>
               <Descriptions.Item label="규격">
                 {RENTAL_COMPONENT_TYPE_LABELS[allocateItem.componentType] ?? allocateItem.componentType} ·{' '}
-                {allocateItem.design} · {allocateItem.color} · {allocateItem.size}
+                {allocateItem.color} · {allocateItem.size}
               </Descriptions.Item>
             </Descriptions>
 
@@ -338,15 +373,9 @@ export function RentalAllocatePage() {
               >
                 <DatePicker style={{ width: '100%' }} />
               </Form.Item>
-              <Form.Item
-                name="availabilityEndDate"
-                label="가용 종료일 (정비 포함 다음 대여 가능 시점)"
-                rules={[{ required: true, message: '가용 종료일을 선택해 주세요.' }]}
-              >
-                <DatePicker style={{ width: '100%' }} />
-              </Form.Item>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                픽업일 ≤ 반납 예정일 ≤ 가용 종료일 순서를 지켜야 합니다.
+                반납 예정일 다음 날부터 다른 예약을 받을 수 있습니다. 세탁이 더 걸리면 반납 처리에서
+                &lsquo;대여 가능 예정일&rsquo;을 미루세요.
               </Typography.Text>
             </Form>
           </Space>

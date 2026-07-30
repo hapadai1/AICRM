@@ -1,5 +1,6 @@
 /**
- * 정장 옵션 세트를 '디자인 상담' 자료 기준 11단계·29선택지로 맞춘다.
+ * 정장 옵션 세트를 상담 자료 기준 14단계·36선택지로 맞춘다.
+ * (자켓·바지 11단계는 '디자인 상담', 베스트 3단계는 '베스트 상담 자료')
  *
  * 버전을 새로 올리지 않고 **첫 버전(V1)을 제자리 갱신**한다.
  * 버전을 올리면 이미 만들어진 선택 세션이 옛 버전을 계속 참조해 화면에 옛 단계·사진이
@@ -7,7 +8,8 @@
  * 내용만 바꾸면 기존 선택값의 참조가 그대로 살아 있어 그런 문제가 생기지 않는다.
  *
  * - 선택지 사진은 prisma/assets/suit-design/*.jpg (PDF에서 추출한 원본).
- *   추출은 assets/extract-suit-design-images.py가 담당하며 PDF가 바뀔 때만 다시 돌린다.
+ *   추출은 assets/extract-{suit,vest}-design-images.py가 담당하며 PDF가 바뀔 때만 다시 돌린다.
+ *   상담 자료에 사진이 없는 선택지('해당 없음')는 assets/make-placeholder-images.py가 만든다.
  * - V1 말고 다른 버전이 남아 있으면 그 세션들을 V1으로 옮기고 버전을 정리한다.
  * - 실행: npm run seed:suit-design
  *         SUIT_DESIGN_IMAGES_ONLY=1 npm run seed:suit-design  (사진만 갱신)
@@ -32,11 +34,6 @@ interface ChoiceSeed {
    * 원본 PDF의 사진·라벨이 어긋난 단계에서만 지정한다.
    */
   imageSlot?: 'A' | 'B' | 'C';
-  /**
-   * 사진을 빌려올 자산 파일 접두. 기본은 단계 코드.
-   * 베스트처럼 전용 촬영본이 아직 없는 단계에서 모양이 가장 가까운 자켓 사진을 임시로 쓴다.
-   */
-  imageFrom?: string;
 }
 
 interface StageSeed {
@@ -45,8 +42,9 @@ interface StageSeed {
   /** 부위 그룹 (E9/D5): 자켓·라펠·안감류→JACKET, 바지류→TROUSERS, 베스트류→VEST */
   componentGroup: 'JACKET' | 'TROUSERS' | 'VEST';
   /**
-   * 미지정이면 필수. 베스트는 구성품이 없는 주문(대부분의 2피스)이 많아 선택 단계로 둔다 —
-   * 필수로 두면 confirm()의 필수 단계 검증에 걸려 베스트 없는 정장까지 확정이 막힌다.
+   * 미지정이면 필수. 다만 confirm()은 이제 필수/선택 구분 없이 **모든 활성 단계**가
+   * 선택돼야 확정을 허용하므로(2026-07-29), 이 플래그는 마스터 메타로만 남는다.
+   * 베스트를 false로 두는 것은 "2피스 주문에는 해당 없는 단계"라는 표시다.
    */
   required?: boolean;
   choices: ChoiceSeed[];
@@ -129,29 +127,38 @@ const STAGES: StageSeed[] = [
     componentGroup: 'TROUSERS',
     choices: [{ name: '벨트고리' }, { name: '사이드어드저스트' }],
   },
-  // 베스트(스리피스) 옵션 — plan_v2 "베스트: 스티치, 카라".
-  // 전용 촬영본이 없어 모양이 가장 가까운 자켓 사진을 임시로 빌려 쓴다.
-  // 베스트 사진을 받으면 assets/suit-design/VEST_*.jpg로 넣고 imageFrom을 지우면 된다.
+  // 베스트(스리피스) 옵션 — '베스트 상담 자료' PDF 1~3페이지 순서 그대로.
+  // 사진은 assets/extract-vest-design-images.py가 뽑는다.
+  {
+    code: 'VEST_LAPEL',
+    name: '베스트 라펠 디자인',
+    componentGroup: 'VEST',
+    required: false,
+    choices: [{ name: '라펠없음' }, { name: '라펠있음', extraPrice: 33000 }],
+  },
   {
     code: 'VEST_STITCH',
     name: '베스트 스티치 디자인',
     componentGroup: 'VEST',
     required: false,
-    choices: [
-      { name: '스티치', extraPrice: 22000, imageFrom: 'STITCH', imageSlot: 'A' },
-      { name: '스티치 없음', imageFrom: 'STITCH', imageSlot: 'B' },
-    ],
+    choices: [{ name: '스티치 없음' }, { name: '스티치 추가', extraPrice: 33000 }],
   },
   {
-    code: 'VEST_COLLAR',
-    name: '베스트 카라 디자인',
+    code: 'VEST_BACK',
+    name: '베스트 등판 디자인',
     componentGroup: 'VEST',
     required: false,
-    choices: [
-      { name: '노치드 카라', imageFrom: 'LAPEL', imageSlot: 'A' },
-      { name: '피크드 카라', extraPrice: 22000, imageFrom: 'LAPEL', imageSlot: 'B' },
-      { name: '숄카라', extraPrice: 22000, imageFrom: 'LAPEL', imageSlot: 'C' },
-    ],
+    // 상담 자료에 추가금액 표기가 없어 셋 다 0원.
+    //
+    // '해당 없음'은 상담 자료에 없는 선택지다. 확정하려면 모든 단계를 골라야 하므로
+    // (confirm()), 베스트 없는 투피스 주문도 이 단계를 지나가야 한다. 등판 원단을
+    // 아무거나 고르게 두면 작업지시서에 없는 베스트의 등판이 찍혀 공장에 나간다.
+    // 베스트 라펠·스티치는 '라펠없음'·'스티치 없음'이 이 역할을 이미 한다.
+    //
+    // 반드시 **맨 뒤**에 둔다 — 선택지는 코드(A/B/C) 자리로 제자리 갱신되므로
+    // 앞에 끼우면 이미 '안감 등판'(A)을 고른 세션이 소리 없이 '해당 없음'으로 바뀐다.
+    // 사진은 상담 자료에 없어 make-placeholder-images.py가 만든 중립 이미지를 쓴다.
+    choices: [{ name: '안감 등판' }, { name: '제원단 등판' }, { name: '해당 없음' }],
   },
 ];
 
@@ -170,7 +177,8 @@ async function ensureFile(stageCode: string, slot: string): Promise<string> {
   if (!existsSync(source))
     throw new Error(
       `선택지 이미지가 없습니다: ${source}\n` +
-        'assets/extract-suit-design-images.py를 먼저 실행하세요.',
+        'assets/extract-suit-design-images.py(자켓·바지) 또는 ' +
+          'assets/extract-vest-design-images.py(베스트)를 먼저 실행하세요.',
     );
 
   const buffer = readFileSync(source);
@@ -218,7 +226,7 @@ async function main(): Promise<void> {
     let n = 0;
     for (const stage of STAGES) {
       for (const [i, choice] of stage.choices.entries()) {
-        await ensureFile(choice.imageFrom ?? stage.code, choice.imageSlot ?? CODES[i]);
+        await ensureFile(stage.code, choice.imageSlot ?? CODES[i]);
         n += 1;
       }
     }
@@ -235,7 +243,7 @@ async function main(): Promise<void> {
     for (const [i, choice] of stage.choices.entries()) {
       imageIds.set(
         `${stage.code}_${CODES[i]}`,
-        await ensureFile(choice.imageFrom ?? stage.code, choice.imageSlot ?? CODES[i]),
+        await ensureFile(stage.code, choice.imageSlot ?? CODES[i]),
       );
     }
   }
@@ -337,17 +345,31 @@ async function main(): Promise<void> {
         }
       }
 
-      // 새 구성에 없는 선택지는 지우지 않고 내린다(선택값이 참조 중일 수 있다).
+      // 새 구성에 없는 선택지 정리. 아무도 안 고른 것은 지운다 —
+      // 남겨두면 단계가 줄었을 때 옛 선택지가 엉뚱한 단계 밑에 붙어 보인다
+      // (베스트 카라 3지 → 스티치 2지로 바뀌며 '숄카라'가 스티치 단계에 남았던 경우).
+      // 고른 이력이 있으면 그 선택값이 참조 중이라 지울 수 없으니 내리기만 한다.
       for (const c of stage.choices) {
-        if (!CODES.slice(0, seed.choices.length).includes(c.choiceCode as (typeof CODES)[number])) {
-          await tx.optionChoice.update({ where: { id: c.id }, data: { active: false } });
-        }
+        if (CODES.slice(0, seed.choices.length).includes(c.choiceCode as (typeof CODES)[number]))
+          continue;
+        const used = await tx.optionSelectionValue.count({ where: { optionChoiceId: c.id } });
+        if (used === 0) await tx.optionChoice.delete({ where: { id: c.id } });
+        else await tx.optionChoice.update({ where: { id: c.id }, data: { active: false } });
       }
     }
 
-    // 11단계를 넘는 예전 단계도 지우지 않고 내린다.
+    // 새 구성의 단계 수를 넘는 예전 단계도 선택지와 같은 규칙으로 정리한다.
+    // 아무도 안 고르고 현재 단계로 잡힌 세션도 없으면 지우고, 아니면 내린다.
     for (const stage of existing) {
-      if (stage.sequenceNo > STAGES.length) {
+      if (stage.sequenceNo <= STAGES.length) continue;
+      const [values, current] = await Promise.all([
+        tx.optionSelectionValue.count({ where: { optionStageId: stage.id } }),
+        tx.optionSelectionSession.count({ where: { currentStageId: stage.id } }),
+      ]);
+      if (values === 0 && current === 0) {
+        await tx.optionChoice.deleteMany({ where: { optionStageId: stage.id } });
+        await tx.optionStage.delete({ where: { id: stage.id } });
+      } else {
         await tx.optionStage.update({
           where: { id: stage.id },
           data: { stageCode: `RETIRED_${stage.sequenceNo}`, active: false },

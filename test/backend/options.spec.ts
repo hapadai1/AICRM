@@ -255,6 +255,22 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
     expect(res.body.error.code).toBe('INVALID_STATUS_TRANSITION');
   });
 
+  it('ACTIVE 버전은 추가금액 수정이 차단된다', async () => {
+    const before = await ctx.prisma.optionChoice.findFirstOrThrow({
+      where: { optionStage: { optionSetVersionId: versionV1 } },
+    });
+    const res = await api(ctx)
+      .patch(`/api/v1/option-choices/${before.id}/price`)
+      .set(auth(ctx))
+      .send({ extraPrice: Number(before.extraPrice) + 11000 })
+      .expect(409);
+    expect(res.body.error.code).toBe('INVALID_STATUS_TRANSITION');
+
+    // 값이 그대로여야 한다 — 거부만 하고 부분 반영되면 안 된다.
+    const after = await ctx.prisma.optionChoice.findUniqueOrThrow({ where: { id: before.id } });
+    expect(Number(after.extraPrice)).toBe(Number(before.extraPrice));
+  });
+
   it('기존 버전 복사로 새 버전을 만들어 활성화하면 기존 ACTIVE는 RETIRED가 된다', async () => {
     const created = await api(ctx)
       .post(`/api/v1/option-sets/${optionSetId}/versions`)
@@ -719,6 +735,50 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
       detail.body.data.stages.find((s: { stageCode: string }) => s.stageCode === 'JACKET_BUTTON')
         .componentGroup,
     ).toBe('JACKET');
+  });
+
+  it('작성중(DRAFT) 버전은 단계·선택지와 함께 삭제된다', async () => {
+    const created = await api(ctx)
+      .post(`/api/v1/option-sets/${optionSetId}/versions`)
+      .set(auth(ctx))
+      .send({ copyFromVersionId: versionV2, description: '삭제할 초안' })
+      .expect(201);
+    const draftId = created.body.data.id as string;
+    expect(created.body.data.stages.length).toBeGreaterThan(0);
+
+    await api(ctx).delete(`/api/v1/option-set-versions/${draftId}`).set(auth(ctx)).expect(200);
+
+    expect(
+      await ctx.prisma.optionSetVersion.findUnique({ where: { id: draftId } }),
+    ).toBeNull();
+    expect(await ctx.prisma.optionStage.count({ where: { optionSetVersionId: draftId } })).toBe(0);
+    expect(
+      await ctx.prisma.optionChoice.count({
+        where: { optionStage: { optionSetVersionId: draftId } },
+      }),
+    ).toBe(0);
+    const audits = await ctx.prisma.auditLog.count({
+      where: { entityType: 'OPTION_SET_VERSION', entityId: draftId, action: 'DELETE' },
+    });
+    expect(audits).toBe(1);
+  });
+
+  it('사용중·종료 버전은 삭제가 차단된다', async () => {
+    const active = await api(ctx)
+      .delete(`/api/v1/option-set-versions/${versionV2}`)
+      .set(auth(ctx))
+      .expect(409);
+    expect(active.body.error.code).toBe('INVALID_STATUS_TRANSITION');
+
+    const retired = await api(ctx)
+      .delete(`/api/v1/option-set-versions/${versionV1}`)
+      .set(auth(ctx))
+      .expect(409);
+    expect(retired.body.error.code).toBe('INVALID_STATUS_TRANSITION');
+
+    // 활성 버전은 그대로 남아 있어야 한다.
+    const set = await ctx.prisma.optionSet.findUniqueOrThrow({ where: { id: optionSetId } });
+    expect(set.activeVersionId).toBe(versionV2);
   });
 
   it('일반 직원 권한(OPTION_SELECT 없음이 아닌 마스터 권한 없음)으로 마스터 API는 403이다', async () => {

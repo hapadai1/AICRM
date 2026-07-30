@@ -217,13 +217,74 @@ export class OptionMasterService {
   }
 
   /**
-   * PATCH /option-choices/:id/price — 선택지 추가금액만 수정한다.
+   * DELETE /option-set-versions/:id — 작성중(DRAFT) 버전을 삭제한다.
    *
-   * 구성(단계·선택지)을 바꾸려면 새 버전을 만들어야 하지만(saveStages는 DRAFT 전용),
-   * 가격은 같은 구성에서 값만 조정하는 일이라 사용중(ACTIVE) 버전에서도 바로 고친다.
-   * - 이미 확정된 계약: option_selection_values.extra_price_snapshot 을 쓰므로 영향 없다.
-   * - 앞으로의 선택: 바뀐 가격이 적용된다.
-   * - 종료(RETIRED) 버전은 과거 기록이므로 고치지 않는다.
+   * 새 버전을 잘못 만들면 되돌릴 방법이 없어 초안이 계속 쌓였다. 아직 아무 계약도 쓰지 않는
+   * DRAFT만 지운다 — 사용중·종료 버전은 확정 계약이 참조하는 과거 기록이라 삭제하지 않는다.
+   */
+  async deleteVersion(versionId: string, actor: AuthUser) {
+    const version = await this.prisma.optionSetVersion.findUnique({
+      where: { id: versionId },
+      select: {
+        id: true,
+        optionSetId: true,
+        versionNo: true,
+        status: true,
+        // 감사로그에서 "어느 옵션셋의 몇 번 버전을 지웠나"가 이름으로 읽혀야 한다 (UUID만으로는 못 읽는다).
+        optionSet: { select: { name: true } },
+        _count: { select: { selectionSessions: true, stages: true } },
+      },
+    });
+    if (!version) throw new NotFoundException('옵션 세트 버전이 없습니다.');
+    if (version.status !== 'DRAFT')
+      throw new BusinessException(
+        'INVALID_STATUS_TRANSITION',
+        '작성중 버전만 삭제할 수 있습니다.',
+        undefined,
+        { status: version.status },
+      );
+    // DRAFT는 옵션 선택 화면에 뜨지 않지만, 활성화 후 되돌린 데이터가 있을 수 있어 확인한다.
+    if (version._count.selectionSessions > 0)
+      throw new BusinessException(
+        'VALIDATION_ERROR',
+        '이 버전으로 진행된 옵션 선택이 있어 삭제할 수 없습니다.',
+        [{ field: 'versionId', reason: 'HAS_SELECTION_SESSIONS' }],
+      );
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.optionChoice.deleteMany({
+        where: { optionStage: { optionSetVersionId: versionId } },
+      });
+      await tx.optionStage.deleteMany({ where: { optionSetVersionId: versionId } });
+      await tx.optionSetVersion.delete({ where: { id: versionId } });
+      await this.audit.log(
+        {
+          userId: actor.id,
+          action: 'DELETE',
+          entityType: 'OPTION_SET_VERSION',
+          entityId: versionId,
+          before: {
+            optionSetName: version.optionSet.name,
+            optionSetId: version.optionSetId,
+            versionNo: version.versionNo,
+            status: version.status,
+            stageCount: version._count.stages,
+          },
+        },
+        tx,
+      );
+    });
+
+    return { versionId, optionSetId: version.optionSetId, versionNo: version.versionNo };
+  }
+
+  /**
+   * PATCH /option-choices/:id/price — 선택지 추가금액만 수정한다. **작성중(DRAFT) 버전 전용.**
+   *
+   * 예전에는 사용중(ACTIVE) 버전의 가격을 그 자리에서 고칠 수 있었다. 버전이 늘지 않아
+   * 편하지만, 같은 버전 번호가 시점에 따라 다른 금액을 뜻하게 되어 "V1로 계약했다"는 말만으로는
+   * 얼마였는지 알 수 없었다. 가격도 구성과 똑같이 새 버전으로만 바꾼다.
+   * - 이미 확정된 계약: option_selection_values.extra_price_snapshot 을 쓰므로 어느 쪽이든 영향 없다.
    * 변경 이력은 감사로그(OPTION_CHOICE / UPDATE)로만 남긴다 — 화면에 따로 노출하지 않는다.
    */
   async updateChoicePrice(choiceId: string, dto: UpdateOptionChoicePriceDto, actor: AuthUser) {
@@ -238,7 +299,9 @@ export class OptionMasterService {
           select: {
             stageName: true,
             optionSetVersionId: true,
-            optionSetVersion: { select: { status: true, versionNo: true } },
+            optionSetVersion: {
+              select: { status: true, versionNo: true, optionSet: { select: { name: true } } },
+            },
           },
         },
       },
@@ -246,10 +309,12 @@ export class OptionMasterService {
     if (!choice) throw new NotFoundException('옵션 선택지가 없습니다.');
 
     const versionStatus = choice.optionStage.optionSetVersion.status;
-    if (versionStatus === 'RETIRED')
+    if (versionStatus !== 'DRAFT')
       throw new BusinessException(
         'INVALID_STATUS_TRANSITION',
-        '종료된 버전의 가격은 수정할 수 없습니다.',
+        versionStatus === 'ACTIVE'
+          ? '사용중 버전의 가격은 수정할 수 없습니다. 새 버전을 만들어 수정한 뒤 활성화해 주세요.'
+          : '종료된 버전의 가격은 수정할 수 없습니다.',
         undefined,
         { status: versionStatus },
       );
@@ -274,12 +339,14 @@ export class OptionMasterService {
           entityId: choiceId,
           // 나중에 "이 계약 옵션 가격이 왜 이랬지"를 되짚을 때 단계·선택지 이름이 같이 보여야 한다.
           before: {
+            optionSetName: choice.optionStage.optionSetVersion.optionSet.name,
             extraPrice: before,
             stageName: choice.optionStage.stageName,
             choiceName: choice.choiceName,
             versionNo: choice.optionStage.optionSetVersion.versionNo,
           },
           after: {
+            optionSetName: choice.optionStage.optionSetVersion.optionSet.name,
             extraPrice: dto.extraPrice,
             stageName: choice.optionStage.stageName,
             choiceName: choice.choiceName,
@@ -300,6 +367,7 @@ export class OptionMasterService {
     const version = await this.prisma.optionSetVersion.findUnique({
       where: { id: versionId },
       include: {
+        optionSet: { select: { name: true } },
         stages: {
           where: { active: true },
           orderBy: { sequenceNo: 'asc' },
@@ -357,8 +425,17 @@ export class OptionMasterService {
           action: 'ACTIVATE',
           entityType: 'OPTION_SET_VERSION',
           entityId: versionId,
-          before: { status: 'DRAFT', previousActiveVersionIds: previousActive.map((v) => v.id) },
-          after: { status: 'ACTIVE', versionNo: activated.versionNo },
+          before: {
+            optionSetName: version.optionSet.name,
+            versionNo: version.versionNo,
+            status: 'DRAFT',
+            previousActiveVersionIds: previousActive.map((v) => v.id),
+          },
+          after: {
+            optionSetName: version.optionSet.name,
+            versionNo: activated.versionNo,
+            status: 'ACTIVE',
+          },
         },
         tx,
       );

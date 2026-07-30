@@ -119,7 +119,7 @@ function ComponentAttrsSummary({ components }: { components: OptionComponentAttr
     minWidth: ATTR_MIN_WIDTH,
   };
   return (
-    <Card size="small" title="부위별 원단·컬러·패턴" styles={{ body: { padding: '0 16px 8px' } }}>
+    <Card size="small" title="원단 정보" styles={{ body: { padding: '0 16px 8px' } }}>
       <div style={{ overflowX: 'auto' }}>
         {/* 헤더 — 라벨을 값 옆에 반복하지 않고 열 제목으로 한 번만 둔다. */}
         <div style={{ ...rowStyle, height: 32, borderBottom: '1px solid #f0f0f0' }}>
@@ -134,9 +134,10 @@ function ComponentAttrsSummary({ components }: { components: OptionComponentAttr
             key={c.componentGroup}
             style={{ ...rowStyle, height: 44, borderTop: i > 0 ? '1px solid #fafafa' : undefined }}
           >
-            <Tag color="blue" style={{ margin: 0, width: 92, textAlign: 'center' }}>
+            {/* 부위는 값 열과 같은 텍스트다 — 칩으로 감싸지 않고 굵기로만 구분한다. */}
+            <Typography.Text strong style={{ fontSize: 14 }}>
               {componentGroupLabel(c.componentGroup)}
-            </Tag>
+            </Typography.Text>
             <AttrCell value={c.fabricName} />
             <AttrCell value={c.colorName} />
             <AttrCell value={c.patternName} />
@@ -178,21 +179,13 @@ function SurchargePanel({ surcharge }: { surcharge: OptionSurcharge }) {
             showIcon
             message={
               <span>
-                현재 계약금액 {won(contract.totalAmount)} 대비{' '}
+                계약금액 반영을 하면 현재 계약금액 {won(contract.totalAmount)} 에{' '}
                 <Typography.Text strong style={{ color: '#cf1322' }}>
-                  {pending > 0 ? '+' : ''}
-                  {won(pending)}
+                  {pending > 0 ? '+' : '-'}
+                  {won(Math.abs(pending))}
                 </Typography.Text>{' '}
-                차이가 납니다.
+                이 {pending > 0 ? '추가' : '차감'}됩니다.
               </span>
-            }
-            description={
-              <Typography.Text type="secondary">
-                반영하면 계약금액이 {won(contract.afterTotalAmount)}이 됩니다. 계약 버전은 올라가지 않습니다.
-                {surcharge.appliable
-                  ? ' 위 [계약금액 반영]을 누르면 반영됩니다.'
-                  : ' 옵션을 확정하면 위에서 반영할 수 있습니다.'}
-              </Typography.Text>
             }
           />
         )}
@@ -335,6 +328,8 @@ export function OptionReviewPage() {
   }
 
   const isConfirmed = review.status === 'CONFIRMED';
+  /** 확정 조건 — 필수/선택 구분 없이 모든 단계를 골라야 최종 저장(확정)할 수 있다. */
+  const missingTotal = review.missingCount + review.missingOptionalCount;
 
   const openConfirmDialog = () => {
     modal.confirm({
@@ -398,7 +393,7 @@ export function OptionReviewPage() {
               key: g,
               label: componentGroupLabel(g),
               stages,
-              missingRequired: stages.filter((s) => s.required && !s.choiceId).length,
+              missing: stages.filter((s) => !s.choiceId).length,
             };
           })
           .filter((sec) => sec.stages.length > 0)
@@ -413,7 +408,7 @@ export function OptionReviewPage() {
       key: '__etc',
       label: '기타',
       stages: ungrouped,
-      missingRequired: ungrouped.filter((s) => s.required && !s.choiceId).length,
+      missing: ungrouped.filter((s) => !s.choiceId).length,
     });
 
   return (
@@ -437,8 +432,7 @@ export function OptionReviewPage() {
               옵션 확인서 — {session?.displayName ?? '맞춤 품목'}
             </Typography.Title>
             <Typography.Text type="secondary">
-              {fabricFieldLabel(session?.productCategory)}: {review.fabric ?? '미입력'} · 옵션 세트 V
-              {session?.optionSetVersionNo ?? '-'}
+              {fabricFieldLabel(session?.productCategory)}: {review.fabric ?? '미입력'}
             </Typography.Text>
           </Space>
           {/*
@@ -452,6 +446,28 @@ export function OptionReviewPage() {
               color={metaOf(OPTION_STATUS_META, review.status).color}
             />
             {isConfirmed && <CheckCircleFilled style={{ color: '#52c41a', fontSize: 24 }} />}
+            {isConfirmed ? (
+              <Button
+                type="primary"
+                icon={<EditOutlined />}
+                loading={reopenMutation.isPending}
+                onClick={openReopenDialog}
+              >
+                옵션 변경
+              </Button>
+            ) : (
+              <Tooltip title={missingTotal > 0 ? '모든 단계를 선택해야 확정할 수 있습니다.' : ''}>
+                <Button
+                  type="primary"
+                  icon={<CheckOutlined />}
+                  disabled={missingTotal > 0}
+                  loading={confirmMutation.isPending}
+                  onClick={openConfirmDialog}
+                >
+                  최종 저장(확정)
+                </Button>
+              </Tooltip>
+            )}
             {review.surcharge.pending !== 0 && (
               <Tooltip
                 title={
@@ -468,47 +484,15 @@ export function OptionReviewPage() {
                 </Button>
               </Tooltip>
             )}
-            {isConfirmed ? (
-              <Button
-                type="primary"
-                icon={<EditOutlined />}
-                loading={reopenMutation.isPending}
-                onClick={openReopenDialog}
-              >
-                옵션 변경
-              </Button>
-            ) : (
-              <Tooltip
-                title={review.missingCount > 0 ? '필수 단계를 모두 선택해야 확정할 수 있습니다.' : ''}
-              >
-                <Button
-                  type="primary"
-                  icon={<CheckOutlined />}
-                  disabled={review.missingCount > 0}
-                  loading={confirmMutation.isPending}
-                  onClick={openConfirmDialog}
-                >
-                  최종 저장(확정)
-                </Button>
-              </Tooltip>
-            )}
           </Space>
         </Space>
       </Card>
 
-      {review.missingCount > 0 && (
+      {missingTotal > 0 && (
         <Alert
           type="warning"
           showIcon
-          message={`선택하지 않은 필수 단계가 ${review.missingCount}개 있습니다. 카드를 눌러 해당 단계를 선택해 주세요.`}
-        />
-      )}
-      {/* 베스트처럼 선택 단계는 안 골라도 확정된다 — 확정을 막지 않고 안내만 한다. */}
-      {review.missingCount === 0 && review.missingOptionalCount > 0 && !isConfirmed && (
-        <Alert
-          type="info"
-          showIcon
-          message={`선택하지 않은 선택 단계가 ${review.missingOptionalCount}개 있습니다. 필요 없으면 그대로 확정할 수 있습니다.`}
+          message={`선택하지 않은 단계가 ${missingTotal}개 있습니다. 모두 선택해야 최종 저장(확정)할 수 있습니다. 카드를 눌러 해당 단계를 선택해 주세요.`}
         />
       )}
       {isConfirmed && (
@@ -537,9 +521,9 @@ export function OptionReviewPage() {
                 <Typography.Text type="secondary" style={{ fontWeight: 400 }}>
                   {sec.stages.filter((s) => s.choiceId).length}/{sec.stages.length} 선택
                 </Typography.Text>
-                {sec.missingRequired > 0 && (
+                {sec.missing > 0 && (
                   <Tag color="red" style={{ margin: 0 }}>
-                    필수 {sec.missingRequired}개 미선택
+                    {sec.missing}개 미선택
                   </Tag>
                 )}
               </Space>

@@ -7,6 +7,7 @@ import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { toAppointmentView, toConsultationView } from '../appointments/appointment-view';
+import { repairItemsLabel } from '../repairs/repair-item-label';
 import {
   CreateCustomerDto,
   CustomerListQueryDto,
@@ -361,6 +362,7 @@ export class CustomersService {
           where: { customerId: id },
           orderBy: { requestDate: 'desc' },
           include: {
+            items: { select: { targetProduct: true, quantity: true }, orderBy: { sequenceNo: 'asc' } },
             orderItem: { select: { displayName: true } },
             component: { select: { componentType: true } },
           },
@@ -456,7 +458,12 @@ export class CustomersService {
       repairs: repairs.map((r) => ({
         id: r.id,
         receivedDate: toDateOnly(r.requestDate),
-        target: r.orderItem?.displayName ?? r.component?.componentType ?? '-',
+        // 대상 품목 우선, 없으면 예전 방식(주문 품목·구성품 연결)으로 접수된 건의 라벨.
+        target:
+          repairItemsLabel(r.items) ??
+          r.orderItem?.displayName ??
+          r.component?.componentType ??
+          '-',
         content: r.description,
         status: r.status,
         repairType: r.repairType,

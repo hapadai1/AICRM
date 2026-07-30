@@ -601,21 +601,33 @@ export async function fetchMeasurementCompare(
 }
 
 // ---------------------------------------------------------------------------
-// cm ↔ inch (설계서 v2 05 §3) — 저장은 CM 고정, inch는 화면 파생 표시 전용
+// cm → inch (설계서 v2 05 §3) — 저장·입력은 CM 고정, inch는 화면 파생 표시 전용
 // ---------------------------------------------------------------------------
 
-function round1(n: number): number {
-  return Math.round(n * 10) / 10;
-}
+/** 인치 분수 표기의 최소 단위 — 재단 관례에 맞춘 1/8인치 (매장 확인 2026-07-29). */
+const INCH_DENOMINATOR = 8;
 
-/** cm → inch (소수 1자리 반올림). 예: 96 → 37.8 */
-export function cmToInch(cm: number): number {
-  return round1(cm / 2.54);
-}
-
-/** inch → cm (소수 1자리 반올림). 편집한 항목만 저장 직전 역환산에 쓴다. */
-export function inchToCm(inch: number): number {
-  return round1(inch * 2.54);
+/**
+ * cm → inch 분수 표기 (1/8인치 단위 반올림). 예: 82.5 → `32 1/2`, 96 → `37 3/4`.
+ * 매장은 인치를 소수가 아니라 분수로 읽으므로 숫자가 아닌 문자열로 돌려준다.
+ * 음수(비교 화면의 diff)도 그대로 받아 부호를 붙인다.
+ */
+export function formatInch(cm: number): string {
+  const eighths = Math.round((Math.abs(cm) / 2.54) * INCH_DENOMINATOR);
+  if (eighths === 0) return '0'; // 1/16인치 미만은 부호 없이 0으로 (diff의 -0 방지)
+  const sign = cm < 0 ? '-' : '';
+  const whole = Math.floor(eighths / INCH_DENOMINATOR);
+  const rest = eighths % INCH_DENOMINATOR;
+  if (rest === 0) return `${sign}${whole}`;
+  // 분모가 8이라 약분 인자는 항상 2의 거듭제곱이다 (2/8 → 1/4, 4/8 → 1/2).
+  let numerator = rest;
+  let denominator = INCH_DENOMINATOR;
+  while (numerator % 2 === 0) {
+    numerator /= 2;
+    denominator /= 2;
+  }
+  const fraction = `${numerator}/${denominator}`;
+  return whole === 0 ? `${sign}${fraction}` : `${sign}${whole} ${fraction}`;
 }
 
 // ---------------------------------------------------------------------------

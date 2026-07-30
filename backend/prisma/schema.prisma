@@ -837,10 +837,10 @@ model FittingAdjustment {
 // 5. 렌탈 실물·기간 배정
 // -----------------------------------------------------------------------------
 
+/// 렌탈 SKU. 디자인 축은 폐기했다 — 실물은 구분 + 컬러 + 사이즈로만 식별한다.
 model RentalSku {
   id            String   @id @db.Uuid
   componentType String   @map("component_type") @db.VarChar(20)
-  design        String   @map("design") @db.VarChar(100)
   color         String   @map("color") @db.VarChar(80)
   size          String   @map("size") @db.VarChar(40)
   description   String?  @map("description")
@@ -850,13 +850,15 @@ model RentalSku {
 
   inventoryItems RentalInventoryItem[]
 
-  @@index([componentType, design, color, size])
+  @@unique([componentType, color, size])
   @@map("rental_skus")
 }
 
+/// 실물 한 벌. managementCode는 전역 UNIQUE가 아니라 "폐기되지 않은 것들 사이에서만" 유일하다
+/// (마이그레이션의 부분 UNIQUE 인덱스). 폐기한 옷의 코드표를 새 옷에 다시 붙여 쓰기 때문이다.
 model RentalInventoryItem {
   id             String    @id @db.Uuid
-  managementCode String    @unique @map("management_code") @db.VarChar(60)
+  managementCode String    @map("management_code") @db.VarChar(60)
   rentalSkuId    String    @map("rental_sku_id") @db.Uuid
   status         String    @default("AVAILABLE") @map("status") @db.VarChar(25)
   availableFrom  DateTime? @map("available_from") @db.Date
@@ -876,6 +878,7 @@ model RentalInventoryItem {
   rentalSelectionLines RentalSelectionLine[]
 
   @@index([status, availableFrom])
+  @@index([managementCode])
   @@map("rental_inventory_items")
 }
 
@@ -946,27 +949,33 @@ model RentalInventoryStatusEvent {
 // -----------------------------------------------------------------------------
 
 /// 렌탈 컬러 기준정보 (ADMIN-001, type=rental-colors). 12색 다운리스트 코드 소스.
+/// 렌탈 컬러. componentTypes = 이 색이 존재하는 품목 목록(예: 3피스는 상의·하의·베스트).
+/// 비어 있으면 전 품목 공통으로 본다.
 model RentalColor {
-  id        String   @id @db.Uuid
-  code      String   @unique @map("code") @db.VarChar(30)
-  name      String   @map("name") @db.VarChar(100)
-  sortOrder Int      @default(0) @map("sort_order")
-  active    Boolean  @default(true) @map("active")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id             String   @id @db.Uuid
+  code           String   @unique @map("code") @db.VarChar(30)
+  name           String   @map("name") @db.VarChar(100)
+  componentTypes String[] @map("component_types")
+  sortOrder      Int      @default(0) @map("sort_order")
+  active         Boolean  @default(true) @map("active")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@map("rental_colors")
 }
 
 /// 렌탈 사이즈 기준정보 (ADMIN-001, type=rental-sizes).
+/// 렌탈 사이즈. 품목마다 체계가 다르다(상의·베스트 46~60, 하의 80~104, 셔츠 95~120, 구두 250~280).
+/// componentTypes로 갈라 두지 않으면 상의 등록 화면에 구두 사이즈가 섞인다.
 model RentalSize {
-  id        String   @id @db.Uuid
-  code      String   @unique @map("code") @db.VarChar(30)
-  name      String   @map("name") @db.VarChar(100)
-  sortOrder Int      @default(0) @map("sort_order")
-  active    Boolean  @default(true) @map("active")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id             String   @id @db.Uuid
+  code           String   @unique @map("code") @db.VarChar(30)
+  name           String   @map("name") @db.VarChar(100)
+  componentTypes String[] @map("component_types")
+  sortOrder      Int      @default(0) @map("sort_order")
+  active         Boolean  @default(true) @map("active")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@map("rental_sizes")
 }
@@ -1057,6 +1066,7 @@ model RepairRequest {
   order        Order?              @relation(fields: [orderId], references: [id])
   orderItem    OrderItem?          @relation(fields: [orderItemId], references: [id])
   component    OrderItemComponent? @relation(fields: [componentId], references: [id])
+  items        RepairRequestItem[]
   statusEvents RepairStatusEvent[]
   // 수선 접수 시 자동 생성되는 REPAIR 진행 트랙 (설계서 02 §7.2·§9.2). 접수 1건 = 진행 1건.
   journey      CustomerJourney?    @relation("RepairJourney")
@@ -1064,6 +1074,24 @@ model RepairRequest {
   @@index([requestDate])
   @@index([dueDate, status])
   @@map("repair_requests")
+}
+
+/**
+ * 수선 대상 품목·개수. 접수 1건에 여러 줄이 붙는다(상의 1, 하의 2 …).
+ * 품목 코드는 기준정보 component-type(JACKET/TROUSERS/VEST/SHIRT/SHOES)이며,
+ * 계약에 등록된 주문 품목과 무관하게 자유 선택한다.
+ */
+model RepairRequestItem {
+  id              String @id @db.Uuid
+  repairRequestId String @map("repair_request_id") @db.Uuid
+  targetProduct   String @map("target_product") @db.VarChar(30)
+  quantity        Int    @default(1) @map("quantity")
+  sequenceNo      Int    @map("sequence_no")
+
+  repairRequest RepairRequest @relation(fields: [repairRequestId], references: [id], onDelete: Cascade)
+
+  @@index([repairRequestId, sequenceNo])
+  @@map("repair_request_items")
 }
 
 model RepairStatusEvent {

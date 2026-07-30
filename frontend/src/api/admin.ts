@@ -256,6 +256,16 @@ export async function createOptionSetVersion(
 }
 
 /**
+ * 작성중(DRAFT) 버전 삭제 — 잘못 만든 초안을 정리한다.
+ * 사용중·종료 버전은 확정 계약이 참조하는 기록이라 백엔드가 막는다.
+ */
+export function deleteOptionSetVersion(
+  versionId: string,
+): Promise<{ versionId: string; optionSetId: string; versionNo: number }> {
+  return request({ url: `/option-set-versions/${versionId}`, method: 'DELETE' });
+}
+
+/**
  * 단계 코드는 신규 단계에서만 생성한다 (기존 단계는 서버 코드 유지).
  * 한글 단계명은 ASCII로 남는 글자가 없어 STAGE_n으로 떨어지므로, 중복되면 뒤에 번호를 붙인다.
  */
@@ -308,11 +318,13 @@ export async function saveOptionStages(
 }
 
 /**
- * 선택지 추가금액만 수정한다 — 사용중 버전에서도 쓸 수 있다.
+ * 선택지 추가금액만 수정한다 — **작성중(DRAFT) 버전 전용**.
  *
- * 구성(단계·선택지)을 바꾸려면 새 버전이 필요하지만 가격은 값만 조정하는 일이라
- * 백엔드가 사용중 버전에도 허용한다. 확정된 계약은 선택 시점 스냅샷을 쓰므로 소급되지 않고,
- * 언제 얼마에서 얼마로 바뀌었는지는 감사로그(대상: 옵션 선택지)에 남는다.
+ * 사용중·종료 버전은 백엔드가 거부한다. 같은 버전 번호가 시점에 따라 다른 금액을 뜻하면
+ * "V1로 계약했다"는 말만으로 얼마였는지 알 수 없기 때문이다. 가격도 구성과 같이
+ * 새 버전을 만들어 바꾼다. 변경 이력은 감사로그(대상: 옵션 선택지)에 남는다.
+ *
+ * 지금은 화면에서 쓰지 않는다 — DRAFT 편집은 단계 저장(saveAdminOptionStages)이 함께 처리한다.
  */
 export async function updateOptionChoicePrice(
   choiceId: string,

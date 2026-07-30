@@ -35,6 +35,7 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useState } from 'react';
+import { codesFor } from '../rentals/rental-constants';
 import { useNavigate, useParams } from 'react-router-dom';
 import { fetchContract } from '../../api/contracts';
 import type { OptionProgressItem } from '../../api/options';
@@ -145,8 +146,10 @@ export function ContractOptionsPage() {
     enabled: !!id,
   });
 
-  const colorsQuery = useQuery({ queryKey: ['rental-colors'], queryFn: fetchRentalColors });
-  const sizesQuery = useQuery({ queryKey: ['rental-sizes'], queryFn: fetchRentalSizes });
+  // 부위별로 쓰는 컬러·사이즈가 달라(정장 12색 / 셔츠 흰색 / 구두 검정·브라운),
+  // 전체를 한 번 받아 행의 부위(row.group)로 걸러 쓴다.
+  const colorsQuery = useQuery({ queryKey: ['rental-colors'], queryFn: () => fetchRentalColors() });
+  const sizesQuery = useQuery({ queryKey: ['rental-sizes'], queryFn: () => fetchRentalSizes() });
 
   // 부위별 입력 초안 — 키는 `${orderItemId}:${부위}`
   const [attrDrafts, setAttrDrafts] = useState<Record<string, AttrDraft>>({});
@@ -440,7 +443,7 @@ export function ContractOptionsPage() {
               disabled={isLocked(row)}
               loading={colorsQuery.isLoading}
               value={draft.colorCode}
-              options={(colorsQuery.data ?? []).map((c) => ({ value: c.code, label: c.name }))}
+              options={codesFor(colorsQuery.data, row.group).map((c) => ({ value: c.code, label: c.name }))}
               onChange={(value: string | undefined) => {
                 const next = { ...draft, colorCode: value ?? null };
                 setRentalDrafts((prev) => ({ ...prev, [row.key]: next }));
@@ -477,7 +480,7 @@ export function ContractOptionsPage() {
               disabled={isLocked(row)}
               loading={sizesQuery.isLoading}
               value={draft.sizeCode}
-              options={(sizesQuery.data ?? []).map((s) => ({ value: s.code, label: s.name }))}
+              options={codesFor(sizesQuery.data, row.group).map((s) => ({ value: s.code, label: s.name }))}
               onChange={(value: string | undefined) => {
                 const next = { ...draft, sizeCode: value ?? null };
                 setRentalDrafts((prev) => ({ ...prev, [row.key]: next }));

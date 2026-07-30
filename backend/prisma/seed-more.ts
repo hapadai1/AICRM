@@ -9,7 +9,7 @@
  *   옵션 세션 5(확정 3·확인대기 1·진행중 1) / 채촌 5버전(초도 3·가봉 2) / 작업지시서 3버전
  *   렌탈 SKU +3·실물 +12·배정 +7(예약 2·대여중 2·반납완료 3) / 수선 +5(상태 4종)
  *   결제 +12(계약금·중도금·잔금·수선비·환불) / 예약 +18 / 상담 +7
- *   알림 규칙 2·발송 이력 6 / 공유 메모 +3 / 기존 데모 고객(정우성 등) 이력 보강
+ *   발송 이력 6(고정메시지 2·직접 입력 4) / 공유 메모 +3 / 기존 데모 고객(정우성 등) 이력 보강
  */
 import { Prisma, PrismaClient } from '@prisma/client';
 import { createHash, randomUUID } from 'crypto';
@@ -550,6 +550,7 @@ async function main(): Promise<void> {
       const repair = async (args: {
         customerId: string; repairType: string; requestDate: Date; dueDate?: Date; status: string;
         description: string; orderId?: string; orderItemId?: string; componentId?: string;
+        targetProduct?: string; quantity?: number;
         notes?: string;
         events: Array<{ previousStatus?: string; newStatus: string; eventDate: Date }>;
       }): Promise<void> => {
@@ -561,6 +562,9 @@ async function main(): Promise<void> {
             orderId: args.orderId ?? null,
             orderItemId: args.orderItemId ?? null,
             componentId: args.componentId ?? null,
+            items: args.targetProduct
+              ? { create: { id: uuid(), targetProduct: args.targetProduct, quantity: args.quantity ?? 1, sequenceNo: 1 } }
+              : undefined,
             repairType: args.repairType,
             requestDate: args.requestDate,
             dueDate: args.dueDate ?? null,
@@ -1026,23 +1030,23 @@ async function main(): Promise<void> {
       // =====================================================================
       await repair({
         customerId: 한지민, repairType: 'CUSTOM_DURING', requestDate: dateOnly(-4), dueDate: dateOnly(3),
-        status: 'IN_PROGRESS', description: '가봉 반영 — 자켓 소매 0.5cm 축소, 바지 기장 1cm 조정',
+        status: 'REQUESTED', description: '가봉 반영 — 자켓 소매 0.5cm 축소, 바지 기장 1cm 조정',
+        targetProduct: 'JACKET',
         orderId: hjmCustomOrder, orderItemId: hjmSuit1, componentId: hjmSuit1Jacket,
         notes: '1차 가봉 결과 반영',
         events: [
           { newStatus: 'RECEIVED', eventDate: dateOnly(-4) },
-          { previousStatus: 'RECEIVED', newStatus: 'IN_PROGRESS', eventDate: dateOnly(-3) },
+          { previousStatus: 'RECEIVED', newStatus: 'REQUESTED', eventDate: dateOnly(-3) },
         ],
       });
       await repair({
         customerId: 서지우, repairType: 'GENERAL', requestDate: dateOnly(-42), dueDate: dateOnly(-38),
         status: 'RELEASED', description: 'PNT-BLK-34-003 반납 턱시도 바지 밑단 풀림 수선',
-        notes: '검수 시 발견, 수선 후 재고 복귀 예정',
+        targetProduct: 'TROUSERS', notes: '검수 시 발견, 수선 후 재고 복귀 예정',
         events: [
           { newStatus: 'RECEIVED', eventDate: dateOnly(-42) },
           { previousStatus: 'RECEIVED', newStatus: 'REQUESTED', eventDate: dateOnly(-42) },
-          { previousStatus: 'REQUESTED', newStatus: 'IN_PROGRESS', eventDate: dateOnly(-41) },
-          { previousStatus: 'IN_PROGRESS', newStatus: 'RETURNED_TO_SHOP', eventDate: dateOnly(-39) },
+          { previousStatus: 'REQUESTED', newStatus: 'RETURNED_TO_SHOP', eventDate: dateOnly(-39) },
           { previousStatus: 'RETURNED_TO_SHOP', newStatus: 'CUSTOMER_NOTIFIED', eventDate: dateOnly(-39) },
           { previousStatus: 'CUSTOMER_NOTIFIED', newStatus: 'RELEASED', eventDate: dateOnly(-38) },
         ],
@@ -1050,26 +1054,27 @@ async function main(): Promise<void> {
       await repair({
         customerId: 오세훈, repairType: 'AFTER_SALE', requestDate: dateOnly(-1), dueDate: dateOnly(6),
         status: 'RECEIVED', description: '셔츠 #1 소매 기장 1cm 줄임',
-        orderId: oshOrder, orderItemId: oshShirt1,
+        targetProduct: 'SHIRT', orderId: oshOrder, orderItemId: oshShirt1,
         events: [{ newStatus: 'RECEIVED', eventDate: dateOnly(-1) }],
       });
       await repair({
         customerId: 윤도현, repairType: 'GENERAL', requestDate: dateOnly(-2), dueDate: dateOnly(4),
-        status: 'IN_PROGRESS', description: '개인 소장 코트 단추 교체',
+        status: 'REQUESTED', description: '개인 소장 코트 단추 교체',
+        targetProduct: 'JACKET',
         events: [
           { newStatus: 'RECEIVED', eventDate: dateOnly(-2) },
-          { previousStatus: 'RECEIVED', newStatus: 'IN_PROGRESS', eventDate: dateOnly(-1) },
+          { previousStatus: 'RECEIVED', newStatus: 'REQUESTED', eventDate: dateOnly(-1) },
         ],
       });
       if (정우성) {
         await repair({
           customerId: 정우성.id, repairType: 'AFTER_SALE', requestDate: dateOnly(-20), dueDate: dateOnly(-14),
           status: 'RELEASED', description: '자켓 어깨 패드 조정',
+          targetProduct: 'JACKET',
           events: [
             { newStatus: 'RECEIVED', eventDate: dateOnly(-20) },
             { previousStatus: 'RECEIVED', newStatus: 'REQUESTED', eventDate: dateOnly(-20) },
-            { previousStatus: 'REQUESTED', newStatus: 'IN_PROGRESS', eventDate: dateOnly(-18) },
-            { previousStatus: 'IN_PROGRESS', newStatus: 'RETURNED_TO_SHOP', eventDate: dateOnly(-16) },
+            { previousStatus: 'REQUESTED', newStatus: 'RETURNED_TO_SHOP', eventDate: dateOnly(-16) },
             { previousStatus: 'RETURNED_TO_SHOP', newStatus: 'CUSTOMER_NOTIFIED', eventDate: dateOnly(-15) },
             { previousStatus: 'CUSTOMER_NOTIFIED', newStatus: 'RELEASED', eventDate: dateOnly(-14) },
           ],
@@ -1126,34 +1131,28 @@ async function main(): Promise<void> {
       }
 
       // =====================================================================
-      // 11) 알림 규칙·발송 이력, 공유 메모
+      // 11) 발송 이력, 공유 메모
       // =====================================================================
+      // 발송 이력 데모 — 실제 두 경로를 그대로 재현한다(2026-07-29).
+      //  (1) 연락 문구(고정메시지)로 나간 건: 진행 단계에서 확인창을 거쳐 발송.
+      //      벤더 승인 전(PENDING)이라 알림톡이 아니라 SMS로 나간다.
+      //  (2) 직접 입력으로 나간 건: 템플릿 없이 담당자가 본문을 써서 발송(설계서 05 §4.1).
+      // 알림 규칙(notification_rules)은 만들지 않는다 — 발송에 쓰이지 않는 경로다(설계서 v2 02 §8.1).
       const templates = await tx.notificationTemplate.findMany();
-      const templateId = (code: string): string | null => templates.find((t) => t.code === code)?.id ?? null;
-      for (const r of [
-        { code: 'FITTING_REMINDER', triggerType: 'APPOINTMENT_D1', autoSend: true },
-        { code: 'RENTAL_RETURN_REMINDER', triggerType: 'RENTAL_RETURN_D1', autoSend: false },
-      ]) {
-        const tid = templateId(r.code);
-        if (!tid) continue;
-        await tx.notificationRule.create({
-          data: { id: uuid(), templateId: tid, triggerType: r.triggerType, autoSend: r.autoSend, active: true },
-        });
-      }
       const history = async (args: {
-        code: string; customerId: string; phone: string; status: string; sentAt?: Date;
-        orderId?: string; errorMessage?: string; createdAt: Date;
+        code?: string; body?: string; customerId: string; phone: string; status: string;
+        sentAt?: Date; orderId?: string; errorMessage?: string; createdAt: Date;
       }): Promise<void> => {
-        const template = templates.find((t) => t.code === args.code);
+        const template = args.code ? templates.find((t) => t.code === args.code) : undefined;
         await tx.notificationHistory.create({
           data: {
             id: uuid(),
-            templateId: templateId(args.code),
+            templateId: template?.id ?? null,
             customerId: args.customerId,
             orderId: args.orderId ?? null,
             recipientPhone: args.phone,
-            channel: template?.channel ?? 'ALIMTALK',
-            body: template?.body ?? null,
+            channel: 'SMS',
+            body: args.body ?? template?.body ?? null,
             status: args.status,
             sentAt: args.sentAt ?? null,
             errorMessage: args.errorMessage ?? null,
@@ -1161,15 +1160,15 @@ async function main(): Promise<void> {
           },
         });
       };
-      await history({ code: 'FITTING_REMINDER', customerId: 한지민, phone: '010-7701-1001', status: 'SENT', sentAt: at(-5, 9), createdAt: at(-5, 9) });
-      await history({ code: 'PICKUP_READY', customerId: 오세훈, phone: '010-7701-1002', status: 'SENT', sentAt: at(-3, 10), orderId: oshOrder, createdAt: at(-3, 10) });
-      await history({ code: 'RENTAL_RETURN_REMINDER', customerId: 윤도현, phone: '010-7701-1006', status: 'SENT', sentAt: at(0, 9), orderId: ydhOrder, createdAt: at(0, 9) });
-      await history({ code: 'RENTAL_RETURN_REMINDER', customerId: 서지우, phone: '010-7701-1003', status: 'FAILED', errorMessage: '수신 거부된 번호입니다.', createdAt: at(-43, 9) });
+      await history({ code: 'JOURNEY_BASTING_RECEIVED', customerId: 한지민, phone: '010-7701-1001', status: 'SENT', sentAt: at(-5, 9), createdAt: at(-5, 9) });
+      await history({ code: 'JOURNEY_PRODUCT_RECEIVED', customerId: 오세훈, phone: '010-7701-1002', status: 'SENT', sentAt: at(-3, 10), orderId: oshOrder, createdAt: at(-3, 10) });
+      await history({ body: '윤도현님, 렌탈 반납 예정일은 내일입니다. 기한 내 반납 부탁드립니다.', customerId: 윤도현, phone: '010-7701-1006', status: 'SENT', sentAt: at(0, 9), orderId: ydhOrder, createdAt: at(0, 9) });
+      await history({ body: '서지우님, 렌탈 반납 예정일 안내드립니다. 기한 내 반납 부탁드립니다.', customerId: 서지우, phone: '010-7701-1003', status: 'FAILED', errorMessage: '수신 거부된 번호입니다.', createdAt: at(-43, 9) });
       if (정우성) {
-        await history({ code: 'RENTAL_RETURN_REMINDER', customerId: 정우성.id, phone: 정우성.phone, status: 'SENT', sentAt: at(-1, 9), createdAt: at(-1, 9) });
+        await history({ body: '정우성님, 렌탈 반납 예정일 안내드립니다. 기한 내 반납 부탁드립니다.', customerId: 정우성.id, phone: 정우성.phone, status: 'SENT', sentAt: at(-1, 9), createdAt: at(-1, 9) });
       }
       if (김민준) {
-        await history({ code: 'FITTING_REMINDER', customerId: 김민준.id, phone: 김민준.phone, status: 'REQUESTED', createdAt: at(0, 8, 30) });
+        await history({ body: '김민준님, 내일 오전 10시 가봉 예약 안내드립니다. 변경이 필요하시면 연락 주세요.', customerId: 김민준.id, phone: 김민준.phone, status: 'REQUESTED', createdAt: at(0, 8, 30) });
       }
 
       for (const note of [
@@ -1181,7 +1180,7 @@ async function main(): Promise<void> {
           data: { id: uuid(), content: note.content, authorId: adminId, status: 'ACTIVE', createdAt: note.createdAt },
         });
       }
-      console.log('notification_rules: 2건 / notification_history: 6건 / shared_notes: +3건');
+      console.log('notification_history: 6건 / shared_notes: +3건');
     },
     { maxWait: 15000, timeout: 300000 },
   );

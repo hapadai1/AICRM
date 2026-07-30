@@ -702,12 +702,12 @@ export class OptionSessionsService {
     const activeStages = this.activeStages(session);
     const valueByStage = new Map(session.values.map((v) => [v.optionStageId, v]));
 
-    // 필수 단계 누락 검증
-    const missing = activeStages.filter((s) => s.required && !valueByStage.has(s.id));
+    // 단계 누락 검증 — 필수/선택 구분 없이 활성 단계는 모두 골라야 확정된다.
+    const missing = activeStages.filter((s) => !valueByStage.has(s.id));
     if (missing.length > 0)
       throw new BusinessException(
         'OPTION_STAGE_INCOMPLETE',
-        '선택하지 않은 필수 단계가 있습니다.',
+        '선택하지 않은 단계가 있습니다. 모든 단계를 선택해야 확정할 수 있습니다.',
         missing.map((s) => ({ field: s.stageCode, reason: 'NOT_SELECTED' })),
         { missingStages: missing.map((s) => ({ stageId: s.id, stageName: s.stageName })) },
       );

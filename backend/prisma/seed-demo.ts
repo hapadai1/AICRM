@@ -9,7 +9,7 @@
  *   옵션 세트 활성 버전(정장 11·셔츠 3·구두 3단계, 단계별 A/B 선택지)
  *   옵션 세션(확정·진행중) / 채촌(김민준 2버전·이서연 1버전) / 작업지시서 V1·V2 이력
  *   렌탈 SKU 9·실물 20·배정 6(오늘 픽업 3·대여 중 2·반납 지연 1)·수선 중 실물 1
- *   수선 3 / 결제(계약금 완료·잔금 미수) / 알림 템플릿 3 / 공유 메모 2 / 예약 10·상담 2
+ *   수선 3 / 결제(계약금 완료·잔금 미수) / 공유 메모 2 / 예약 10·상담 2
  */
 import { Prisma, PrismaClient } from '@prisma/client';
 import { createHash, randomUUID } from 'crypto';
@@ -1143,7 +1143,7 @@ async function main(): Promise<void> {
       // -----------------------------------------------------------------------
       const repair = async (args: {
         customerId: string; repairType: string; requestDate: Date; dueDate?: Date; status: string;
-        description: string; orderId?: string; orderItemId?: string;
+        description: string; orderId?: string; orderItemId?: string; targetProduct?: string; quantity?: number;
         notes?: string;
         events: Array<{ previousStatus?: string; newStatus: string; eventDate: Date }>;
       }): Promise<void> => {
@@ -1154,6 +1154,9 @@ async function main(): Promise<void> {
             customerId: args.customerId,
             orderId: args.orderId ?? null,
             orderItemId: args.orderItemId ?? null,
+            items: args.targetProduct
+              ? { create: { id: uuid(), targetProduct: args.targetProduct, quantity: args.quantity ?? 1, sequenceNo: 1 } }
+              : undefined,
             repairType: args.repairType,
             requestDate: args.requestDate,
             dueDate: args.dueDate ?? null,
@@ -1174,55 +1177,41 @@ async function main(): Promise<void> {
       // 맞춤 사후 수선: 정우성 정장 #1 바지 기장
       await repair({
         customerId: 정우성, repairType: 'AFTER_SALE', requestDate: dateOnly(-7), dueDate: dateOnly(2),
-        status: 'IN_PROGRESS', description: '바지 기장 1.5cm 줄임',
-        orderId: o4, orderItemId: oi8,
+        status: 'REQUESTED', description: '바지 기장 1.5cm 줄임',
+        targetProduct: 'TROUSERS', orderId: o4, orderItemId: oi8,
         events: [
           { newStatus: 'RECEIVED', eventDate: dateOnly(-7) },
-          { previousStatus: 'RECEIVED', newStatus: 'IN_PROGRESS', eventDate: dateOnly(-5) },
+          { previousStatus: 'RECEIVED', newStatus: 'REQUESTED', eventDate: dateOnly(-5) },
         ],
       });
       // 일반 수선: 렌탈 실물(JKT-BLK-100-003) 관련 건이지만 수선구분은 일반 수선이다.
       // (렌탈 수선 진행 자체는 렌탈 진행의 수선요청·입고·출고 단계에서 관리한다)
       await repair({
         customerId: 정우성, repairType: 'GENERAL', requestDate: dateOnly(-3), dueDate: dateOnly(7),
-        status: 'IN_PROGRESS', description: 'JKT-BLK-100-003 자켓 소매 안감 뜯어짐 수선',
-        notes: '반납 검수 중 발견',
+        status: 'REQUESTED', description: 'JKT-BLK-100-003 자켓 소매 안감 뜯어짐 수선',
+        targetProduct: 'JACKET', notes: '반납 검수 중 발견',
         events: [
           { newStatus: 'RECEIVED', eventDate: dateOnly(-3) },
-          { previousStatus: 'RECEIVED', newStatus: 'IN_PROGRESS', eventDate: dateOnly(-2) },
+          { previousStatus: 'RECEIVED', newStatus: 'REQUESTED', eventDate: dateOnly(-2) },
         ],
       });
       // 일반 수선: 강하늘 (외부 의류 반입)
       await repair({
         customerId: 강하늘, repairType: 'GENERAL', requestDate: dateOnly(-1), dueDate: dateOnly(5),
         status: 'RECEIVED', description: '외부 구입 자켓 소매 기장 수선',
+        targetProduct: 'JACKET',
         events: [{ newStatus: 'RECEIVED', eventDate: dateOnly(-1) }],
       });
       console.log('repair_requests: 3건');
 
       // -----------------------------------------------------------------------
-      // 11) 알림 템플릿 3종 (승인 상태)
+      // 11) 알림 템플릿 — 데모용 예시 문구는 만들지 않는다 (2026-07-29)
       // -----------------------------------------------------------------------
-      const templates = [
-        {
-          code: 'FITTING_REMINDER', name: '가봉 예약 안내', channel: 'ALIMTALK',
-          body: '[테일러샵] #{고객명}님, #{예약일시} 가봉 예약 안내드립니다. 방문 전 변경이 필요하면 연락 부탁드립니다.',
-        },
-        {
-          code: 'PICKUP_READY', name: '제품 준비 완료 안내', channel: 'ALIMTALK',
-          body: '[테일러샵] #{고객명}님, 주문하신 #{품목명}이 준비되었습니다. 편하신 시간에 방문해 주세요.',
-        },
-        {
-          code: 'RENTAL_RETURN_REMINDER', name: '렌탈 반납 예정 안내', channel: 'SMS',
-          body: '[테일러샵] #{고객명}님, 렌탈 반납 예정일은 #{반납예정일}입니다. 기한 내 반납 부탁드립니다.',
-        },
-      ];
-      for (const t of templates) {
-        await tx.notificationTemplate.create({
-          data: { id: uuid(), code: t.code, name: t.name, channel: t.channel, body: t.body, approvalStatus: 'APPROVED' },
-        });
-      }
-      console.log('notification_templates: 3건 (APPROVED)');
+      // 연락 문구는 매장이 확정한 고정메시지 2종(기본 시드)뿐이고, 그 2종은 모두 연락 시점에
+      // 매핑돼 있다. 시점에 붙지 않는 예시 문구를 데모로 끼워 넣으면 관리자 화면의
+      // `연락 문구` 목록에 매장이 쓰지 않는 문구가 섞인다. 그때그때 다른 안내는 템플릿 없이
+      // `고객 연락` 화면에서 본문을 직접 써서 보낸다(설계서 05 §4.1) — 데모 발송 이력도
+      // seed-more에서 그 형태(직접 입력)로 만든다.
 
       // -----------------------------------------------------------------------
       // 12) 공유 메모 2건

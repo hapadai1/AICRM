@@ -26,12 +26,19 @@ const DATE_MSG = '날짜는 YYYY-MM-DD 형식이어야 합니다.';
 
 export class InventoryListQueryDto extends PageQueryDto {
   @IsOptional() @IsIn(RENTAL_COMPONENT_TYPES) componentType?: string;
-  @IsOptional() @IsString() design?: string;
   @IsOptional() @IsString() color?: string;
   /** SKU 사이즈 필터 (page size 파라미터와의 충돌 회피를 위해 skuSize 사용) */
   @IsOptional() @IsString() skuSize?: string;
   @IsOptional() @IsIn(RENTAL_ITEM_STATUSES) status?: string;
   @IsOptional() @IsString() managementCode?: string;
+  /**
+   * 폐기 실물 표시 여부. true면 폐기만, 기본(미지정·false)은 폐기를 뺀 살아 있는 재고만.
+   * 폐기는 현업에서 '삭제'로 쓰이므로 평소 목록에 섞이면 안 된다.
+   */
+  @IsOptional()
+  @Transform(({ value }) => (value === 'true' ? true : value === 'false' ? false : value))
+  @IsBoolean()
+  retired?: boolean;
   /** 해당 일자에 대여 가능 예정(available_from이 없거나 이 날짜 이전)인 실물만 */
   @IsOptional() @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) availableOn?: string;
   @IsOptional()
@@ -42,7 +49,6 @@ export class InventoryListQueryDto extends PageQueryDto {
 
 export class CreateInventoryDto {
   @IsIn(RENTAL_COMPONENT_TYPES) componentType: string;
-  @IsString() @IsNotEmpty() @MaxLength(100) design: string;
   @IsString() @IsNotEmpty() @MaxLength(80) color: string;
   @IsString() @IsNotEmpty() @MaxLength(40) size: string;
   @IsOptional() @IsString() skuDescription?: string;
@@ -68,7 +74,6 @@ export class ImportInventoryDto {
 
 export class UpdateInventoryDto {
   @IsOptional() @IsIn(RENTAL_COMPONENT_TYPES) componentType?: string;
-  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(100) design?: string;
   @IsOptional() @IsString() @IsNotEmpty() @MaxLength(80) color?: string;
   @IsOptional() @IsString() @IsNotEmpty() @MaxLength(40) size?: string;
   @IsOptional() @IsString() @IsNotEmpty() @MaxLength(60) managementCode?: string;
@@ -78,20 +83,35 @@ export class UpdateInventoryDto {
   @IsOptional() @IsInt() version?: number;
 }
 
+/**
+ * 실물 상태 수동 변경. 사유는 필수다 — 왜 뺐는지/왜 되돌렸는지가 남지 않으면
+ * 나중에 상태 이력을 봐도 아무것도 알 수 없다. 폐기(RetireInventoryDto)와 같은 기준.
+ */
 export class CreateStatusEventDto {
   @IsIn(RENTAL_ITEM_STATUSES) newStatus: string;
   @IsOptional() @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) availableFrom?: string;
-  @IsOptional() @IsString() reason?: string;
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @IsNotEmpty({ message: '사유를 입력해 주세요.' })
+  @MaxLength(500)
+  reason: string;
   @IsOptional() @IsInt() version?: number;
 }
 
+/**
+ * 폐기는 되돌릴 수 없어 사유를 필수로 받는다 — 나중에 왜 뺐는지 추적할 근거가 남아야 한다.
+ * 공백만 넣어 우회하지 못하도록 검증 전에 trim 한다(IsNotEmpty는 '   '를 통과시킨다).
+ */
 export class RetireInventoryDto {
-  @IsOptional() @IsString() reason?: string;
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @IsNotEmpty({ message: '폐기 사유를 입력해 주세요.' })
+  @MaxLength(500)
+  reason: string;
 }
 
 export class AvailabilityQueryDto {
   @IsIn(RENTAL_COMPONENT_TYPES) componentType: string;
-  @IsOptional() @IsString() design?: string;
   @IsOptional() @IsString() color?: string;
   @IsOptional() @IsString() size?: string;
   @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) pickupDate: string;
@@ -106,10 +126,9 @@ export class AvailabilityCalendarQueryDto {
   @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) from: string;
   @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) to: string;
   @IsOptional() @IsIn(RENTAL_COMPONENT_TYPES) componentType?: string;
-  @IsOptional() @IsString() design?: string;
   @IsOptional() @IsString() color?: string;
   @IsOptional() @IsString() size?: string;
-  /** 자유 검색어(관리코드·디자인·컬러 부분일치) */
+  /** 자유 검색어(관리코드·컬러 부분일치) */
   @IsOptional() @IsString() q?: string;
   /** SKU 설명(코드) 부분일치 */
   @IsOptional() @IsString() sku?: string;
@@ -123,7 +142,12 @@ export class CreateAllocationDto {
   @IsOptional() @IsString() @IsNotEmpty() @MaxLength(60) itemCode?: string;
   @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) pickupDate: string;
   @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) returnDueDate: string;
-  @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) availabilityEndDate: string;
+  /**
+   * 실물이 묶여 있는 마지막 날. 생략하면 반납 예정일과 같다 —
+   * 반납 다음 날부터 다른 예약을 받는다(7/31 반납이면 8/1부터).
+   * 세탁이 더 걸리면 예약 시점에 추측하지 않고, 반납 처리에서 '대여 가능 예정일'로 미룬다.
+   */
+  @IsOptional() @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) availabilityEndDate?: string;
 }
 
 export class ChangeItemDto {
@@ -132,12 +156,13 @@ export class ChangeItemDto {
   @IsInt() version: number;
 }
 
+/**
+ * 출고. 실물 관리코드 재입력(확인 ID) 대조는 없앴다 — 현장에서 라벨을 다시 치는 부담만 컸다.
+ * 예약된 것과 다른 옷을 내보냈다면 notes에 적어 둔다(배정 자체를 바꾸려면 실물 교체를 쓴다).
+ */
 export class CheckoutDto {
-  /** 확인 실물 UUID — confirmedItemCode와 둘 중 하나 필수 */
-  @IsOptional() @IsUUID() confirmedInventoryItemId?: string;
-  /** 확인 실물 관리코드 — confirmedInventoryItemId 대신 허용(코드→id 해석) */
-  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(60) confirmedItemCode?: string;
   @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) checkoutDate: string;
+  @IsOptional() @IsString() @MaxLength(500) notes?: string;
   @IsInt() version: number;
 }
 

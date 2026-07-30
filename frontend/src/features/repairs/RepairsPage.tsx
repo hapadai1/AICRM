@@ -1,12 +1,17 @@
-import { PlusOutlined, StopOutlined, SwapOutlined } from '@ant-design/icons';
+import {
+  MinusCircleOutlined,
+  PlusOutlined,
+  StopOutlined,
+  SwapOutlined,
+} from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Alert,
   App,
   Button,
   DatePicker,
   Form,
   Input,
+  InputNumber,
   Modal,
   Select,
   Space,
@@ -25,14 +30,14 @@ import { fetchCustomers } from '../../api/customers';
 import {
   REPAIR_COMPONENT_TYPE_LABELS,
   REPAIR_STATUS_FLOW,
+  REPAIR_TARGET_PRODUCTS,
   REPAIR_TYPES,
   createRepair,
   fetchRepair,
-  fetchRepairLinkTargets,
   fetchRepairs,
+  isTargetProductRequired,
   nextRepairStatus,
   postRepairStatusEvent,
-  repairLinkKind,
   repairStatusMeta,
   repairTypeLabel,
   REPAIR_METHOD_LABELS,
@@ -46,6 +51,7 @@ import {
   type RepairStatus,
 } from '../../api/repairs';
 import { Can } from '../../shared/Can';
+import { RepairWorkCard } from './RepairWorkCard';
 import { NotificationConfirmModal } from '../../shared/NotificationConfirmModal';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { autoWidth } from '../../shared/table-width';
@@ -53,8 +59,8 @@ import { autoWidth } from '../../shared/table-width';
 interface ReceiptValues {
   customerId: string;
   repairType: string;
-  orderItemId?: string;
-  componentId?: string;
+  /** 대상 품목·개수 (상의·하의·베스트·셔츠·구두) — 계약 등록 품목과 무관하게 고른다 */
+  items?: { targetProduct?: string; quantity?: number }[];
   requestDate: Dayjs;
   dueDate?: Dayjs;
   description: string;
@@ -102,22 +108,17 @@ export function RepairsPage() {
       fetchRepairs({ status: statusFilter, customerId: customerFilter, page, size }),
   });
 
-  // 고객 검색 — 필터·접수 모달 공용 (전화번호로도 검색된다)
+  // 고객 검색 — 필터·접수 모달 공용 (전화번호로도 검색된다).
+  // 수선은 계약 보유 고객만 대상이다 — 다른 화면(계약·실측)의 scope=ALL 검색과
+  // 캐시가 섞이지 않도록 queryKey에 scope를 포함한다.
   const customerQuery = useQuery({
-    queryKey: ['customers', 'search', customerKeyword],
+    queryKey: ['customers', 'search', 'CONTRACT', customerKeyword],
     queryFn: () =>
-      fetchCustomers({ q: customerKeyword || undefined, scope: 'ALL', size: 20 }),
+      fetchCustomers({ q: customerKeyword || undefined, scope: 'CONTRACT', size: 20 }),
   });
 
-  const receiptCustomerId = Form.useWatch('customerId', receiptForm);
   const receiptType = Form.useWatch('repairType', receiptForm);
-  const linkKind = repairLinkKind(receiptType ?? 'AFTER_SALE');
-
-  const linkTargetsQuery = useQuery({
-    queryKey: ['repairs', 'link-targets', receiptCustomerId],
-    queryFn: () => fetchRepairLinkTargets(receiptCustomerId as string),
-    enabled: receiptOpen && !!receiptCustomerId,
-  });
+  const targetRequired = isTargetProductRequired(receiptType ?? 'AFTER_SALE');
 
   const detailQuery = useQuery({
     queryKey: ['repairs', 'detail', expandedId],
@@ -143,8 +144,10 @@ export function RepairsPage() {
         releaseMethod: v.releaseMethod,
         pickupAddress: v.pickupAddress,
         deliveryAddress: v.deliveryAddress,
-        orderItemId: v.componentId ? undefined : v.orderItemId,
-        componentId: v.componentId,
+        // 빈 줄(품목 미선택)은 보내지 않는다 — 일반 수선은 품목 없이도 접수된다.
+        items: (v.items ?? [])
+          .filter((i) => i?.targetProduct)
+          .map((i) => ({ targetProduct: i.targetProduct as string, quantity: i.quantity ?? 1 })),
       }),
     onSuccess: (r) => {
       message.success(`${r.customerName} 고객의 수선이 접수되었습니다.`);
@@ -178,16 +181,10 @@ export function RepairsPage() {
     label: `${c.name} (${c.phone})`,
   }));
 
-  // 맞춤 수선 대상: 품목과 그 하위 구성품을 한 셀렉트에서 고른다.
-  const customTargetOptions = (linkTargetsQuery.data?.orderItems ?? []).map((item) => ({
-    label: `${item.orderNo} · ${item.displayName}`,
-    options: [
-      { value: `item:${item.id}`, label: `${item.displayName} (품목 전체)` },
-      ...item.components.map((c) => ({
-        value: `component:${c.id}:${item.id}`,
-        label: `${item.displayName} · ${REPAIR_COMPONENT_TYPE_LABELS[c.componentType] ?? c.componentType} #${c.sequenceNo}`,
-      })),
-    ],
+  // 대상 품목: 계약에 등록된 물품이 아니라 품목 목록에서 자유롭게 고른다.
+  const targetProductOptions = REPAIR_TARGET_PRODUCTS.map((code) => ({
+    value: code,
+    label: REPAIR_COMPONENT_TYPE_LABELS[code] ?? code,
   }));
 
   const openStatusChange = (repair: Repair, toStatus: RepairStatus) => {
@@ -302,17 +299,6 @@ export function RepairsPage() {
           }
         />
 
-        <Alert
-          type="info"
-          showIcon
-          message={
-            <Typography.Text strong>
-              진행 순서: 접수 → 수선 요청 → 수선 중 → 수선 입고 → 고객 연락 → 출고 완료
-            </Typography.Text>
-          }
-          description="다음 단계로만 이동할 수 있고, 취소는 어느 단계에서든 가능합니다. 행을 누르면 상세가 펼쳐지며 상태 변경도 그곳에서 진행합니다."
-        />
-
         <DataTable<Repair>
           rowKey="id"
           loading={listQuery.isLoading}
@@ -347,7 +333,9 @@ export function RepairsPage() {
               }
               const cancelled = r.status === 'CANCELLED';
               const cancelEvent = eventByStatus.get('CANCELLED');
-              const currentIndex = REPAIR_STATUS_FLOW.indexOf(r.status as RepairStatus);
+              // 현재 상태 = 그 단계를 "끝낸" 상태다(접수 등록 = 접수 완료). 그래서 진행중 표시는
+              // 다음 단계로 한 칸 민다 — 출고 완료면 flow 길이가 되어 전 단계가 완료로 찍힌다.
+              const currentIndex = REPAIR_STATUS_FLOW.indexOf(r.status as RepairStatus) + 1;
 
               const stepItems = REPAIR_STATUS_FLOW.map((status) => {
                 const ev = eventByStatus.get(status);
@@ -432,8 +420,18 @@ export function RepairsPage() {
           }}
         />
       </Space>
+      </PageCard>
 
-      {/* 수선 접수 모달 — 고객을 먼저 고르면 연결 대상 후보가 채워진다. */}
+      {/* 고객별 업무 처리 — 상태 관리 목록 아래에 붙는다(설계 PDF 2페이지 수선 업무 흐름). */}
+      <RepairWorkCard
+        customerOptions={customerOptions}
+        customerLoading={customerQuery.isLoading}
+        onCustomerSearch={setCustomerKeyword}
+        onWork={openStatusChange}
+        pendingRepairId={statusMutation.isPending ? statusMutation.variables?.repair.id : undefined}
+      />
+
+      {/* 수선 접수 모달 — 고객·대상 품목·수선 내용을 받는다. */}
       <Modal
         title="수선 접수"
         open={receiptOpen}
@@ -448,7 +446,13 @@ export function RepairsPage() {
         <Form<ReceiptValues>
           form={receiptForm}
           layout="vertical"
-          initialValues={{ repairType: 'AFTER_SALE', requestDate: dayjs() }}
+          // 접수·출고 방식은 고객 방문이 대부분이라 기본값으로 채운다(방문 수거·배송만 바꿔 고른다).
+          initialValues={{
+            repairType: 'AFTER_SALE',
+            requestDate: dayjs(),
+            receiptMethod: 'VISIT',
+            releaseMethod: 'VISIT',
+          }}
           onFinish={(values) => createMutation.mutate(values)}
         >
           <Form.Item
@@ -463,65 +467,66 @@ export function RepairsPage() {
               onSearch={setCustomerKeyword}
               loading={customerQuery.isLoading}
               options={customerOptions}
-              onChange={() =>
-                receiptForm.setFieldsValue({
-                  orderItemId: undefined,
-                  componentId: undefined,
-                })
-              }
             />
           </Form.Item>
 
           <Form.Item name="repairType" label="수선 유형" rules={[{ required: true }]}>
-            <Select
-              options={REPAIR_TYPES.map((t) => ({ value: t, label: repairTypeLabel(t) }))}
-              onChange={() =>
-                receiptForm.setFieldsValue({
-                  orderItemId: undefined,
-                  componentId: undefined,
-                })
-              }
-            />
+            <Select options={REPAIR_TYPES.map((t) => ({ value: t, label: repairTypeLabel(t) }))} />
           </Form.Item>
 
-          {linkKind === 'CUSTOM' && (
-            <Form.Item
-              label="대상 품목·구성품"
-              required
-              rules={[{ required: true }]}
-              extra={!receiptCustomerId ? '고객을 먼저 선택해 주세요.' : undefined}
-            >
-              <Select
-                placeholder="맞춤 품목 또는 구성품 선택"
-                loading={linkTargetsQuery.isLoading}
-                disabled={!receiptCustomerId}
-                options={customTargetOptions}
-                onChange={(v: string) => {
-                  const [kind, id, itemId] = v.split(':');
-                  receiptForm.setFieldsValue(
-                    kind === 'component'
-                      ? { componentId: id, orderItemId: itemId }
-                      : { componentId: undefined, orderItemId: id },
-                  );
-                }}
-              />
-            </Form.Item>
-          )}
-          {/* 백엔드로 보내는 실제 값 (구성품 선택 시 상위 품목도 함께 채운다) */}
-          <Form.Item
-            name="orderItemId"
-            hidden
-            rules={
-              linkKind === 'CUSTOM'
-                ? [{ required: true, message: '대상 품목 또는 구성품을 선택해 주세요.' }]
-                : []
-            }
-          >
-            <Input />
-          </Form.Item>
-          <Form.Item name="componentId" hidden>
-            <Input />
-          </Form.Item>
+          {/* 계약에 등록된 물품을 찾아 연결하지 않는다 — 품목과 개수를 줄 단위로 적는다. */}
+          <Form.List name="items" initialValue={[{ quantity: 1 }]}>
+            {(fields, { add, remove }) => (
+              <Form.Item
+                label="대상 품목"
+                required={targetRequired}
+                extra={targetRequired ? undefined : '일반 수선은 품목 없이도 접수할 수 있습니다.'}
+              >
+                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  {fields.map((field, index) => (
+                    <Space key={field.key} size={8} align="start">
+                      <Form.Item
+                        name={[field.name, 'targetProduct']}
+                        noStyle
+                        rules={
+                          // 첫 줄만 필수 — 나머지는 비워 두면 접수 시 버린다.
+                          targetRequired && index === 0
+                            ? [{ required: true, message: '대상 품목을 선택해 주세요.' }]
+                            : []
+                        }
+                      >
+                        <Select
+                          allowClear
+                          style={{ width: 200 }}
+                          placeholder="품목 선택"
+                          options={targetProductOptions}
+                        />
+                      </Form.Item>
+                      <Form.Item name={[field.name, 'quantity']} noStyle initialValue={1}>
+                        <InputNumber min={1} max={99} style={{ width: 90 }} addonAfter="개" />
+                      </Form.Item>
+                      {fields.length > 1 && (
+                        <Button
+                          type="text"
+                          icon={<MinusCircleOutlined />}
+                          onClick={() => remove(field.name)}
+                          aria-label="품목 삭제"
+                        />
+                      )}
+                    </Space>
+                  ))}
+                  <Button
+                    type="dashed"
+                    icon={<PlusOutlined />}
+                    onClick={() => add({ quantity: 1 })}
+                    style={{ width: 300 }}
+                  >
+                    품목 추가
+                  </Button>
+                </Space>
+              </Form.Item>
+            )}
+          </Form.List>
 
           <Space size="middle" style={{ display: 'flex' }} align="start">
             <Form.Item
@@ -540,7 +545,7 @@ export function RepairsPage() {
             name="description"
             label="수선 내용"
             rules={[{ required: true, message: '수선 내용을 입력해 주세요.' }]}
-            extra={linkKind === 'NONE' ? '일반 수선은 대상 설명을 내용에 함께 적어 주세요.' : undefined}
+            extra={!targetRequired ? '일반 수선은 대상 설명을 내용에 함께 적어 주세요.' : undefined}
           >
             <Input.TextArea rows={3} placeholder="예: 하의 기장 1.5cm 줄임" />
           </Form.Item>
@@ -654,7 +659,6 @@ export function RepairsPage() {
         onDone={() => setSuggestion(null)}
         onCancel={() => setSuggestion(null)}
       />
-      </PageCard>
     </PageShell>
   );
 }

@@ -37,11 +37,11 @@ export class RentalSelectionController {
     return this.service.progress(contractId);
   }
 
-  /** 렌탈 컬러·사이즈 활성 코드 (드롭다운용 읽기 전용) */
+  /** 렌탈 컬러·사이즈 활성 코드 (드롭다운용 읽기 전용). componentType을 주면 그 품목 것만. */
   @Get('rental-selections/codes')
   @RequirePermission('RENTAL_VIEW')
-  codes() {
-    return this.service.codes();
+  codes(@Query('componentType') componentType?: string) {
+    return this.service.codes(componentType);
   }
 
   @Get('rental-selections/:id')
