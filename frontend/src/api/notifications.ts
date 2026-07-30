@@ -53,6 +53,8 @@ export interface NotificationTemplate {
 export interface NotificationRecord {
   id: string;
   customerId: string;
+  /** 이력 전체 조회 시 함께 오는 고객명(고객별 조회에서는 비어 있을 수 있다). */
+  customerName?: string;
   phone: string;
   channel: NotificationChannel;
   templateId?: string;
@@ -112,6 +114,7 @@ interface RawHistory {
   retryOfId: string | null;
   createdAt: string;
   template?: { code: string; name: string; channel: string } | null;
+  customer?: { id: string; name: string; phone: string } | null;
 }
 
 /** 발송 API 응답의 개별 결과 항목. 템플릿 없이 직접 쓴 문구는 template* 필드가 null이다. */
@@ -171,6 +174,7 @@ function mapHistory(raw: RawHistory): NotificationRecord {
   return {
     id: raw.id,
     customerId: raw.customerId,
+    customerName: raw.customer?.name,
     phone: raw.recipientPhone,
     channel: toChannel(raw.channel ?? raw.template?.channel),
     templateId: raw.templateId ?? undefined,
@@ -309,6 +313,34 @@ export async function retryNotification(id: string): Promise<NotificationRecord>
 export async function fetchCustomerNotifications(customerId: string): Promise<NotificationRecord[]> {
   const raw = await request<RawHistory[]>({ url: `/customers/${customerId}/notifications` });
   return (raw ?? []).map(mapHistory);
+}
+
+export interface NotificationListParams {
+  /** 특정 고객으로 좁힐 때만 지정. 미지정이면 전체 이력. */
+  customerId?: string;
+  status?: NotificationStatus;
+  channel?: NotificationChannel;
+  /** 고객명·전화번호 검색 */
+  q?: string;
+  page?: number;
+  size?: number;
+}
+
+/** 발송 이력 전체 목록 — GET /notifications (고객 지정 없이 전체 조회). */
+export function fetchNotifications(
+  params: NotificationListParams,
+): Promise<ListResult<NotificationRecord>> {
+  return request<ListResult<RawHistory>>({
+    url: '/notifications',
+    params: {
+      customerId: params.customerId || undefined,
+      status: params.status || undefined,
+      channel: params.channel || undefined,
+      q: params.q || undefined,
+      page: params.page ?? 1,
+      size: params.size ?? 30,
+    },
+  }).then((res) => ({ ...res, data: res.data.map(mapHistory) }));
 }
 
 /** 트리거별 문구 매핑 (수선 상태 등 진행 단계 밖의 연락 — 개발설계서 05 G-06) */

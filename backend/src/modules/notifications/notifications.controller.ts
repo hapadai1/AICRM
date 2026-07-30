@@ -1,7 +1,8 @@
-import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { AuthUser, CurrentUser, RequirePermission } from '../../common/decorators';
 import {
   CreateTemplateDto,
+  ListNotificationsQueryDto,
   PreviewNotificationDto,
   SendNotificationDto,
   UpdateRuleDto,
@@ -62,6 +63,13 @@ export class NotificationsController {
   @RequirePermission('NOTIFICATION_SEND')
   retry(@Param('id') id: string, @CurrentUser() actor: AuthUser) {
     return this.notificationsService.retry(id, actor);
+  }
+
+  /** 발송 이력 전체 목록 — 고객 지정 없이 조회(이력 탭 기본). */
+  @Get('notifications')
+  @RequirePermission('NOTIFICATION_VIEW')
+  list(@Query() query: ListNotificationsQueryDto) {
+    return this.notificationsService.list(query);
   }
 
   @Get('customers/:id/notifications')

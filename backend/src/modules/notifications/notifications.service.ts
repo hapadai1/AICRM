@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { BusinessException } from '../../common/business.exception';
 import { AuthUser } from '../../common/decorators';
+import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import {
@@ -11,6 +12,7 @@ import {
 } from './adapters/message-vendor.adapter';
 import {
   CreateTemplateDto,
+  ListNotificationsQueryDto,
   PreviewNotificationDto,
   SendNotificationDto,
   UpdateRuleDto,
@@ -330,6 +332,42 @@ export class NotificationsService {
       reason: '발송 재시도',
     });
     return history;
+  }
+
+  /**
+   * 발송 이력 전체 목록(시간 역순, 페이지네이션). 고객 지정 없이 모든 연락을 보여준다.
+   * 고객·상태·채널·검색어로 좁힐 수 있다. 이력 탭 기본 조회에 쓴다(MSG-001).
+   */
+  async list(query: ListNotificationsQueryDto) {
+    const where: Prisma.NotificationHistoryWhereInput = {
+      ...(query.customerId ? { customerId: query.customerId } : {}),
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.channel ? { channel: query.channel } : {}),
+      ...(query.q
+        ? {
+            customer: {
+              OR: [
+                { name: { contains: query.q, mode: 'insensitive' } },
+                { phone: { contains: query.q } },
+              ],
+            },
+          }
+        : {}),
+    };
+    const [totalElements, items] = await this.prisma.$transaction([
+      this.prisma.notificationHistory.count({ where }),
+      this.prisma.notificationHistory.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: query.skip,
+        take: query.size,
+        include: {
+          template: { select: { code: true, name: true, channel: true } },
+          customer: { select: { id: true, name: true, phone: true } },
+        },
+      }),
+    ]);
+    return new Paginated(items, query.page, query.size, totalElements);
   }
 
   /** 고객 연락 이력(시간 역순). */

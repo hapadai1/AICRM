@@ -1,4 +1,27 @@
 import { IsBoolean, IsIn, IsNotEmpty, IsObject, IsOptional, IsString, IsUUID } from 'class-validator';
+import { PageQueryDto } from '../../common/pagination';
+
+/** 발송 이력 목록 조회 필터 (MSG-001 이력 탭 — 고객 지정 없이 전체 조회). */
+export class ListNotificationsQueryDto extends PageQueryDto {
+  /** 특정 고객으로 좁힐 때만 지정한다(미지정이면 전체 이력). */
+  @IsOptional()
+  @IsUUID()
+  customerId?: string;
+
+  @IsOptional()
+  @IsIn(['REQUESTED', 'SENT', 'FAILED'])
+  status?: string;
+
+  @IsOptional()
+  @IsIn(['ALIMTALK', 'SMS'])
+  channel?: string;
+
+  /** 고객명·전화번호 부분검색. */
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  q?: string;
+}
 
 export class CreateTemplateDto {
   @IsString()
