@@ -292,6 +292,32 @@ function applyOption(ws: ExcelJS.Worksheet, option: WorkOrderExcelOption): boole
   }
 }
 
+/** 인치 분수 표기의 최소 단위 — 재단 관례에 맞춘 1/8인치 (매장 확인 2026-07-29). */
+const INCH_DENOMINATOR = 8;
+
+/**
+ * cm → inch 분수 표기 (1/8인치 단위 반올림). 예: 82.5 → `32 1/2`, 84 → `33 1/8`.
+ * 매장은 인치를 소수로 읽지 않으므로 셀에 숫자가 아니라 문자열로 적는다 (설계서 05 §3).
+ * 프런트 `frontend/src/api/measurements.ts` `formatInch()`와 같은 규칙이다.
+ */
+export function formatInch(cm: number): string {
+  const eighths = Math.round((Math.abs(cm) / 2.54) * INCH_DENOMINATOR);
+  if (eighths === 0) return '0';
+  const sign = cm < 0 ? '-' : '';
+  const whole = Math.floor(eighths / INCH_DENOMINATOR);
+  const rest = eighths % INCH_DENOMINATOR;
+  if (rest === 0) return `${sign}${whole}`;
+  // 분모가 8이라 약분 인자는 항상 2의 거듭제곱이다 (2/8 → 1/4, 4/8 → 1/2).
+  let numerator = rest;
+  let denominator = INCH_DENOMINATOR;
+  while (numerator % 2 === 0) {
+    numerator /= 2;
+    denominator /= 2;
+  }
+  const fraction = `${numerator}/${denominator}`;
+  return whole === 0 ? `${sign}${fraction}` : `${sign}${whole} ${fraction}`;
+}
+
 /**
  * 채촌 값을 '신체' 열에 쓴다. 인쇄된 보조문구((옆) 등)는 앞에 남긴다.
  *
@@ -300,7 +326,7 @@ function applyOption(ws: ExcelJS.Worksheet, option: WorkOrderExcelOption): boole
  *  - lowerNotes: 앞마다/뒷마다처럼 하의 추가요청사항(AA75)에 "앞: n"으로 적을 라벨 값
  *    (설계서 05 §2.2)
  *
- * cm↔inch(설계서 05 §3): 신체(F)=cm 원값, 완성(인치)(P)=round(cm/2.54,1). 항목 행 동일.
+ * cm→inch(설계서 05 §3): 신체(F)=cm 원값, 완성(인치)(P)=1/8인치 단위 분수. 항목 행 동일.
  */
 function applyMeasurements(
   ws: ExcelJS.Worksheet,
@@ -327,12 +353,11 @@ function applyMeasurements(
     cell.value = text;
     fitFontSize(ws, address, text);
 
-    // 완성(인치) 열: 수치형이면 cm→inch(소수1자리) 기입 (설계서 05 §3)
+    // 완성(인치) 열: 수치형이면 cm→inch 분수 표기로 기입 (설계서 05 §3)
     const cm = Number(String(m.value).replace(/[^\d.-]/g, ''));
     if (Number.isFinite(cm) && cm > 0) {
       const inchAddress = `${FINISH_INCH_COLUMN}${row}`;
-      const inch = Math.round((cm / 2.54) * 10) / 10;
-      ws.getCell(inchAddress).value = inch;
+      ws.getCell(inchAddress).value = formatInch(cm);
     }
   }
   return { unmapped, lowerNotes };

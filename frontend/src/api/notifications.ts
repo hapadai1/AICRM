@@ -130,6 +130,9 @@ interface RawSendResult {
   renderedBody: string;
 }
 
+/** 발송 시 서버가 고객·주문에서 자동으로 채우는 변수 (notification-suggestion.service.ts) */
+export const AUTO_VARIABLES = ['고객명', '품목', '반납예정일'];
+
 /** 템플릿 본문의 치환 변수(`#{이름}` / `{{이름}}`)를 순서대로 중복 없이 추출한다. */
 export function extractTemplateVariables(body: string): string[] {
   const names: string[] = [];

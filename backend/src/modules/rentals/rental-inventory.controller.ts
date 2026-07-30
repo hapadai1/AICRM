@@ -30,6 +30,13 @@ export class RentalInventoryController {
     return this.service.availabilityCalendar(query);
   }
 
+  /** 품목 대분류별 건수 (재고 화면 상단 버튼). ':id'보다 먼저 선언해야 경로가 안 먹힌다. */
+  @Get('summary')
+  @RequirePermission('RENTAL_VIEW')
+  summary(@Query() query: InventoryListQueryDto) {
+    return this.service.summary(query);
+  }
+
   @Get()
   @RequirePermission('RENTAL_VIEW')
   list(@Query() query: InventoryListQueryDto) {

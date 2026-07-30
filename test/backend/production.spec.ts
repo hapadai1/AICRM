@@ -430,11 +430,11 @@ describe('제작 상태·부분 입출고·가봉 (ProductionModule)', () => {
       });
       expect(link.purpose).toBe('FACTORY_SENT');
 
-      // 업로드 감사로그(CREATE)
-      const createLogs = await ctx.prisma.auditLog.findMany({
-        where: { entityType: 'FITTING_SESSION', entityId: fittingId, action: 'CREATE' },
+      // 업로드 감사로그(UPLOAD) — 세션 생성(CREATE)과 구분되어야 한다.
+      const uploadLogs = await ctx.prisma.auditLog.findMany({
+        where: { entityType: 'FITTING_SESSION', entityId: fittingId, action: 'UPLOAD' },
       });
-      expect(createLogs.length).toBeGreaterThanOrEqual(1);
+      expect(uploadLogs.length).toBeGreaterThanOrEqual(1);
 
       // 목록
       const list = await api(ctx).get(`/api/v1/fittings/${fittingId}/files`).set(auth(ctx)).expect(200);

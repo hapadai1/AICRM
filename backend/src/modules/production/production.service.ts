@@ -516,7 +516,8 @@ export class ProductionService {
     });
     await this.audit.log({
       userId: actor.id,
-      action: 'CREATE',
+      // 세션 생성(CREATE)과 같은 코드를 쓰면 감사로그에서 "가봉 세션 생성"과 구분되지 않는다.
+      action: 'UPLOAD',
       entityType: 'FITTING_SESSION',
       entityId: fittingId,
       after: { fileId: uploaded.id, purpose: FITTING_FILE_PURPOSE, originalName: uploaded.originalName },

@@ -81,12 +81,7 @@ export function CustomerInfoGateModal({ open, customer, onDone, onPickAgain }: P
       width={480}
     >
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-        <Alert
-          type="info"
-          showIcon
-          message={`${customer.name} · ${customer.phone}`}
-          description="작업지시서에 필요한 정보입니다. 지금 대략 입력하고 채촌에서 정정해도 됩니다."
-        />
+        <Alert type="info" message={`${customer.name} · ${customer.phone}`} />
         <Form form={form} layout="vertical" requiredMark>
           <Form.Item label="키 (cm)" name="heightCm" rules={[{ required: true, message: '키를 입력해 주세요.' }]}>
             <InputNumber style={{ width: '100%' }} min={0} max={300} precision={0} autoFocus />

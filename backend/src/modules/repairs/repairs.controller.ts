@@ -3,7 +3,6 @@ import { AuthUser, CurrentUser, RequirePermission } from '../../common/decorator
 import {
   CreateRepairDto,
   CreateRepairStatusEventDto,
-  LinkTargetsQueryDto,
   ListRepairsQueryDto,
   UpdateRepairDto,
 } from './repairs.dto';
@@ -13,13 +12,6 @@ import { RepairsService } from './repairs.service';
 @Controller('repairs')
 export class RepairsController {
   constructor(private readonly repairsService: RepairsService) {}
-
-  /** 접수 모달 연결 대상 후보 — :id 라우트보다 먼저 선언해야 한다. */
-  @Get('link-targets')
-  @RequirePermission('REPAIR_VIEW')
-  linkTargets(@Query() query: LinkTargetsQueryDto) {
-    return this.repairsService.linkTargets(query);
-  }
 
   @Get()
   @RequirePermission('REPAIR_VIEW')

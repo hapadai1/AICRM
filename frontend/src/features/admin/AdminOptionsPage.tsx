@@ -1,7 +1,7 @@
 /**
  * ADMIN-002 옵션 세트·단계 관리
- * - 품목 대분류 선택 → 버전 목록(DRAFT/ACTIVE/RETIRED) → 단계 표 + 선택지
- * - 선택지는 5개까지 옆으로(정장·셔츠), 그보다 많으면 한 칸에서 3개씩 줄바꿈(구두)
+ * - 품목 대분류 선택 → 버전 목록(DRAFT/ACTIVE/RETIRED) → 단계 목록 + 선택지
+ * - 단계는 세로로 쌓는다: 첫 줄에 순서·단계명·필수, 그 아래 선택지 사진 격자
  * - 새 버전(기존 복사), DRAFT만 편집, 활성화 시 기존 ACTIVE → RETIRED 확인
  */
 import { DeleteOutlined, PlusOutlined, SaveOutlined, ThunderboltOutlined } from '@ant-design/icons';
@@ -21,6 +21,7 @@ import {
   Table,
   Tabs,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -28,8 +29,8 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   activateOptionSetVersion,
   createOptionSetVersion,
+  deleteOptionSetVersion,
   fetchOptionSets,
-  updateOptionChoicePrice,
 } from '../../api/admin';
 import { CHOICE_SLOTS, MAX_CHOICES, MIN_CHOICES } from '../../api/admin';
 import type { OptionSetVersionStatus, OptionSetVersionSummary } from '../../api/admin';
@@ -70,6 +71,11 @@ interface EditableStage {
   required: boolean;
   /** 부위 그룹(JACKET/TROUSERS/VEST). 셔츠·구두 등 단일 부위 세트는 null. */
   componentGroup: string | null;
+  /**
+   * 표시 전용 부위 내 순번. 표에 뿌리기 직전 stageTable()이 매긴다 (저장 대상 아님).
+   * sortOrder는 세트 전체를 관통하는 흐름 순서라 부위 탭에서는 베스트가 12·13으로 보인다.
+   */
+  groupOrder?: number;
   /** 2~40개, 화면 순서가 곧 A~Z·AA~ 슬롯이다 */
   choices: EditableChoice[];
 }
@@ -88,7 +94,9 @@ const THUMB_MAT = 6;
 /**
  * 등록된 사진을 원본 크기(100%)로 보여준다 — 줄이면 카라 벌림·커프스 모서리처럼
  * 선택지를 가르는 미세한 차이가 화면에서 사라져 등록이 맞는지 확인할 수 없다.
- * 대신 칸이 넓어 표는 가로로 스크롤한다(CHOICE_COL_WIDTH).
+ * width를 주지 않아 원본보다 늘어나지도 않는다 — 셔츠 자산은 290px대라 늘리면 뭉갠다
+ * (원본이 상담자료 한 장에서 잘라낸 것이라 해상도가 거기까지다).
+ * 칸(CHOICE_COL_WIDTH)보다 큰 사진만 maxWidth로 줄고, 원본은 '크게 보기'로 확인한다.
  */
 const THUMB_STYLE = {
   maxWidth: '100%',
@@ -102,23 +110,16 @@ const THUMB_STYLE = {
   cursor: 'zoom-in' as const,
 };
 
-/** 사진(가장 큰 자산이 폭 392) + 여백이 들어가는 선택지 한 칸 너비 */
-const CHOICE_COL_WIDTH = 420;
-
-/** 선택지를 슬롯별 열로 펼치는 한계. 이보다 많으면 한 칸 안에서 줄바꿈한다(구두 29스타일). */
-const SLOT_COLUMN_LIMIT = 5;
-
-/** 줄바꿈 배치에서 한 줄에 놓는 선택지 수 */
-const CHOICES_PER_ROW = 3;
+/**
+ * 선택지 한 칸의 최소 너비.
+ * 실제 자산 폭은 셔츠 284~393, 정장 377~941(STITCH), 베스트 769~804, 구두 830이다.
+ * 620이면 대부분이 원본대로 들어가고(정장 STITCH·베스트만 살짝 줄어든다) 한 줄에 2~3장씩 비교된다.
+ * 941까지 올리면 전부 원본이지만 한 줄에 한 장이라 비교가 안 된다.
+ */
+const CHOICE_COL_WIDTH = 620;
 
 /** 선택지 추가금액 상한(원) — 백엔드 MAX_EXTRA_PRICE 와 같은 값. 자릿수 오타를 막는다. */
 const MAX_EXTRA_PRICE = 100_000_000;
-
-/**
- * 한 화면에 펼치는 단계 수.
- * 사진이 원본 크기라 단계 하나가 400px 넘게 차지한다 — 전부 쌓으면 페이지가 7,000px을 넘었다.
- */
-const STAGES_PER_PAGE = 3;
 
 /** 아직 이미지가 없는 선택지(신규 단계) 자리 표시 */
 function ImagePlaceholder() {
@@ -243,21 +244,6 @@ export function AdminOptionsPage() {
   const onApiError = (e: unknown) =>
     message.error(e instanceof ApiError ? e.message : '처리에 실패했습니다.');
 
-  /**
-   * 사용중 버전의 추가금액만 바로 고친다.
-   * 구성 변경은 새 버전이 필요하지만 가격은 값만 바뀌는 일이라 새 버전을 만들지 않는다.
-   * 확정된 계약은 선택 시점 스냅샷을 쓰므로 소급되지 않고, 이력은 감사로그에 남는다.
-   */
-  const priceMutation = useMutation({
-    mutationFn: ({ choiceId, extraPrice }: { choiceId: string; extraPrice: number }) =>
-      updateOptionChoicePrice(choiceId, extraPrice),
-    onSuccess: (res) => {
-      if (res.changed) message.success('추가금액을 변경했습니다. (변경 이력은 감사로그에 남습니다)');
-      invalidate();
-    },
-    onError: onApiError,
-  });
-
   const createVersionMutation = useMutation({
     mutationFn: () => createOptionSetVersion(currentSet!.id, selectedVersionId ?? undefined),
     onSuccess: (created) => {
@@ -293,6 +279,29 @@ export function AdminOptionsPage() {
     },
     onError: onApiError,
   });
+
+  /** 잘못 만든 작성중 버전 정리 — 사용중·종료 버전은 백엔드가 막는다. */
+  const deleteVersionMutation = useMutation({
+    mutationFn: (versionId: string) => deleteOptionSetVersion(versionId),
+    onSuccess: (res) => {
+      message.success(`V${res.versionNo} 초안을 삭제했습니다.`);
+      // 지운 버전을 보고 있었다면 선택을 비워 목록 새로고침 후 사용중 버전이 잡히게 한다.
+      setSelectedVersionId((prev) => (prev === res.versionId ? null : prev));
+      invalidate();
+    },
+    onError: onApiError,
+  });
+
+  const handleDeleteVersion = (v: OptionSetVersionSummary) => {
+    modal.confirm({
+      title: `V${v.versionNo} 초안 삭제`,
+      content: '작성 중인 단계·선택지가 함께 삭제되며 되돌릴 수 없습니다. 삭제할까요?',
+      okText: '삭제',
+      okButtonProps: { danger: true },
+      cancelText: '취소',
+      onOk: () => deleteVersionMutation.mutate(v.id),
+    });
+  };
 
   const activateMutation = useMutation({
     mutationFn: () => activateOptionSetVersion(selectedVersionId!),
@@ -335,6 +344,28 @@ export function AdminOptionsPage() {
     { title: '단계 수', dataIndex: 'stageCount', width: 80, align: 'center' },
     { title: '생성일', dataIndex: 'createdAt', width: 110 },
     { title: '활성화일', dataIndex: 'activatedAt', width: 110, render: (v?: string) => v ?? '-' },
+    {
+      // 작성중 버전만 지운다 — 사용중·종료 버전은 확정 계약이 참조하는 기록이다.
+      title: '삭제',
+      key: 'remove',
+      width: 60,
+      align: 'center',
+      render: (_: unknown, v) =>
+        v.status === 'DRAFT' ? (
+          <Button
+            size="small"
+            type="text"
+            danger
+            icon={<DeleteOutlined />}
+            loading={deleteVersionMutation.isPending && deleteVersionMutation.variables === v.id}
+            onClick={(e) => {
+              // 행 클릭(버전 선택)까지 같이 타지 않게 막는다.
+              e.stopPropagation();
+              handleDeleteVersion(v);
+            }}
+          />
+        ) : null,
+    },
   ];
 
   const patchChoice = (stageKey: string, index: number, patch: Partial<EditableChoice>) => {
@@ -346,25 +377,6 @@ export function AdminOptionsPage() {
       ),
     );
     setDirty(true);
-  };
-
-  /**
-   * 서버에 저장된 추가금액. 포커스를 벗어날 때 값이 실제로 달라졌는지만 보고 PATCH 한다
-   * (숫자를 눌렀다 되돌린 경우까지 감사로그에 남으면 이력이 지저분해진다).
-   */
-  const serverPriceById = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const stage of version?.stages ?? []) {
-      for (const c of stage.choices) map.set(c.id, c.extraPrice);
-    }
-    return map;
-  }, [version]);
-
-  const savePriceIfChanged = (choice: EditableChoice) => {
-    if (!choice.id) return;
-    const saved = serverPriceById.get(choice.id);
-    if (saved === undefined || saved === choice.extraPrice) return;
-    priceMutation.mutate({ choiceId: choice.id, extraPrice: choice.extraPrice });
   };
 
   const addChoiceButton = (stage: EditableStage) => (
@@ -386,18 +398,16 @@ export function AdminOptionsPage() {
     </Button>
   );
 
-  const choiceCell = (stage: EditableStage, index: number, showLabel = false) => {
+  const choiceCell = (stage: EditableStage, index: number) => {
     const choice = stage.choices[index];
     const slot = CHOICE_SLOTS[index];
     const removable = isDraft && stage.choices.length > MIN_CHOICES && index === stage.choices.length - 1;
     return (
       <Space direction="vertical" size={8} style={{ width: '100%' }}>
-        {/* 줄바꿈 배치에서는 열 머리글이 없으니 칸마다 슬롯을 적는다. */}
-        {showLabel && (
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            선택지 #{index + 1} ({slot})
-          </Typography.Text>
-        )}
+        {/* 격자 배치라 열 머리글이 없다 — 칸마다 슬롯을 적어 A~Z 순서를 알아볼 수 있게 한다. */}
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          선택지 #{index + 1} ({slot})
+        </Typography.Text>
         <ChoiceImage path={choice.imageUrl} alt={`${stage.name} ${slot} ${choice.name}`} />
         <Space direction="vertical" size={4} style={{ width: '100%' }}>
           {isDraft ? (
@@ -417,6 +427,7 @@ export function AdminOptionsPage() {
               <InputNumber
                 size="small"
                 min={0}
+                max={MAX_EXTRA_PRICE}
                 step={1000}
                 style={{ width: '100%' }}
                 prefix="+"
@@ -455,33 +466,14 @@ export function AdminOptionsPage() {
                 {choice.factoryName || '-'}
               </Typography.Text>
               {/*
-                추가금액은 사용중 버전에서도 바로 고친다 — 가격만 바뀌는 일에 새 버전을
-                만들게 하면 실무에서 버전이 계속 늘어난다. 종료된 버전은 과거 기록이라 잠근다.
+                추가금액은 작성중(DRAFT) 버전에서만 고친다. 사용중 버전에서 바로 고칠 수 있게
+                두면 같은 버전 번호가 시점에 따라 다른 금액을 뜻하게 되어, "V1로 계약했다"는
+                말만으로 얼마였는지 알 수 없다. 가격도 구성과 같이 새 버전으로만 바꾼다.
               */}
-              {choice.id && version?.status === 'ACTIVE' ? (
-                <InputNumber
-                  size="small"
-                  min={0}
-                  max={MAX_EXTRA_PRICE}
-                  step={1000}
-                  style={{ width: '100%' }}
-                  prefix="+"
-                  addonAfter="원"
-                  value={choice.extraPrice}
-                  formatter={(v) => `${v ?? 0}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
-                  parser={(v) => Number((v ?? '').replace(/,/g, ''))}
-                  disabled={priceMutation.isPending}
-                  // 입력 중마다 저장하지 않는다 — 포커스를 벗어나거나 Enter를 눌렀을 때만 보낸다.
-                  onChange={(v) => patchChoice(stage.key, index, { extraPrice: v ?? 0 })}
-                  onBlur={() => savePriceIfChanged(choice)}
-                  onPressEnter={() => savePriceIfChanged(choice)}
-                />
-              ) : (
-                choice.extraPrice > 0 && (
-                  <Tag color="red" style={{ marginInlineEnd: 0 }}>
-                    +{choice.extraPrice.toLocaleString()}원
-                  </Tag>
-                )
+              {choice.extraPrice > 0 && (
+                <Tag color="red" style={{ marginInlineEnd: 0 }}>
+                  +{choice.extraPrice.toLocaleString()}원
+                </Tag>
               )}
             </>
           )}
@@ -491,132 +483,97 @@ export function AdminOptionsPage() {
   };
 
   /**
-   * 선택지는 한 칸 안에서 3개씩 줄바꿈해 아래로 쌓는다.
-   * 슬롯마다 열을 두면 구두(스타일 29개)처럼 선택지가 많은 단계가 옆으로 한없이 늘어나
-   * 가로 스크롤로만 볼 수 있다.
+   * 선택지는 화면 폭에 들어가는 만큼 옆으로 놓고 넘치면 아래로 접는다.
+   * 한 칸은 사진 원본 폭(CHOICE_COL_WIDTH)을 유지하므로 좁은 화면에서는 한 줄에 하나씩 내려간다.
    */
   const choicesGrid = (stage: EditableStage) => (
     <div
       style={{
         display: 'grid',
-        gridTemplateColumns: `repeat(${CHOICES_PER_ROW}, minmax(0, 1fr))`,
+        gridTemplateColumns: `repeat(auto-fill, minmax(min(${CHOICE_COL_WIDTH}px, 100%), 1fr))`,
         gap: 12,
         alignItems: 'start',
       }}
     >
       {stage.choices.map((_, i) => (
-        <div key={i}>{choiceCell(stage, i, true)}</div>
+        <div key={i}>{choiceCell(stage, i)}</div>
       ))}
       {isDraft && stage.choices.length < MAX_CHOICES && <div>{addChoiceButton(stage)}</div>}
     </div>
   );
 
-  /** 슬롯 열 방식에서 쓰는 칸 — 아직 안 쓰는 슬롯 자리에는 추가 버튼(초안)이나 '-'를 놓는다. */
-  const slotCell = (stage: EditableStage, index: number) => {
-    if (stage.choices[index]) return choiceCell(stage, index);
-    if (!isDraft || index !== stage.choices.length || stage.choices.length >= MAX_CHOICES)
-      return <Typography.Text type="secondary">-</Typography.Text>;
-    return addChoiceButton(stage);
-  };
-
   /**
-   * 선택지가 슬롯 열에 다 들어가는 세트(정장·셔츠: 단계당 2~5개)는 예전처럼 옆으로 편다 —
-   * 사진을 나란히 놓고 비교하는 화면이라 그게 보기 편하다.
-   * 구두(스타일 29개)처럼 넘치면 한 칸 안에서 3개씩 줄바꿈해 아래로 쌓는다.
+   * 단계 하나를 세로로 쌓아 보여준다 — 첫 줄에 순서·단계명·필수, 그 아래 선택지 사진.
+   * 예전처럼 단계명 옆으로 사진 열을 이어 붙이면, 선택지가 많은 단계(구두 29스타일)에서
+   * 오른쪽 사진을 보려고 가로 스크롤한 순간 단계명이 화면 밖으로 밀려 무슨 단계인지 알 수 없었다.
    */
-  const maxChoices = Math.max(0, ...draftStages.map((s) => s.choices.length));
-  const wrapChoices = maxChoices > SLOT_COLUMN_LIMIT;
-  const visibleSlots = CHOICE_SLOTS.slice(
-    0,
-    Math.min(MAX_CHOICES, Math.max(MIN_CHOICES, maxChoices) + (isDraft ? 1 : 0)),
-  );
-
-  const stageColumns: ColumnsType<EditableStage> = [
-    {
-      title: '순서',
-      dataIndex: 'sortOrder',
-      width: 56,
-      render: (v: number, s) =>
-        isDraft ? (
-          <InputNumber
-            size="small"
-            min={1}
-            value={v}
-            style={{ width: 60 }}
-            onChange={(next) => patchStage(s.key, { sortOrder: next ?? 1 })}
-          />
+  const stageBlock = (s: EditableStage) => (
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Space wrap size={8} style={{ width: '100%' }}>
+        {/* 편집 중에는 전체 순번을 그대로 다뤄야 한다 — 순번은 한 버전 안에서 유일해야 하고
+            (option_stages의 (version, sequence_no) 유일 제약) 부위를 가로지르는 진행 순서를
+            정하는 값이라, 부위별로 1부터 다시 매기면 부위 간 순서를 표현할 수 없다. */}
+        {isDraft ? (
+          <>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              순서(전체)
+            </Typography.Text>
+            <InputNumber
+              size="small"
+              min={1}
+              value={s.sortOrder}
+              style={{ width: 64 }}
+              onChange={(next) => patchStage(s.key, { sortOrder: next ?? 1 })}
+            />
+            <Input
+              size="small"
+              style={{ width: 220 }}
+              placeholder="단계명"
+              value={s.name}
+              onChange={(e) => patchStage(s.key, { name: e.target.value })}
+            />
+          </>
+        ) : s.groupOrder != null && s.groupOrder !== s.sortOrder ? (
+          // 부위 탭에서는 그 부위 기준 번호를 보여준다(베스트 12·13 → 1·2).
+          <Tooltip title={`전체 순서 ${s.sortOrder}번`}>
+            <Typography.Text strong style={{ fontSize: 15 }}>
+              {s.groupOrder}. {s.name}
+            </Typography.Text>
+          </Tooltip>
         ) : (
-          v
-        ),
-    },
-    {
-      title: '단계명',
-      dataIndex: 'name',
-      // 단계명은 "자켓 디자인"처럼 짧다 — 180px은 좌측 블록만 넓히고 사진 칸을 밀어냈다.
-      width: 116,
-      render: (v: string, s) =>
-        isDraft ? (
-          <Input
-            size="small"
-            value={v}
-            onChange={(e) => patchStage(s.key, { name: e.target.value })}
-          />
-        ) : (
-          v
-        ),
-    },
-    {
-      title: '필수',
-      dataIndex: 'required',
-      width: 52,
-      align: 'center',
-      render: (v: boolean, s) => (
+          <Typography.Text strong style={{ fontSize: 15 }}>
+            {s.sortOrder}. {s.name}
+          </Typography.Text>
+        )}
         <Checkbox
-          checked={v}
+          checked={s.required}
           disabled={!isDraft}
           onChange={(e) => patchStage(s.key, { required: e.target.checked })}
-        />
-      ),
-    },
-    ...(wrapChoices
-      ? [
-          {
-            title: '선택지',
-            key: 'choices',
-            width: CHOICE_COL_WIDTH * CHOICES_PER_ROW,
-            render: (_: unknown, s: EditableStage) => choicesGrid(s),
-          } as ColumnsType<EditableStage>[number],
-        ]
-      : visibleSlots.map(
-          (slot, index) =>
-            ({
-              title: `선택지 #${index + 1} (${slot})`,
-              key: slot,
-              width: CHOICE_COL_WIDTH,
-              render: (_: unknown, s: EditableStage) => slotCell(s, index),
-            }) as ColumnsType<EditableStage>[number],
-        )),
-    ...(isDraft
-      ? [
-          {
-            title: '삭제',
-            key: 'remove',
-            width: 60,
-            render: (_: unknown, s: EditableStage) => (
-              <Button
-                size="small"
-                type="text"
-                danger
-                icon={<DeleteOutlined />}
-                onClick={() => {
-                  setDraftStages((prev) => prev.filter((x) => x.key !== s.key));
-                  setDirty(true);
-                }}
-              />
-            ),
-          } as ColumnsType<EditableStage>[number],
-        ]
-      : []),
+        >
+          필수
+        </Checkbox>
+        {isDraft && (
+          <Button
+            size="small"
+            type="text"
+            danger
+            icon={<DeleteOutlined />}
+            onClick={() => {
+              setDraftStages((prev) => prev.filter((x) => x.key !== s.key));
+              setDirty(true);
+            }}
+          >
+            단계 삭제
+          </Button>
+        )}
+      </Space>
+      {choicesGrid(s)}
+    </Space>
+  );
+
+  // 단계 블록 하나가 곧 한 행이라 열은 하나뿐이다 — 머리글은 표에서 감춘다.
+  const stageColumns: ColumnsType<EditableStage> = [
+    { title: '단계', key: 'stage', render: (_: unknown, s: EditableStage) => stageBlock(s) },
   ];
 
   const sortedStages = [...draftStages].sort((a, b) => a.sortOrder - b.sortOrder);
@@ -626,24 +583,17 @@ export function AdminOptionsPage() {
       rowKey="key"
       size="small"
       loading={versionQuery.isLoading}
-      dataSource={rows}
+      // 부위 내 순번은 여기서 매긴다 — 표가 페이지로 잘리므로 render의 행 인덱스로는
+      // 2페이지부터 1로 되돌아간다.
+      dataSource={rows.map((s, i) => ({ ...s, groupOrder: i + 1 }))}
       columns={stageColumns}
+      showHeader={false}
       /*
-        사진을 원본 크기로 두는 규칙(THUMB_STYLE 주석)은 그대로 지킨다 — 줄이면 확인이 안 된다.
-        대신 한 화면에 쌓는 단계 수를 제한한다. 단계를 전부 펼치면 페이지가 7,000px을 넘어
-        아래쪽 단계는 스크롤로만 닿을 수 있었다. 한 번에 STAGES_PER_PAGE개씩 본다.
+        페이지로 나누지 않고 단계를 전부 편다. 사진이 원본 크기라 페이지가 길어지지만,
+        페이지를 넘겨 가며 보면 단계 간 비교가 끊긴다 — 세로 스크롤로 훑는 편이 낫다.
       */
-      pagination={
-        rows.length > STAGES_PER_PAGE
-          ? {
-              pageSize: STAGES_PER_PAGE,
-              showSizeChanger: true,
-              pageSizeOptions: [STAGES_PER_PAGE, 6, 12, 50],
-              showTotal: (total, range) => `단계 ${range[0]}–${range[1]} / 총 ${total}`,
-            }
-          : false
-      }
-      scroll={{ x: 'max-content' }}
+      pagination={false}
+      // 선택지가 화면 폭 안에서 접히므로 가로 스크롤을 두지 않는다 — 스크롤하면 단계명이 밀려난다.
       locale={{ emptyText: '단계가 없습니다. 단계를 추가해 주세요.' }}
     />
   );
@@ -785,14 +735,12 @@ export function AdminOptionsPage() {
             ) : undefined
           }
         >
-          {/* 가격만 바로 고칠 수 있게 열어 두었으므로 "직접 수정 불가"라고만 쓰면 사실과 다르다. */}
           {version.status === 'ACTIVE' && (
             <Alert
               type="info"
               showIcon
               style={{ marginBottom: 12 }}
-              message="단계·선택지 구성은 새 버전을 만들어 바꿉니다. 추가금액은 여기서 바로 고칠 수 있습니다."
-              description="추가금액 변경은 이미 확정된 계약에 소급되지 않습니다(선택 시점 금액이 계약에 남습니다). 변경 이력은 감사로그 › 옵션 선택지에서 확인합니다."
+              message="사용중 버전은 수정할 수 없습니다. 변경이 필요하면 새 버전을 생성해 주세요."
             />
           )}
           {version.status === 'RETIRED' && (

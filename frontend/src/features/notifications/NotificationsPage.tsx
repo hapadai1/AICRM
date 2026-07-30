@@ -1,5 +1,7 @@
 /**
  * MSG-001 고객 연락·발송 이력
+ * - 이 화면은 **보내는 일**만 다룬다. 문구 원문과 단계별 매핑 설정은 `관리자 > 연락 문구`에 있다
+ *   (2026-07-29 분리 — 설정 카드가 담당자 운영 화면 위를 차지하고 있었다).
  * - 고객 검색 → (선택) 템플릿으로 문구 불러오기 → 문구 작성·수정 → 발송
  * - 템플릿 없이 문구만 써서 보낼 수도 있다. 단, 알림톡은 승인 문구 그대로일 때만 나가고
  *   직접 쓰거나 고친 문구는 SMS로 발송된다(백엔드 `notifications.service.send`).
@@ -41,7 +43,6 @@ import { autoWidth } from '../../shared/table-width';
 import { metaOf } from '../../shared/status-meta';
 import { DataTable } from '../../shared/DataTable';
 import { PageCard, PageShell } from '../../shared/PageShell';
-import { StageTemplateMappingCard } from './StageTemplateMappingCard';
 
 export function NotificationsPage() {
   const [customerSearch, setCustomerSearch] = useState('');
@@ -223,9 +224,6 @@ export function NotificationsPage() {
 
   return (
     <PageShell>
-      {/* 어느 시점에 어떤 문구를 제안할지 (개발설계서 05 G-06) */}
-      <StageTemplateMappingCard />
-
       <PageCard title="고객에게 직접 보내기">
         <Space wrap>
           <Typography.Text>고객 선택</Typography.Text>

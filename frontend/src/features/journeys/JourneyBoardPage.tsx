@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Card, Empty, Segmented, Space, Spin, Tag, Typography, theme } from 'antd';
+import { Alert, Card, Empty, Radio, Segmented, Space, Spin, Tag, Typography, theme } from 'antd';
+import type { RadioChangeEvent } from 'antd';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { SEMANTIC_COLOR } from '../../app/theme';
@@ -85,15 +86,21 @@ export function JourneyBoardPage() {
                 options={STALLED_DAY_OPTIONS.map((d) => ({ label: `${d}일`, value: d }))}
               />
             </Space>
-            <Segmented
+            {/*
+              트랙 전환은 이 화면에서 가장 자주 누르는 축이다. Segmented는 배경만 옅게 깔려
+              어느 것이 눌리는 버튼인지 구분되지 않아, 테두리가 있고 선택 시 꽉 찬 색이 되는
+              Radio 버튼 그룹을 쓴다(재고·연락 문구 화면과 같은 규칙).
+            */}
+            <Radio.Group
               value={trackType}
-              onChange={(v) => setTrackType(v as TrackType)}
-              options={[
-                { label: '비즈니스 맞춤', value: 'CUSTOM' },
-                { label: '웨딩패키지 렌탈', value: 'RENTAL' },
-                { label: '수선', value: 'REPAIR' },
-              ]}
-            />
+              optionType="button"
+              buttonStyle="solid"
+              onChange={(e: RadioChangeEvent) => setTrackType(e.target.value as TrackType)}
+            >
+              <Radio.Button value="CUSTOM">비즈니스 맞춤</Radio.Button>
+              <Radio.Button value="RENTAL">웨딩패키지 렌탈</Radio.Button>
+              <Radio.Button value="REPAIR">수선</Radio.Button>
+            </Radio.Group>
           </Space>
         </Space>
         {stalledCount > 0 && (

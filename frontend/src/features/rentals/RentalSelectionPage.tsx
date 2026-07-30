@@ -20,7 +20,7 @@ import {
 } from 'antd';
 import dayjs, { type Dayjs } from 'dayjs';
 import type { ColumnsType } from 'antd/es/table';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ApiError } from '../../api/client';
 import {
@@ -44,6 +44,7 @@ import {
   type RentalSelectionDetail,
 } from '../../api/rentals';
 import { StatusBadge } from '../../shared/StatusBadge';
+import { codesFor } from './rental-constants';
 import { metaOf } from '../../shared/status-meta';
 
 interface Draft {
@@ -78,15 +79,18 @@ export function RentalSelectionPage() {
   const sessionId = detail?.sessionId;
   const editable = detail?.status === 'IN_PROGRESS';
 
-  const colorsQuery = useQuery({ queryKey: ['rentals', 'colors'], queryFn: fetchRentalColors });
-  const sizesQuery = useQuery({ queryKey: ['rentals', 'sizes'], queryFn: fetchRentalSizes });
+  // 부위가 여러 개라 전체 코드를 한 번 받아 행마다 그 부위 것만 걸러 쓴다.
+  const colorsQuery = useQuery({ queryKey: ['rentals', 'colors'], queryFn: () => fetchRentalColors() });
+  const sizesQuery = useQuery({ queryKey: ['rentals', 'sizes'], queryFn: () => fetchRentalSizes() });
 
-  const colorOptions = useMemo(
-    () => (colorsQuery.data ?? []).map((c) => ({ value: c.code, label: `${c.name} (${c.code})` })),
+  const colorOptionsFor = useCallback(
+    (componentType: string) =>
+      codesFor(colorsQuery.data, componentType).map((c) => ({ value: c.code, label: `${c.name} (${c.code})` })),
     [colorsQuery.data],
   );
-  const sizeOptions = useMemo(
-    () => (sizesQuery.data ?? []).map((s) => ({ value: s.code, label: `${s.name} (${s.code})` })),
+  const sizeOptionsFor = useCallback(
+    (componentType: string) =>
+      codesFor(sizesQuery.data, componentType).map((s) => ({ value: s.code, label: `${s.name} (${s.code})` })),
     [sizesQuery.data],
   );
 
@@ -228,7 +232,7 @@ export function RentalSelectionPage() {
           placeholder="컬러 선택"
           style={{ width: '100%' }}
           value={drafts[r.orderItemComponentId]?.colorCode}
-          options={colorOptions}
+          options={colorOptionsFor(r.componentType)}
           onChange={(v) =>
             setDrafts((d) => ({ ...d, [r.orderItemComponentId]: { ...d[r.orderItemComponentId], colorCode: v } }))
           }
@@ -246,7 +250,7 @@ export function RentalSelectionPage() {
           placeholder="사이즈 선택"
           style={{ width: '100%' }}
           value={drafts[r.orderItemComponentId]?.sizeCode}
-          options={sizeOptions}
+          options={sizeOptionsFor(r.componentType)}
           onChange={(v) =>
             setDrafts((d) => ({ ...d, [r.orderItemComponentId]: { ...d[r.orderItemComponentId], sizeCode: v } }))
           }
@@ -277,7 +281,7 @@ export function RentalSelectionPage() {
           <Space direction="vertical" size={0}>
             <Typography.Text>{r.selectedItem.managementCode}</Typography.Text>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {r.selectedItem.design} · {r.selectedItem.color} · {r.selectedItem.size}
+              {r.selectedItem.color} · {r.selectedItem.size}
             </Typography.Text>
             <StatusBadge
               label={metaOf(RENTAL_ITEM_STATUS_META, r.selectedItem.status).label}
@@ -340,7 +344,6 @@ export function RentalSelectionPage() {
           id: c.selectedItem!.id,
           managementCode: c.selectedItem!.managementCode,
           componentType: c.componentType,
-          design: c.selectedItem!.design,
           color: c.selectedItem!.color,
           size: c.selectedItem!.size,
         },
@@ -350,7 +353,6 @@ export function RentalSelectionPage() {
 
   const candidateColumns: ColumnsType<RentalCandidate> = [
     { title: '관리 ID', dataIndex: 'managementCode', width: 170 },
-    { title: '디자인', dataIndex: 'design', width: 110 },
     { title: '컬러', dataIndex: 'color', width: 90 },
     { title: '사이즈', dataIndex: 'size', width: 80 },
     {

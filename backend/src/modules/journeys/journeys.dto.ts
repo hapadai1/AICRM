@@ -21,6 +21,16 @@ export class UpdateStageTemplateDto {
   @IsOptional() @IsUUID() templateId?: string | null;
 }
 
+/**
+ * 그 시점에 보낼 문구를 쓴다(없으면 만들고, 있으면 고친다).
+ * 문구는 시점 하나에만 붙는다(2026-07-29) — 코드·이름은 단계에서 서버가 만든다.
+ */
+export class PutStageMessageDto {
+  @IsString() @IsNotEmpty() body: string;
+  @IsOptional() @IsIn(['ALIMTALK', 'SMS']) channel?: string;
+  @IsOptional() @IsIn(['PENDING', 'APPROVED', 'REJECTED']) approvalStatus?: string;
+}
+
 export class CreateJourneyDto {
   @IsIn([...TRACK_TYPES]) trackType: string;
   /** 계약 전이면 생략한다. */

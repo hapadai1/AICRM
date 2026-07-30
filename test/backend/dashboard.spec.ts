@@ -265,7 +265,7 @@ describe('대시보드 (dashboard)', () => {
     });
     const skuId = randomUUID();
     await ctx.prisma.rentalSku.create({
-      data: { id: skuId, componentType: 'JACKET', design: 'A라인', color: 'BLACK', size: '100' },
+      data: { id: skuId, componentType: 'JACKET', color: 'BLACK', size: '50' },
     });
     const inventoryItemId = randomUUID();
     await ctx.prisma.rentalInventoryItem.create({

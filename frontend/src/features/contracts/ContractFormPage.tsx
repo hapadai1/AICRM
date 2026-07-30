@@ -427,30 +427,25 @@ export function ContractFormPage() {
         ) : (
           // 고객 선택은 팝업이 아니라 계약서 상단 필드에서 한다.
           // 이름을 넣어 고르면 곧바로 연결되고, 신체 정보가 비어 있을 때만 보완 팝업이 이어진다.
-          <Flex vertical gap={8}>
-            <Flex align="center" gap={12} wrap>
-              <Typography.Text strong>고객</Typography.Text>
-              <Select
-                showSearch
-                autoFocus
-                style={{ minWidth: 320, flex: '1 1 320px' }}
-                placeholder="고객명 또는 전화번호로 검색"
-                suffixIcon={<UserOutlined />}
-                filterOption={false}
-                notFoundContent={customerSearchQuery.isFetching ? '검색 중...' : '검색 결과가 없습니다.'}
-                loading={customerSearchQuery.isFetching}
-                onSearch={setCustomerKeyword}
-                onChange={(v: string) => selectCustomer(v)}
-                options={(customerSearchQuery.data?.data ?? []).map((c) => ({
-                  value: c.id,
-                  label: `${c.name} (${c.phone})`,
-                }))}
-              />
-              <Button onClick={() => setPickerOpen(true)}>목록에서 찾기</Button>
-            </Flex>
-            <Typography.Text type="secondary">
-              고객을 선택하면 계약서에 연결됩니다. 작업지시서에 필요한 정보가 비어 있으면 이어서 입력받습니다.
-            </Typography.Text>
+          <Flex align="center" gap={12} wrap>
+            <Typography.Text strong>고객</Typography.Text>
+            <Select
+              showSearch
+              autoFocus
+              style={{ minWidth: 320, flex: '1 1 320px' }}
+              placeholder="고객명 또는 전화번호로 검색"
+              suffixIcon={<UserOutlined />}
+              filterOption={false}
+              notFoundContent={customerSearchQuery.isFetching ? '검색 중...' : '검색 결과가 없습니다.'}
+              loading={customerSearchQuery.isFetching}
+              onSearch={setCustomerKeyword}
+              onChange={(v: string) => selectCustomer(v)}
+              options={(customerSearchQuery.data?.data ?? []).map((c) => ({
+                value: c.id,
+                label: `${c.name} (${c.phone})`,
+              }))}
+            />
+            <Button onClick={() => setPickerOpen(true)}>목록에서 찾기</Button>
           </Flex>
         )}
       </Card>

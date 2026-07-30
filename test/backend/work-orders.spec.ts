@@ -3,6 +3,7 @@ import ExcelJS from 'exceljs';
 import * as fs from 'fs';
 import JSZip from 'jszip';
 import * as path from 'path';
+import { formatInch } from '../../backend/src/modules/work-orders/work-order-excel';
 import { WorkOrdersModule } from '../../backend/src/modules/work-orders/work-orders.module';
 import { api, auth, createTestContext, TestContext, truncateBusinessData } from './helpers';
 
@@ -664,9 +665,10 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
       // 인쇄된 매장명은 그대로 두고 값 칸만 채운다
       expect(ws.getCell('L1').value).toBe('슈트에이전시(강남본점)');
       expect(String(ws.getCell('AP1').value)).toContain('테스트고객');
-      // 채촌 WAIST → 하의 '허리' 행의 신체 열(F61)=cm, 완성(인치) 열(P61)=round(84/2.54,1) (설계서 05 §3)
+      // 채촌 WAIST → 하의 '허리' 행의 신체 열(F61)=cm, 완성(인치) 열(P61)=1/8인치 분수 (설계서 05 §3)
+      // 84cm ÷ 2.54 = 33.07in → 1/8 단위 반올림 33 1/8
       expect(String(ws.getCell('F61').value)).toBe('84');
-      expect(Number(ws.getCell('P61').value)).toBeCloseTo(33.1, 1);
+      expect(String(ws.getCell('P61').value)).toBe('33 1/8');
       // 양식에 칸이 없는 채촌 항목(CHEST·SLEEVE)은 버리지 않고 추가요청사항으로 옮긴다
       expect(String(ws.getCell('AA41').value)).toContain('[치수]');
     });
@@ -868,5 +870,21 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
       expect(cells).toContain('172cm');
       expect(cells).toContain('41세');
     });
+  });
+});
+
+/** 완성(인치) 열 표기 규칙 — 매장은 인치를 1/8 단위 분수로 읽는다 (설계서 05 §3, 매장 확인 2026-07-29). */
+describe('cm → inch 분수 표기 (formatInch)', () => {
+  it.each([
+    [82.5, '32 1/2'],  // 32.48in → 1/2
+    [83.2, '32 3/4'],  // 32.76in → 3/4
+    [84, '33 1/8'],    // 33.07in → 1/8
+    [96, '37 3/4'],    // 37.80in → 3/4
+    [2.54, '1'],       // 정수 인치는 분수를 붙이지 않는다
+    [1.6, '5/8'],      // 1인치 미만은 분수만
+    [0.05, '0'],       // 1/16인치 미만은 0 (부호 없음)
+    [-3.2, '-1 1/4'],  // 비교 화면 diff용 음수
+  ])('%scm → %s', (cm, expected) => {
+    expect(formatInch(cm)).toBe(expected);
   });
 });

@@ -46,6 +46,19 @@ export const OUTCOME_META: Record<string, { label: string; color: string }> = {
   SKIPPED: { label: '생략', color: 'default' },
 };
 
+/**
+ * 시점에 붙은 연락 문구. 문구는 시점 하나에만 붙으므로(2026-07-29) 단계 조회에 본문까지 실려 온다 —
+ * 관리 화면이 문구 목록을 따로 받지 않는다.
+ */
+export interface StageMessage {
+  id: string;
+  code: string;
+  name: string;
+  channel: 'ALIMTALK' | 'SMS';
+  body: string;
+  approvalStatus: 'PENDING' | 'APPROVED' | 'REJECTED';
+}
+
 export interface JourneyStage {
   id: string;
   trackType: string;
@@ -54,7 +67,7 @@ export interface JourneyStage {
   sequenceNo: number;
   /** 이 단계에 진입하면 고객 연락을 제안한다 */
   templateId: string | null;
-  template?: { id: string; code: string; name: string; channel: string } | null;
+  template?: StageMessage | null;
 }
 
 /** 진행 요약 (고객 상세 카드·현황 보드 공용) */
@@ -224,8 +237,24 @@ export function fetchJourneyStages(trackType?: TrackType): Promise<JourneyStage[
 }
 
 /**
- * PATCH /journey-stages/{id} — 단계에 붙일 연락 문구를 바꾼다.
- * null이면 그 단계에서는 연락을 제안하지 않는다.
+ * PUT /journey-stages/{id}/message — 그 시점에 보낼 문구를 쓴다.
+ * 없으면 만들어 붙이고, 있으면 본문·채널·승인을 고친다(코드·이름은 서버가 단계에서 만든다).
+ */
+export function putStageMessage(
+  id: string,
+  input: { body: string; channel: 'ALIMTALK' | 'SMS'; approvalStatus: 'PENDING' | 'APPROVED' | 'REJECTED' },
+): Promise<JourneyStage> {
+  return request<JourneyStage>({ url: `/journey-stages/${id}/message`, method: 'PUT', data: input });
+}
+
+/** DELETE /journey-stages/{id}/message — 그 시점의 연락을 끄고 문구를 지운다(발송 이력은 남는다). */
+export function deleteStageMessage(id: string): Promise<JourneyStage> {
+  return request<JourneyStage>({ url: `/journey-stages/${id}/message`, method: 'DELETE' });
+}
+
+/**
+ * PATCH /journey-stages/{id} — 단계에 붙일 문구를 기존 문구로 바꾼다.
+ * null이면 그 단계에서는 연락을 제안하지 않는다. 관리 화면은 위 message 경로를 쓴다.
  */
 export function updateStageTemplate(id: string, templateId: string | null): Promise<JourneyStage> {
   return request<JourneyStage>({

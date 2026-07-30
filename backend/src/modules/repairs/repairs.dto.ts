@@ -1,11 +1,18 @@
+import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  IsArray,
   IsDateString,
   IsIn,
+  IsInt,
   IsNotEmpty,
   IsOptional,
   IsString,
   IsUUID,
+  Max,
   MaxLength,
+  Min,
+  ValidateNested,
 } from 'class-validator';
 import { PageQueryDto } from '../../common/pagination';
 import { codesOf } from '../admin-master/code-labels.constants';
@@ -16,6 +23,12 @@ import { codesOf } from '../admin-master/code-labels.constants';
  * 수선요청·수선입고·수선출고 단계와 렌탈 실물 상태(ALTERATION)로 관리한다.
  */
 export const REPAIR_TYPES = codesOf('repair-type');
+
+/**
+ * 수선 대상 품목 — 구성품 코드 집합(상의·하의·베스트·셔츠·구두)을 그대로 쓴다.
+ * 계약에 등록된 주문 품목을 찾아 연결하지 않고 이 목록에서 자유롭게 고른다.
+ */
+export const REPAIR_TARGET_PRODUCTS = codesOf('component-type');
 
 /**
  * 접수·출고 방식 (개발설계서 05 G-07).
@@ -40,9 +53,10 @@ export class ListRepairsQueryDto extends PageQueryDto {
   @IsOptional() @IsUUID() customerId?: string;
 }
 
-/** 수선 접수 모달 연결 대상 조회 (연동정합화 계약 §8) */
-export class LinkTargetsQueryDto {
-  @IsUUID() customerId: string;
+/** 대상 품목 한 줄 (품목·개수) */
+export class RepairItemDto {
+  @IsIn([...REPAIR_TARGET_PRODUCTS]) targetProduct: string;
+  @IsInt() @Min(1) @Max(99) quantity: number;
 }
 
 export class CreateRepairDto extends RepairMethodDto {
@@ -52,15 +66,26 @@ export class CreateRepairDto extends RepairMethodDto {
   @IsOptional() @IsDateString() dueDate?: string;
   @IsString() @IsNotEmpty() description: string;
   @IsOptional() @IsString() notes?: string;
-  /** CUSTOM_DURING / AFTER_SALE: 품목 또는 구성품 연결 필수 */
-  @IsOptional() @IsUUID() orderItemId?: string;
-  @IsOptional() @IsUUID() componentId?: string;
+  /** 대상 품목·개수. CUSTOM_DURING / AFTER_SALE 은 1줄 이상 필수 (service.assertItems) */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @ValidateNested({ each: true })
+  @Type(() => RepairItemDto)
+  items?: RepairItemDto[];
 }
 
 export class UpdateRepairDto extends RepairMethodDto {
   @IsOptional() @IsDateString() dueDate?: string;
   @IsOptional() @IsString() @IsNotEmpty() description?: string;
   @IsOptional() @IsString() notes?: string;
+  /** 주면 기존 줄을 통째로 교체한다 */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @ValidateNested({ each: true })
+  @Type(() => RepairItemDto)
+  items?: RepairItemDto[];
 }
 
 export class CreateRepairStatusEventDto {

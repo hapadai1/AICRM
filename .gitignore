@@ -10,3 +10,6 @@ backend/prisma/migrations/**/README.md
 
 # 빌드 산출물
 *.tsbuildinfo
+
+# 오피스 파일 열어둘 때 생기는 잠금 임시파일
+~$*

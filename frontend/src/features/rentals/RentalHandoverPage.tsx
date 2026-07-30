@@ -22,6 +22,7 @@ import { useSearchParams } from 'react-router-dom';
 import { ApiError } from '../../api/client';
 import {
   RENTAL_ITEM_STATUS_META,
+  RENTAL_COMPONENT_TYPE_LABELS,
   RETURN_NEXT_STATUSES,
   changeAllocationItem,
   checkoutAllocation,
@@ -36,6 +37,7 @@ import { DataTable } from '../../shared/DataTable';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { metaOf } from '../../shared/status-meta';
+import { useRentalCodeNames } from './rental-codes';
 
 /** RENT-004 렌탈 출고·반납 */
 export function RentalHandoverPage() {
@@ -45,9 +47,8 @@ export function RentalHandoverPage() {
   const [checkoutTarget, setCheckoutTarget] = useState<RentalAllocation | null>(null);
   const [returnTarget, setReturnTarget] = useState<RentalAllocation | null>(null);
   const [changeOpen, setChangeOpen] = useState(false);
-  const [mismatchError, setMismatchError] = useState<string | null>(null);
 
-  const [checkoutForm] = Form.useForm<{ confirmedItemCode: string; checkoutDate: Dayjs }>();
+  const [checkoutForm] = Form.useForm<{ checkoutDate: Dayjs; notes?: string }>();
   const [returnForm] = Form.useForm<{ returnDate: Dayjs; availableFrom: Dayjs; nextStatus: RentalItemStatus }>();
   const [changeForm] = Form.useForm<{ newInventoryItemId: string; reason: string }>();
 
@@ -91,26 +92,18 @@ export function RentalHandoverPage() {
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['rentals'] });
 
   const checkoutMutation = useMutation({
-    mutationFn: (v: { confirmedItemCode: string; checkoutDate: Dayjs }) =>
+    mutationFn: (v: { checkoutDate: Dayjs; notes?: string }) =>
       checkoutAllocation(checkoutTarget!.id, {
-        confirmedItemCode: v.confirmedItemCode.trim(),
         checkoutDate: v.checkoutDate.format('YYYY-MM-DD'),
+        notes: v.notes?.trim() || undefined,
         version: checkoutTarget!.version,
       }),
     onSuccess: (alloc) => {
       message.success(`관리 ID ${alloc.managementCode} 출고 처리되었습니다.`);
       setCheckoutTarget(null);
-      setMismatchError(null);
       void invalidate();
     },
-    onError: (e) => {
-      if (e instanceof ApiError && e.code === 'RENTAL_ID_MISMATCH') {
-        // 불일치: 오류를 표시하고 "ID 변경" 흐름을 안내
-        setMismatchError(e.message);
-      } else {
-        message.error(e instanceof ApiError ? e.message : '출고 처리에 실패했습니다.');
-      }
-    },
+    onError: (e) => message.error(e instanceof ApiError ? e.message : '출고 처리에 실패했습니다.'),
   });
 
   const changeMutation = useMutation({
@@ -121,11 +114,9 @@ export function RentalHandoverPage() {
         version: checkoutTarget!.version,
       }),
     onSuccess: (alloc) => {
-      message.success(`배정 실물이 ${alloc.managementCode}(으)로 변경되었습니다. 확인 ID를 다시 검증한 뒤 출고하세요.`);
+      message.success(`배정 실물이 ${alloc.managementCode}(으)로 변경되었습니다. 이어서 출고하세요.`);
       setChangeOpen(false);
-      setMismatchError(null);
-      setCheckoutTarget(alloc); // 변경된 배정으로 재검증
-      checkoutForm.setFieldsValue({ confirmedItemCode: '' });
+      setCheckoutTarget(alloc); // 변경된 배정으로 이어서 출고
       void invalidate();
     },
     onError: (e) => message.error(e instanceof ApiError ? e.message : 'ID 변경에 실패했습니다.'),
@@ -147,13 +138,66 @@ export function RentalHandoverPage() {
     onError: (e) => message.error(e instanceof ApiError ? e.message : '반납 처리에 실패했습니다.'),
   });
 
+  // 출고·반납 대상은 품목을 가리지 않으므로 전 품목 코드를 받아 이름으로 바꾼다.
+  const codes = useRentalCodeNames();
+
   const todayStr = dayjs().format('YYYY-MM-DD');
 
-  const pickupColumns: ColumnsType<RentalAllocation> = [
-    { title: '고객', dataIndex: 'customerName', width: 100 },
+  /**
+   * 출고·반납 공통 열.
+   * 현장에서 필요한 건 "누가 / 무엇을 / 어떤 옷을"이다 —
+   * 고객은 연락처까지, 실물은 관리코드만이 아니라 구분·컬러·사이즈까지 보여 준다.
+   */
+  const commonColumns: ColumnsType<RentalAllocation> = [
+    {
+      title: '고객',
+      dataIndex: 'customerName',
+      width: 130,
+      render: (name: string, r) => (
+        <Space direction="vertical" size={0}>
+          <Typography.Text>{name}</Typography.Text>
+          {r.customerPhone && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {r.customerPhone}
+            </Typography.Text>
+          )}
+        </Space>
+      ),
+    },
     { title: '주문번호', dataIndex: 'orderNo', width: 150 },
-    { title: '구성품', dataIndex: 'componentLabel' },
-    { title: '예약 실물 ID', dataIndex: 'managementCode', width: 170 },
+    {
+      title: '주문 품목',
+      dataIndex: 'displayName',
+      width: 150,
+      render: (v: string | undefined, r) => (
+        <Space direction="vertical" size={0}>
+          <Typography.Text>{v ?? '-'}</Typography.Text>
+          {r.componentType && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {RENTAL_COMPONENT_TYPE_LABELS[r.componentType] ?? r.componentType}
+              {r.componentSequenceNo ? ` #${r.componentSequenceNo}` : ''}
+            </Typography.Text>
+          )}
+        </Space>
+      ),
+    },
+    {
+      title: '실물',
+      dataIndex: 'managementCode',
+      width: 200,
+      render: (code: string, r) => (
+        <Space direction="vertical" size={0}>
+          <Typography.Text strong>{code}</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {codes.colorName(r.color)} / {codes.sizeName(r.size)}
+          </Typography.Text>
+        </Space>
+      ),
+    },
+  ];
+
+  const pickupColumns: ColumnsType<RentalAllocation> = [
+    ...commonColumns,
     {
       title: '픽업일',
       dataIndex: 'pickupDate',
@@ -177,8 +221,7 @@ export function RentalHandoverPage() {
           icon={<ExportOutlined />}
           onClick={() => {
             setCheckoutTarget(r);
-            setMismatchError(null);
-            checkoutForm.setFieldsValue({ confirmedItemCode: '', checkoutDate: dayjs() });
+            checkoutForm.setFieldsValue({ checkoutDate: dayjs(), notes: undefined });
           }}
         >
           출고
@@ -188,11 +231,14 @@ export function RentalHandoverPage() {
   ];
 
   const returnColumns: ColumnsType<RentalAllocation> = [
-    { title: '고객', dataIndex: 'customerName', width: 100 },
-    { title: '주문번호', dataIndex: 'orderNo', width: 150 },
-    { title: '구성품', dataIndex: 'componentLabel' },
-    { title: '실물 ID', dataIndex: 'managementCode', width: 170 },
-    { title: '출고일', dataIndex: 'checkoutDate', width: 110, render: (d?: string) => d ?? '-' },
+    ...commonColumns,
+    {
+      title: '출고일',
+      dataIndex: 'checkoutDate',
+      width: 110,
+      // 예정일이 아니라 실제로 나간 날. 백엔드 뷰는 actualPickupAt으로 내려 준다.
+      render: (d: string | undefined, r) => d ?? r.actualPickupAt?.slice(0, 10) ?? '-',
+    },
     {
       title: '반납 예정일',
       dataIndex: 'returnDueDate',
@@ -288,12 +334,9 @@ export function RentalHandoverPage() {
 
       {/* 출고 모달: 확인 ID 검증 → 불일치 시 RENTAL_ID_MISMATCH → ID 변경 */}
       <Modal
-        title={checkoutTarget ? `출고 — ${checkoutTarget.customerName} · ${checkoutTarget.componentLabel}` : '출고'}
+        title={checkoutTarget ? `출고 — ${checkoutTarget.customerName} · ${checkoutTarget.displayName ?? checkoutTarget.managementCode}` : '출고'}
         open={!!checkoutTarget}
-        onCancel={() => {
-          setCheckoutTarget(null);
-          setMismatchError(null);
-        }}
+        onCancel={() => setCheckoutTarget(null)}
         onOk={() => checkoutForm.submit()}
         okText="출고"
         cancelText="취소"
@@ -303,23 +346,18 @@ export function RentalHandoverPage() {
         {checkoutTarget && (
           <Space direction="vertical" size="middle" style={{ width: '100%' }}>
             <Descriptions size="small" bordered column={1}>
-              <Descriptions.Item label="예약 실물 ID">
-                <Typography.Text strong>{checkoutTarget.managementCode}</Typography.Text>
-              </Descriptions.Item>
-              <Descriptions.Item label="대여 기간">
-                {checkoutTarget.pickupDate} ~ {checkoutTarget.returnDueDate}
-              </Descriptions.Item>
-            </Descriptions>
-
-            {mismatchError && (
-              <Alert
-                type="error"
-                showIcon
-                message="확인 ID 불일치 (RENTAL_ID_MISMATCH)"
-                description={mismatchError}
-                action={
+              <Descriptions.Item label="예약 실물">
+                <Space>
+                  <Typography.Text strong>{checkoutTarget.managementCode}</Typography.Text>
+                  <Typography.Text type="secondary">
+                    {codes.colorName(checkoutTarget.color)} / {codes.sizeName(checkoutTarget.size)}
+                  </Typography.Text>
+                  {/*
+                    확인 ID 대조를 없애면서 실물 교체로 들어가는 유일한 입구였던
+                    불일치 알림도 함께 사라졌다 — 상시 버튼으로 되살린다.
+                    비고는 기록용이고, 배정 자체를 바꾸려면 이쪽을 쓴다.
+                  */}
                   <Button
-                    danger
                     size="small"
                     icon={<SwapOutlined />}
                     onClick={() => {
@@ -327,11 +365,14 @@ export function RentalHandoverPage() {
                       setChangeOpen(true);
                     }}
                   >
-                    ID 변경
+                    실물 교체
                   </Button>
-                }
-              />
-            )}
+                </Space>
+              </Descriptions.Item>
+              <Descriptions.Item label="대여 기간">
+                {checkoutTarget.pickupDate} ~ {checkoutTarget.returnDueDate}
+              </Descriptions.Item>
+            </Descriptions>
 
             <Form
               form={checkoutForm}
@@ -339,18 +380,21 @@ export function RentalHandoverPage() {
               onFinish={(values) => checkoutMutation.mutate(values)}
             >
               <Form.Item
-                name="confirmedItemCode"
-                label="확인 ID (실물 라벨의 관리 ID 입력)"
-                rules={[{ required: true, message: '확인 ID를 입력해 주세요.' }]}
-              >
-                <Input placeholder="예: JKT-BLK-100-001" autoFocus />
-              </Form.Item>
-              <Form.Item
                 name="checkoutDate"
                 label="실제 출고일"
                 rules={[{ required: true, message: '출고일을 선택해 주세요.' }]}
               >
-                <DatePicker style={{ width: '100%' }} />
+                <DatePicker style={{ width: '100%' }} autoFocus />
+              </Form.Item>
+              {/*
+                예약된 옷과 다른 걸 내보낸 경우 등 현장 상황을 적어 둔다.
+                배정 자체를 바꾸려면 아래 [배정 실물 변경]을 쓴다 — 이 비고는 기록용이다.
+              */}
+              <Form.Item name="notes" label="비고 (선택)">
+                <Input.TextArea
+                  rows={3}
+                  placeholder="예: 예약된 JKT-BLACK-48-001 대신 JKT-BLACK-50-001로 출고 (사이즈 교환 요청)"
+                />
               </Form.Item>
             </Form>
           </Space>
@@ -393,7 +437,7 @@ export function RentalHandoverPage() {
                 .filter((it) => it.id !== checkoutTarget?.inventoryItemId)
                 .map((it) => ({
                   value: it.id,
-                  label: `${it.managementCode} · ${it.design} · ${it.color} · ${it.size} (${metaOf(RENTAL_ITEM_STATUS_META, it.status).label})`,
+                  label: `${it.managementCode} · ${it.color} · ${it.size} (${metaOf(RENTAL_ITEM_STATUS_META, it.status).label})`,
                 }))}
             />
           </Form.Item>
@@ -457,9 +501,6 @@ export function RentalHandoverPage() {
       <PageCard>
         <Space size="large" wrap>
           <StatusBadge label="지연: 픽업일 또는 반납 예정일이 오늘 이전" color="red" />
-          <Typography.Text type="secondary">
-            출고는 확인 ID가 예약 ID와 일치해야 하며, 불일치 시 ID 변경 후 재검증합니다.
-          </Typography.Text>
         </Space>
       </PageCard>
     </PageShell>

@@ -39,6 +39,9 @@ export const REPAIR_TYPE_LABELS_MAP: Record<string, string> = {
 /** 수선 구분 코드 집합·표시 순서 (공유 가변 배열) — 접수 화면 선택지의 출처 */
 export const REPAIR_TYPE_CODES: string[] = Object.keys(REPAIR_TYPE_LABELS_MAP);
 
+/** 구성품 코드 집합·표시 순서 (공유 가변 배열) — 수선 접수의 대상 품목 선택지 출처 */
+export const COMPONENT_TYPE_CODES: string[] = Object.keys(COMPONENT_TYPE_LABELS);
+
 const DOMAIN_MAPS: Record<CodeLabelDomain, Record<string, string>> = {
   'product-category': PRODUCT_CATEGORY_LABELS,
   'component-type': COMPONENT_TYPE_LABELS,
@@ -48,6 +51,7 @@ const DOMAIN_MAPS: Record<CodeLabelDomain, Record<string, string>> = {
 /** 코드 집합까지 서버를 따라야 하는 도메인 (선택지로 쓰이는 도메인만 둔다) */
 const DOMAIN_CODES: Partial<Record<CodeLabelDomain, string[]>> = {
   'repair-type': REPAIR_TYPE_CODES,
+  'component-type': COMPONENT_TYPE_CODES,
 };
 
 export interface CodeLabelItem {

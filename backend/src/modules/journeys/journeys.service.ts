@@ -8,6 +8,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { defaultLabelsOf } from '../admin-master/code-labels.constants';
 import { AuditService } from '../audit/audit.service';
 import { NotificationSuggestionService } from '../notifications/notification-suggestion.service';
+import { repairItemsLabel } from '../repairs/repair-item-label';
 import { CONSULT_RESERVED_EXPIRE_DAYS, DEFAULT_STALLED_DAYS } from './journeys.constants';
 import { computeGating, type GatingResult } from './journey-gating';
 import {
@@ -18,6 +19,7 @@ import {
   ListJourneysQueryDto,
   ListStagesQueryDto,
   NotificationOutcomeDto,
+  PutStageMessageDto,
 } from './journeys.dto';
 
 const JOURNEY_SELECT = {
@@ -105,6 +107,22 @@ function isConsultReservedExpired(
   return ageDays > CONSULT_RESERVED_EXPIRE_DAYS;
 }
 
+/**
+ * 단계 마스터 응답. 연락 문구는 시점에 붙어서만 존재하므로(2026-07-29) 본문·승인까지 함께 준다 —
+ * 관리 화면이 문구 목록을 따로 받지 않고 이 한 번의 조회로 표를 그린다.
+ */
+const STAGE_MASTER_SELECT = {
+  id: true,
+  trackType: true,
+  code: true,
+  name: true,
+  sequenceNo: true,
+  templateId: true,
+  template: {
+    select: { id: true, code: true, name: true, channel: true, body: true, approvalStatus: true },
+  },
+} as const;
+
 @Injectable()
 export class JourneysService {
   constructor(
@@ -121,15 +139,113 @@ export class JourneysService {
     return this.prisma.journeyStage.findMany({
       where: { active: true, ...(query.trackType ? { trackType: query.trackType } : {}) },
       orderBy: [{ trackType: 'asc' }, { sequenceNo: 'asc' }],
-      select: {
-        id: true,
-        trackType: true,
-        code: true,
-        name: true,
-        sequenceNo: true,
-        templateId: true,
-        template: { select: { id: true, code: true, name: true, channel: true } },
+      select: STAGE_MASTER_SELECT,
+    });
+  }
+
+  /**
+   * 그 시점에 보낼 문구를 쓴다 — 없으면 만들어 붙이고, 있으면 본문·채널·승인만 고친다.
+   *
+   * 문구는 **시점 하나에만 붙는다**(2026-07-29 결정). 같은 내용을 두 시점에서 쓰려면
+   * 시점마다 따로 쓴다 — 문구를 공유하면 한쪽을 고칠 때 다른 시점 문구까지 바뀐다.
+   * 그래서 코드·이름도 담당자가 정하지 않고 단계에서 만든다(내부 식별자다).
+   */
+  async putStageMessage(id: string, dto: PutStageMessageDto, actor: AuthUser) {
+    const stage = await this.prisma.journeyStage.findUnique({ where: { id } });
+    if (!stage) throw new NotFoundException('진행 단계가 없습니다.');
+
+    if (stage.templateId) {
+      const before = await this.prisma.notificationTemplate.findUnique({
+        where: { id: stage.templateId },
+      });
+      const template = await this.prisma.notificationTemplate.update({
+        where: { id: stage.templateId },
+        data: {
+          body: dto.body,
+          ...(dto.channel ? { channel: dto.channel } : {}),
+          ...(dto.approvalStatus ? { approvalStatus: dto.approvalStatus } : {}),
+        },
+      });
+      await this.audit.log({
+        userId: actor.id,
+        action: 'UPDATE',
+        entityType: 'NOTIFICATION_TEMPLATE',
+        entityId: template.id,
+        before,
+        after: template,
+      });
+      return this.stageWithTemplate(id);
+    }
+
+    // 코드는 단계에서 만든다. 지웠다 다시 쓰는 경우가 있으므로 충돌하면 뒤에 번호를 붙인다.
+    const template = await this.prisma.notificationTemplate.create({
+      data: {
+        id: randomUUID(),
+        code: await this.freeTemplateCode(`JOURNEY_${stage.code}`),
+        name: `${stage.name} 안내`,
+        channel: dto.channel ?? 'ALIMTALK',
+        body: dto.body,
+        approvalStatus: dto.approvalStatus ?? 'PENDING',
       },
+    });
+    await this.audit.log({
+      userId: actor.id,
+      action: 'CREATE',
+      entityType: 'NOTIFICATION_TEMPLATE',
+      entityId: template.id,
+      after: template,
+    });
+    return this.updateStageTemplate(id, template.id, actor);
+  }
+
+  /**
+   * 그 시점의 연락을 끈다 — 매핑을 풀고 문구를 지운다.
+   * 발송 이력은 남긴다(본문·수신번호가 이력 자체에 있다). 링크만 끊어 '직접 입력'으로 남는다.
+   */
+  async deleteStageMessage(id: string, actor: AuthUser) {
+    const stage = await this.prisma.journeyStage.findUnique({ where: { id } });
+    if (!stage) throw new NotFoundException('진행 단계가 없습니다.');
+    if (!stage.templateId) return this.stageWithTemplate(id);
+    const templateId = stage.templateId;
+
+    const updated = await this.updateStageTemplate(id, null, actor);
+    // 문구는 시점 하나에만 붙지만, 예전 데이터가 공유 중이면 남겨 둔다.
+    const usedElsewhere = await this.prisma.journeyStage.count({ where: { templateId } });
+    if (usedElsewhere > 0) return updated;
+
+    const before = await this.prisma.notificationTemplate.findUnique({ where: { id: templateId } });
+    await this.prisma.notificationHistory.updateMany({
+      where: { templateId },
+      data: { templateId: null },
+    });
+    await this.prisma.notificationRule.deleteMany({ where: { templateId } });
+    await this.prisma.notificationTemplate.delete({ where: { id: templateId } });
+    await this.audit.log({
+      userId: actor.id,
+      action: 'DELETE',
+      entityType: 'NOTIFICATION_TEMPLATE',
+      entityId: templateId,
+      before,
+    });
+    return updated;
+  }
+
+  /** `JOURNEY_{단계코드}`가 이미 쓰이고 있으면 뒤에 번호를 붙여 비어 있는 코드를 찾는다. */
+  private async freeTemplateCode(base: string): Promise<string> {
+    for (let n = 0; n < 100; n += 1) {
+      const code = n === 0 ? base : `${base}_${n + 1}`;
+      const exists = await this.prisma.notificationTemplate.findUnique({ where: { code } });
+      if (!exists) return code;
+    }
+    throw new BusinessException('VALIDATION_ERROR', '문구 코드를 만들 수 없습니다.', [
+      { field: 'code', reason: 'DUPLICATE' },
+    ]);
+  }
+
+  private stageWithTemplate(id: string) {
+    return this.prisma.journeyStage.findUniqueOrThrow({
+      where: { id },
+      select: STAGE_MASTER_SELECT,
     });
   }
 
@@ -145,19 +261,22 @@ export class JourneysService {
         throw new BusinessException('VALIDATION_ERROR', '알림 템플릿이 없습니다.', [
           { field: 'templateId', reason: 'NOT_FOUND' },
         ]);
+      // 문구는 시점 하나에만 붙는다 — 공유하면 한 시점을 고칠 때 다른 시점 문구까지 바뀐다.
+      const takenBy = await this.prisma.journeyStage.findFirst({
+        where: { templateId, id: { not: id } },
+        select: { name: true },
+      });
+      if (takenBy)
+        throw new BusinessException(
+          'VALIDATION_ERROR',
+          `이미 '${takenBy.name}' 시점에 쓰는 문구입니다. 시점마다 문구를 따로 씁니다.`,
+          [{ field: 'templateId', reason: 'ALREADY_MAPPED' }],
+        );
     }
     const updated = await this.prisma.journeyStage.update({
       where: { id },
       data: { templateId },
-      select: {
-        id: true,
-        trackType: true,
-        code: true,
-        name: true,
-        sequenceNo: true,
-        templateId: true,
-        template: { select: { id: true, code: true, name: true, channel: true } },
-      },
+      select: STAGE_MASTER_SELECT,
     });
     await this.audit.log({
       userId: actor.id,
@@ -226,15 +345,19 @@ export class JourneysService {
           repairType: true,
           description: true,
           status: true,
+          items: { select: { targetProduct: true, quantity: true }, orderBy: { sequenceNo: 'asc' } },
           orderItem: { select: { displayName: true, productCategory: true } },
           component: { select: { componentType: true } },
         },
       });
       if (!repair) return { targetType: 'REPAIR_ITEM', targets: [] };
       const label = REPAIR_TYPE_LABELS[repair.repairType] ?? repair.repairType;
-      // 연결 대상명: 맞춤 품목 > 구성품 > 대상 설명 순으로 채운다.
+      // 대상명: 대상 품목 > (구방식 연결) 맞춤 품목 > 구성품 > 대상 설명 순으로 채운다.
       const linkedName =
-        repair.orderItem?.displayName ?? repair.component?.componentType ?? repair.description;
+        repairItemsLabel(repair.items) ??
+        repair.orderItem?.displayName ??
+        repair.component?.componentType ??
+        repair.description;
       return {
         targetType: 'REPAIR_ITEM',
         targets: [
@@ -817,7 +940,7 @@ export class JourneysService {
   /**
    * 수선 입고 안내를 실제로 보냈으면 수선 건 상태도 '고객 연락'으로 옮긴다.
    *
-   * 6단계 수선 상태(통합설계서 §12.1)와 4단계 REPAIR 진행 트랙(설계서 v2 02 §2.2)은
+   * 5단계 수선 상태(통합설계서 §12.1)와 4단계 REPAIR 진행 트랙(설계서 v2 02 §2.2)은
    * 별개의 레이어지만 '고객 연락'은 같은 사실이다. 연락 경로가 진행 카드로 일원화된 뒤
    * (설계서 v2 02 §8) 수선 상태의 CUSTOMER_NOTIFIED는 담당자가 손으로 한 번 더 눌러야
    * 하는 껍데기 단계가 됐다. 발송에 맞춰 여기서 옮겨 이중 입력을 없앤다.

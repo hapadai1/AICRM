@@ -28,9 +28,27 @@ import {
 
 const ITEM_WITH_SKU = { rentalSku: true } as const;
 
+/**
+ * 코드가 활성 목록에 있는지 + 그 코드가 이 품목에서 쓰이는지 확인한다.
+ * componentTypes가 빈 배열이면 품목을 가리지 않는 공통 코드로 본다.
+ */
+function codeErrors(
+  field: 'color' | 'size',
+  registry: Map<string, string[]>,
+  componentType: string | undefined,
+  raw: string,
+): FieldError[] {
+  const code = raw.trim();
+  const allowed = registry.get(code);
+  if (allowed === undefined)
+    return [{ field, reason: field === 'color' ? 'INVALID_COLOR_CODE' : 'INVALID_SIZE_CODE' }];
+  if (componentType && allowed.length > 0 && !allowed.includes(componentType))
+    return [{ field, reason: field === 'color' ? 'COLOR_NOT_FOR_COMPONENT' : 'SIZE_NOT_FOR_COMPONENT' }];
+  return [];
+}
+
 interface ImportRowInput {
   componentType: string;
-  design: string;
   color: string;
   size: string;
   managementCode: string;
@@ -47,6 +65,12 @@ interface ImportRowError {
   errors: string[];
 }
 
+/** 목록 where에 쓰이는 필터 필드만 추린 것 (페이지 파라미터 제외) */
+type InventoryFilterFields = Pick<
+  InventoryListQueryDto,
+  'status' | 'retired' | 'active' | 'managementCode' | 'availableOn' | 'componentType' | 'color' | 'skuSize'
+>;
+
 @Injectable()
 export class RentalInventoryService {
   constructor(
@@ -58,9 +82,16 @@ export class RentalInventoryService {
   // 목록·상세
   // ---------------------------------------------------------------------------
 
-  async list(query: InventoryListQueryDto) {
-    const where: Prisma.RentalInventoryItemWhereInput = {
-      ...(query.status ? { status: query.status } : {}),
+  /**
+   * 목록·건수 집계가 같은 조건을 봐야 해서 where 구성을 한곳에 둔다.
+   * 페이지 파라미터는 안 보므로 필터 필드만 받는다(DTO를 스프레드하면 skip 게터가 날아간다).
+   */
+  private buildListWhere(query: InventoryFilterFields): Prisma.RentalInventoryItemWhereInput {
+    return {
+      // 폐기는 현업에서 '삭제'다 — 평소 목록에서 빼고, 체크했을 때만 폐기만 보여 준다.
+      ...(query.retired ? { status: 'RETIRED' } : { status: { not: 'RETIRED' } }),
+      // 상태 필터는 폐기 범위 안에서 다시 좁히는 값이라 뒤에 둔다(폐기만 보기와 겹치지 않는다).
+      ...(query.status && query.status !== 'RETIRED' && !query.retired ? { status: query.status } : {}),
       ...(query.active !== undefined ? { active: query.active } : {}),
       ...(query.managementCode
         ? { managementCode: { contains: query.managementCode, mode: 'insensitive' } }
@@ -72,11 +103,34 @@ export class RentalInventoryService {
         : {}),
       rentalSku: {
         ...(query.componentType ? { componentType: query.componentType } : {}),
-        ...(query.design ? { design: { contains: query.design, mode: 'insensitive' } } : {}),
-        ...(query.color ? { color: { contains: query.color, mode: 'insensitive' } } : {}),
+        // 컬러는 드롭다운에서 고른 코드다 — 부분일치로 두면 BLACK이 SHOE_BLACK까지 잡는다.
+        ...(query.color ? { color: query.color } : {}),
         ...(query.skuSize ? { size: query.skuSize } : {}),
       },
     };
+  }
+
+  /**
+   * 품목 대분류 버튼에 붙일 건수. 품목 조건만 빼고 나머지 검색 조건은 그대로 적용해,
+   * 버튼을 누르면 실제로 몇 건이 나올지 미리 보여 준다.
+   */
+  async summary(query: InventoryListQueryDto) {
+    const [total, ...byType] = await this.prisma.$transaction([
+      this.prisma.rentalInventoryItem.count({
+        where: this.buildListWhere({ ...query, componentType: undefined }),
+      }),
+      ...RENTAL_COMPONENT_TYPES.map((componentType) =>
+        this.prisma.rentalInventoryItem.count({ where: this.buildListWhere({ ...query, componentType }) }),
+      ),
+    ]);
+    return {
+      total,
+      byComponentType: Object.fromEntries(RENTAL_COMPONENT_TYPES.map((t, i) => [t, byType[i]])),
+    };
+  }
+
+  async list(query: InventoryListQueryDto) {
+    const where = this.buildListWhere(query);
 
     const today = parseDateOnly(toDateOnlyString(new Date()));
     const [rows, total] = await this.prisma.$transaction([
@@ -174,7 +228,7 @@ export class RentalInventoryService {
 
   /**
    * 실물 등록. quantity > 1이면 관리코드 연번(`CODE-001` …)으로 일괄 생성한다.
-   * SKU(구분·디자인·컬러·사이즈)는 find-or-create.
+   * SKU(구분·컬러·사이즈)는 find-or-create.
    */
   async create(dto: CreateInventoryDto, actor: AuthUser) {
     const quantity = dto.quantity ?? 1;
@@ -185,10 +239,10 @@ export class RentalInventoryService {
         : Array.from({ length: quantity }, (_, i) => `${dto.managementCode.trim()}-${String(startNo + i).padStart(3, '0')}`);
 
     await this.assertManagementCodesFree(codes);
-    await this.assertActiveColorSize(dto.color, dto.size);
+    await this.assertActiveColorSize(dto.componentType, dto.color, dto.size);
 
     const created = await this.prisma.$transaction(async (tx) => {
-      const sku = await this.findOrCreateSku(tx, dto.componentType, dto.design, dto.color, dto.size, dto.skuDescription);
+      const sku = await this.findOrCreateSku(tx, dto.componentType, dto.color, dto.size, dto.skuDescription);
       const items = codes.map((code) => ({
         id: randomUUID(),
         managementCode: code,
@@ -236,8 +290,9 @@ export class RentalInventoryService {
     const codesInPayload = dto.items
       .map((row) => (typeof row.managementCode === 'string' ? row.managementCode.trim() : ''))
       .filter((code) => code.length > 0);
+    // 폐기된 실물의 코드는 재사용 가능하므로 중복으로 보지 않는다.
     const existing = await this.prisma.rentalInventoryItem.findMany({
-      where: { managementCode: { in: codesInPayload } },
+      where: { managementCode: { in: codesInPayload }, status: { not: 'RETIRED' } },
       select: { managementCode: true },
     });
     const existingCodes = new Set(existing.map((e) => e.managementCode));
@@ -252,7 +307,6 @@ export class RentalInventoryService {
         typeof raw[key] === 'string' && (raw[key] as string).trim().length > 0 ? (raw[key] as string).trim() : undefined;
 
       const componentType = str('componentType');
-      const design = str('design');
       const color = str('color');
       const size = str('size');
       const managementCode = str('managementCode');
@@ -263,11 +317,15 @@ export class RentalInventoryService {
       if (!componentType) rowErrors.push('componentType 필수값이 없습니다.');
       else if (!RENTAL_COMPONENT_TYPES.includes(componentType))
         rowErrors.push(`componentType이 허용되지 않은 품목입니다: ${componentType}`);
-      if (!design) rowErrors.push('design 필수값이 없습니다.');
+      // 품목별로 쓰는 코드가 달라(상의 46~60, 구두 250~280) 존재 여부만으로는 부족하다.
       if (!color) rowErrors.push('color 필수값이 없습니다.');
       else if (!activeColors.has(color)) rowErrors.push(`color가 활성 기준정보 코드가 아닙니다: ${color}`);
+      else if (codeErrors('color', activeColors, componentType, color).length > 0)
+        rowErrors.push(`color가 ${componentType} 품목에서 쓰이는 코드가 아닙니다: ${color}`);
       if (!size) rowErrors.push('size 필수값이 없습니다.');
       else if (!activeSizes.has(size)) rowErrors.push(`size가 활성 기준정보 코드가 아닙니다: ${size}`);
+      else if (codeErrors('size', activeSizes, componentType, size).length > 0)
+        rowErrors.push(`size가 ${componentType} 품목에서 쓰이는 코드가 아닙니다: ${size}`);
       if (!managementCode) rowErrors.push('managementCode 필수값이 없습니다.');
       else {
         if (existingCodes.has(managementCode)) rowErrors.push(`이미 등록된 관리코드입니다: ${managementCode}`);
@@ -289,7 +347,6 @@ export class RentalInventoryService {
       }
       validRows.push({
         componentType: componentType as string,
-        design: design as string,
         color: color as string,
         size: size as string,
         managementCode: managementCode as string,
@@ -316,7 +373,7 @@ export class RentalInventoryService {
       ? await this.prisma.$transaction(async (tx) => {
           const ids: string[] = [];
           for (const row of validRows) {
-            const sku = await this.findOrCreateSku(tx, row.componentType, row.design, row.color, row.size, row.skuDescription);
+            const sku = await this.findOrCreateSku(tx, row.componentType, row.color, row.size, row.skuDescription);
             const id = randomUUID();
             ids.push(id);
             await tx.rentalInventoryItem.create({
@@ -378,12 +435,15 @@ export class RentalInventoryService {
     const sizeChanged = !!dto.size && dto.size.trim() !== before.rentalSku.size;
     // E10: 컬러·사이즈를 바꾸는 경우에만 활성 기준정보 코드 검증(자유문자 유입 차단).
     if (colorChanged || sizeChanged) {
-      await this.assertActiveColorSize(colorChanged ? dto.color : undefined, sizeChanged ? dto.size : undefined);
+      await this.assertActiveColorSize(
+        dto.componentType ?? before.rentalSku.componentType,
+        colorChanged ? dto.color : undefined,
+        sizeChanged ? dto.size : undefined,
+      );
     }
 
     const skuChanged =
       (dto.componentType && dto.componentType !== before.rentalSku.componentType) ||
-      (dto.design && dto.design !== before.rentalSku.design) ||
       colorChanged ||
       sizeChanged;
 
@@ -394,7 +454,6 @@ export class RentalInventoryService {
         const sku = await this.findOrCreateSku(
           tx,
           dto.componentType ?? before.rentalSku.componentType,
-          dto.design ?? before.rentalSku.design,
           dto.color ?? before.rentalSku.color,
           dto.size ?? before.rentalSku.size,
         );
@@ -463,7 +522,7 @@ export class RentalInventoryService {
           previousStatus: item.status,
           newStatus: dto.newStatus,
           availableFrom: after.availableFrom,
-          reason: dto.reason ?? null,
+          reason: dto.reason,
           actorId: actor.id,
         },
       });
@@ -508,7 +567,7 @@ export class RentalInventoryService {
           previousStatus: item.status,
           newStatus: 'RETIRED',
           availableFrom: after.availableFrom,
-          reason: dto.reason ?? '폐기 처리',
+          reason: dto.reason,
           actorId: actor.id,
         },
       });
@@ -549,7 +608,6 @@ export class RentalInventoryService {
         OR: [{ availableFrom: null }, { availableFrom: { lte: pickup } }],
         rentalSku: {
           componentType: query.componentType,
-          ...(query.design ? { design: query.design } : {}),
           ...(query.color ? { color: query.color } : {}),
           ...(query.size ? { size: query.size } : {}),
         },
@@ -589,8 +647,7 @@ export class RentalInventoryService {
 
     const skuFilter: Prisma.RentalSkuWhereInput = {
       ...(query.componentType ? { componentType: query.componentType } : {}),
-      ...(query.design ? { design: { contains: query.design, mode: 'insensitive' } } : {}),
-      ...(query.color ? { color: { contains: query.color, mode: 'insensitive' } } : {}),
+      ...(query.color ? { color: query.color } : {}),
       ...(query.size ? { size: query.size } : {}),
       ...(query.sku ? { description: { contains: query.sku, mode: 'insensitive' } } : {}),
     };
@@ -602,7 +659,6 @@ export class RentalInventoryService {
         ? {
             OR: [
               { managementCode: { contains: query.q, mode: 'insensitive' } },
-              { rentalSku: { design: { contains: query.q, mode: 'insensitive' } } },
               { rentalSku: { color: { contains: query.q, mode: 'insensitive' } } },
             ],
           }
@@ -615,7 +671,7 @@ export class RentalInventoryService {
         id: true,
         managementCode: true,
         availableFrom: true,
-        rentalSku: { select: { componentType: true, design: true, color: true, size: true } },
+        rentalSku: { select: { componentType: true, color: true, size: true } },
         // 기간과 겹치는 활성 배정만 로드해 일자별 점유 판정에 사용한다.
         allocations: {
           where: {
@@ -636,7 +692,6 @@ export class RentalInventoryService {
         id: string;
         managementCode: string;
         componentType: string;
-        design: string;
         color: string;
         size: string;
       }>;
@@ -656,7 +711,6 @@ export class RentalInventoryService {
           id: i.id,
           managementCode: i.managementCode,
           componentType: i.rentalSku.componentType,
-          design: i.rentalSku.design,
           color: i.rentalSku.color,
           size: i.rentalSku.size,
         })),
@@ -670,33 +724,34 @@ export class RentalInventoryService {
   // ---------------------------------------------------------------------------
 
   /** 활성 렌탈 컬러·사이즈 코드 집합 (E10 검증 소스). */
-  private async loadActiveCodeSets(): Promise<{ colors: Set<string>; sizes: Set<string> }> {
+  /** 코드 → 그 코드가 쓰이는 품목 목록. 빈 배열이면 전 품목 공통. */
+  private async loadActiveCodeSets(): Promise<{ colors: Map<string, string[]>; sizes: Map<string, string[]> }> {
     const [colors, sizes] = await Promise.all([
-      this.prisma.rentalColor.findMany({ where: { active: true }, select: { code: true } }),
-      this.prisma.rentalSize.findMany({ where: { active: true }, select: { code: true } }),
+      this.prisma.rentalColor.findMany({ where: { active: true }, select: { code: true, componentTypes: true } }),
+      this.prisma.rentalSize.findMany({ where: { active: true }, select: { code: true, componentTypes: true } }),
     ]);
     return {
-      colors: new Set(colors.map((c) => c.code)),
-      sizes: new Set(sizes.map((s) => s.code)),
+      colors: new Map(colors.map((c) => [c.code, c.componentTypes])),
+      sizes: new Map(sizes.map((s) => [s.code, s.componentTypes])),
     };
   }
 
   /**
-   * E10: 컬러·사이즈가 활성 기준정보(rental_colors/rental_sizes) 코드인지 검증한다.
-   * 인자가 주어진 항목만 검사하며(수정 시 부분 변경 대응), 하나라도 어긋나면 fieldErrors로 반환.
+   * E10: 컬러·사이즈가 활성 코드인지, 그리고 그 코드가 해당 품목에서 쓰이는지 검증한다.
+   * 인자가 주어진 항목만 검사한다(수정 시 부분 변경 대응).
+   * 사이즈 체계가 품목마다 달라(상의 46~60, 구두 250~280) 코드 존재만 봐서는
+   * 상의에 구두 사이즈를 붙이는 등록이 그대로 통과한다.
    */
-  private async assertActiveColorSize(color?: string, size?: string): Promise<void> {
+  private async assertActiveColorSize(componentType?: string, color?: string, size?: string): Promise<void> {
     if (color === undefined && size === undefined) return;
     const { colors, sizes } = await this.loadActiveCodeSets();
     const fieldErrors: FieldError[] = [];
-    if (color !== undefined && !colors.has(color.trim()))
-      fieldErrors.push({ field: 'color', reason: 'INVALID_COLOR_CODE' });
-    if (size !== undefined && !sizes.has(size.trim()))
-      fieldErrors.push({ field: 'size', reason: 'INVALID_SIZE_CODE' });
+    if (color !== undefined) fieldErrors.push(...codeErrors('color', colors, componentType, color));
+    if (size !== undefined) fieldErrors.push(...codeErrors('size', sizes, componentType, size));
     if (fieldErrors.length > 0)
       throw new BusinessException(
         'VALIDATION_ERROR',
-        '컬러·사이즈는 활성 렌탈 기준정보 코드여야 합니다.',
+        '컬러·사이즈는 해당 품목에서 쓰이는 활성 렌탈 기준정보 코드여야 합니다.',
         fieldErrors,
       );
   }
@@ -704,20 +759,18 @@ export class RentalInventoryService {
   private async findOrCreateSku(
     tx: Prisma.TransactionClient,
     componentType: string,
-    design: string,
     color: string,
     size: string,
     description?: string,
   ) {
     const found = await tx.rentalSku.findFirst({
-      where: { componentType, design: design.trim(), color: color.trim(), size: size.trim() },
+      where: { componentType, color: color.trim(), size: size.trim() },
     });
     if (found) return found;
     return tx.rentalSku.create({
       data: {
         id: randomUUID(),
         componentType,
-        design: design.trim(),
         color: color.trim(),
         size: size.trim(),
         description: description ?? null,
@@ -725,10 +778,13 @@ export class RentalInventoryService {
     });
   }
 
-  /** 관리코드 중복 사전 검증 — UNIQUE 위반을 친절한 오류로 반환한다. */
+  /**
+   * 관리코드 중복 사전 검증 — UNIQUE 위반을 친절한 오류로 반환한다.
+   * 폐기된 실물의 코드는 비어 있는 것으로 본다(코드표를 새 옷에 다시 붙여 쓴다).
+   */
   private async assertManagementCodesFree(codes: string[]): Promise<void> {
     const dup = await this.prisma.rentalInventoryItem.findMany({
-      where: { managementCode: { in: codes } },
+      where: { managementCode: { in: codes }, status: { not: 'RETIRED' } },
       select: { managementCode: true },
     });
     if (dup.length > 0) {
