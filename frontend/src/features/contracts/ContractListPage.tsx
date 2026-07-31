@@ -14,7 +14,6 @@ import { useQuery } from '@tanstack/react-query';
 import {
   Button,
   DatePicker,
-  Flex,
   Input,
   Radio,
   Select,
@@ -332,15 +331,6 @@ export function ContractListPage({
   return (
     <PageShell>
       <PageCard>
-        {/* 계약 구분 관리는 관리자 메뉴에서 한다 — 조회 화면에 관리 입구를 두지 않는다. */}
-        <Flex justify="flex-end" wrap gap={8} style={{ marginBottom: 16 }}>
-          <Can permission="CONTRACT_CREATE">
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/contracts/new')}>
-              신규 계약
-            </Button>
-          </Can>
-        </Flex>
-
         {/*
           필터는 공용 ListToolbar 규격을 따른다 — 라벨 없이 placeholder로 뜻을 전하고,
           폭은 12칸 그리드가 아니라 내용에 맞춰 고정한 뒤 좁아지면 자연 줄바꿈시킨다.
@@ -410,7 +400,13 @@ export function ContractListPage({
               </Button>
             </>
           }
-          info={<Typography.Text type="secondary">기본 조회 기간은 최근 1개월입니다.</Typography.Text>}
+          actions={
+            <Can permission="CONTRACT_CREATE">
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/contracts/new')}>
+                신규 계약
+              </Button>
+            </Can>
+          }
         />
       </PageCard>
 
