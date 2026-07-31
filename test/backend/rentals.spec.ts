@@ -864,8 +864,9 @@ describe('렌탈 스타일 선택·기준정보 (v2 D3)', () => {
         customerStatus: 'CONTRACTED',
       },
     });
+    // 렌탈 선택(컨설팅)은 계약 작성중(DRAFT)에서 한다 (현업 확정 2026-07-31).
     const contract = await ctx.prisma.contract.create({
-      data: { id: randomUUID(), contractNo: 'CTR-260721-950', customerId: customer.id, status: 'CONFIRMED' },
+      data: { id: randomUUID(), contractNo: 'CTR-260721-950', customerId: customer.id, status: 'DRAFT' },
     });
     const version = await ctx.prisma.contractVersion.create({
       data: { id: randomUUID(), contractId: contract.id, versionNo: 1, versionStatus: 'CONFIRMED', createdBy: admin.id },
@@ -1166,7 +1167,7 @@ describe('렌탈 스타일 선택·기준정보 (v2 D3)', () => {
       data: { id: randomUUID(), name: '맞춤고객', phone: '010-9100-0002', phoneNormalized: '01091000002' },
     });
     const contract = await ctx.prisma.contract.create({
-      data: { id: randomUUID(), contractNo: 'CTR-260721-951', customerId: customer.id, status: 'CONFIRMED' },
+      data: { id: randomUUID(), contractNo: 'CTR-260721-951', customerId: customer.id, status: 'DRAFT' },
     });
     const cv = await ctx.prisma.contractVersion.create({
       data: { id: randomUUID(), contractId: contract.id, versionNo: 1, versionStatus: 'CONFIRMED', createdBy: admin.id },

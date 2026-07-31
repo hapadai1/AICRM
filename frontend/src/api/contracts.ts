@@ -552,6 +552,10 @@ export interface ContractFlow {
   completed: boolean;
   /** 수정하기(버전업) 가능 — 완료된 계약 */
   canRevise: boolean;
+  /** 수정하기(서명 해제) 가능 — 서명완료. 버전업 없이 작성중으로 되돌린다 */
+  canReopen: boolean;
+  /** 취소 가능 — 작성중·서명완료 + 주문 없음. 취소는 종결(수정하기 없음) */
+  canCancel: boolean;
   excelStored: boolean;
 }
 

@@ -330,6 +330,9 @@ export function OptionReviewPage() {
   }
 
   const isConfirmed = review.status === 'CONFIRMED';
+  /** 컨설팅 편집 가능 = 계약 작성중 + 품목 미진행 (현업 확정 2026-07-31). 아니면 확인서는 열람 전용. */
+  const canEdit =
+    (review.contractStatus == null || review.contractStatus === 'DRAFT') && !review.inProduction;
   /** 확정 조건 — 필수/선택 구분 없이 모든 단계를 골라야 최종 저장(확정)할 수 있다. */
   const missingTotal = review.missingCount + review.missingOptionalCount;
 
@@ -449,28 +452,32 @@ export function OptionReviewPage() {
             />
             {isConfirmed && <CheckCircleFilled style={{ color: '#52c41a', fontSize: 24 }} />}
             {isConfirmed ? (
-              <Button
-                type="primary"
-                icon={<EditOutlined />}
-                loading={reopenMutation.isPending}
-                onClick={openReopenDialog}
-              >
-                옵션 변경
-              </Button>
-            ) : (
-              <Tooltip title={missingTotal > 0 ? '모든 단계를 선택해야 확정할 수 있습니다.' : ''}>
+              canEdit && (
                 <Button
                   type="primary"
-                  icon={<CheckOutlined />}
-                  disabled={missingTotal > 0}
-                  loading={confirmMutation.isPending}
-                  onClick={openConfirmDialog}
+                  icon={<EditOutlined />}
+                  loading={reopenMutation.isPending}
+                  onClick={openReopenDialog}
                 >
-                  최종 저장(확정)
+                  옵션 변경
                 </Button>
-              </Tooltip>
+              )
+            ) : (
+              canEdit && (
+                <Tooltip title={missingTotal > 0 ? '모든 단계를 선택해야 확정할 수 있습니다.' : ''}>
+                  <Button
+                    type="primary"
+                    icon={<CheckOutlined />}
+                    disabled={missingTotal > 0}
+                    loading={confirmMutation.isPending}
+                    onClick={openConfirmDialog}
+                  >
+                    최종 저장(확정)
+                  </Button>
+                </Tooltip>
+              )
             )}
-            {review.surcharge.pending !== 0 && (
+            {canEdit && review.surcharge.pending !== 0 && (
               <Tooltip
                 title={
                   review.surcharge.appliable ? '' : '옵션을 확정한 뒤 계약금액에 반영할 수 있습니다.'

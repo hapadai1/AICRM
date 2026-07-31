@@ -91,6 +91,8 @@ interface ComponentRow {
   itemRowSpan: number;
   /** 부위 코드 (맞춤 componentGroup / 렌탈 componentType) */
   group: string;
+  /** 제작 진행 중 품목 — 계약이 작성중이어도 편집 잠금 (맞춤 행만 내려온다) */
+  inProduction?: boolean;
   // 맞춤
   sessionId?: string | null;
   completedStages?: number;
@@ -278,7 +280,8 @@ export function ContractOptionsPage() {
         source &&
         row.contractItemId !== source.contractItemId &&
         row.productCategory === source.productCategory &&
-        row.status !== 'CONFIRMED',
+        row.status !== 'CONFIRMED' &&
+        !row.inProduction,
     );
 
   // 맞춤 → 렌탈 순서로 품목을 이어 붙이고, 품목마다 부위 행으로 펼친다.
@@ -309,6 +312,7 @@ export function ContractOptionsPage() {
           status: item.status,
           itemRowSpan: i === 0 ? groups.length : 0,
           group: c.componentGroup,
+          inProduction: item.inProduction,
           sessionId: item.sessionId,
           completedStages: c.completedStages,
           totalStages: c.totalStages,
@@ -383,8 +387,15 @@ export function ContractOptionsPage() {
       label: `${row.displayName} ${componentGroupLabel(row.group)}`,
     });
 
-  /** 확정 세션은 열람 전용 — 여기서 값을 고치면 새 선택 버전이 조용히 열려버린다. */
-  const isLocked = (row: ComponentRow) => row.status === 'CONFIRMED';
+  /**
+   * 컨설팅 편집 가능 = 계약 작성중(DRAFT) (현업 확정 2026-07-31).
+   * 서명완료·계약완료면 전체 보기 전용 — 수정하려면 계약 상세의 [수정하기]로 되돌린다.
+   */
+  const contractEditable = !contract || contract.status === 'DRAFT';
+
+  /** 확정 세션·잠긴 계약·제작 진행 중 품목은 열람 전용. */
+  const isLocked = (row: ComponentRow) =>
+    row.status === 'CONFIRMED' || !contractEditable || row.inProduction === true;
 
   const spanCell = (row: ComponentRow) => ({ rowSpan: row.itemRowSpan });
 
@@ -574,22 +585,29 @@ export function ContractOptionsPage() {
       width: 150,
       render: (_, row) =>
         row.kind === 'RENTAL' ? (
-          <Button
-            type={row.selectedItemCode ? 'default' : 'primary'}
-            icon={<SearchOutlined />}
-            disabled={!row.contractItemComponentId}
-            onClick={() => setRentalTarget(row)}
-          >
-            실물 검색
-          </Button>
+          <Tooltip title={contractEditable ? '' : '작성중인 계약에서만 실물을 변경할 수 있습니다.'}>
+            <span>
+              <Button
+                type={row.selectedItemCode ? 'default' : 'primary'}
+                icon={<SearchOutlined />}
+                disabled={!row.contractItemComponentId || !contractEditable}
+                onClick={() => setRentalTarget(row)}
+              >
+                실물 검색
+              </Button>
+            </span>
+          </Tooltip>
         ) : (row.totalStages ?? 0) === 0 ? null : (
-          <Button
-            type={row.status === 'CONFIRMED' ? 'default' : 'primary'}
-            icon={row.status === 'CONFIRMED' ? <EyeOutlined /> : undefined}
-            onClick={() => setOptionTarget(row)}
-          >
-            {row.status === 'CONFIRMED' ? '옵션 보기' : '옵션 선택'}
-          </Button>
+          // 잠긴 계약·제작 진행 중·확정 세션은 보기 모드로 연다 (편집은 서버도 막는다).
+          <Tooltip title={row.inProduction ? '제작 진행 중인 품목은 옵션을 변경할 수 없습니다.' : ''}>
+            <Button
+              type={isLocked(row) ? 'default' : 'primary'}
+              icon={isLocked(row) ? <EyeOutlined /> : undefined}
+              onClick={() => setOptionTarget(row)}
+            >
+              {isLocked(row) ? '옵션 보기' : '옵션 선택'}
+            </Button>
+          </Tooltip>
         ),
     },
     {
@@ -627,7 +645,7 @@ export function ContractOptionsPage() {
       onCell: spanCell,
       render: (_, row) => {
         const item = itemOf(row);
-        const canCopy = !!item?.sessionId && copyTargets(item).length > 0;
+        const canCopy = contractEditable && !!item?.sessionId && copyTargets(item).length > 0;
         return (
           <Dropdown
             trigger={['click']}
@@ -682,6 +700,14 @@ export function ContractOptionsPage() {
               원단 가격표
             </Button>
           </div>
+          {contract && !contractEditable && (
+            <Alert
+              type="info"
+              showIcon
+              message="서명완료·계약완료 상태라 스타일 컨설팅은 보기 전용입니다."
+              description="수정하려면 계약 상세의 [수정하기]로 계약을 작성중으로 되돌린 뒤 진행해 주세요."
+            />
+          )}
           {isLoading ? (
             <Spin style={{ display: 'block', margin: '48px auto' }} />
           ) : (

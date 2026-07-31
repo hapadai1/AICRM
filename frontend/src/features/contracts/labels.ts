@@ -40,10 +40,12 @@ export const CONTRACT_VERSION_STATUS_META: Record<string, StatusMeta> = {
   SUPERSEDED: { label: '이전 버전', color: 'default' },
 };
 
+/**
+ * 주문 헤더 상태 — 실제로 쓰이는 값은 생성·취소 둘뿐이다 (현업 확정 2026-07-31).
+ * 진행 상태는 품목(ORDER_ITEM_STATUS_META)이 담당한다.
+ */
 export const ORDER_STATUS_META: Record<string, StatusMeta> = {
   CREATED: { label: '생성', color: 'default' },
-  IN_PROGRESS: { label: '진행중', color: 'blue' },
-  COMPLETED: { label: '완료', color: 'green' },
   CANCELLED: { label: '취소', color: 'red' },
 };
 
@@ -54,8 +56,12 @@ export const ORDER_ITEM_STATUS_META: Record<string, StatusMeta> = {
   READY_TO_ORDER: { label: '발주 가능(미주문)', color: 'orange' },
   PRODUCTION_REQUESTED: { label: '제작 요청', color: 'blue' },
   PRODUCTION_IN_PROGRESS: { label: '제작중', color: 'blue' },
+  BASTING_RECEIVED: { label: '가봉 입고', color: 'geekblue' },
+  FITTING_COMPLETED: { label: '가봉 완료', color: 'geekblue' },
+  PRODUCTION_COMPLETED: { label: '제작 완료', color: 'cyan' },
   PARTIALLY_RECEIVED: { label: '부분 입고', color: 'cyan' },
   RECEIVED: { label: '입고 완료', color: 'green' },
+  PARTIALLY_RELEASED: { label: '부분 출고', color: 'green' },
   RELEASED: { label: '출고', color: 'green' },
   COMPLETED: { label: '완료', color: 'green' },
   CANCELLED: { label: '취소', color: 'red' },
@@ -72,6 +78,8 @@ export const COMPONENT_STATUS_META: Record<string, StatusMeta> = {
   CREATED: { label: '생성', color: 'default' },
   PRODUCTION_REQUESTED: { label: '제작 요청', color: 'blue' },
   PRODUCTION_IN_PROGRESS: { label: '제작중', color: 'blue' },
+  BASTING_RECEIVED: { label: '가봉 입고', color: 'geekblue' },
+  PRODUCTION_COMPLETED: { label: '제작 완료', color: 'cyan' },
   RECEIVED: { label: '입고', color: 'green' },
   RELEASED: { label: '출고', color: 'green' },
   RESERVED: { label: '렌탈 예약', color: 'purple' },

@@ -109,6 +109,10 @@ export function OptionStageModal({ open, contractItemId, componentGroup, title, 
   });
 
   const isConfirmed = session?.status === 'CONFIRMED';
+  /** 컨설팅 편집 가능 = 계약 작성중 + 품목 미진행 (현업 확정 2026-07-31). 아니면 순수 보기 모드. */
+  const canReedit =
+    (session?.contractStatus == null || session.contractStatus === 'DRAFT') &&
+    !session?.inProduction;
   const dirty = !!choiceId && choiceId !== stage?.selectedChoiceId;
   const done = stages.filter((s) => s.selectedChoiceId).length;
 
@@ -198,7 +202,7 @@ export function OptionStageModal({ open, contractItemId, componentGroup, title, 
                   ? `${index + 1}단계 / ${stages.length}단계 — ${stage.name}`
                   : stage.name}
               </Typography.Title>
-              {isConfirmed && (
+              {isConfirmed && canReedit && (
                 <Button
                   type="primary"
                   icon={<EditOutlined />}
@@ -211,7 +215,9 @@ export function OptionStageModal({ open, contractItemId, componentGroup, title, 
             </Space>
             <Typography.Text type="secondary">
               {isConfirmed
-                ? `확정된 옵션입니다. 선택지를 누르면 새 선택 버전으로 변경을 시작합니다. (${stage.choices.length}개 선택지)`
+                ? canReedit
+                  ? `확정된 옵션입니다. 선택지를 누르면 새 선택 버전으로 변경을 시작합니다. (${stage.choices.length}개 선택지)`
+                  : '확정된 옵션입니다. 계약이 작성중일 때만 변경할 수 있습니다.'
                 : `${stage.choices.length}개 선택지 중 하나를 눌러 선택하세요.`}
             </Typography.Text>
           </Space>
@@ -231,7 +237,9 @@ export function OptionStageModal({ open, contractItemId, componentGroup, title, 
                   hoverable
                   onClick={
                     isConfirmed
-                      ? () => handleConfirmedPick(choice.choiceId)
+                      ? canReedit
+                        ? () => handleConfirmedPick(choice.choiceId)
+                        : undefined
                       : () => setChoiceId(choice.choiceId)
                   }
                   style={{

@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsDateString,
   IsInt,
   IsIn,
@@ -46,6 +47,21 @@ export class ContractLineDto {
   @IsNumber()
   @Min(0)
   lineAmount?: number;
+
+  /**
+   * 베스트(3피스) 포함 — 맞춤 정장(CUSTOM×SUIT) 라인만 허용 (현업 확정 2026-07-30).
+   * 계약서 화면의 [베스트 제외] 체크박스를 풀면 true. 기본 false(2피스).
+   */
+  @IsOptional()
+  @IsBoolean()
+  vestIncluded?: boolean;
+
+  /** 베스트 포함 시 벌당 베스트 단가(수기). 금액 = 수량 × (단가 + 베스트 단가). */
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  vestUnitPrice?: number;
 
   @IsOptional()
   @IsString()

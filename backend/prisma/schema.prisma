@@ -402,6 +402,12 @@ model ContractLine {
   quantity          Int      @map("quantity")
   unitPrice         Decimal? @map("unit_price") @db.Decimal(14, 2)
   lineAmount        Decimal  @default(0) @map("line_amount") @db.Decimal(14, 2)
+  /// 맞춤 정장 라인의 베스트(3피스) 포함 여부 (현업 확정 2026-07-30).
+  /// 계약서 품목표의 [베스트 제외] 체크박스가 이 값이다(체크 = false). 기본은 2피스.
+  vestIncluded      Boolean  @default(false) @map("vest_included")
+  /// 베스트 포함 시 벌당 베스트 단가(수기). 금액 = 수량 × (단가 + 베스트 단가).
+  /// 컨설팅 중 베스트를 제외하면 이 값만큼 라인·계약 금액에서 자동 차감한다.
+  vestUnitPrice     Decimal? @map("vest_unit_price") @db.Decimal(14, 2)
   notes             String?  @map("notes")
   sortOrder         Int      @default(0) @map("sort_order")
   createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)

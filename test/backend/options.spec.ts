@@ -55,8 +55,9 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
       },
     });
     const contractId = randomUUID();
+    // 컨설팅은 계약 작성중(DRAFT)에서 한다 (현업 확정 2026-07-31) — 서명·완료된 계약은 잠긴다.
     await ctx.prisma.contract.create({
-      data: { id: contractId, contractNo: 'CTR-OPT-001', customerId, status: 'CONFIRMED' },
+      data: { id: contractId, contractNo: 'CTR-OPT-001', customerId, status: 'DRAFT' },
     });
     const contractVersionId = randomUUID();
     await ctx.prisma.contractVersion.create({
@@ -593,12 +594,12 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
     const sid = cur.body.data.session.sessionId as string;
     let version = cur.body.data.session.version as number;
 
-    // 세션 상세는 카테고리(SUIT)의 부위 슬롯을 빈 값으로 내려준다
+    // 세션 상세는 카테고리(SUIT)의 부위 슬롯을 빈 값으로 내려준다.
+    // 베스트는 품목에 살아 있는 VEST 부위가 있을 때만 낀다 — 2피스는 자켓·바지뿐 (현업 확정 2026-07-30).
     const detail0 = await api(ctx).get(`/api/v1/option-sessions/${sid}`).set(auth(ctx)).expect(200);
     expect(detail0.body.data.components.map((c: { componentGroup: string }) => c.componentGroup)).toEqual([
       'JACKET',
       'TROUSERS',
-      'VEST',
     ]);
 
     const saved = await api(ctx)
@@ -671,7 +672,8 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
         c.fabricName,
       ]),
     );
-    expect(byGroup).toMatchObject({ JACKET: '자켓원단', TROUSERS: '바지원단', VEST: null });
+    // 2피스 품목(VEST 부위 없음)이라 베스트 슬롯은 내려오지 않는다 (현업 확정 2026-07-30).
+    expect(byGroup).toEqual({ JACKET: '자켓원단', TROUSERS: '바지원단' });
   });
 
   it('copy 시 부위별 component-attrs도 함께 복사된다', async () => {

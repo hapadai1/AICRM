@@ -39,8 +39,9 @@ export const CANCELLED = 'CANCELLED';
  * 상태 전이를 검증한다 (§10.5, §13.4).
  * - 순방향 이동 허용(중간 단계 건너뛰기 허용 — 가봉 없는 품목 등)
  * - 역행은 reason 필수 (데이터모델 §10.3 "상태 역행은 권한과 변경 사유를 요구한다")
- * - CANCELLED는 어느 상태에서든 진입 가능, CANCELLED에서의 재전이는 불가
- * - 동일 상태 재설정 불가
+ * - CANCELLED 직접 진입 불가 — 주문 취소는 계약 취소를 통해서만 (현업 확정 2026-07-31).
+ *   품목 정리가 필요하면 [되돌리기]로 생성 상태까지 되돌린 뒤 계약 수정으로 처리한다.
+ * - CANCELLED에서의 재전이는 불가, 동일 상태 재설정 불가
  */
 export function validateTransition(
   flow: readonly string[],
@@ -56,7 +57,13 @@ export function validateTransition(
       undefined,
       { current, next },
     );
-  if (next === CANCELLED) return { backward: false };
+  if (next === CANCELLED)
+    throw new BusinessException(
+      'INVALID_STATUS_TRANSITION',
+      `${unit} 취소는 지원하지 않습니다. 주문 취소는 계약 취소로만 처리됩니다.`,
+      undefined,
+      { current, next },
+    );
   if (!flow.includes(next))
     throw new BusinessException('VALIDATION_ERROR', `허용되지 않은 상태 코드입니다: ${next}`, [
       { field: 'newStatus', reason: 'UNKNOWN_STATUS' },

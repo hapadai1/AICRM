@@ -651,7 +651,8 @@ export function MeasurementEditPage() {
               <Alert
                 type="info"
                 showIcon
-                message="완료된 채촌입니다. 값을 고치려면 완료를 해제한 뒤 저장하세요."
+                message="완료된 채촌입니다. 수정 후 [저장]하면 그대로 반영됩니다."
+                description="완료는 작업지시서에 쓸 수 있다는 표시로, 수정을 막지 않습니다. 완료 표시를 되돌리려면 [완료 해제]를 누르세요."
                 action={
                   <Can permission="MEASUREMENT_EDIT">
                     <Button
@@ -834,11 +835,13 @@ export function MeasurementEditPage() {
                 <Can permission="MEASUREMENT_EDIT">
                   <Space direction="vertical" size="small" style={{ width: '100%' }}>
                     <div style={{ display: 'flex', gap: 8 }}>
+                      {/* 채촌은 언제든 수정 — 완료 후에도 저장할 수 있다 (현업 확정 2026-07-31).
+                          작업지시서에 출력된 세션(readOnly)만 잠근다. */}
                       <Button
                         size="large"
                         style={{ flex: 1, height: 56, fontSize: 18 }}
                         icon={<SaveOutlined />}
-                        disabled={readOnly || session?.completed}
+                        disabled={readOnly}
                         loading={saveMutation.isPending && !completeMutation.isPending}
                         onClick={() =>
                           saveMutation.mutate(undefined, {

@@ -68,6 +68,17 @@ export class ContractsController {
   }
 
   /**
+   * 스타일 컨설팅 중 베스트 제외 — 옵션 화면 베스트 탭의 [옵션 선택 안함] (현업 확정 2026-07-30).
+   * 계약서의 베스트 품목(금액)을 빼고 합계에서 자동 차감한다. 작성중(DRAFT) 한정.
+   */
+  @Post('items/:itemId/exclude-vest')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission('CONTRACT_EDIT')
+  excludeVest(@Param('itemId') itemId: string, @CurrentUser() actor: AuthUser) {
+    return this.contracts.excludeVest(itemId, actor);
+  }
+
+  /**
    * 수정하기(버전업) — 완료된 계약서를 새 버전으로 복사하고 작성중으로 되돌린다.
    * 품목·컨설팅·주문·작업지시서·입출고는 계약에 매달려 있어 그대로 이어진다.
    */

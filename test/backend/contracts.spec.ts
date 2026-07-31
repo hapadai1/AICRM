@@ -398,13 +398,13 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
       expect(v2.versionStatus).toBe('CONFIRMED');
     });
 
-    it('수량을 줄이면 물리화된 품목은 뒤 순번부터 취소되고 물리 삭제하지 않는다', async () => {
+    it('주문으로 물리화된 품목은 수량을 줄일 수 없다 — 수정하기는 품목 추가 전용 (현업 확정 2026-07-31)', async () => {
       await api(ctx)
         .post(`/api/v1/contracts/${contractId}/revisions`)
         .set(auth(ctx))
         .send({ changeReason: '고객 요청으로 정장 2벌 축소' })
         .expect(201);
-      await api(ctx)
+      const res = await api(ctx)
         .patch(`/api/v1/contracts/${contractId}`)
         .set(auth(ctx))
         .send({
@@ -414,18 +414,16 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
             { transactionType: 'RENTAL', productCategory: 'SHOES', quantity: 1 },
           ],
         })
-        .expect(200);
+        .expect(409);
+      expect(res.body.error.code).toBe('INVALID_STATUS_TRANSITION');
 
+      // 품목은 그대로 보존된다 — 정리가 필요하면 계약 취소(주문 전) 또는 오프라인으로 처리한다.
       const suits = await ctx.prisma.contractItem.findMany({
         where: { contractId, productCategory: 'SUIT', transactionType: 'CUSTOM' },
         orderBy: { sequenceNo: 'asc' },
       });
-      // 물리 삭제 금지: 3건 모두 보존, 뒤 순번부터 취소
       expect(suits).toHaveLength(3);
-      expect(suits[0].status).not.toBe('CANCELLED');
-      expect(suits[1].status).toBe('CANCELLED');
-      expect(suits[2].status).toBe('CANCELLED');
-      expect(suits[1].cancelledReason).toBe('고객 요청으로 정장 2벌 축소');  // 수정 사유가 취소 사유로 남는다
+      expect(suits.every((s) => s.status !== 'CANCELLED')).toBe(true);
     });
 
     it('사유 없이 수정할 수 없고, 수정 중이면 새 수정을 시작할 수 없다', async () => {
@@ -636,7 +634,7 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
       expect(await ctx.prisma.contractItem.count({ where: { contractId } })).toBe(0);
     });
 
-    it('진행 이력(채촌 연결)이 있는 계약은 삭제를 거부한다', async () => {
+    it('주문이 생성된 계약은 수정하기로 작성중이 돼도 취소·삭제할 수 없다 (현업 확정 2026-07-31)', async () => {
       const customerId = await newCustomer();
       const created = await api(ctx)
         .post('/api/v1/contracts')
@@ -648,43 +646,26 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
         .expect(201);
       const contractId = created.body.data.id as string;
       await signAndCompleteContract(ctx, contractId);
-      // 완료 → 수정하기로 작성중으로 되돌린 뒤 취소한다 (주문품목은 남아 있다).
+      // 완료 → 수정하기로 작성중으로 되돌린다 (주문은 살아 있다).
       await api(ctx)
         .post(`/api/v1/contracts/${contractId}/revisions`)
         .set(auth(ctx))
         .send({ changeReason: '고객 변심으로 정리' })
         .expect(201);
-      await api(ctx)
+
+      // 작성중이지만 주문이 있으므로 취소가 막힌다 — 실물 정리는 오프라인·렌탈 메뉴에서.
+      const cancelDenied = await api(ctx)
         .post(`/api/v1/contracts/${contractId}/cancel`)
         .set(auth(ctx))
         .send({ reason: '고객 변심', version: await currentRowVersion(contractId) })
-        .expect(200);
+        .expect(409);
+      expect(cancelDenied.body.error.code).toBe('INVALID_STATUS_TRANSITION');
+      expect(cancelDenied.body.error.message).toContain('주문');
 
-      // 채촌 세션을 품목에 연결해 '진행 이력'을 만든다.
-      const item = await ctx.prisma.orderItem.findFirstOrThrow({ where: { order: { contractId } } });
-      const admin = await ctx.prisma.user.findUniqueOrThrow({ where: { loginId: 'admin' } });
-      const session = await ctx.prisma.measurementSession.create({
-        data: {
-          id: randomUUID(),
-          customerId,
-          versionNo: 1,
-          measurementDate: new Date(),
-          createdBy: admin.id,
-        },
-      });
-      await ctx.prisma.orderItemMeasurement.create({
-        data: {
-          id: randomUUID(),
-          orderItemId: item.id,
-          measurementSessionId: session.id,
-          linkedBy: admin.id,
-          linkedAt: new Date(),
-        },
-      });
-
+      // 삭제도 막힌다 — 작성중이 "완료 후 재작성"을 겸하므로 주문 존재로 가른다.
       const res = await api(ctx).delete(`/api/v1/contracts/${contractId}`).set(auth(ctx)).expect(409);
       expect(res.body.error.code).toBe('CONTRACT_NOT_DELETABLE');
-      expect(res.body.error.message).toContain('채촌 연결');
+      expect(res.body.error.message).toContain('주문');
       expect(await ctx.prisma.contract.findUnique({ where: { id: contractId } })).not.toBeNull();
     });
   });

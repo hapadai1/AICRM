@@ -430,11 +430,14 @@ export function ContractFormPage() {
                     </Button>
                   </Tooltip>
                 </Can>
-                <Can permission="CONTRACT_CANCEL">
-                  <Button danger icon={<StopOutlined />} onClick={() => setCancelOpen(true)}>
-                    계약 취소
-                  </Button>
-                </Can>
+                {/* 취소는 주문이 생기기 전에만 — 완료 후 수정하기로 되돌린 계약은 취소 버튼이 없다. */}
+                {flow?.canCancel && (
+                  <Can permission="CONTRACT_CANCEL">
+                    <Button danger icon={<StopOutlined />} onClick={() => setCancelOpen(true)}>
+                      계약 취소
+                    </Button>
+                  </Can>
+                )}
               </>
             )}
           </Space>

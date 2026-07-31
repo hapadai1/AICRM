@@ -86,6 +86,10 @@ export interface OptionProgressItem {
   completionDueDate: string | null;
   fabric: string | null;
   status: OptionStatus;
+  /** 계약 상태 — 작성중(DRAFT)이 아니면 컨설팅은 보기 전용 (현업 확정 2026-07-31) */
+  contractStatus: string;
+  /** 제작 진행 중(제작요청 이후) 품목 — 계약이 작성중이어도 컨설팅 잠금 */
+  inProduction: boolean;
   completedStages: number;
   totalStages: number;
   sessionId: string | null;
@@ -159,6 +163,10 @@ export interface OptionSessionDetail {
   /** 백엔드 fabricName */
   fabric: string | null;
   status: OptionSessionStatus;
+  /** 계약 상태 — 작성중(DRAFT)이 아니면 편집·옵션 변경 버튼을 숨긴다 */
+  contractStatus: string | null;
+  /** 제작 진행 중 품목 — 계약이 작성중이어도 편집 잠금 */
+  inProduction: boolean;
   currentStageId: string | null;
   /** 중단 지점 (currentSession 응답에만 포함) */
   resumeStageId: string | null;
@@ -212,6 +220,8 @@ interface OptionSessionApiRow {
   confirmedAt: string | null;
   isCurrent: boolean;
   version: number;
+  contractStatus?: string | null;
+  inProduction?: boolean;
   totalStages: number;
   completedStages: number;
   stages: OptionStageApiRow[];
@@ -252,6 +262,8 @@ function toOptionSession(row: OptionSessionApiRow): OptionSessionDetail {
     selectionVersionNo: row.selectionVersionNo,
     fabric: row.fabricName ?? null,
     status: row.status,
+    contractStatus: row.contractStatus ?? null,
+    inProduction: row.inProduction ?? false,
     currentStageId: row.currentStageId ?? null,
     resumeStageId: row.resumeStageId ?? null,
     lastSavedAt: toDateTime(row.lastSavedAt),
@@ -295,6 +307,10 @@ export interface OptionReviewData {
   contractItemId: string;
   fabric: string | null;
   status: OptionSessionStatus;
+  /** 계약 상태 — 작성중(DRAFT)이 아니면 확정·변경·금액반영 버튼을 숨긴다 */
+  contractStatus: string | null;
+  /** 제작 진행 중 품목 — 계약이 작성중이어도 편집 잠금 */
+  inProduction: boolean;
   totalStages: number;
   completedStages: number;
   /**
@@ -316,6 +332,8 @@ interface OptionReviewApiRow {
   sessionId: string;
   contractItemId: string;
   status: OptionSessionStatus;
+  contractStatus?: string | null;
+  inProduction?: boolean;
   fabricName: string | null;
   totalStages: number;
   completedStages: number;
@@ -346,6 +364,8 @@ function toOptionReview(row: OptionReviewApiRow): OptionReviewData {
     contractItemId: row.contractItemId,
     fabric: row.fabricName ?? null,
     status: row.status,
+    contractStatus: row.contractStatus ?? null,
+    inProduction: row.inProduction ?? false,
     totalStages: row.totalStages,
     completedStages: row.completedStages,
     missingCount: missing.filter((m) => m.required).length,
