@@ -65,8 +65,9 @@ const orderItemInclude = Prisma.validator<Prisma.OrderItemInclude>()({
     },
   },
   workOrder: { include: { currentVersion: true } },
-  // 작업지시서 양식의 상의/하의/조끼 벌수·가봉일 칸을 채우는 원본
-  components: { where: { active: true } },
+  // 작업지시서 양식의 상의/하의/조끼 벌수·가봉일 칸을 채우는 원본.
+  // 베스트 제외로 취소된 구성품이 조끼 벌수에 섞이면 안 된다 (2026-07-30).
+  components: { where: { active: true, status: { not: 'CANCELLED' } } },
   fittingSessions: { orderBy: { fittingDate: Prisma.SortOrder.desc }, take: 1 },
 });
 

@@ -190,13 +190,19 @@ export class OptionSessionsService {
     const versionChanged = targetVersionId !== current.optionSetVersionId;
 
     const created = await this.prisma.$transaction(async (tx) => {
-      const values = versionChanged
-        ? []
-        : await tx.optionSelectionValue.findMany({ where: { selectionSessionId: current.id } });
-      const stages = await tx.optionStage.findMany({
+      const allStages = await tx.optionStage.findMany({
         where: { optionSetVersionId: targetVersionId, active: true },
         orderBy: { sequenceNo: 'asc' },
       });
+      // 이 품목의 단계 구성 — 베스트 없는(2피스) 품목은 VEST 단계를 뺀다 (2026-07-30).
+      const vestActive = vestActiveOf(item.components);
+      const stages = allStages.filter((s) => vestActive || s.componentGroup !== 'VEST');
+      const usableStageIds = new Set(stages.map((s) => s.id));
+      const values = versionChanged
+        ? []
+        : (
+            await tx.optionSelectionValue.findMany({ where: { selectionSessionId: current.id } })
+          ).filter((v) => usableStageIds.has(v.optionStageId));
       const selectedStageIds = new Set(values.map((v) => v.optionStageId));
       const complete = stages.length > 0 && stages.every((s) => selectedStageIds.has(s.id));
       const now = new Date();
@@ -236,10 +242,12 @@ export class OptionSessionsService {
           })),
         });
       }
-      // 부위별 원단·컬러·패턴도 새 선택 라운드로 이어받는다.
-      const attrs = await tx.optionSelectionComponentAttr.findMany({
-        where: { selectionSessionId: current.id },
-      });
+      // 부위별 원단·컬러·패턴도 새 선택 라운드로 이어받는다 (베스트가 빠졌으면 그 부위는 제외).
+      const attrs = (
+        await tx.optionSelectionComponentAttr.findMany({
+          where: { selectionSessionId: current.id },
+        })
+      ).filter((a) => vestActive || a.componentGroup !== 'VEST');
       if (attrs.length > 0) {
         await tx.optionSelectionComponentAttr.createMany({
           data: attrs.map((a) => ({
@@ -287,6 +295,8 @@ export class OptionSessionsService {
             },
           },
           orderItems: { select: { status: true } },
+          // 베스트 유무(부위)가 이 품목의 부위 행·단계 수를 가른다 (현업 확정 2026-07-30).
+          components: { select: { componentType: true, status: true } },
           optionSelectionSessions: {
             where: { isCurrent: true },
             include: {
@@ -319,13 +329,16 @@ export class OptionSessionsService {
     const activeStages = new Map(
       optionSets.map((s) => [s.productCategory, s.activeVersion?.stages ?? []]),
     );
-    const activeStageCount = new Map(
-      optionSets.map((s) => [s.productCategory, s.activeVersion?.stages.length ?? 0]),
-    );
 
     return items.map((item) => {
       const session = item.optionSelectionSessions[0];
-      const activeStageIds = new Set(session?.optionSetVersion.stages.map((s) => s.id) ?? []);
+      // 2피스(베스트 없는) 품목은 VEST 단계를 진행률 분모에서 뺀다.
+      const vestActive = vestActiveOf(item.components);
+      const activeStageIds = new Set(
+        (session?.optionSetVersion.stages ?? [])
+          .filter((s) => vestActive || s.componentGroup !== 'VEST')
+          .map((s) => s.id),
+      );
       const contract = item.contract;
       return {
         // 부위(상의/하의/베스트) 슬롯 — 목록을 부위 단위 행으로 펼치기 위한 축.
@@ -352,7 +365,9 @@ export class OptionSessionsService {
           : 0,
         totalStages: session
           ? activeStageIds.size
-          : (activeStageCount.get(item.productCategory) ?? 0),
+          : (activeStages.get(item.productCategory) ?? []).filter(
+              (s) => vestActive || s.componentGroup !== 'VEST',
+            ).length,
         sessionId: session?.id ?? null,
       };
     });
@@ -360,11 +375,11 @@ export class OptionSessionsService {
 
   /**
    * progress() 행의 부위별 슬롯 — 부위당 원단·컬러·패턴·비고 + 그 부위 단계의 진행 수.
-   * 부위 슬롯 자체는 카테고리 상수(OPTION_COMPONENT_GROUPS)로 고정이라 저장값이
-   * 없어도(=세션 이전) 항상 상의/하의/베스트 세 줄이 나온다.
+   * 부위 슬롯은 카테고리 상수에서 출발하되, 베스트는 품목의 VEST 부위가 살아 있을 때만
+   * 낀다(2026-07-30) — 2피스 품목은 목록에 상의/하의 두 줄만 나온다.
    */
   private progressComponents(
-    item: { productCategory: string },
+    item: { productCategory: string; components: { componentType: string; status: string }[] },
     session:
       | {
           values: { optionStageId: string }[];
@@ -380,11 +395,12 @@ export class OptionSessionsService {
       | undefined,
     activeStages: Map<string, { id: string; componentGroup: string | null }[]>,
   ) {
-    const groups = componentGroupsFor(item.productCategory);
+    const groups = groupsOfItem(item.productCategory, item.components);
     if (groups.length === 0) return [];
-    const stages = session
-      ? session.optionSetVersion.stages
-      : (activeStages.get(item.productCategory) ?? []);
+    const vestActive = vestActiveOf(item.components);
+    const stages = (
+      session ? session.optionSetVersion.stages : (activeStages.get(item.productCategory) ?? [])
+    ).filter((s) => vestActive || s.componentGroup !== 'VEST');
     const selected = new Set(session?.values.map((v) => v.optionStageId) ?? []);
     const attrByGroup = new Map((session?.componentAttrs ?? []).map((a) => [a.componentGroup, a]));
 
@@ -833,6 +849,8 @@ export class OptionSessionsService {
       include: {
         contract: { select: { status: true } },
         orderItems: { select: { status: true } },
+        // 대상의 베스트 유무에 따라 VEST 선택값 복사 여부를 가른다 (2026-07-30).
+        components: { select: { componentType: true, status: true } },
       },
     });
     if (!target) throw new NotFoundException('복사 대상 품목이 없습니다.');
@@ -853,10 +871,22 @@ export class OptionSessionsService {
         },
       );
 
-    const activeStages = this.activeStages(source);
-    const selectedStageIds = new Set(source.values.map((v) => v.optionStageId));
+    // 복사본의 단계 구성은 '대상 품목'의 베스트 유무를 따른다 — 3피스→2피스 복사면
+    // VEST 선택값을 버리고, 2피스→3피스 복사면 베스트 단계만 미완료로 남는다.
+    const targetVestActive = vestActiveOf(target.components);
+    const targetStages = source.optionSetVersion.stages
+      .filter((s) => s.active)
+      .filter((s) => targetVestActive || s.componentGroup !== 'VEST');
+    const stageGroup = new Map(source.optionSetVersion.stages.map((s) => [s.id, s.componentGroup]));
+    const copyValues = source.values.filter(
+      (v) => targetVestActive || stageGroup.get(v.optionStageId) !== 'VEST',
+    );
+    const copyAttrs = source.componentAttrs.filter(
+      (a) => targetVestActive || a.componentGroup !== 'VEST',
+    );
+    const selectedStageIds = new Set(copyValues.map((v) => v.optionStageId));
     const complete =
-      activeStages.length > 0 && activeStages.every((s) => selectedStageIds.has(s.id));
+      targetStages.length > 0 && targetStages.every((s) => selectedStageIds.has(s.id));
     const now = new Date();
 
     const created = await this.prisma.$transaction(async (tx) => {
@@ -875,18 +905,18 @@ export class OptionSessionsService {
           optionSetVersionId: source.optionSetVersionId,
           selectionVersionNo: (last._max.selectionVersionNo ?? 0) + 1,
           status:
-            source.values.length === 0 ? 'NOT_STARTED' : complete ? 'REVIEW' : 'IN_PROGRESS',
-          currentStageId: activeStages.find((s) => !selectedStageIds.has(s.id))?.id ?? null,
+            copyValues.length === 0 ? 'NOT_STARTED' : complete ? 'REVIEW' : 'IN_PROGRESS',
+          currentStageId: targetStages.find((s) => !selectedStageIds.has(s.id))?.id ?? null,
           fabricName: source.fabricName,
-          startedAt: source.values.length > 0 ? now : null,
-          lastSavedAt: source.values.length > 0 ? now : null,
+          startedAt: copyValues.length > 0 ? now : null,
+          lastSavedAt: copyValues.length > 0 ? now : null,
           reviewedAt: complete ? now : null,
           isCurrent: true,
         },
       });
-      if (source.values.length > 0) {
+      if (copyValues.length > 0) {
         await tx.optionSelectionValue.createMany({
-          data: source.values.map((v) => ({
+          data: copyValues.map((v) => ({
             id: randomUUID(),
             selectionSessionId: session.id,
             optionStageId: v.optionStageId,
@@ -897,9 +927,9 @@ export class OptionSessionsService {
         });
       }
       // 부위별 원단·컬러·패턴도 함께 복사한다.
-      if (source.componentAttrs.length > 0) {
+      if (copyAttrs.length > 0) {
         await tx.optionSelectionComponentAttr.createMany({
-          data: source.componentAttrs.map((a) => ({
+          data: copyAttrs.map((a) => ({
             id: randomUUID(),
             selectionSessionId: session.id,
             componentGroup: a.componentGroup,

@@ -63,6 +63,10 @@ interface ContractLineApiRow {
   quantity: number;
   unitPrice?: string | number | null;
   lineAmount?: string | number | null;
+  /** 베스트(3피스) 포함 — 맞춤 정장 라인만 true 가능 (현업 확정 2026-07-30) */
+  vestIncluded?: boolean;
+  /** 베스트 포함 시 벌당 베스트 단가. 금액 = 수량 × (단가 + 베스트 단가) */
+  vestUnitPrice?: string | number | null;
   notes?: string | null;
   sortOrder: number;
 }
@@ -134,6 +138,10 @@ export interface ContractLine {
   quantity: number;
   unitPrice: number;
   amount: number;
+  /** 베스트(3피스) 포함 — 맞춤 정장 라인 전용. 품목표에서 베스트가 자기 행으로 보인다. */
+  vestIncluded: boolean;
+  /** 베스트 포함 시 벌당 베스트 단가(수기) */
+  vestUnitPrice: number;
   note?: string;
   itemDescription?: string;
 }
@@ -145,6 +153,8 @@ export interface ContractLineInput {
   quantity: number;
   unitPrice: number;
   amount: number;
+  vestIncluded?: boolean;
+  vestUnitPrice?: number;
   note?: string;
 }
 
@@ -229,6 +239,8 @@ function toLine(row: ContractLineApiRow): ContractLine {
     quantity: row.quantity,
     unitPrice: toNumber(row.unitPrice) ?? 0,
     amount: toNumber(row.lineAmount) ?? 0,
+    vestIncluded: row.vestIncluded ?? false,
+    vestUnitPrice: toNumber(row.vestUnitPrice) ?? 0,
     note: row.notes ?? undefined,
     itemDescription: row.itemDescription ?? undefined,
   };
@@ -423,6 +435,8 @@ function toLinePayload(lines: ContractLineInput[]) {
     quantity: l.quantity,
     unitPrice: l.unitPrice,
     lineAmount: l.amount,
+    // 베스트는 포함일 때만 단가를 보낸다 (백엔드가 제외 라인의 단가를 null로 정규화).
+    ...(l.vestIncluded ? { vestIncluded: true, vestUnitPrice: l.vestUnitPrice ?? 0 } : {}),
     ...(l.note ? { notes: l.note } : {}),
   }));
 }
@@ -661,6 +675,8 @@ export interface ContractDocumentLine {
   unitPrice: number;
   lineAmount: number;
   notes?: string;
+  /** 베스트 파생 행 — 정장 라인의 베스트 금액을 자기 행으로 편 것 (현업 확정 2026-07-30) */
+  isVest: boolean;
   /** 주문품목 × 부위 × 유료옵션 계층 */
   items: ContractDocumentItem[];
 }
@@ -705,6 +721,7 @@ interface ContractDocumentLineApiRow {
   unitPrice?: string | number | null;
   lineAmount?: string | number | null;
   notes?: string | null;
+  isVest?: boolean;
   items?: ContractDocumentItemApiRow[] | null;
 }
 
@@ -742,6 +759,26 @@ interface ContractDocumentApiRow {
   signature: { signed: boolean; signerName?: string | null; signedAt?: string | null; downloadUrl?: string | null };
 }
 
+/**
+ * 스타일 컨설팅 중 베스트 제외 (현업 확정 2026-07-30 — 옵션 화면 [옵션 선택 안함]).
+ * 계약서의 베스트 품목(금액)을 빼고 합계에서 자동 차감한다. 작성중 + 품목 미진행에서만 허용.
+ */
+export interface ExcludeVestResult {
+  contractItemId: string;
+  contractId: string;
+  contractNo: string;
+  vestIncluded: false;
+  /** 계약 합계에서 자동 차감된 베스트 금액 */
+  deductedAmount: number;
+}
+
+export function excludeVest(contractItemId: string): Promise<ExcludeVestResult> {
+  return request<ExcludeVestResult>({
+    url: `/contracts/items/${contractItemId}/exclude-vest`,
+    method: 'POST',
+  });
+}
+
 /** 웹 계약서 표시 데이터. 금액은 Decimal 문자열로 오므로 number 로 흡수한다. */
 export function fetchContractDocument(id: string): Promise<ContractDocument> {
   return request<ContractDocumentApiRow>({ url: `/contracts/${id}/document` }).then((row) => ({
@@ -765,6 +802,7 @@ export function fetchContractDocument(id: string): Promise<ContractDocument> {
       unitPrice: toNumber(l.unitPrice) ?? 0,
       lineAmount: toNumber(l.lineAmount) ?? 0,
       notes: l.notes ?? undefined,
+      isVest: l.isVest ?? false,
       items: (l.items ?? []).map((it) => ({
         contractItemId: it.contractItemId,
         orderNo: it.orderNo ?? null,

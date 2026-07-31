@@ -189,6 +189,8 @@ export function ContractFormPage() {
         quantity: l.quantity,
         unitPrice: l.unitPrice,
         amount: l.amount,
+        vestIncluded: l.vestIncluded,
+        vestUnitPrice: l.vestUnitPrice,
         note: l.note,
       }),
     );
@@ -242,6 +244,8 @@ export function ContractFormPage() {
         quantity: l.quantity,
         unitPrice: l.unitPrice,
         amount: l.amount,
+        vestIncluded: l.vestIncluded,
+        vestUnitPrice: l.vestUnitPrice,
         note: l.note?.trim() || undefined,
       })),
     };

@@ -427,6 +427,7 @@ export class ContractsService {
         components: true,
         contract: { select: { id: true, contractNo: true, status: true, rowVersion: true, currentVersionId: true } },
         sourceContractLine: true,
+        orderItems: { select: { status: true } },
       },
     });
     if (!item) throw new NotFoundException('계약 품목이 없습니다.');
@@ -434,9 +435,16 @@ export class ContractsService {
     if (contract.status !== 'DRAFT')
       throw new BusinessException(
         'CONTRACT_NOT_DRAFT',
-        '작성중 계약에서만 베스트를 제외할 수 있습니다. 계약 상세의 [수정하기]로 새 버전을 만든 뒤 진행해 주세요.',
+        '작성중인 계약에서만 베스트를 제외할 수 있습니다. 계약서 [수정하기]로 되돌린 뒤 진행해 주세요.',
         undefined,
         { status: contract.status },
+      );
+    // 제외는 '감소'다 — 컨설팅 잠금과 같은 규칙으로 제작 진행 중(제작요청 이후) 벌은 막는다 (0731).
+    const inProduction = item.orderItems.some((o) => o.status !== 'CREATED' && o.status !== 'CANCELLED');
+    if (inProduction)
+      throw new BusinessException(
+        'INVALID_STATUS_TRANSITION',
+        '제작 진행 중인 품목은 베스트를 제외할 수 없습니다. 제작·입출고 화면에서 상태를 되돌린 뒤 진행해 주세요.',
       );
     if (!this.isVestCapable(item.transactionType, item.productCategory))
       throw new BusinessException('VALIDATION_ERROR', '맞춤 정장 품목에서만 베스트를 제외할 수 있습니다.', [
@@ -1045,18 +1053,19 @@ export class ContractsService {
       if (item.transactionType === 'RENTAL') {
         done = item.rentalSelectionSessions.some((x) => x.status === 'CONFIRMED');
       } else {
-        // 확정 상태만으로는 모자라다 — 2피스로 확정한 뒤 베스트를 추가하면 베스트 단계가
-        // 미선택인 채 확정으로 남는다. 살아 있는 부위 기준의 활성 단계가 전부 선택돼야 완료다.
+        // 확정 상태만으로는 모자란 경우가 하나 있다 — 2피스로 확정한 뒤 베스트를 추가하면
+        // 베스트 단계가 미선택인 채 확정으로 남는다. 확정 시점 검증(confirm)이 보장하는
+        // 나머지 단계는 다시 세지 않고, **베스트 단계의 공백만** 미완료로 본다.
         const session = item.optionSelectionSessions[0];
         if (session?.status === 'CONFIRMED') {
           const vestActive = item.components.some(
             (c) => c.componentType === 'VEST' && c.status !== 'CANCELLED',
           );
-          const requiredStages = session.optionSetVersion.stages.filter(
-            (s) => vestActive || s.componentGroup !== 'VEST',
-          );
+          const vestStages = vestActive
+            ? session.optionSetVersion.stages.filter((s) => s.componentGroup === 'VEST')
+            : [];
           const selected = new Set(session.values.map((v) => v.optionStageId));
-          done = requiredStages.every((s) => selected.has(s.id));
+          done = vestStages.every((s) => selected.has(s.id));
         }
       }
       if (!done) {
