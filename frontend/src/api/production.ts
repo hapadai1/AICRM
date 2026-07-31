@@ -109,6 +109,21 @@ export function canRequestProduction(itemStatus: string): boolean {
   return rank !== undefined && rank < ITEM_STATUS_RANK.PRODUCTION_REQUESTED;
 }
 
+/**
+ * [제작요청 완료]를 막아야 하면 그 사유 문자열, 누를 수 있으면 null.
+ * 맞춤(CUSTOM)은 준비(옵션 확정 + 채촌 연결 = 작업지시서 준비 완료)가 돼야 제작요청할 수 있다.
+ * 렌탈·구매는 준비 개념이 없어 상태 순번만 본다. (백엔드 createItemEvent와 같은 규칙)
+ */
+export function productionRequestBlockReason(item: ProductionItem): string | null {
+  if (!canRequestProduction(item.itemStatus)) {
+    const label = PRODUCTION_STATUS_META[item.itemStatus]?.label ?? item.itemStatus;
+    return `이미 ${label} 상태라 제작요청을 다시 보낼 수 없습니다.`;
+  }
+  if (item.transactionType === 'CUSTOM' && !item.workOrder.canIssue)
+    return '옵션 확정과 채촌 완료 후 제작요청할 수 있습니다.';
+  return null;
+}
+
 /** 품목·구성품 상태 표시명/색상 (품목 집계 상태 포함) */
 export const PRODUCTION_STATUS_META: Record<string, { label: string; color: string }> = {
   RESERVED: { label: '예약', color: 'cyan' },

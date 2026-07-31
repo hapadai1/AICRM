@@ -90,6 +90,21 @@ export class ProductionService {
       );
     validateTransition(ITEM_STATUS_FLOW, item.status, dto.newStatus, dto.reason, '품목');
 
+    // 맞춤은 준비(옵션 확정 + 채촌 연결 = 작업지시서 준비 완료)가 끝나야 제작요청할 수 있다.
+    // 프론트 버튼 비활성의 서버측 이중 방어 — 준비 없이 제작요청된 앞뒤 안 맞는 상태를 막는다.
+    if (dto.newStatus === 'PRODUCTION_REQUESTED') {
+      const gate = await this.prisma.orderItem.findUnique({
+        where: { id: orderItemId },
+        select: { order: { select: { transactionType: true } }, ...workOrderStatusSelect },
+      });
+      if (gate && gate.order.transactionType === 'CUSTOM' && !buildWorkOrderView(gate).canIssue)
+        throw new BusinessException(
+          'VALIDATION_ERROR',
+          '옵션 확정과 채촌 완료 후 제작요청할 수 있습니다.',
+          [{ field: 'newStatus', reason: 'NOT_READY' }],
+        );
+    }
+
     const event = await this.prisma.$transaction(async (tx) => {
       const created = await tx.productionEvent.create({
         data: {

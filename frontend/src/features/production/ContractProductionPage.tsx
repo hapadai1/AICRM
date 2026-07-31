@@ -44,7 +44,7 @@ import { fetchContract } from '../../api/contracts';
 import {
   COMPONENT_TYPE_LABELS,
   PRODUCTION_STATUS_META,
-  canRequestProduction,
+  productionRequestBlockReason,
   fetchProductionItems,
   postComponentStatusEvent,
   postItemProductionEvent,
@@ -301,23 +301,20 @@ export function ContractProductionPage() {
       key: 'itemActions',
       width: 184,
       onCell: spanCell,
-      render: (_, { item: r }) => (
+      render: (_, { item: r }) => {
+        // 맞춤은 준비(옵션 확정 + 채촌 연결)가 끝나야 제작요청 가능 — 준비 미완이면 잠근다.
+        // 작업지시서 출력과 "행위"를 커플링하는 게 아니라 "준비 상태"를 게이트하는 것(설계서 11 §9와 양립).
+        const requestBlockReason = productionRequestBlockReason(r);
+        return (
         <Space size="small" wrap>
           <Can permission="PRODUCTION_EDIT">
-            {/* 작업지시서 출력과 커플링하지 않는 독립 버튼 (설계서 11 §9) — 제작요청 이후 상태에서만 잠근다. */}
-            <Tooltip
-              title={
-                canRequestProduction(r.itemStatus)
-                  ? ''
-                  : `이미 ${statusLabel(r.itemStatus)} 상태라 제작요청을 다시 보낼 수 없습니다.`
-              }
-            >
+            <Tooltip title={requestBlockReason ?? ''}>
               <Button
                 size="small"
                 type="primary"
                 ghost
                 icon={<SendOutlined />}
-                disabled={!canRequestProduction(r.itemStatus)}
+                disabled={!!requestBlockReason}
                 loading={requestMutation.isPending && requestMutation.variables === r.orderItemId}
                 onClick={() => requestMutation.mutate(r.orderItemId)}
               >
@@ -331,7 +328,8 @@ export function ContractProductionPage() {
             </Button>
           </Can>
         </Space>
-      ),
+        );
+      },
     },
     {
       title: '구성품',
