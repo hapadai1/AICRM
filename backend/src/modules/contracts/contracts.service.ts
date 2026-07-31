@@ -1457,8 +1457,8 @@ export class ContractsService {
 
     const existingItems = await tx.contractItem.findMany({
       where: { contractId },
-      // 물리화(주문품목) 여부가 '지워도 되는 품목'을 가른다. 부위는 베스트 켜고 끄기에 쓴다.
-      include: { orderItems: { select: { id: true } }, components: true },
+      // 물리화(주문품목) 여부가 '지워도 되는 품목'을, 상태가 '베스트를 꺼도 되는 품목'을 가른다.
+      include: { orderItems: { select: { id: true, status: true } }, components: true },
     });
     const keys = new Set<string>([
       ...slotsByKey.keys(),
@@ -1564,13 +1564,20 @@ export class ContractsService {
 
   /**
    * 품목의 VEST 부위를 라인의 베스트 포함 여부에 맞춘다.
-   * - 포함: 취소된 부위가 있으면 되살리고, 없으면 새로 만든다.
+   * - 포함: 취소된 부위가 있으면 되살리고, 없으면 새로 만든다. (추가는 언제나 자유 — 품목 추가 전용 규칙)
    * - 제외: 부위를 CANCELLED로 두고(물리 삭제 금지) 그 품목의 베스트 옵션 선택도 정리한다.
+   *   제외는 '감소'라 **제작 진행 중(제작요청 이후) 벌은 저장을 거부**한다 — 옵션 화면
+   *   [옵션 선택 안함]과 계약서 라인 저장이 같은 규칙을 탄다 (현업 확정 2026-07-31).
    * 주문품목 구성품은 여기서 건드리지 않는다 — 계약완료 시 syncOrders 가 증분 반영한다.
    */
   private async syncVestComponent(
     tx: Prisma.TransactionClient,
-    item: { id: string; components: { id: string; componentType: string; status: string }[] },
+    item: {
+      id: string;
+      displayName: string;
+      components: { id: string; componentType: string; status: string }[];
+      orderItems: { status: string }[];
+    },
     vestIncluded: boolean,
   ): Promise<void> {
     const vest = item.components
@@ -1586,6 +1593,14 @@ export class ContractsService {
           data: { id: randomUUID(), contractItemId: item.id, componentType: 'VEST', sequenceNo: 1, status: 'CREATED' },
         });
     } else if (vest && vest.status !== 'CANCELLED') {
+      const inProduction = item.orderItems.some(
+        (o) => o.status !== 'CREATED' && o.status !== 'CANCELLED',
+      );
+      if (inProduction)
+        throw new BusinessException(
+          'INVALID_STATUS_TRANSITION',
+          `${item.displayName}은(는) 제작 진행 중이라 베스트를 제외할 수 없습니다. 제작·입출고 화면에서 상태를 되돌린 뒤 진행해 주세요.`,
+        );
       await tx.contractItemComponent.update({ where: { id: vest.id }, data: { status: 'CANCELLED' } });
       await this.removeVestSelections(tx, item.id);
     }
