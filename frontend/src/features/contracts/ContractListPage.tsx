@@ -67,6 +67,19 @@ const FIXED_DATE_FIELD = 'contractedAt' as const;
 /** 기본 조회 기간: 최근 1개월 (현업 확정 2026-07-31) */
 const defaultRange = (): [Dayjs, Dayjs] => [dayjs().subtract(1, 'month'), dayjs()];
 
+/**
+ * 기본 상태: 작성중 (현업 확정 2026-07-31).
+ * 화면을 열면 손볼 계약부터 보인다 — 이미 끝난 계약은 찾아서 본다.
+ */
+const DEFAULT_STATUS: ContractStatus = 'DRAFT';
+
+/**
+ * 상태를 "전체"로 되돌린 상태를 URL에 남기는 값.
+ * 파라미터가 아예 없으면 기본값(작성중)으로 읽으므로, 사용자가 일부러 전체로
+ * 지운 것과 처음 들어온 것을 구분해야 한다. 없으면 전체를 골라도 작성중으로 튕긴다.
+ */
+const STATUS_ALL = 'ALL';
+
 /** URL 쿼리 ↔ 필터 상태 */
 interface Filters {
   q: string;
@@ -80,11 +93,17 @@ interface Filters {
 
 function readFilters(params: URLSearchParams): Filters {
   const [from, to] = defaultRange();
+  const rawStatus = params.get('status');
   return {
     q: params.get('q') ?? '',
     dateFrom: params.get('dateFrom') ?? from.format('YYYY-MM-DD'),
     dateTo: params.get('dateTo') ?? to.format('YYYY-MM-DD'),
-    status: (params.get('status') as ContractStatus | null) ?? undefined,
+    status:
+      rawStatus === null
+        ? DEFAULT_STATUS
+        : rawStatus === STATUS_ALL
+          ? undefined
+          : (rawStatus as ContractStatus),
     contractTypeId: params.get('contractTypeId') ?? undefined,
     page: Number(params.get('page') ?? 1),
     size: Number(params.get('size') ?? 30),
@@ -96,7 +115,8 @@ function writeFilters(filters: Filters): Record<string, string> {
     ['q', filters.q || undefined],
     ['dateFrom', filters.dateFrom],
     ['dateTo', filters.dateTo],
-    ['status', filters.status],
+    // 전체(undefined)도 URL에 남긴다 — 안 남기면 다음 읽기에서 기본값(작성중)으로 되돌아간다.
+    ['status', filters.status ?? STATUS_ALL],
     ['contractTypeId', filters.contractTypeId],
     ['page', filters.page > 1 ? filters.page : undefined],
     ['size', filters.size !== 30 ? filters.size : undefined],
@@ -164,6 +184,8 @@ export function ContractListPage({
         q: '',
         dateFrom: from.format('YYYY-MM-DD'),
         dateTo: to.format('YYYY-MM-DD'),
+        // 초기화는 처음 들어온 상태로 되돌리는 것이다 — 전체가 아니라 기본값(작성중)이다.
+        status: DEFAULT_STATUS,
         page: 1,
         size: 30,
       }),
