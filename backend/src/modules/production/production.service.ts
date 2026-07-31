@@ -127,6 +127,48 @@ export class ProductionService {
         },
         tx,
       );
+
+      // 제작요청은 품목 축의 신호지만, 아직 '생성'인 구성품도 함께 '제작요청'으로 전진시킨다.
+      // 그래야 진행바(구성품 상태)가 요청을 반영한다. 이미 진행된 구성품·렌탈 예약(RESERVED)·
+      // 취소는 status='CREATED' 필터로 자연히 제외된다.
+      if (dto.newStatus === 'PRODUCTION_REQUESTED') {
+        const eventDate = toDate(dto.eventDate) ?? today();
+        const pending = await tx.orderItemComponent.findMany({
+          where: { orderItemId, active: true, status: 'CREATED' },
+          select: { id: true },
+        });
+        for (const c of pending) {
+          await tx.productionEvent.create({
+            data: {
+              id: randomUUID(),
+              orderItemId,
+              componentId: c.id,
+              eventType: 'PRODUCTION_REQUESTED',
+              previousStatus: 'CREATED',
+              newStatus: 'PRODUCTION_REQUESTED',
+              eventDate,
+              notes: '품목 제작요청에 따른 자동 전진',
+              actorId: actor.id,
+            },
+          });
+          await tx.orderItemComponent.update({
+            where: { id: c.id },
+            data: { status: 'PRODUCTION_REQUESTED' },
+          });
+          await this.audit.log(
+            {
+              userId: actor.id,
+              action: 'STATUS_CHANGE',
+              entityType: 'ORDER_ITEM_COMPONENT',
+              entityId: c.id,
+              before: { status: 'CREATED' },
+              after: { status: 'PRODUCTION_REQUESTED' },
+              reason: '품목 제작요청 cascade',
+            },
+            tx,
+          );
+        }
+      }
       return created;
     });
     return event;
