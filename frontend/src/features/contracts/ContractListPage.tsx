@@ -16,6 +16,7 @@ import {
   DatePicker,
   Input,
   Radio,
+  Segmented,
   Select,
   Space,
   Table,
@@ -45,11 +46,24 @@ import { CONTRACT_STATUS_META, formatKrw, metaOf } from './labels';
 
 const { RangePicker } = DatePicker;
 
-/** 필터 옵션은 백엔드가 허용하는 상태만 사용한다(CONTRACT_STATUSES 와 동일). */
-const STATUS_OPTIONS = CONTRACT_FILTER_STATUSES.map((value) => ({
-  value,
-  label: metaOf(CONTRACT_STATUS_META, value).label,
-}));
+/**
+ * 상태를 "전체"로 되돌린 상태를 URL에 남기는 값.
+ * 파라미터가 아예 없으면 기본값(작성중)으로 읽으므로, 사용자가 일부러 전체로
+ * 지운 것과 처음 들어온 것을 구분해야 한다. 없으면 전체를 골라도 작성중으로 튕긴다.
+ */
+const STATUS_ALL = 'ALL';
+
+/**
+ * 상태 선택 버튼 — 맨 앞이 전체, 나머지는 백엔드가 허용하는 상태만 사용한다
+ * (CONTRACT_STATUSES 와 동일). 순서는 계약 흐름 순서다.
+ */
+const STATUS_OPTIONS = [
+  { value: STATUS_ALL, label: '전체' },
+  ...CONTRACT_FILTER_STATUSES.map((value) => ({
+    value,
+    label: metaOf(CONTRACT_STATUS_META, value).label,
+  })),
+];
 
 /**
  * 정렬은 계약일 최신순으로 고정한다(관리자·고객모드 동일).
@@ -72,13 +86,6 @@ const defaultRange = (): [Dayjs, Dayjs] => [dayjs().subtract(1, 'month'), dayjs(
  * 화면을 열면 손볼 계약부터 보인다 — 이미 끝난 계약은 찾아서 본다.
  */
 const DEFAULT_STATUS: ContractStatus = 'DRAFT';
-
-/**
- * 상태를 "전체"로 되돌린 상태를 URL에 남기는 값.
- * 파라미터가 아예 없으면 기본값(작성중)으로 읽으므로, 사용자가 일부러 전체로
- * 지운 것과 처음 들어온 것을 구분해야 한다. 없으면 전체를 골라도 작성중으로 튕긴다.
- */
-const STATUS_ALL = 'ALL';
 
 /** URL 쿼리 ↔ 필터 상태 */
 interface Filters {
@@ -409,13 +416,17 @@ export function ContractListPage({
                 onChange={(v?: string) => update({ contractTypeId: v })}
                 options={(typesQuery.data ?? []).map((t) => ({ value: t.id, label: t.name }))}
               />
-              <Select
-                allowClear
-                style={{ width: LAYOUT.filterWidth }}
-                placeholder="상태 전체"
+              {/*
+                상태는 다섯 개로 고정돼 늘어나지 않으므로 접었다 펴는 셀렉트 대신
+                버튼으로 늘어놓는다 — 지금 무엇으로 보고 있는지가 열지 않아도 보인다
+                (채촌·스타일 컨설팅 목록과 같은 방식).
+              */}
+              <Segmented
+                value={filters.status ?? STATUS_ALL}
+                onChange={(v) =>
+                  update({ status: v === STATUS_ALL ? undefined : (v as ContractStatus) })
+                }
                 options={STATUS_OPTIONS}
-                value={filters.status}
-                onChange={(v?: ContractStatus) => update({ status: v })}
               />
               <Button icon={<ReloadOutlined />} onClick={resetFilters}>
                 초기화
