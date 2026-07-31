@@ -1229,6 +1229,133 @@ describe('베스트 — 계약서 추가·컨설팅 중 제외', () => {
     expect(Number(lines[1].lineAmount)).toBe(vest);
   });
 
+  it('베스트 부위 옵션은 계약서에서 "베스트" 행에 담긴다 (부위 행이 없어도 공통으로 뭉개지 않는다)', async () => {
+    const admin = await ctx.prisma.user.findUniqueOrThrow({ where: { loginId: 'admin' } });
+    const optionSet = await ctx.prisma.optionSet.findUniqueOrThrow({
+      where: { productCategory: 'SUIT' },
+    });
+    const versionId = randomUUID();
+    const stageId = randomUUID();
+    const choiceId = randomUUID();
+    const fileId = randomUUID();
+    await ctx.prisma.file.create({
+      data: {
+        id: fileId,
+        storageKey: `vest-label-test/${fileId}`,
+        originalName: 'choice.png',
+        mimeType: 'image/png',
+        sizeBytes: BigInt(1),
+      },
+    });
+    await ctx.prisma.optionSetVersion.create({
+      data: {
+        id: versionId,
+        optionSetId: optionSet.id,
+        versionNo: 900 + seq,
+        status: 'ACTIVE',
+        createdBy: admin.id,
+      },
+    });
+    await ctx.prisma.optionStage.create({
+      data: {
+        id: stageId,
+        optionSetVersionId: versionId,
+        stageCode: 'VEST_LABEL_TEST',
+        stageName: '베스트 라펠 디자인',
+        sequenceNo: 1,
+        componentGroup: 'VEST',
+        choices: {
+          create: [
+            {
+              id: choiceId,
+              choiceCode: 'A',
+              choiceName: '라펠있음',
+              extraPrice: 33000,
+              imageFileId: fileId,
+            },
+          ],
+        },
+      },
+    });
+
+    // 베스트를 뺀(2피스) 벌 — VEST 부위 행이 없는 상태에서 베스트 옵션 값만 남아 있다.
+    // (구버전 데이터에서 실제로 나오는 모양. 예전에는 이 값이 '공통'으로 떨어졌다.)
+    const { contractId } = await createVestContract();
+    const item = await ctx.prisma.contractItem.findFirstOrThrow({ where: { contractId } });
+    await ctx.prisma.contractItemComponent.updateMany({
+      where: { contractItemId: item.id, componentType: 'VEST' },
+      data: { status: 'CANCELLED' },
+    });
+    const sessionId = randomUUID();
+    await ctx.prisma.optionSelectionSession.create({
+      data: {
+        id: sessionId,
+        contractItemId: item.id,
+        optionSetVersionId: versionId,
+        selectionVersionNo: 1,
+        status: 'IN_PROGRESS',
+        isCurrent: true,
+        values: {
+          create: [
+            {
+              id: randomUUID(),
+              optionStageId: stageId,
+              optionChoiceId: choiceId,
+              extraPriceSnapshot: 33000,
+              selectedBy: admin.id,
+            },
+          ],
+        },
+      },
+    });
+
+    const doc = await api(ctx).get(`/api/v1/contracts/${contractId}/document`).set(auth(ctx)).expect(200);
+    const docItem = doc.body.data.lines[0].items[0];
+    const withOptions = docItem.components.filter((c: { options: unknown[] }) => c.options.length > 0);
+    expect(withOptions.map((c: { groupLabel: string }) => c.groupLabel)).toEqual(['베스트']);
+    expect(withOptions[0].options[0].optionName).toBe('라펠있음');
+  });
+
+  it('같은 품목 라인이 둘이면 각 라인은 자기 벌만 싣는다 (계약서 표 중복 방지)', async () => {
+    const customerId = await newCustomer();
+    const res = await api(ctx)
+      .post('/api/v1/contracts')
+      .set(auth(ctx))
+      .send({
+        customerId,
+        totalAmount: 2_500_000,
+        lines: [
+          {
+            transactionType: 'CUSTOM',
+            productCategory: 'SUIT',
+            quantity: 1,
+            unitPrice: 1_500_000,
+            lineAmount: 1_500_000,
+          },
+          {
+            transactionType: 'CUSTOM',
+            productCategory: 'SUIT',
+            quantity: 1,
+            unitPrice: 1_000_000,
+            lineAmount: 1_000_000,
+          },
+        ],
+      })
+      .expect(201);
+
+    const doc = await api(ctx)
+      .get(`/api/v1/contracts/${res.body.data.id}/document`)
+      .set(auth(ctx))
+      .expect(200);
+    const lines = doc.body.data.lines;
+    expect(lines).toHaveLength(2);
+    expect(lines.map((l: { items: unknown[] }) => l.items.length)).toEqual([1, 1]);
+    const names = lines.flatMap((l: { items: { displayName: string }[] }) =>
+      l.items.map((i) => i.displayName),
+    );
+    expect(new Set(names).size).toBe(2);
+  });
+
   it('베스트는 맞춤 정장 라인에만 켤 수 있다 (렌탈·셔츠는 400)', async () => {
     const customerId = await newCustomer();
     for (const line of [

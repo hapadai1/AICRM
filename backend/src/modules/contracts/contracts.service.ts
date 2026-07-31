@@ -975,7 +975,10 @@ export class ContractsService {
           notes: l.notes,
           isVest: false,
           // 주문품목 × 부위 × 유료옵션 계층 (주문 생성 전에는 빈 배열)
-          items: itemTree.get(`${l.transactionType}|${l.productCategory}`) ?? [],
+          items:
+            itemTree.get(`line:${l.id}`) ??
+            itemTree.get(`${l.transactionType}|${l.productCategory}`) ??
+            [],
         };
         if (!l.vestIncluded) return [base];
         return [
@@ -2040,11 +2043,21 @@ export class ContractsService {
       );
 
       for (const v of valuesByItem.get(item.id) ?? []) {
-        const matched = components.find((c) => c.group === v.optionStage.componentGroup);
-        // 부위 미지정 단계(단일 부위 세트·구버전)는 부위가 하나면 그 부위, 아니면 '공통'으로 모은다.
-        let target = matched ?? (components.length === 1 ? components[0] : undefined);
+        const group = v.optionStage.componentGroup;
+        let target = components.find((c) => c.group === group);
+        if (!target && group) {
+          // 부위가 지정된 단계인데 부위 행이 없다(부위 행 자체가 없는 구버전 품목 등).
+          // '공통'으로 뭉개지 말고 제 부위 라벨로 행을 만든다.
+          target = {
+            group,
+            groupLabel: COMPONENT_GROUP_LABELS[group] ?? COMPONENT_LABEL[group] ?? group,
+            options: [],
+          };
+          components.push(target);
+        }
         if (!target) {
-          target = components.find((c) => c.group === 'COMMON');
+          // 부위 미지정 단계(단일 부위 세트·구버전)는 부위가 하나면 그 부위, 아니면 '공통'으로 모은다.
+          target = components.length === 1 ? components[0] : components.find((c) => c.group === 'COMMON');
           if (!target) {
             target = { group: 'COMMON', groupLabel: '공통', options: [] };
             components.push(target);
@@ -2057,7 +2070,12 @@ export class ContractsService {
         });
       }
 
-      const key = `${item.transactionType}|${item.productCategory}`;
+      // 라인이 같은 카테고리로 둘 이상이면(정장 2줄) 카테고리 키로만 묶을 때 두 라인이
+      // 서로의 벌까지 그려 표가 겹쳐 보인다. 벌은 자기 라인을 알고 있으니 그 키로 묶고,
+      // 라인 참조가 끊긴 구버전 품목만 카테고리 키에 남긴다.
+      const key = item.sourceContractLineId
+        ? `line:${item.sourceContractLineId}`
+        : `${item.transactionType}|${item.productCategory}`;
       const list = tree.get(key) ?? [];
       list.push({
         contractItemId: item.id,
