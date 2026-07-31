@@ -47,6 +47,13 @@ const CATEGORY_OPTIONS = (Object.keys(PRODUCT_CATEGORY_LABEL) as ProductCategory
   label: PRODUCT_CATEGORY_LABEL[v],
 }));
 
+/** 서버 응답 라인에는 id·contractTypeId·타임스탬프가 붙어 오므로 DTO가 받는 필드만 남긴다. */
+const pickLineFields = (l: ContractTypeLine): ContractTypeLine => ({
+  transactionType: l.transactionType,
+  productCategory: l.productCategory,
+  defaultQuantity: l.defaultQuantity,
+});
+
 interface TypeFormValues {
   name: string;
   description?: string;
@@ -129,13 +136,15 @@ export function ContractTypeAdminPage() {
       name: t.name,
       description: t.description,
       sortOrder: t.sortOrder,
-      lines: t.lines.map((l) => ({ ...l })),
+      lines: t.lines.map(pickLineFields),
     });
     setOpen(true);
   };
 
   const handleSubmit = async () => {
-    const values = await form.validateFields();
+    const raw = await form.validateFields();
+    // 백엔드가 forbidNonWhitelisted라 DTO에 없는 필드(id·contractTypeId·createdAt 등)를 보내면 400이 난다.
+    const values: TypeFormValues = { ...raw, lines: (raw.lines ?? []).map(pickLineFields) };
     const doSave = () => saveMutation.mutate(values);
     // 중복명 경고 (저장 자체는 허용 — 문서 03 §6.1)
     const duplicated = types?.some((t) => t.name === values.name.trim() && t.id !== editing?.id);
@@ -161,13 +170,14 @@ export function ContractTypeAdminPage() {
       render: (v: string) => <Typography.Text strong>{v}</Typography.Text>,
     },
     // ellipsis 컬럼은 표 레이아웃이 fixed로 바뀌므로 폭을 지정해 둔다(미지정 시 좁게 찌그러짐).
-    { title: '설명', dataIndex: 'description', width: 260, ellipsis: true, render: (v?: string) => v ?? '-' },
+    { title: '설명', dataIndex: 'description', width: 220, ellipsis: true, render: (v?: string) => v ?? '-' },
     {
       title: '기본 품목',
       dataIndex: 'lines',
-      width: 320,
+      width: 200,
       render: (lines: ContractTypeLine[]) => (
-        <Space size={[4, 4]} wrap>
+        // 품목은 한 줄에 하나씩 세로로 나열한다
+        <Space direction="vertical" size={4} align="start">
           {lines.map((l, i) => (
             <Tag key={i} color={l.transactionType === 'CUSTOM' ? 'blue' : 'purple'}>
               {TRANSACTION_TYPE_LABEL[l.transactionType]} {PRODUCT_CATEGORY_LABEL[l.productCategory]} ×
@@ -187,10 +197,11 @@ export function ContractTypeAdminPage() {
     {
       title: '작업',
       key: 'actions',
-      width: 220,
+      // 버튼 3개(수정·복제·사용 중지)가 줄바꿈 없이 한 줄에 들어가는 폭
+      width: 260,
       render: (_, t) => (
         <Can permission="CONTRACT_TYPE_EDIT">
-          <Space size={4} wrap>
+          <Space size={4} wrap={false}>
             <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(t)}>
               수정
             </Button>
