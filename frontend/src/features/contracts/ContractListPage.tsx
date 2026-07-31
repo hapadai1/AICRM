@@ -1,6 +1,6 @@
 /**
  * 계약 목록 — 계약 현황 조회 화면 (개편계획 06)
- * - 진입점은 고객과 기간: 기간 기준 선택 + 통합검색 + 고객 검색 팝업
+ * - 진입점은 고객과 기간: 통합검색(고객명·전화번호·계약번호) + 기간 기준·범위
  * - 필터는 URL 쿼리에 동기화한다(새로고침·뒤로가기·링크 공유 보존)
  */
 import {
@@ -10,7 +10,6 @@ import {
   ReloadOutlined,
   RightOutlined,
   SettingOutlined,
-  UserOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -25,7 +24,6 @@ import {
   Space,
   Statistic,
   Table,
-  Tag,
   Typography,
 } from 'antd';
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
@@ -46,8 +44,6 @@ import { Can } from '../../shared/Can';
 import { DataTable, PAGE_SIZE_OPTIONS } from '../../shared/DataTable';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { LAYOUT } from '../../app/theme';
-import { CustomerPickerModal } from '../../shared/CustomerPickerModal';
-import type { PickedCustomer } from '../../shared/CustomerPickerModal';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { autoWidth } from '../../shared/table-width';
 import { CONTRACT_STATUS_META, formatKrw, metaOf } from './labels';
@@ -85,8 +81,6 @@ interface Filters {
   dateTo?: string;
   status?: ContractStatus;
   contractTypeId?: string;
-  customerId?: string;
-  customerLabel?: string;
   page: number;
   size: number;
 }
@@ -100,8 +94,6 @@ function readFilters(params: URLSearchParams): Filters {
     dateTo: params.get('dateTo') ?? to.format('YYYY-MM-DD'),
     status: (params.get('status') as ContractStatus | null) ?? undefined,
     contractTypeId: params.get('contractTypeId') ?? undefined,
-    customerId: params.get('customerId') ?? undefined,
-    customerLabel: params.get('customerLabel') ?? undefined,
     page: Number(params.get('page') ?? 1),
     size: Number(params.get('size') ?? 30),
   };
@@ -115,8 +107,6 @@ function writeFilters(filters: Filters): Record<string, string> {
     ['dateTo', filters.dateTo],
     ['status', filters.status],
     ['contractTypeId', filters.contractTypeId],
-    ['customerId', filters.customerId],
-    ['customerLabel', filters.customerLabel],
     ['page', filters.page > 1 ? filters.page : undefined],
     ['size', filters.size !== 30 ? filters.size : undefined],
   ];
@@ -143,7 +133,6 @@ export function ContractListPage({
 
   // 검색어는 입력 중 URL을 바꾸지 않도록 로컬 상태로 둔다.
   const [keyword, setKeyword] = useState(filters.q);
-  const [pickerOpen, setPickerOpen] = useState(false);
 
   const update = (patch: Partial<Filters>) => {
     // 조건이 바뀌면 첫 페이지로 되돌린다(페이지 이동만 예외).
@@ -155,8 +144,7 @@ export function ContractListPage({
   const params: ContractSearchParams = embedded
     ? { customerId: embeddedCustomerId, sort: FIXED_SORT, page: 1, size: 100 }
     : {
-        q: filters.customerId ? undefined : filters.q || undefined,
-        customerId: filters.customerId,
+        q: filters.q || undefined,
         dateField: filters.dateField,
         dateFrom: filters.dateFrom,
         dateTo: filters.dateTo,
@@ -176,12 +164,6 @@ export function ContractListPage({
     queryKey: ['contract-types', { includeInactive: false }],
     queryFn: () => fetchContractTypes(false),
   });
-
-  const handlePickCustomer = (customer: PickedCustomer) => {
-    update({ customerId: customer.id, customerLabel: `${customer.name} (${customer.phone})`, q: '' });
-    setKeyword('');
-    setPickerOpen(false);
-  };
 
   const resetFilters = () => {
     setKeyword('');
@@ -384,32 +366,18 @@ export function ContractListPage({
         <ListToolbar
           filters={
             <>
-              {filters.customerId ? (
-                <Space>
-                  <Tag
-                    color="blue"
-                    closable
-                    onClose={() => update({ customerId: undefined, customerLabel: undefined })}
-                    style={{ padding: '4px 8px', fontSize: 14 }}
-                  >
-                    <UserOutlined /> {filters.customerLabel ?? '선택한 고객'}
-                  </Tag>
-                  <Button onClick={() => setPickerOpen(true)}>변경</Button>
-                </Space>
-              ) : (
-                <Space.Compact style={{ width: LAYOUT.searchWidth + 110 }}>
-                  <Input.Search
-                    allowClear
-                    placeholder="고객명 · 전화번호 · 계약번호"
-                    value={keyword}
-                    onChange={(e) => setKeyword(e.target.value)}
-                    onSearch={(value) => update({ q: value.trim() })}
-                  />
-                  <Button icon={<UserOutlined />} onClick={() => setPickerOpen(true)}>
-                    고객 찾기
-                  </Button>
-                </Space.Compact>
-              )}
+              {/*
+                고객 선택은 이 입력 하나로 끝낸다 — 고객명·전화번호가 키워드 검색에 걸리므로
+                따로 고객 찾기 팝업을 띄울 이유가 없다 (현업 확정 2026-07-31).
+              */}
+              <Input.Search
+                allowClear
+                style={{ width: LAYOUT.searchWidth }}
+                placeholder="고객명 · 전화번호 · 계약번호"
+                value={keyword}
+                onChange={(e) => setKeyword(e.target.value)}
+                onSearch={(value) => update({ q: value.trim() })}
+              />
               <Select<DateField>
                 style={{ width: LAYOUT.filterWidth }}
                 value={filters.dateField}
@@ -512,14 +480,6 @@ export function ContractListPage({
           locale={{ emptyText: '조회 조건에 해당하는 계약이 없습니다.' }}
         />
       </PageCard>
-
-      <CustomerPickerModal
-        open={pickerOpen}
-        onCancel={() => setPickerOpen(false)}
-        onSelect={handlePickCustomer}
-        initialKeyword={keyword}
-        title="고객 검색 — 계약 조회"
-      />
     </PageShell>
   );
 }
