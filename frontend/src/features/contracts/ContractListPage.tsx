@@ -9,20 +9,16 @@ import {
   PlusOutlined,
   ReloadOutlined,
   RightOutlined,
-  SettingOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import {
   Button,
-  Col,
   DatePicker,
   Flex,
   Input,
   Radio,
-  Row,
   Select,
   Space,
-  Statistic,
   Table,
   Typography,
 } from 'antd';
@@ -56,8 +52,6 @@ const STATUS_OPTIONS = CONTRACT_FILTER_STATUSES.map((value) => ({
   label: metaOf(CONTRACT_STATUS_META, value).label,
 }));
 
-type DateField = NonNullable<ContractSearchParams['dateField']>;
-
 /**
  * 정렬은 계약일 최신순으로 고정한다(관리자·고객모드 동일).
  * 표 헤더 정렬을 열어두면 antd 가 정렬 중인 열의 헤더·셀에 배경색을 입혀
@@ -65,10 +59,11 @@ type DateField = NonNullable<ContractSearchParams['dateField']>;
  */
 const FIXED_SORT = 'contractedAt,desc';
 
-const DATE_FIELD_OPTIONS: { value: DateField; label: string }[] = [
-  { value: 'contractedAt', label: '계약일' },
-  { value: 'completionDueDate', label: '완료 예정일' },
-];
+/**
+ * 기간 필터는 계약일 기준 하나로 고정한다 (현업 확정 2026-07-31).
+ * 완료 예정일로 훑는 일은 제작·납기 화면에서 하지, 계약 조회에서 하지 않는다.
+ */
+const FIXED_DATE_FIELD = 'contractedAt' as const;
 
 /** 기본 조회 기간: 최근 1개월 (현업 확정 2026-07-31) */
 const defaultRange = (): [Dayjs, Dayjs] => [dayjs().subtract(1, 'month'), dayjs()];
@@ -76,7 +71,6 @@ const defaultRange = (): [Dayjs, Dayjs] => [dayjs().subtract(1, 'month'), dayjs(
 /** URL 쿼리 ↔ 필터 상태 */
 interface Filters {
   q: string;
-  dateField: DateField;
   dateFrom?: string;
   dateTo?: string;
   status?: ContractStatus;
@@ -89,7 +83,6 @@ function readFilters(params: URLSearchParams): Filters {
   const [from, to] = defaultRange();
   return {
     q: params.get('q') ?? '',
-    dateField: (params.get('dateField') as DateField | null) ?? 'contractedAt',
     dateFrom: params.get('dateFrom') ?? from.format('YYYY-MM-DD'),
     dateTo: params.get('dateTo') ?? to.format('YYYY-MM-DD'),
     status: (params.get('status') as ContractStatus | null) ?? undefined,
@@ -102,7 +95,6 @@ function readFilters(params: URLSearchParams): Filters {
 function writeFilters(filters: Filters): Record<string, string> {
   const entries: [string, string | undefined | boolean | number][] = [
     ['q', filters.q || undefined],
-    ['dateField', filters.dateField],
     ['dateFrom', filters.dateFrom],
     ['dateTo', filters.dateTo],
     ['status', filters.status],
@@ -145,7 +137,7 @@ export function ContractListPage({
     ? { customerId: embeddedCustomerId, sort: FIXED_SORT, page: 1, size: 100 }
     : {
         q: filters.q || undefined,
-        dateField: filters.dateField,
+        dateField: FIXED_DATE_FIELD,
         dateFrom: filters.dateFrom,
         dateTo: filters.dateTo,
         status: filters.status,
@@ -171,7 +163,6 @@ export function ContractListPage({
     setSearchParams(
       writeFilters({
         q: '',
-        dateField: 'contractedAt',
         dateFrom: from.format('YYYY-MM-DD'),
         dateTo: to.format('YYYY-MM-DD'),
         page: 1,
@@ -307,8 +298,6 @@ export function ContractListPage({
     },
   ];
 
-  const totals = data?.totals;
-
   /**
    * 작성중(DRAFT)은 아직 작성 중인 계약서다 — 상세 대신 수정(작성) 화면으로 바로 연다.
    * 확정된 계약만 상세로 간다. 고객모드는 예외(고객 화면에서 작성 폼을 열지 않는다).
@@ -341,16 +330,8 @@ export function ContractListPage({
   return (
     <PageShell>
       <PageCard>
-        {/*
-          기능 버튼은 필터와 같은 줄에 두지 않는다 — 이 화면은 필터가 여섯이라
-          한 줄에 같이 넣으면 버튼이 아래로 밀려 왼쪽에 붙는다(버튼은 항상 우상단).
-        */}
+        {/* 계약 구분 관리는 관리자 메뉴에서 한다 — 조회 화면에 관리 입구를 두지 않는다. */}
         <Flex justify="flex-end" wrap gap={8} style={{ marginBottom: 16 }}>
-          <Can permission="CONTRACT_TYPE_EDIT">
-            <Button icon={<SettingOutlined />} onClick={() => navigate('/admin/contract-types')}>
-              계약 구분 관리
-            </Button>
-          </Can>
           <Can permission="CONTRACT_CREATE">
             <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/contracts/new')}>
               신규 계약
@@ -361,7 +342,7 @@ export function ContractListPage({
         {/*
           필터는 공용 ListToolbar 규격을 따른다 — 라벨 없이 placeholder로 뜻을 전하고,
           폭은 12칸 그리드가 아니라 내용에 맞춰 고정한 뒤 좁아지면 자연 줄바꿈시킨다.
-          순서는 현업이 찾는 순서다: 고객 → 기간 → 계약 구분 → 상태 (현업 확정 2026-07-31).
+          순서는 현업이 찾는 순서다: 고객 → 기간 → 계약 구분 → 상태 → 초기화 (현업 확정 2026-07-31).
         */}
         <ListToolbar
           filters={
@@ -377,12 +358,6 @@ export function ContractListPage({
                 value={keyword}
                 onChange={(e) => setKeyword(e.target.value)}
                 onSearch={(value) => update({ q: value.trim() })}
-              />
-              <Select<DateField>
-                style={{ width: LAYOUT.filterWidth }}
-                value={filters.dateField}
-                onChange={(v) => update({ dateField: v })}
-                options={DATE_FIELD_OPTIONS}
               />
               {/* 기간 앞뒤 이동은 달력을 열지 않고 지난달·다음달을 훑는 조작이라 기간 입력에 붙여 둔다. */}
               <Space.Compact>
@@ -428,34 +403,13 @@ export function ContractListPage({
                 value={filters.status}
                 onChange={(v?: ContractStatus) => update({ status: v })}
               />
-            </>
-          }
-          // 초기화는 조건을 좁히는 필터가 아니라 되돌리는 조작이라, 필터 줄에 끼우지 않고
-          // 기간 안내와 같은 줄에 둔다 — 필터 줄 끝에 붙이면 폭이 모자라 혼자 다음 줄로 밀린다.
-          info={
-            <Space size={8}>
               <Button icon={<ReloadOutlined />} onClick={resetFilters}>
                 초기화
               </Button>
-              <Typography.Text type="secondary">기본 조회 기간은 최근 1개월입니다.</Typography.Text>
-            </Space>
+            </>
           }
+          info={<Typography.Text type="secondary">기본 조회 기간은 최근 1개월입니다.</Typography.Text>}
         />
-      </PageCard>
-
-      {/*
-        건수·금액을 카드 두 장으로 나눠 두면 두 장이 왼쪽 절반에만 몰리고 오른쪽이 통째로 비었다.
-        같은 조회 결과의 요약이므로 한 장 안에 나란히 둔다.
-      */}
-      <PageCard>
-        <Row gutter={[16, 16]}>
-          <Col xs={12} md={6}>
-            <Statistic title="계약 건수" value={totals?.count ?? 0} suffix="건" />
-          </Col>
-          <Col xs={12} md={6}>
-            <Statistic title="계약금액 합계" value={totals?.totalAmount ?? 0} suffix="원" />
-          </Col>
-        </Row>
       </PageCard>
 
       <PageCard>
