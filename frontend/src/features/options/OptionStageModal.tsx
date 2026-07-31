@@ -131,7 +131,7 @@ export function OptionStageModal({ open, contractItemId, componentGroup, title, 
   /**
    * 베스트 제외 (현업 확정 2026-07-30 — [옵션 선택 안함]).
    * 계약서의 베스트 품목(금액)이 빠지고 합계에서 자동 차감된다. 재포함은 계약서 화면에서
-   * [베스트 제외] 체크를 풀어 한다.
+   * [베스트 포함]을 체크해 한다.
    */
   const excludeMutation = useMutation({
     mutationFn: () => excludeVest(contractItemId),
@@ -152,7 +152,7 @@ export function OptionStageModal({ open, contractItemId, componentGroup, title, 
     modal.confirm({
       title: '베스트 옵션 선택 안함',
       content:
-        '베스트를 계약 품목에서 제외합니다. 계약서의 베스트 금액이 합계에서 자동 차감되고, 이미 고른 베스트 옵션은 삭제됩니다. 다시 추가하려면 계약서 화면에서 [베스트 제외] 체크를 풀면 됩니다.',
+        '베스트를 계약 품목에서 제외합니다. 계약서의 베스트 금액이 합계에서 자동 차감되고, 이미 고른 베스트 옵션은 삭제됩니다. 다시 추가하려면 계약서 화면에서 [베스트 포함]을 체크하면 됩니다.',
       okText: '베스트 제외',
       okButtonProps: { danger: true },
       cancelText: '취소',

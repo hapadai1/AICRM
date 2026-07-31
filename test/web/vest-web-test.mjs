@@ -6,7 +6,7 @@
  *   2) cd test/web && npm install (최초 1회)
  *   3) node vest-web-test.mjs
  *
- * 흐름: 로그인 → 계약서 작성(고객·계약구분) → [베스트 제외] 해제 + 베스트 단가 입력 →
+ * 흐름: 로그인 → 계약서 작성(고객·계약구분) → [베스트 포함] 체크 + 베스트 단가 입력 →
  *       임시저장 → 스타일 컨설팅 → 베스트 행 [옵션 선택] → [옵션 선택 안함] 제외 →
  *       계약서로 돌아와 합계 차감 확인. 각 단계 스크린샷.
  * 끝나면 테스트로 만든 초안 계약을 API로 삭제해 개발 DB를 더럽히지 않는다.
@@ -103,14 +103,14 @@ try {
   await pickSelect(page.locator('.ant-select', { hasText: '계약 구분 선택' }).first(), null, CONTRACT_TYPE);
   await page.waitForTimeout(400);
 
-  // 3) 품목표: 정장 단가 100만 → [베스트 제외] 해제 → 베스트 행 단가 30만
+  // 3) 품목표: 정장 단가 100만 → [베스트 포함] 체크 → 베스트 행 단가 30만
   const suitRow = page.locator('tr', { has: page.locator('.ant-select-selection-item[title="정장"]') }).first();
   const numInputs = suitRow.locator('.ant-input-number-input'); // 0=수량 1=단가 2=금액
   await numInputs.nth(1).fill('1000000');
   await page.keyboard.press('Tab');
   await shot('suit-2piece');
 
-  await page.getByLabel('베스트 제외').uncheck(); // 체크 해제 = 베스트 포함
+  await page.getByLabel('베스트 포함').check(); // 체크 = 베스트 포함
   const vestRow = page.locator('tr', { hasText: '└ 베스트' });
   await vestRow.waitFor();
   await vestRow.getByPlaceholder('베스트 단가').fill('300000');

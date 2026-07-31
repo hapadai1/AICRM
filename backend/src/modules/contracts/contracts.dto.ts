@@ -50,7 +50,7 @@ export class ContractLineDto {
 
   /**
    * 베스트(3피스) 포함 — 맞춤 정장(CUSTOM×SUIT) 라인만 허용 (현업 확정 2026-07-30).
-   * 계약서 화면의 [베스트 제외] 체크박스를 풀면 true. 기본 false(2피스).
+   * 계약서 화면의 [베스트 포함] 체크박스를 켜면 true. 기본 false(2피스).
    */
   @IsOptional()
   @IsBoolean()

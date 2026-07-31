@@ -17,7 +17,7 @@ export interface EditableLine {
   amount: number;
   /**
    * 베스트(3피스) 포함 — 맞춤 정장 라인 전용 (현업 확정 2026-07-30).
-   * [베스트 제외] 체크를 풀면 아래에 베스트 행이 생기고 단가를 수기로 넣는다.
+   * [베스트 포함]을 체크하면 아래에 베스트 행이 생기고 단가를 수기로 넣는다.
    */
   vestIncluded: boolean;
   /** 베스트 포함 시 벌당 베스트 단가(수기) */
@@ -254,19 +254,23 @@ export function ContractLineEditor({ value, onChange, disabled }: ContractLineEd
         ),
     },
     {
-      // 정장(맞춤) 행 맨뒤 [베스트 제외] 체크박스 (현업 확정 2026-07-30).
-      // 체크를 풀면 아래에 베스트 행이 생기고, 다시 체크하면 행이 빠지며 합계에서 차감된다.
-      title: '베스트 제외',
+      // 정장(맞춤) 행 맨뒤 [베스트 포함] 체크박스 (현업 확정 2026-07-31).
+      // 체크하면 아래에 베스트 행이 생기고, 풀면 행이 빠지며 합계에서 차감된다.
+      //
+      // 종전에는 [베스트 제외]로 두어 체크가 곧 제외였는데, 기본이 2피스라 새 계약서를
+      // 열면 아무것도 제외한 적 없이 체크가 들어가 있었다. 켜는 것을 체크로 두면
+      // 기본 상태가 빈 칸이 되어 읽는 대로 동작한다.
+      title: '베스트 포함',
       key: 'vest',
       width: 96,
       align: 'center',
       render: (_, l) =>
         l.isVestRow || !isVestCapable(l) ? null : (
           <Checkbox
-            checked={!l.vestIncluded}
+            checked={l.vestIncluded}
             disabled={disabled}
-            aria-label="베스트 제외"
-            onChange={(e) => update(l.key, { vestIncluded: !e.target.checked })}
+            aria-label="베스트 포함"
+            onChange={(e) => update(l.key, { vestIncluded: e.target.checked })}
           />
         ),
     },
