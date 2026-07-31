@@ -1,0 +1,9 @@
+{
+  "name": "aicrm-web-tests",
+  "private": true,
+  "description": "AICRM 웹 브라우저 테스트 드라이버 (headless Chrome). 실행 방법: ../../docs/test/전체테스트_실행방안.md",
+  "type": "module",
+  "dependencies": {
+    "playwright-core": "^1.49.0"
+  }
+}
