@@ -23,20 +23,20 @@ export const PRODUCT_CATEGORY_LABEL = PRODUCT_CATEGORY_LABELS as Record<ProductC
 export const COMPONENT_TYPE_LABEL = COMPONENT_TYPE_LABELS;
 
 /**
- * 계약 상태 라벨.
- * 흐름: 작성중 → 등록(확정) → [스타일 컨설팅·서명] → 완료. 변경계약을 확정하면 '변경 확정'으로 돌아간다.
+ * 계약 상태 라벨 (현업 확정 2026-07-30).
+ * 흐름: 작성중(수정·컨설팅) → 서명완료 → 계약완료 → 수정하기(버전업) → 작성중 … 반복.
+ * 취소는 작성중에서만.
  */
 export const CONTRACT_STATUS_META: Record<string, StatusMeta> = {
   DRAFT: { label: '작성중', color: 'gold' },
-  CONFIRMED: { label: '등록', color: 'green' },
-  CHANGED: { label: '변경 확정', color: 'geekblue' },
+  SIGNED: { label: '서명완료', color: 'geekblue' },
+  COMPLETED: { label: '계약완료', color: 'blue' },
   CANCELLED: { label: '취소', color: 'red' },
-  COMPLETED: { label: '계약 완료', color: 'blue' },
 };
 
 export const CONTRACT_VERSION_STATUS_META: Record<string, StatusMeta> = {
-  DRAFT: { label: '변경 초안', color: 'gold' },
-  CONFIRMED: { label: '확정', color: 'green' },
+  DRAFT: { label: '작성중', color: 'gold' },
+  CONFIRMED: { label: '적용', color: 'green' },
   SUPERSEDED: { label: '이전 버전', color: 'default' },
 };
 

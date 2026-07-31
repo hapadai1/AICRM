@@ -33,6 +33,7 @@ import {
   type ContractSearchParams,
   type ContractStatus,
 } from '../../api/contracts';
+import { useModeStore } from '../../app/mode-store';
 import { Can } from '../../shared/Can';
 import { DataTable, PAGE_SIZE_OPTIONS } from '../../shared/DataTable';
 import { PageCard, PageShell } from '../../shared/PageShell';
@@ -44,10 +45,7 @@ import { CONTRACT_STATUS_META, formatKrw, metaOf } from './labels';
 
 const { RangePicker } = DatePicker;
 
-/**
- * 필터 옵션은 백엔드가 허용하는 상태만 사용한다.
- * 라벨 맵 전체(COMPLETED 포함)를 옵션으로 쓰면 400을 받는다.
- */
+/** 필터 옵션은 백엔드가 허용하는 상태만 사용한다(CONTRACT_STATUSES 와 동일). */
 const STATUS_OPTIONS = CONTRACT_FILTER_STATUSES.map((value) => ({
   value,
   label: metaOf(CONTRACT_STATUS_META, value).label,
@@ -132,6 +130,7 @@ export function ContractListPage({
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const filters = useMemo(() => readFilters(searchParams), [searchParams]);
+  const customerMode = useModeStore((s) => s.mode) === 'CUSTOMER';
 
   // 검색어는 입력 중 URL을 바꾸지 않도록 로컬 상태로 둔다.
   const [keyword, setKeyword] = useState(filters.q);
@@ -224,7 +223,7 @@ export function ContractListPage({
       title: '계약일',
       dataIndex: 'contractedAt',
       ...autoWidth(),
-      // 확정 전 초안은 계약일이 없다. 빈 칸 대신 작성일을 보여 준다(목록 기간 필터·정렬 기준과 동일).
+      // 계약일은 계약완료 시점에 정해진다. 그 전에는 빈 칸 대신 작성일을 보여 준다(기간 필터 기준과 동일).
       render: (v: string | undefined, row) =>
         v ?? (row.createdAt ? <Typography.Text type="secondary">{row.createdAt} (작성)</Typography.Text> : '-'),
     },
@@ -262,9 +261,19 @@ export function ContractListPage({
       title: '상태',
       dataIndex: 'status',
       ...autoWidth(),
-      render: (v: string) => {
+      // 수정하기(버전업)를 거친 계약은 상태만 보면 신규 작성건과 구분되지 않는다 → 버전을 함께 보여준다.
+      render: (v: string, row) => {
         const meta = metaOf(CONTRACT_STATUS_META, v);
-        return <StatusBadge label={meta.label} color={meta.color} />;
+        return (
+          <Space size={4}>
+            <StatusBadge label={meta.label} color={meta.color} />
+            {(row.currentVersionNo ?? 1) > 1 && (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                v{row.currentVersionNo}
+              </Typography.Text>
+            )}
+          </Space>
+        );
       },
     },
     {
@@ -290,6 +299,15 @@ export function ContractListPage({
 
   const totals = data?.totals;
 
+  /**
+   * 작성중(DRAFT)은 아직 작성 중인 계약서다 — 상세 대신 수정(작성) 화면으로 바로 연다.
+   * 확정된 계약만 상세로 간다. 고객모드는 예외(고객 화면에서 작성 폼을 열지 않는다).
+   */
+  const rowPath = (row: ContractListItem) =>
+    row.status === 'DRAFT' && !customerMode
+      ? `/contracts/new?contractId=${row.id}`
+      : `/contracts/${row.id}`;
+
   // 임베드(고객모드): 크롬 없이 표만. 고객 열은 숨긴다(단일 고객 컨텍스트).
   if (embedded) {
     return (
@@ -301,7 +319,7 @@ export function ContractListPage({
         dataSource={data?.data ?? []}
         scroll={{ x: 'max-content' }}
         onRow={(record) => ({
-          onClick: () => navigate(`/contracts/${record.id}`),
+          onClick: () => navigate(rowPath(record)),
           style: { cursor: 'pointer' },
         })}
         pagination={false}
@@ -435,7 +453,7 @@ export function ContractListPage({
           dataSource={data?.data ?? []}
           onChange={handleTableChange}
           onRow={(record) => ({
-            onClick: () => navigate(`/contracts/${record.id}`),
+            onClick: () => navigate(rowPath(record)),
             style: { cursor: 'pointer' },
           })}
           pagination={{

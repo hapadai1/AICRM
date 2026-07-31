@@ -13,17 +13,16 @@ import { toDateOnly, toNumber } from './transform';
 
 export type TransactionType = 'CUSTOM' | 'RENTAL';
 export type ProductCategory = 'SUIT' | 'SHIRT' | 'SHOES';
-export type ContractStatus = 'DRAFT' | 'CONFIRMED' | 'CHANGED' | 'CANCELLED' | 'COMPLETED';
+export type ContractStatus = 'DRAFT' | 'SIGNED' | 'COMPLETED' | 'CANCELLED';
 export type ContractVersionStatus = 'DRAFT' | 'CONFIRMED' | 'SUPERSEDED';
 
 /**
  * 목록 필터로 보낼 수 있는 상태 — 백엔드 CONTRACT_STATUSES 와 동일해야 한다.
- * COMPLETED(계약 완료)는 v2 흐름 확정(2026-07-28)으로 정식 상태가 되어 필터에도 넣는다.
+ * 흐름(현업 확정 2026-07-30): 작성중 → 서명완료 → 계약완료 → 수정하기(버전업) → 작성중 …
  */
 export const CONTRACT_FILTER_STATUSES: ContractStatus[] = [
   'DRAFT',
-  'CONFIRMED',
-  'CHANGED',
+  'SIGNED',
   'COMPLETED',
   'CANCELLED',
 ];
@@ -462,35 +461,20 @@ export function updateContractDraft(id: string, body: Partial<ContractDraftInput
   }).then(toContractDetail);
 }
 
-export function confirmContract(id: string, body: { version: number; confirmedDate?: string }) {
-  return request<ContractConfirmResult>({ url: `/contracts/${id}/confirm`, method: 'POST', data: body });
-}
-
 export function fetchContractVersions(id: string): Promise<ContractVersion[]> {
   return request<ContractVersionApiRow[]>({ url: `/contracts/${id}/versions` }).then((rows) =>
     rows.map(toVersion),
   );
 }
 
-/** 변경 초안 생성 — body 필드명 changeReason (계약 문서 04 §3) */
+/**
+ * 수정하기(버전업) — 완료된 계약서를 새 버전으로 복사하고 상태를 작성중으로 되돌린다.
+ * 품목·컨설팅·주문·작업지시서·입출고는 계약에 매달려 있어 그대로 이어진다.
+ */
 export function createContractRevision(id: string, body: { changeReason: string }): Promise<ContractVersion> {
   return request<ContractVersionApiRow>({ url: `/contracts/${id}/revisions`, method: 'POST', data: body }).then(
     toVersion,
   );
-}
-
-export function confirmContractRevision(id: string, revisionId: string, body: RevisionConfirmInput) {
-  return request<RevisionConfirmResult>({
-    url: `/contracts/${id}/revisions/${revisionId}/confirm`,
-    method: 'POST',
-    // 품목은 lineAmount/notes로 변환한다(ConfirmRevisionDto.lines = ContractLineDto).
-    data: {
-      ...(body.changeReason !== undefined ? { changeReason: body.changeReason } : {}),
-      version: body.version,
-      totalAmount: body.totalAmount,
-      lines: toLinePayload(body.lines),
-    },
-  });
 }
 
 export function cancelContract(id: string, body: { reason: string; version: number }): Promise<ContractDetail> {
@@ -547,14 +531,14 @@ export interface SignatureMeta {
 
 /**
  * 계약 흐름 게이팅 (GET /contracts/:id/flow).
- * 계약서 등록 → 스타일 컨설팅 → 서명 → 계약 완료 중 어디까지 왔는지 알려준다.
+ * 작성중(수정·컨설팅) → 서명완료 → 계약완료 중 어디까지 왔는지 알려준다.
  */
 export interface ContractFlow {
   contractId: string;
   status: ContractStatus;
   version: number;
   currentVersionId: string | null;
-  registered: boolean;
+  versionNo: number | null;
   consulting: {
     ready: boolean;
     targetCount: number;
@@ -566,6 +550,8 @@ export interface ContractFlow {
   canSign: boolean;
   canComplete: boolean;
   completed: boolean;
+  /** 수정하기(버전업) 가능 — 완료된 계약 */
+  canRevise: boolean;
   excelStored: boolean;
 }
 
@@ -573,12 +559,17 @@ export function fetchContractFlow(id: string): Promise<ContractFlow> {
   return request<ContractFlow>({ url: `/contracts/${id}/flow` });
 }
 
-/** 계약 완료 — 서명이 끝난 확정 계약만. 완료 시점 계약서 엑셀이 보관된다. */
+/**
+ * 계약 완료 — 서명완료 계약만. 이 시점에 주문·주문품목이 생기고(물리화),
+ * 완료 시점 계약서 엑셀이 보관된다.
+ */
 export interface ContractCompleteResult {
   contractId: string;
   contractNo: string;
   status: ContractStatus;
   versionNo: number;
+  customerStatus: string;
+  orders: { id: string; orderNo: string; tradeType: TransactionType }[];
   excelFileId: string;
   downloadUrl: string;
 }
@@ -591,7 +582,7 @@ export function completeContract(id: string, body: { version?: number }): Promis
   });
 }
 
-/** 서명 이미지 저장·교체 (컨설팅 확정 후 현재 확정 버전 한정). */
+/** 서명 이미지 저장·교체 (컨설팅 확정 후 작성중 버전 한정). 저장되면 상태가 서명완료가 된다. */
 export function saveSignature(
   contractId: string,
   versionId: string,

@@ -49,7 +49,12 @@ const ALLOCATION_VIEW_INCLUDE = {
             select: {
               id: true,
               orderNo: true,
-              contract: { select: { customer: { select: { id: true, name: true, phone: true } } } },
+              contract: {
+                select: {
+                  contractNo: true,
+                  customer: { select: { id: true, name: true, phone: true } },
+                },
+              },
             },
           },
         },
@@ -293,7 +298,14 @@ export class RentalAllocationsService {
       action: 'CREATE',
       entityType: 'RENTAL_ALLOCATION',
       entityId: allocation.id,
-      after: allocation,
+      // DB 행을 통째로 남기면 UUID만 잔뜩 남는다 — 읽을 수 있는 항목만 고른다.
+      after: {
+        ...(await this.allocationIdentity(allocation.id)),
+        pickupDate: dto.pickupDate,
+        returnDueDate: dto.returnDueDate,
+        availabilityEndDate: dto.availabilityEndDate,
+        status: allocation.status,
+      },
     });
     return allocation;
   }
@@ -358,13 +370,19 @@ export class RentalAllocationsService {
       return after;
     });
 
+    const identity = await this.allocationIdentity(id);
+    const previousItem = await this.prisma.rentalInventoryItem.findUnique({
+      where: { id: oldItemId },
+      select: { managementCode: true },
+    });
     await this.audit.log({
       userId: actor.id,
       action: 'UPDATE',
       entityType: 'RENTAL_ALLOCATION',
       entityId: id,
-      before: { rentalInventoryItemId: oldItemId },
-      after: { rentalInventoryItemId: dto.newInventoryItemId },
+      // 교체 전 관리번호는 배정에 더 이상 남지 않는다 — 실물에서 직접 읽어 남긴다.
+      before: { ...identity, managementCode: previousItem?.managementCode ?? null },
+      after: identity,
       reason: dto.reason,
     });
     return updated;
@@ -415,13 +433,14 @@ export class RentalAllocationsService {
       return after;
     });
 
+    const checkoutIdentity = await this.allocationIdentity(id);
     await this.audit.log({
       userId: actor.id,
       action: 'STATUS_CHANGE',
       entityType: 'RENTAL_ALLOCATION',
       entityId: id,
-      before: { status: allocation.status },
-      after: { status: 'CHECKED_OUT', checkoutDate: dto.checkoutDate },
+      before: { ...checkoutIdentity, status: allocation.status },
+      after: { ...checkoutIdentity, status: 'CHECKED_OUT', checkoutDate: dto.checkoutDate },
     });
     return updated;
   }
@@ -486,13 +505,19 @@ export class RentalAllocationsService {
       return after;
     });
 
+    const returnIdentity = await this.allocationIdentity(id);
     await this.audit.log({
       userId: actor.id,
       action: 'STATUS_CHANGE',
       entityType: 'RENTAL_ALLOCATION',
       entityId: id,
-      before: { status: allocation.status },
-      after: { status: 'RETURNED', itemStatus: nextStatus, availableFrom: dto.availableFrom },
+      before: { ...returnIdentity, status: allocation.status },
+      after: {
+        ...returnIdentity,
+        status: 'RETURNED',
+        itemStatus: nextStatus,
+        availableFrom: dto.availableFrom,
+      },
     });
     return updated;
   }
@@ -500,6 +525,29 @@ export class RentalAllocationsService {
   // ---------------------------------------------------------------------------
   // 내부 헬퍼
   // ---------------------------------------------------------------------------
+
+  /**
+   * 감사로그용 배정 식별 정보 — "누구의 어느 계약에, 어떤 옷을" 이 로그만 보고 읽혀야 한다.
+   * 배정 스냅샷은 UUID뿐이라 그것만으로는 고객도 계약도 알 수 없었다.
+   * 전/후 양쪽에 같은 값으로 넣어 변경 항목 수는 늘리지 않으면서 대상만 드러낸다.
+   */
+  private async allocationIdentity(allocationId: string): Promise<Record<string, unknown>> {
+    const row = await this.prisma.rentalAllocation.findUnique({
+      where: { id: allocationId },
+      include: ALLOCATION_VIEW_INCLUDE,
+    });
+    if (!row) return {};
+    const orderItem = row.orderItemComponent.orderItem;
+    return {
+      customerName: orderItem.order.contract.customer.name,
+      contractNo: orderItem.order.contract.contractNo,
+      orderNo: orderItem.order.orderNo,
+      componentType: row.orderItemComponent.componentType,
+      managementCode: row.rentalInventoryItem.managementCode,
+      color: row.rentalInventoryItem.rentalSku.color,
+      size: row.rentalInventoryItem.rentalSku.size,
+    };
+  }
 
   /** 실물 UUID 또는 관리코드 중 하나를 실물 UUID로 해석한다 (연동정합화 계약 §5). */
   private async resolveInventoryItemId(

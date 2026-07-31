@@ -20,6 +20,7 @@ import { OrdersModule } from './modules/orders/orders.module';
 import { ProductionModule } from './modules/production/production.module';
 import { RentalsModule } from './modules/rentals/rentals.module';
 import { RepairsModule } from './modules/repairs/repairs.module';
+import { StatsModule } from './modules/stats/stats.module';
 import { UsersModule } from './modules/users/users.module';
 import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
 import { PrismaModule } from './prisma/prisma.module';
@@ -44,6 +45,7 @@ import { PrismaModule } from './prisma/prisma.module';
     RentalsModule,
     NotificationsModule,
     DashboardModule,
+    StatsModule,
     AdminMasterModule,
     FilesModule,
   ],

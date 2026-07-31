@@ -349,6 +349,7 @@ model Contract {
   contractType   ContractType?     @relation(fields: [contractTypeId], references: [id])
   currentVersion ContractVersion?  @relation("ContractCurrentVersion", fields: [currentVersionId], references: [id])
   versions       ContractVersion[] @relation("ContractVersions")
+  items          ContractItem[]
   orders         Order[]
 
   @@index([customerId, contractedAt(sort: Desc)])
@@ -387,7 +388,6 @@ model ContractVersion {
   signatureFile      File?          @relation("ContractVersionSignature", fields: [signatureFileId], references: [id])
   excelFile          File?          @relation("ContractVersionExcel", fields: [excelFileId], references: [id])
   lines              ContractLine[]
-  items              ContractItem[]
 
   @@unique([contractId, versionNo])
   @@map("contract_versions")
@@ -414,16 +414,20 @@ model ContractLine {
 }
 
 // -----------------------------------------------------------------------------
-// 1-b. 가계약(초안) 품목·부위 — 컨설팅(옵션·렌탈 선택)의 앵커.
-//   흐름: 계약(가계약) → 옵션(컨설팅) → 계약확정 → 주문.
-//   주문(Order/OrderItem)은 확정 후에만 생기고, 컨설팅은 이 계약 품목에 붙는다.
+// 1-b. 계약 품목·부위 — 컨설팅(옵션·렌탈 선택)의 앵커.
+//   흐름: 계약(작성중) → 컨설팅 → 서명 → 계약완료 → 주문.
+//   주문(Order/OrderItem)은 계약완료 후에만 생기고, 컨설팅은 이 계약 품목에 붙는다.
 //   계약 라인(카테고리×수량)을 벌 단위(정장 #1, #2)로 펼친 것이며 부위(상의/하의)를 갖는다.
+//
+//   **품목은 버전이 아니라 계약에 매달린다** (현업 확정 2026-07-30). 수정하기(버전업)는
+//   계약서 문서의 버전업이므로, 품목과 그에 딸린 컨설팅·주문·작업지시서·입출고는 그대로
+//   이어져야 한다. 버전별 수량·금액 이력은 ContractLine 이 갖는다.
 // -----------------------------------------------------------------------------
 
 model ContractItem {
   id                   String    @id @db.Uuid
-  contractVersionId    String    @map("contract_version_id") @db.Uuid
-  // 초안 수정 시 계약 라인은 삭제·재생성되지만 품목(과 컨설팅)은 보존한다 → 라인 참조는 nullable·SetNull.
+  contractId           String    @map("contract_id") @db.Uuid
+  // 계약 수정 시 계약 라인은 삭제·재생성되고 버전업 때는 새 버전 라인이 생긴다 → 라인 참조는 nullable·SetNull.
   sourceContractLineId String?   @map("source_contract_line_id") @db.Uuid
   transactionType      String    @map("transaction_type") @db.VarChar(20)
   productCategory      String    @map("product_category") @db.VarChar(20)
@@ -436,15 +440,15 @@ model ContractItem {
   createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt            DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  contractVersion         ContractVersion          @relation(fields: [contractVersionId], references: [id])
+  contract                Contract                 @relation(fields: [contractId], references: [id])
   sourceContractLine      ContractLine?            @relation(fields: [sourceContractLineId], references: [id], onDelete: SetNull)
   components              ContractItemComponent[]
   optionSelectionSessions OptionSelectionSession[]
   rentalSelectionSessions RentalSelectionSession[]
   orderItems              OrderItem[]
 
-  @@unique([contractVersionId, transactionType, productCategory, sequenceNo])
-  @@index([contractVersionId])
+  @@unique([contractId, transactionType, productCategory, sequenceNo])
+  @@index([contractId])
   @@map("contract_items")
 }
 

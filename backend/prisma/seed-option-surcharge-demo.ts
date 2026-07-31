@@ -49,10 +49,10 @@ async function wipePrevious() {
   const versionIds = customer.contracts.flatMap((c) => c.versions.map((v) => v.id));
 
   await prisma.$transaction(async (tx) => {
-    // 옵션 세션은 이제 ContractItem에 붙는다 → 계약 버전 하위 ContractItem 기준으로 지운다.
+    // 옵션 세션은 ContractItem(계약 소유)에 붙는다 → 계약 기준으로 지운다.
     const contractItemIds = (
       await tx.contractItem.findMany({
-        where: { contractVersionId: { in: versionIds } },
+        where: { contractId: { in: contractIds } },
         select: { id: true },
       })
     ).map((ci) => ci.id);
@@ -119,7 +119,7 @@ async function main() {
         id: contractId,
         contractNo: CONTRACT_NO,
         customerId,
-        status: 'CONFIRMED',
+        status: 'COMPLETED',
         contractedAt: daysAgo(10),
       },
     });
@@ -193,7 +193,7 @@ async function main() {
       await tx.contractItem.create({
         data: {
           id: contractItemId,
-          contractVersionId: versionId,
+          contractId,
           sourceContractLineId: item.lineId,
           transactionType: 'CUSTOM',
           productCategory: 'SUIT',

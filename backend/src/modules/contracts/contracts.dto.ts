@@ -114,12 +114,15 @@ export class UpdateContractDto extends ContractAmountsDto {
 }
 
 /**
- * 계약 상태 (설계서 6.1 + v2 확정 2026-07-28).
+ * 계약 상태 (현업 확정 2026-07-30).
  *
- * 흐름: DRAFT(계약서 작성) → CONFIRMED(등록·주문 생성) → [스타일 컨설팅] → 서명 →
- * COMPLETED(계약 완료). 변경계약을 확정하면 CHANGED로 돌아가 재서명·재완료한다.
+ * 흐름: DRAFT(작성중 — 수정·컨설팅) → SIGNED(서명완료) → COMPLETED(계약완료·주문 생성)
+ *       → 수정하기(버전업) → DRAFT → … 반복. 취소(CANCELLED)는 작성중에서만.
+ *
+ * 예전의 CONFIRMED(등록)·CHANGED(변경 확정)는 없어졌다 — 컨설팅이 작성중 단계로 내려와
+ * 등록을 앞세울 이유가 사라졌고, 변경 확정은 재서명이 대신한다.
  */
-export const CONTRACT_STATUSES = ['DRAFT', 'CONFIRMED', 'CHANGED', 'COMPLETED', 'CANCELLED'] as const;
+export const CONTRACT_STATUSES = ['DRAFT', 'SIGNED', 'COMPLETED', 'CANCELLED'] as const;
 
 /** 계약 완료 (서명 필수) */
 export class CompleteContractDto {
@@ -183,22 +186,6 @@ export class ContractListQueryDto extends PageQueryDto {
   sort?: string;
 }
 
-export class ConfirmContractDto {
-  /** 낙관적 잠금: contracts.row_version (문서 14.1) */
-  @Type(() => Number)
-  @IsInt()
-  version: number;
-
-  @IsOptional()
-  @IsDateString()
-  confirmedDate?: string;
-
-  /** Idempotency-Key 헤더 대신 body로도 허용 (문서 14.1) */
-  @IsOptional()
-  @IsString()
-  idempotencyKey?: string;
-}
-
 export class CreateRevisionDto extends ContractAmountsDto {
   @IsOptional()
   @IsString()
@@ -213,38 +200,6 @@ export class CreateRevisionDto extends ContractAmountsDto {
   lines?: ContractLineDto[];
 }
 
-export class ConfirmRevisionDto {
-  /** 낙관적 잠금: contracts.row_version */
-  @Type(() => Number)
-  @IsInt()
-  version: number;
-
-  /** 변경 사유 (초안 작성 시 저장하지 않았다면 필수) */
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  changeReason?: string;
-
-  /** 제공 시 확정 직전 revision 금액에 반영한다 (연동정합화 계약 §3) */
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  @Min(0)
-  totalAmount?: number;
-
-  /** 제공 시 확정 직전 revision 라인 전체 교체 (연동정합화 계약 §3) */
-  @IsOptional()
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => ContractLineDto)
-  lines?: ContractLineDto[];
-
-  @IsOptional()
-  @IsString()
-  idempotencyKey?: string;
-}
-
-/** 전자서명 저장 (설계서 03 §3.2) */
 export class SaveSignatureDto {
   /** data:image/png;base64,... 형식 */
   @IsString()
