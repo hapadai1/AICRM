@@ -206,7 +206,9 @@ export function ContractListPage({
    * 폭은 고정하지 않는다 — autoWidth() 참고.
    */
   const columns: ColumnsType<ContractListItem> = [
-    // 진입점은 사람이 아는 정보(고객·계약일). 계약번호는 참고용으로 맨 뒤에 둔다.
+    // 열 순서는 현업이 읽는 순서다 (현업 확정 2026-07-31):
+    // 누구의(고객) 무슨(계약 구분) 계약이 언제(계약일) 시작해 언제(완료 예정일) 끝나고
+    // 얼마(계약금액)이며 지금 어디까지(상태) 왔나. 계약번호는 참고용이라 맨 뒤.
     {
       title: '고객',
       dataIndex: 'customerName',
@@ -219,14 +221,6 @@ export function ContractListPage({
           </Typography.Text>
         </Space>
       ),
-    },
-    {
-      title: '계약일',
-      dataIndex: 'contractedAt',
-      ...autoWidth(),
-      // 계약일은 계약완료 시점에 정해진다. 그 전에는 빈 칸 대신 작성일을 보여 준다(기간 필터 기준과 동일).
-      render: (v: string | undefined, row) =>
-        v ?? (row.createdAt ? <Typography.Text type="secondary">{row.createdAt} (작성)</Typography.Text> : '-'),
     },
     {
       title: '계약 구분',
@@ -259,6 +253,27 @@ export function ContractListPage({
       ),
     },
     {
+      title: '계약일',
+      dataIndex: 'contractedAt',
+      ...autoWidth(),
+      // 계약일은 계약완료 시점에 정해진다. 그 전에는 빈 칸 대신 작성일을 보여 준다(기간 필터 기준과 동일).
+      render: (v: string | undefined, row) =>
+        v ?? (row.createdAt ? <Typography.Text type="secondary">{row.createdAt} (작성)</Typography.Text> : '-'),
+    },
+    {
+      title: '완료 예정일',
+      dataIndex: 'completionDueDate',
+      ...autoWidth(),
+      render: (v?: string) => v ?? '-',
+    },
+    {
+      title: '계약금액',
+      dataIndex: 'totalAmount',
+      ...autoWidth(),
+      align: 'right',
+      render: formatKrw,
+    },
+    {
       title: '상태',
       dataIndex: 'status',
       ...autoWidth(),
@@ -276,19 +291,6 @@ export function ContractListPage({
           </Space>
         );
       },
-    },
-    {
-      title: '계약금액',
-      dataIndex: 'totalAmount',
-      ...autoWidth(),
-      align: 'right',
-      render: formatKrw,
-    },
-    {
-      title: '완료 예정일',
-      dataIndex: 'completionDueDate',
-      ...autoWidth(),
-      render: (v?: string) => v ?? '-',
     },
     {
       title: '계약번호',
@@ -430,6 +432,9 @@ export function ContractListPage({
             showSizeChanger: true,
             pageSizeOptions: PAGE_SIZE_OPTIONS,
             showTotal: (total) => `총 ${total}건`,
+            // 건수·페이지 이동을 표 위아래 양쪽에 둔다 — 30건을 다 내려가야 다음 장으로
+            // 넘어갈 수 있으면 목록을 훑는 동안 스크롤을 왕복하게 된다.
+            position: ['topRight', 'bottomRight'],
           }}
           locale={{ emptyText: '조회 조건에 해당하는 계약이 없습니다.' }}
         />
