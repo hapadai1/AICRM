@@ -9,9 +9,10 @@ import type { OptionProgressItem, ProductCategory } from '../../api/options';
 import { fetchOptionProgress } from '../../api/options';
 import { DataTable } from '../../shared/DataTable';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
+import { StatusBadge } from '../../shared/StatusBadge';
 import { LAYOUT } from '../../app/theme';
 import { autoWidth } from '../../shared/table-width';
-import { PRODUCT_CATEGORY_LABEL } from '../contracts/labels';
+import { CONTRACT_STATUS_META, metaOf, PRODUCT_CATEGORY_LABEL } from '../contracts/labels';
 
 /** 납기 D-day 태그 */
 function DdayTag({ due }: { due: string }) {
@@ -25,6 +26,8 @@ function DdayTag({ due }: { due: string }) {
 interface ContractRow {
   contractId: string;
   contractNo: string;
+  /** 계약 상태(DRAFT·SIGNED·COMPLETED) — 서명완료 이후는 컨설팅이 보기 전용이다 */
+  contractStatus: string;
   customerName: string;
   customerPhone: string;
   /** 완성 예정일(납기) — 계약 내 가장 이른 납기 (YYYY-MM-DD). 없으면 null */
@@ -43,6 +46,7 @@ function groupByContract(items: OptionProgressItem[]): ContractRow[] {
     const row = map.get(it.contractId) ?? {
       contractId: it.contractId,
       contractNo: it.contractNo,
+      contractStatus: it.contractStatus,
       customerName: it.customerName,
       customerPhone: it.customerPhone,
       dueDate: null,
@@ -126,6 +130,17 @@ export function OptionProgressListPage({
       render: (v: string) => v || <Typography.Text type="secondary">-</Typography.Text>,
     },
     { title: '계약번호', dataIndex: 'contractNo', key: 'contractNo', ...autoWidth() },
+    {
+      // 서명완료·계약완료 계약은 컨설팅이 보기 전용이라, 들어가기 전에 여기서 알아야 한다.
+      title: '계약 상태',
+      dataIndex: 'contractStatus',
+      key: 'contractStatus',
+      ...autoWidth(),
+      render: (v: string) => {
+        const meta = metaOf(CONTRACT_STATUS_META, v);
+        return <StatusBadge label={meta.label} color={meta.color} />;
+      },
+    },
     {
       title: '품목 구성',
       key: 'composition',
