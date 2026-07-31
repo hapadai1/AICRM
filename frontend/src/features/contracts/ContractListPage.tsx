@@ -3,7 +3,15 @@
  * - 진입점은 고객과 기간: 기간 기준 선택 + 통합검색 + 고객 검색 팝업
  * - 필터는 URL 쿼리에 동기화한다(새로고침·뒤로가기·링크 공유 보존)
  */
-import { FilterOutlined, PlusOutlined, ReloadOutlined, SettingOutlined, UserOutlined } from '@ant-design/icons';
+import {
+  FilterOutlined,
+  LeftOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  RightOutlined,
+  SettingOutlined,
+  UserOutlined,
+} from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import {
   Button,
@@ -36,7 +44,8 @@ import {
 import { useModeStore } from '../../app/mode-store';
 import { Can } from '../../shared/Can';
 import { DataTable, PAGE_SIZE_OPTIONS } from '../../shared/DataTable';
-import { PageCard, PageShell } from '../../shared/PageShell';
+import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
+import { LAYOUT } from '../../app/theme';
 import { CustomerPickerModal } from '../../shared/CustomerPickerModal';
 import type { PickedCustomer } from '../../shared/CustomerPickerModal';
 import { StatusBadge } from '../../shared/StatusBadge';
@@ -65,8 +74,8 @@ const DATE_FIELD_OPTIONS: { value: DateField; label: string }[] = [
   { value: 'completionDueDate', label: '완료 예정일' },
 ];
 
-/** 기본 조회 기간: 최근 3개월 */
-const defaultRange = (): [Dayjs, Dayjs] => [dayjs().subtract(3, 'month'), dayjs()];
+/** 기본 조회 기간: 최근 1개월 (현업 확정 2026-07-31) */
+const defaultRange = (): [Dayjs, Dayjs] => [dayjs().subtract(1, 'month'), dayjs()];
 
 /** URL 쿼리 ↔ 필터 상태 */
 interface Filters {
@@ -187,6 +196,25 @@ export function ContractListPage({
         size: 30,
       }),
     );
+  };
+
+  /**
+   * 조회 기간을 통째로 앞뒤 한 달씩 옮긴다.
+   *
+   * 시작일만 월 단위로 옮기고 종료일은 **폭(일수)을 더해** 다시 만든다.
+   * 양끝을 각각 add(month) 하면 말일이 그 달 길이에 맞춰 깎여서
+   * (7/31 −1달 = 6/30, 다시 +1달 = 7/30) 이전→다음 왕복에 하루씩 사라진다.
+   */
+  const shiftRange = (months: number) => {
+    const [defFrom, defTo] = defaultRange();
+    const from = filters.dateFrom ? dayjs(filters.dateFrom) : defFrom;
+    const to = filters.dateTo ? dayjs(filters.dateTo) : defTo;
+    const spanDays = to.diff(from, 'day');
+    const nextFrom = from.add(months, 'month');
+    update({
+      dateFrom: nextFrom.format('YYYY-MM-DD'),
+      dateTo: nextFrom.add(spanDays, 'day').format('YYYY-MM-DD'),
+    });
   };
 
   /** 표 변경은 페이지 이동만 반영한다(정렬 고정 — FIXED_SORT). */
@@ -331,6 +359,10 @@ export function ContractListPage({
   return (
     <PageShell>
       <PageCard>
+        {/*
+          기능 버튼은 필터와 같은 줄에 두지 않는다 — 이 화면은 필터가 여섯이라
+          한 줄에 같이 넣으면 버튼이 아래로 밀려 왼쪽에 붙는다(버튼은 항상 우상단).
+        */}
         <Flex justify="flex-end" wrap gap={8} style={{ marginBottom: 16 }}>
           <Can permission="CONTRACT_TYPE_EDIT">
             <Button icon={<SettingOutlined />} onClick={() => navigate('/admin/contract-types')}>
@@ -344,90 +376,103 @@ export function ContractListPage({
           </Can>
         </Flex>
 
-        <Row gutter={[12, 12]} align="middle">
-          <Col xs={24} md={4}>
-            <Select<DateField>
-              style={{ width: '100%' }}
-              value={filters.dateField}
-              onChange={(v) => update({ dateField: v })}
-              options={DATE_FIELD_OPTIONS}
-            />
-          </Col>
-          <Col xs={24} md={8}>
-            <RangePicker
-              style={{ width: '100%' }}
-              allowEmpty={[true, true]}
-              value={[
-                filters.dateFrom ? dayjs(filters.dateFrom) : null,
-                filters.dateTo ? dayjs(filters.dateTo) : null,
-              ]}
-              onChange={(range) =>
-                update({
-                  dateFrom: range?.[0]?.format('YYYY-MM-DD'),
-                  dateTo: range?.[1]?.format('YYYY-MM-DD'),
-                })
-              }
-            />
-          </Col>
-          <Col xs={24} md={12}>
-            {filters.customerId ? (
-              <Space>
-                <Tag
-                  color="blue"
-                  closable
-                  onClose={() => update({ customerId: undefined, customerLabel: undefined })}
-                  style={{ padding: '4px 8px', fontSize: 14 }}
-                >
-                  <UserOutlined /> {filters.customerLabel ?? '선택한 고객'}
-                </Tag>
-                <Button size="small" onClick={() => setPickerOpen(true)}>
-                  변경
-                </Button>
-              </Space>
-            ) : (
-              <Space.Compact style={{ width: '100%' }}>
-                <Input.Search
-                  allowClear
-                  placeholder="계약번호 · 고객명 · 전화번호 · 계약 구분"
-                  value={keyword}
-                  onChange={(e) => setKeyword(e.target.value)}
-                  onSearch={(value) => update({ q: value.trim() })}
+        {/*
+          필터는 공용 ListToolbar 규격을 따른다 — 라벨 없이 placeholder로 뜻을 전하고,
+          폭은 12칸 그리드가 아니라 내용에 맞춰 고정한 뒤 좁아지면 자연 줄바꿈시킨다.
+          순서는 현업이 찾는 순서다: 고객 → 기간 → 계약 구분 → 상태 (현업 확정 2026-07-31).
+        */}
+        <ListToolbar
+          filters={
+            <>
+              {filters.customerId ? (
+                <Space>
+                  <Tag
+                    color="blue"
+                    closable
+                    onClose={() => update({ customerId: undefined, customerLabel: undefined })}
+                    style={{ padding: '4px 8px', fontSize: 14 }}
+                  >
+                    <UserOutlined /> {filters.customerLabel ?? '선택한 고객'}
+                  </Tag>
+                  <Button onClick={() => setPickerOpen(true)}>변경</Button>
+                </Space>
+              ) : (
+                <Space.Compact style={{ width: LAYOUT.searchWidth + 110 }}>
+                  <Input.Search
+                    allowClear
+                    placeholder="고객명 · 전화번호 · 계약번호"
+                    value={keyword}
+                    onChange={(e) => setKeyword(e.target.value)}
+                    onSearch={(value) => update({ q: value.trim() })}
+                  />
+                  <Button icon={<UserOutlined />} onClick={() => setPickerOpen(true)}>
+                    고객 찾기
+                  </Button>
+                </Space.Compact>
+              )}
+              <Select<DateField>
+                style={{ width: LAYOUT.filterWidth }}
+                value={filters.dateField}
+                onChange={(v) => update({ dateField: v })}
+                options={DATE_FIELD_OPTIONS}
+              />
+              {/* 기간 앞뒤 이동은 달력을 열지 않고 지난달·다음달을 훑는 조작이라 기간 입력에 붙여 둔다. */}
+              <Space.Compact>
+                <Button
+                  icon={<LeftOutlined />}
+                  onClick={() => shiftRange(-1)}
+                  title="이전 1개월"
+                  aria-label="이전 1개월"
                 />
-                <Button icon={<UserOutlined />} onClick={() => setPickerOpen(true)}>
-                  고객 찾기
-                </Button>
+                <RangePicker
+                  allowEmpty={[true, true]}
+                  value={[
+                    filters.dateFrom ? dayjs(filters.dateFrom) : null,
+                    filters.dateTo ? dayjs(filters.dateTo) : null,
+                  ]}
+                  onChange={(range) =>
+                    update({
+                      dateFrom: range?.[0]?.format('YYYY-MM-DD'),
+                      dateTo: range?.[1]?.format('YYYY-MM-DD'),
+                    })
+                  }
+                />
+                <Button
+                  icon={<RightOutlined />}
+                  onClick={() => shiftRange(1)}
+                  title="다음 1개월"
+                  aria-label="다음 1개월"
+                />
               </Space.Compact>
-            )}
-          </Col>
-          <Col xs={12} md={5}>
-            <Select
-              allowClear
-              style={{ width: '100%' }}
-              placeholder="계약 구분 전체"
-              value={filters.contractTypeId}
-              onChange={(v?: string) => update({ contractTypeId: v })}
-              options={(typesQuery.data ?? []).map((t) => ({ value: t.id, label: t.name }))}
-            />
-          </Col>
-          <Col xs={12} md={4}>
-            <Select
-              allowClear
-              style={{ width: '100%' }}
-              placeholder="상태 전체"
-              options={STATUS_OPTIONS}
-              value={filters.status}
-              onChange={(v?: ContractStatus) => update({ status: v })}
-            />
-          </Col>
-          <Col xs={12} md={11}>
-            <Space>
+              <Select
+                allowClear
+                style={{ width: LAYOUT.filterWidth }}
+                placeholder="계약 구분 전체"
+                value={filters.contractTypeId}
+                onChange={(v?: string) => update({ contractTypeId: v })}
+                options={(typesQuery.data ?? []).map((t) => ({ value: t.id, label: t.name }))}
+              />
+              <Select
+                allowClear
+                style={{ width: LAYOUT.filterWidth }}
+                placeholder="상태 전체"
+                options={STATUS_OPTIONS}
+                value={filters.status}
+                onChange={(v?: ContractStatus) => update({ status: v })}
+              />
+            </>
+          }
+          // 초기화는 조건을 좁히는 필터가 아니라 되돌리는 조작이라, 필터 줄에 끼우지 않고
+          // 기간 안내와 같은 줄에 둔다 — 필터 줄 끝에 붙이면 폭이 모자라 혼자 다음 줄로 밀린다.
+          info={
+            <Space size={8}>
               <Button icon={<ReloadOutlined />} onClick={resetFilters}>
                 초기화
               </Button>
-              <Typography.Text type="secondary">기본 조회 기간은 최근 3개월입니다.</Typography.Text>
+              <Typography.Text type="secondary">기본 조회 기간은 최근 1개월입니다.</Typography.Text>
             </Space>
-          </Col>
-        </Row>
+          }
+        />
       </PageCard>
 
       {/*
