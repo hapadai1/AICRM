@@ -88,9 +88,17 @@ function vestActiveOf(components: Array<{ componentType: string; status: string 
   return components.some((c) => c.componentType === 'VEST' && c.status !== 'CANCELLED');
 }
 
+/** 베스트를 가질 수 있는 품목인가 — 정장뿐 (맞춤·렌탈 공통, 현업 확정 2026-08-01). */
+function isSuit(productCategory: string): boolean {
+  return productCategory === 'SUIT';
+}
+
 /**
  * 품목의 부위 슬롯 — 카테고리 상수에서 시작하되, 베스트는 품목의 VEST 부위가
- * 살아 있을 때만 낀다. 2피스 계약은 베스트 탭·단계가 아예 나오지 않는다.
+ * 살아 있을 때만 낀다. 2피스 품목은 베스트 탭·단계가 아예 나오지 않는다.
+ *
+ * 컨설팅 목록만은 예외다(progressComponents) — 제외한 베스트도 행은 남겨야
+ * [베스트 제외] 체크를 다시 풀 자리가 생긴다 (현업 확정 2026-08-01).
  */
 function groupsOfItem(
   productCategory: string,
@@ -290,6 +298,10 @@ export class OptionSessionsService {
               contractNo: true,
               // 계약 작성중이 아니면 컨설팅은 보기 전용 — 화면 잠금 판단용 (현업 확정 2026-07-31).
               status: true,
+              // 목록의 계약일 기준 기간 검색용. 계약일은 계약완료 시점에 정해지므로
+              // 그 전(작성중)에는 작성일로 대신 건다 — 계약 목록과 같은 규칙.
+              contractedAt: true,
+              createdAt: true,
               customer: { select: { id: true, name: true, phone: true } },
               currentVersion: { select: { completionDueDate: true } },
             },
@@ -350,6 +362,9 @@ export class OptionSessionsService {
         contractId: contract.id,
         contractNo: contract.contractNo,
         contractStatus: contract.status,
+        // 계약일(미확정이면 null) + 작성일 — 목록의 기간 필터·표시가 둘을 함께 쓴다.
+        contractedAt: contract.contractedAt?.toISOString() ?? null,
+        contractCreatedAt: contract.createdAt.toISOString(),
         // 제작 진행 중(제작요청 이후) 품목은 계약이 작성중이어도 컨설팅을 잠근다.
         inProduction: item.orderItems.some(
           (o) => o.status !== 'CREATED' && o.status !== 'CANCELLED',
@@ -395,7 +410,9 @@ export class OptionSessionsService {
       | undefined,
     activeStages: Map<string, { id: string; componentGroup: string | null }[]>,
   ) {
-    const groups = groupsOfItem(item.productCategory, item.components);
+    // 컨설팅 목록은 제외한 베스트도 행으로 남긴다 — 체크를 다시 풀 자리가 있어야 한다
+    // (현업 확정 2026-08-01). 단계 수는 아래 vestActive 로 0이 되어 진행률은 그대로다.
+    const groups = componentGroupsFor(item.productCategory);
     if (groups.length === 0) return [];
     const vestActive = vestActiveOf(item.components);
     const stages = (
@@ -415,6 +432,8 @@ export class OptionSessionsService {
         notes: attr?.notes ?? null,
         totalStages: groupStages.length,
         completedStages: groupStages.filter((s) => selected.has(s.id)).length,
+        // 이 부위가 계약 품목에서 빠졌는가 — 베스트만 해당([베스트 제외] 체크 상태).
+        excluded: group === 'VEST' && !vestActive,
       };
     });
   }
@@ -670,6 +689,11 @@ export class OptionSessionsService {
         (o) => o.status !== 'CREATED' && o.status !== 'CANCELLED',
       ),
       fabricName: session.fabricName,
+      // 이 벌에서 베스트를 뺐는가 — 확정 팝업의 "계약서 변경내용"에 함께 알린다.
+      // 베스트 금액은 자동 차감하지 않으므로(값이 그때그때 다르다) 수기 조정을 안내한다.
+      vestExcluded:
+        isSuit(session.contractItem.productCategory) &&
+        !vestActiveOf(session.contractItem.components),
       totalStages: activeStages.length,
       completedStages: activeStages.length - missing.length,
       missingStages: missing.map((m) => ({
@@ -719,39 +743,49 @@ export class OptionSessionsService {
         surchargeApplied: state.applied,
       });
 
-    const versionId = this.contractOf(session)!.currentVersionId!;
-    const { pending } = state;
-    const before = state.contract;
-
     await this.prisma.$transaction(async (tx) => {
-      await tx.contractVersion.update({
-        where: { id: versionId },
-        data: { totalAmount: { increment: pending } },
-      });
-      await tx.optionSelectionSession.update({
-        where: { id: sessionId },
-        data: { surchargeApplied: state.total, surchargeAppliedAt: new Date() },
-      });
-      await this.audit.log(
-        {
-          userId: actor.id,
-          action: 'UPDATE',
-          entityType: 'CONTRACT_VERSION',
-          entityId: versionId,
-          before: { totalAmount: before.totalAmount },
-          after: {
-            totalAmount: before.totalAmount + pending,
-            optionSurcharge: pending,
-            optionSessionId: sessionId,
-            contractItemId: session.contractItemId,
-          },
-          reason: `옵션 추가금액 반영 (${session.contractItem.displayName})`,
-        },
-        tx,
-      );
+      await this.applyPendingTx(tx, session, state, actor);
     });
 
     return this.surcharge(sessionId);
+  }
+
+  /** 미반영 차액을 계약 현재 버전 금액에 제자리 반영하고 감사로그를 남긴다 (확정·수동 반영 공용). */
+  private async applyPendingTx(
+    tx: Prisma.TransactionClient,
+    session: SessionWithDetail,
+    state: Awaited<ReturnType<OptionSessionsService['surchargeState']>>,
+    actor: AuthUser,
+  ) {
+    const versionId = this.contractOf(session)!.currentVersionId!;
+    const { pending } = state;
+    const before = state.contract!;
+
+    await tx.contractVersion.update({
+      where: { id: versionId },
+      data: { totalAmount: { increment: pending } },
+    });
+    await tx.optionSelectionSession.update({
+      where: { id: session.id },
+      data: { surchargeApplied: state.total, surchargeAppliedAt: new Date() },
+    });
+    await this.audit.log(
+      {
+        userId: actor.id,
+        action: 'UPDATE',
+        entityType: 'CONTRACT_VERSION',
+        entityId: versionId,
+        before: { totalAmount: before.totalAmount },
+        after: {
+          totalAmount: before.totalAmount + pending,
+          optionSurcharge: pending,
+          optionSessionId: session.id,
+          contractItemId: session.contractItemId,
+        },
+        reason: `옵션 추가금액 반영 (${session.contractItem.displayName})`,
+      },
+      tx,
+    );
   }
 
   /** POST /option-sessions/:id/confirm — 서버 재검증 후 CONFIRMED (화면·API 정의서 §14.3) */
@@ -799,6 +833,9 @@ export class OptionSessionsService {
     }
 
     const now = new Date();
+    // 확정과 계약금액 반영은 한 트랜잭션이다 (현업 확정 2026-07-31).
+    // 확정된 세션에 미반영 차액이 남는 상태를 만들지 않는다.
+    const state = await this.surchargeState(session);
     const updated = await this.prisma.$transaction(async (tx) => {
       const confirmed = await tx.optionSelectionSession.update({
         where: { id: sessionId },
@@ -827,6 +864,8 @@ export class OptionSessionsService {
         },
         tx,
       );
+      if (state.pending !== 0 && state.contract)
+        await this.applyPendingTx(tx, session, state, actor);
       return confirmed;
     });
 
@@ -835,7 +874,7 @@ export class OptionSessionsService {
       status: updated.status,
       confirmedAt: updated.confirmedAt,
       optionSummary: summary.map((s) => ({ stageName: s.stageName, choiceName: s.choiceName })),
-      // 확정 직후 계약금액 차액을 안내하기 위한 값. 반영은 별도 확인(apply)을 거친다.
+      // 반영 결과 안내용 — 확정과 함께 반영되므로 정상 흐름에서 pending은 0이다.
       surcharge: await this.surcharge(sessionId),
       version: updated.rowVersion,
     };

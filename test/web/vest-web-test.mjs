@@ -6,9 +6,13 @@
  *   2) cd test/web && npm install (최초 1회)
  *   3) node vest-web-test.mjs
  *
- * 흐름: 로그인 → 계약서 작성(고객·계약구분) → [베스트 포함] 체크 + 베스트 단가 입력 →
- *       임시저장 → 스타일 컨설팅 → 베스트 행 [옵션 선택] → [옵션 선택 안함] 제외 →
- *       계약서로 돌아와 합계 차감 확인. 각 단계 스크린샷.
+ * 계약서는 베스트를 다루지 않는다 (현업 확정 2026-08-01) — 정장은 맞춤·렌탈 모두 상의·하의·
+ * 베스트 세 부위로 만들어지고, 뺄지 말지는 스타일 컨설팅에서 벌마다 [베스트 제외]로 정한다.
+ * 금액은 자동 차감하지 않는다(베스트 값이 그때그때 다르다) — 계약서에서 수기로 조정한다.
+ *
+ * 흐름: 로그인 → 계약서 작성(고객·계약구분·단가) → 품목표에 베스트 흔적이 없는지 확인 →
+ *       임시저장 → 스타일 컨설팅 → 정장 베스트 행에서 [베스트 제외] 체크(옵션 버튼 잠김) →
+ *       체크 해제로 재포함 → 계약서로 돌아와 금액이 그대로인지 확인. 각 단계 스크린샷.
  * 끝나면 테스트로 만든 초안 계약을 API로 삭제해 개발 DB를 더럽히지 않는다.
  * 스크린샷: docs/test/screenshots/vest/ (매 실행 시 덮어씀)
  */
@@ -103,20 +107,20 @@ try {
   await pickSelect(page.locator('.ant-select', { hasText: '계약 구분 선택' }).first(), null, CONTRACT_TYPE);
   await page.waitForTimeout(400);
 
-  // 3) 품목표: 정장 단가 100만 → [베스트 포함] 체크 → 베스트 행 단가 30만
+  // 3) 품목표: 정장 1벌 100만. 계약서에는 베스트가 없어야 한다(행도, 체크박스도).
   const suitRow = page.locator('tr', { has: page.locator('.ant-select-selection-item[title="정장"]') }).first();
   const numInputs = suitRow.locator('.ant-input-number-input'); // 0=수량 1=단가 2=금액
+  // 수량은 계약 구분의 기본 품목을 따라 2벌로 들어오기도 한다 — 금액 검증이 흔들리지 않게 1벌로 고정.
+  await numInputs.nth(0).fill('1');
   await numInputs.nth(1).fill('1000000');
   await page.keyboard.press('Tab');
-  await shot('suit-2piece');
-
-  await page.getByLabel('베스트 포함').check(); // 체크 = 베스트 포함
-  const vestRow = page.locator('tr', { hasText: '└ 베스트' });
-  await vestRow.waitFor();
-  await vestRow.getByPlaceholder('베스트 단가').fill('300000');
-  await page.keyboard.press('Tab');
   await page.waitForTimeout(300);
-  await shot('vest-added-1300000');
+
+  if (await page.locator('tr', { hasText: '└ 베스트' }).count())
+    throw new Error('계약서 품목표에 베스트 행이 남아 있다');
+  if (await page.getByLabel('베스트 제외').count())
+    throw new Error('계약서 품목표에 [베스트 제외] 체크박스가 남아 있다');
+  await shot('contract-without-vest');
 
   // 4) 임시저장 — 토스트에서 계약번호 확보(끝나고 정리용)
   await page.getByRole('button', { name: '임시저장' }).click();
@@ -125,34 +129,40 @@ try {
   contractNo = (await toast.textContent())?.match(/CTR-[\d-]+/)?.[0] ?? null;
   await shot('draft-saved');
 
-  // 5) 스타일 컨설팅 — 베스트 부위 행 확인
+  // 5) 스타일 컨설팅 — 정장은 상의·하의·베스트 세 부위로 나온다
   await page.getByRole('button', { name: '스타일 컨설팅으로 이동' }).click();
   await page.getByText('스타일 컨설팅 —').waitFor();
   await page.locator('td', { hasText: '베스트' }).first().waitFor();
   await shot('consulting-with-vest-row');
 
-  // 6) 베스트 행 [옵션 선택] → 팝업 상단 [옵션 선택 안함]
-  const vestListRow = page.locator('tr', { has: page.locator('td', { hasText: /^베스트$/ }) }).first();
-  await vestListRow.getByRole('button', { name: /옵션 선택|옵션 보기/ }).click();
-  await page.getByText('옵션 선택 안함 — 베스트를 품목에서 제외합니다').waitFor();
-  await shot('vest-option-modal');
-
-  await page.getByText('옵션 선택 안함 — 베스트를 품목에서 제외합니다').click();
-  await page.locator('.ant-modal-confirm-title', { hasText: '베스트 옵션 선택 안함' }).waitFor();
-  await shot('exclude-confirm-modal');
-  await page.getByRole('button', { name: '베스트 제외' }).click();
-  await page.getByText(/차감되었습니다|제외했습니다/).waitFor();
+  // 6) 정장 #1 베스트 행의 [베스트 제외] 체크 → 옵션 버튼이 잠기고 "제외됨"이 남는다
+  const vestBox = page.getByLabel('정장 #1 베스트 제외', { exact: true });
+  await vestBox.waitFor();
+  if (await vestBox.isChecked()) throw new Error('새 계약인데 베스트가 이미 제외돼 있다');
+  await vestBox.click();
+  await page.getByText(/베스트를 제외했습니다/).waitFor();
   await page.waitForTimeout(800);
-  await shot('vest-excluded-list'); // 목록에서 베스트 행이 사라진 상태
+  if (!(await page.getByLabel('정장 #1 베스트 제외', { exact: true }).isChecked()))
+    throw new Error('제외 후에도 체크가 들어가지 않았다');
+  if (!(await page.getByText('제외됨').count())) throw new Error('옵션 칸에 "제외됨"이 없다');
+  await shot('vest-excluded-list');
 
-  // 7) 계약서로 돌아와 차감 확인 (작성중 계약은 작성 화면으로 열린다)
+  // 7) 체크 해제 → 재포함 (계약서 경로가 없어졌으므로 여기서 왕복이 돼야 한다)
+  await page.getByLabel('정장 #1 베스트 제외', { exact: true }).click();
+  await page.getByText(/베스트를 다시 포함했습니다/).waitFor();
+  await page.waitForTimeout(800);
+  if (await page.getByLabel('정장 #1 베스트 제외', { exact: true }).isChecked())
+    throw new Error('재포함 후에도 체크가 남아 있다');
+  await shot('vest-included-again');
+
+  // 8) 계약서로 돌아와 금액이 그대로인지 확인 (베스트는 금액을 건드리지 않는다)
   await page.getByRole('button', { name: /계약으로/ }).click();
   await page.waitForTimeout(1200);
   await shot('back-to-contract');
 
   const header = await page.locator('text=/합계 .*원/').first().textContent().catch(() => null);
   log(`합계 표시: ${header}`);
-  if (header && !header.includes('1,000,000')) throw new Error(`베스트 차감 후 합계가 1,000,000원이 아님: ${header}`);
+  if (header && !header.includes('1,000,000')) throw new Error(`계약 금액이 바뀌었다: ${header}`);
   log(`콘솔 페이지 오류: ${errors.length === 0 ? '없음' : errors.join(' | ')}`);
   log('DONE — 전 단계 통과');
 } catch (e) {

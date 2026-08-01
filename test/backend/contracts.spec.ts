@@ -1181,52 +1181,56 @@ describe('베스트 — 계약서 추가·컨설팅 중 제외', () => {
     return customer.id;
   }
 
-  /** 베스트 포함 정장 1벌 계약 생성 (단가 100만 + 베스트 30만) */
-  async function createVestContract(quantity = 1) {
+  /**
+   * 정장 계약 생성 (벌당 단가 100만).
+   * 계약서는 베스트를 다루지 않는다 (현업 확정 2026-08-01) — 정장 벌은 언제나
+   * 상의·하의·베스트 세 부위로 만들어지고, 뺄지 말지는 컨설팅에서 벌마다 정한다.
+   */
+  async function createVestContract(quantity = 1, transactionType = 'CUSTOM') {
     const customerId = await newCustomer();
     const unit = 1_000_000;
-    const vest = 300_000;
     const res = await api(ctx)
       .post('/api/v1/contracts')
       .set(auth(ctx))
       .send({
         customerId,
-        totalAmount: quantity * (unit + vest),
+        totalAmount: quantity * unit,
         lines: [
           {
-            transactionType: 'CUSTOM',
+            transactionType,
             productCategory: 'SUIT',
             quantity,
             unitPrice: unit,
-            lineAmount: quantity * (unit + vest),
-            vestIncluded: true,
-            vestUnitPrice: vest,
+            lineAmount: quantity * unit,
           },
         ],
       })
       .expect(201);
-    return { contractId: res.body.data.id as string, vest, unit };
+    return { contractId: res.body.data.id as string, unit };
   }
 
-  it('베스트 포함 라인은 벌의 VEST 부위를 만들고, 계약서 문서에 베스트 행이 따로 나온다', async () => {
-    const { contractId, vest, unit } = await createVestContract();
+  /** 컨설팅 [베스트 제외] 체크박스 — 체크(제외)/해제(재포함) 한 엔드포인트 */
+  const setVest = (contractItemId: string, included: boolean) =>
+    api(ctx).post(`/api/v1/contracts/items/${contractItemId}/vest`).set(auth(ctx)).send({ included });
 
-    const item = await ctx.prisma.contractItem.findFirstOrThrow({
-      where: { contractId },
-      include: { components: true },
-    });
-    const types = item.components.filter((c) => c.status !== 'CANCELLED').map((c) => c.componentType);
-    expect(types).toEqual(expect.arrayContaining(['JACKET', 'TROUSERS', 'VEST']));
+  it('정장 벌은 맞춤·렌탈 모두 상의·하의·베스트로 만들어지고, 계약서 문서에 베스트 행은 없다', async () => {
+    for (const transactionType of ['CUSTOM', 'RENTAL']) {
+      const { contractId, unit } = await createVestContract(1, transactionType);
 
-    // 저장된 라인 값
-    const doc = await api(ctx).get(`/api/v1/contracts/${contractId}/document`).set(auth(ctx)).expect(200);
-    const lines = doc.body.data.lines;
-    expect(lines).toHaveLength(2);
-    expect(lines[0].isVest).toBe(false);
-    expect(Number(lines[0].lineAmount)).toBe(unit); // 정장 행은 베스트 금액을 뺀 몫
-    expect(lines[1].isVest).toBe(true);
-    expect(lines[1].categoryLabel).toBe('베스트');
-    expect(Number(lines[1].lineAmount)).toBe(vest);
+      const item = await ctx.prisma.contractItem.findFirstOrThrow({
+        where: { contractId },
+        include: { components: true },
+      });
+      const types = item.components
+        .filter((c) => c.status !== 'CANCELLED')
+        .map((c) => c.componentType);
+      expect(types).toEqual(expect.arrayContaining(['JACKET', 'TROUSERS', 'VEST']));
+
+      const doc = await api(ctx).get(`/api/v1/contracts/${contractId}/document`).set(auth(ctx)).expect(200);
+      const lines = doc.body.data.lines;
+      expect(lines).toHaveLength(1);
+      expect(Number(lines[0].lineAmount)).toBe(unit);
+    }
   });
 
   it('베스트 부위 옵션은 계약서에서 "베스트" 행에 담긴다 (부위 행이 없어도 공통으로 뭉개지 않는다)', async () => {
@@ -1324,6 +1328,7 @@ describe('베스트 — 계약서 추가·컨설팅 중 제외', () => {
       .send({
         customerId,
         totalAmount: 2_500_000,
+        // 이 검증은 베스트와 무관하다 — 맞춤 정장 기본이 포함이라 베스트 행이 끼어들지 않게 제외로 둔다.
         lines: [
           {
             transactionType: 'CUSTOM',
@@ -1331,6 +1336,7 @@ describe('베스트 — 계약서 추가·컨설팅 중 제외', () => {
             quantity: 1,
             unitPrice: 1_500_000,
             lineAmount: 1_500_000,
+            vestIncluded: false,
           },
           {
             transactionType: 'CUSTOM',
@@ -1338,6 +1344,7 @@ describe('베스트 — 계약서 추가·컨설팅 중 제외', () => {
             quantity: 1,
             unitPrice: 1_000_000,
             lineAmount: 1_000_000,
+            vestIncluded: false,
           },
         ],
       })
@@ -1356,41 +1363,19 @@ describe('베스트 — 계약서 추가·컨설팅 중 제외', () => {
     expect(new Set(names).size).toBe(2);
   });
 
-  it('베스트는 맞춤 정장 라인에만 켤 수 있다 (렌탈·셔츠는 400)', async () => {
-    const customerId = await newCustomer();
-    for (const line of [
-      { transactionType: 'RENTAL', productCategory: 'SUIT' },
-      { transactionType: 'CUSTOM', productCategory: 'SHIRT' },
-    ]) {
-      const res = await api(ctx)
-        .post('/api/v1/contracts')
-        .set(auth(ctx))
-        .send({
-          customerId,
-          lines: [{ ...line, quantity: 1, lineAmount: 100000, vestIncluded: true, vestUnitPrice: 10000 }],
-        })
-        .expect(400);
-      expect(res.body.error.code).toBe('VALIDATION_ERROR');
-    }
-  });
-
-  it('[옵션 선택 안함] 제외 — 라인·합계에서 베스트 금액이 자동 차감되고 부위가 취소된다', async () => {
-    const { contractId, vest, unit } = await createVestContract();
+  it('[베스트 제외] 체크 — 부위만 취소되고 계약 금액은 그대로다 (수기 조정)', async () => {
+    const { contractId, unit } = await createVestContract();
     const item = await ctx.prisma.contractItem.findFirstOrThrow({ where: { contractId } });
 
-    const res = await api(ctx)
-      .post(`/api/v1/contracts/items/${item.id}/exclude-vest`)
-      .set(auth(ctx))
-      .expect(200);
-    expect(Number(res.body.data.deductedAmount)).toBe(vest);
+    const res = await setVest(item.id, false).expect(200);
+    expect(res.body.data.vestIncluded).toBe(false);
+    expect(res.body.data.changed).toBe(true);
 
+    // 베스트 값은 그때그때 달라 금액은 건드리지 않는다 (현업 확정 2026-08-01).
     const line = await ctx.prisma.contractLine.findFirstOrThrow({
       where: { contractVersion: { contractId } },
     });
-    expect(line.vestIncluded).toBe(false);
-    expect(line.vestUnitPrice).toBeNull();
     expect(Number(line.lineAmount)).toBe(unit);
-
     const contract = await ctx.prisma.contract.findUniqueOrThrow({
       where: { id: contractId },
       include: { currentVersion: true },
@@ -1403,100 +1388,106 @@ describe('베스트 — 계약서 추가·컨설팅 중 제외', () => {
     expect(components).toHaveLength(1);
     expect(components[0].status).toBe('CANCELLED');
 
-    // 이미 제외된 품목은 다시 제외할 수 없다
-    const dup = await api(ctx)
-      .post(`/api/v1/contracts/items/${item.id}/exclude-vest`)
-      .set(auth(ctx))
-      .expect(400);
-    expect(dup.body.error.code).toBe('VALIDATION_ERROR');
+    // 같은 상태로 다시 눌러도 오류가 아니다 — 바뀐 게 없다고만 알린다(체크박스는 왕복한다).
+    const dup = await setVest(item.id, false).expect(200);
+    expect(dup.body.data.changed).toBe(false);
   });
 
-  it('여러 벌 라인에서 한 벌만 제외하면 라인이 분리된다 (다른 벌의 베스트 유지)', async () => {
-    const { contractId, vest, unit } = await createVestContract(2);
-    const first = await ctx.prisma.contractItem.findFirstOrThrow({
+  it('체크를 풀면 베스트가 되살아난다 (컨설팅이 유일한 경로라 왕복이 돼야 한다)', async () => {
+    const { contractId } = await createVestContract();
+    const item = await ctx.prisma.contractItem.findFirstOrThrow({ where: { contractId } });
+
+    await setVest(item.id, false).expect(200);
+    const res = await setVest(item.id, true).expect(200);
+    expect(res.body.data.vestIncluded).toBe(true);
+
+    // 부위를 새로 만들지 않고 취소했던 것을 되살린다(이력 보존).
+    const components = await ctx.prisma.contractItemComponent.findMany({
+      where: { contractItemId: item.id, componentType: 'VEST' },
+    });
+    expect(components).toHaveLength(1);
+    expect(components[0].status).toBe('CREATED');
+  });
+
+  it('여러 벌이면 벌마다 따로 제외된다 (계약서 라인은 그대로)', async () => {
+    const { contractId, unit } = await createVestContract(2);
+    const items = await ctx.prisma.contractItem.findMany({
       where: { contractId },
       orderBy: { sequenceNo: 'asc' },
     });
 
-    await api(ctx).post(`/api/v1/contracts/items/${first.id}/exclude-vest`).set(auth(ctx)).expect(200);
+    await setVest(items[0].id, false).expect(200);
 
+    // 라인 분리는 없다 — 벌 단위 결정은 품목 부위가 갖는다.
     const lines = await ctx.prisma.contractLine.findMany({
       where: { contractVersion: { contractId } },
     });
-    expect(lines).toHaveLength(2);
-    const kept = lines.find((l) => l.vestIncluded);
-    const split = lines.find((l) => !l.vestIncluded);
-    expect(kept?.quantity).toBe(1);
-    expect(split?.quantity).toBe(1);
-    expect(Number(split!.lineAmount)).toBe(unit);
+    expect(lines).toHaveLength(1);
+    expect(lines[0].quantity).toBe(2);
+    expect(Number(lines[0].lineAmount)).toBe(2 * unit);
 
-    // 총액은 한 벌 몫만 차감
-    const contract = await ctx.prisma.contract.findUniqueOrThrow({
-      where: { id: contractId },
-      include: { currentVersion: true },
-    });
-    expect(Number(contract.currentVersion!.totalAmount)).toBe(2 * unit + vest);
-
-    // 부위: 첫 벌만 취소, 둘째 벌은 유지
-    const items = await ctx.prisma.contractItem.findMany({
+    const after = await ctx.prisma.contractItem.findMany({
       where: { contractId },
       include: { components: true },
       orderBy: { sequenceNo: 'asc' },
     });
-    const vestOf = (i: (typeof items)[number]) =>
+    const vestOf = (i: (typeof after)[number]) =>
       i.components.find((c) => c.componentType === 'VEST');
-    expect(vestOf(items[0])?.status).toBe('CANCELLED');
-    expect(vestOf(items[1])?.status).toBe('CREATED');
+    expect(vestOf(after[0])?.status).toBe('CANCELLED');
+    expect(vestOf(after[1])?.status).toBe('CREATED');
   });
 
-  it('완료 후 수정하기(버전업)로 베스트를 추가하면 재완료 시 주문 구성품에 증분 반영된다', async () => {
-    // 2피스로 계약완료 → 주문 구성품은 상의·하의뿐
-    const customerId = await newCustomer();
-    const unit = 1_000_000;
-    const created = await api(ctx)
-      .post('/api/v1/contracts')
+  it('계약서를 다시 저장해도 컨설팅에서 뺀 베스트가 되살아나지 않는다', async () => {
+    // 컨설팅에서 빼고 → 계약서에서 금액을 수기로 고쳐 저장하는 흐름 그대로.
+    const { contractId, unit } = await createVestContract();
+    const item = await ctx.prisma.contractItem.findFirstOrThrow({ where: { contractId } });
+    await setVest(item.id, false).expect(200);
+
+    await api(ctx)
+      .patch(`/api/v1/contracts/${contractId}`)
       .set(auth(ctx))
       .send({
-        customerId,
-        totalAmount: unit,
+        totalAmount: unit - 300_000,
         lines: [
-          { transactionType: 'CUSTOM', productCategory: 'SUIT', quantity: 1, unitPrice: unit, lineAmount: unit },
+          {
+            transactionType: 'CUSTOM',
+            productCategory: 'SUIT',
+            quantity: 1,
+            unitPrice: unit - 300_000,
+            lineAmount: unit - 300_000,
+          },
         ],
       })
-      .expect(201);
-    const contractId = created.body.data.id as string;
+      .expect(200);
+
+    const vest = await ctx.prisma.contractItemComponent.findFirstOrThrow({
+      where: { contractItemId: item.id, componentType: 'VEST' },
+    });
+    expect(vest.status).toBe('CANCELLED');
+  });
+
+  it('완료 후 수정하기(버전업)로 베스트를 되살리면 재완료 시 주문 구성품에 증분 반영된다', async () => {
+    // 2피스로 계약완료 → 주문 구성품은 상의·하의뿐
+    const { contractId } = await createVestContract();
+    const item = await ctx.prisma.contractItem.findFirstOrThrow({ where: { contractId } });
+    await setVest(item.id, false).expect(200);
     await signAndCompleteContract(ctx, contractId);
 
     const orderItem = await ctx.prisma.orderItem.findFirstOrThrow({
       where: { order: { contractId } },
       include: { components: true },
     });
-    expect(orderItem.components.map((c) => c.componentType)).not.toContain('VEST');
+    expect(
+      orderItem.components.filter((c) => c.status !== 'CANCELLED').map((c) => c.componentType),
+    ).not.toContain('VEST');
 
-    // 수정하기(버전업) → 베스트 추가 → 재서명·재완료
+    // 수정하기(버전업)로 작성중 복귀 → 컨설팅에서 베스트 재포함 → 재서명·재완료
     await api(ctx)
       .post(`/api/v1/contracts/${contractId}/revisions`)
       .set(auth(ctx))
       .send({ changeReason: '베스트 추가' })
       .expect(201);
-    await api(ctx)
-      .patch(`/api/v1/contracts/${contractId}`)
-      .set(auth(ctx))
-      .send({
-        totalAmount: unit + 300_000,
-        lines: [
-          {
-            transactionType: 'CUSTOM',
-            productCategory: 'SUIT',
-            quantity: 1,
-            unitPrice: unit,
-            lineAmount: unit + 300_000,
-            vestIncluded: true,
-            vestUnitPrice: 300_000,
-          },
-        ],
-      })
-      .expect(200);
+    await setVest(item.id, true).expect(200);
     await signAndCompleteContract(ctx, contractId);
 
     // 같은 주문품목에 VEST 구성품만 늘어난다 (품목 중복 생성 없음)
@@ -1558,8 +1549,8 @@ describe('베스트 — 계약서 추가·컨설팅 중 제외', () => {
       const locked = await api(ctx).get(`/api/v1/contracts/${contractId}/flow`).set(auth(ctx)).expect(200);
       expect(locked.body.data.consulting.ready).toBe(false);
 
-      // [옵션 선택 안함]으로 베스트를 제외하면 다시 서명 가능
-      await api(ctx).post(`/api/v1/contracts/items/${item.id}/exclude-vest`).set(auth(ctx)).expect(200);
+      // [베스트 제외] 체크로 베스트를 빼면 다시 서명 가능
+      await setVest(item.id, false).expect(200);
       const unlocked = await api(ctx).get(`/api/v1/contracts/${contractId}/flow`).set(auth(ctx)).expect(200);
       expect(unlocked.body.data.consulting.ready).toBe(true);
     } finally {
@@ -1587,10 +1578,7 @@ describe('베스트 — 계약서 추가·컨설팅 중 제외', () => {
     });
 
     const item = await ctx.prisma.contractItem.findFirstOrThrow({ where: { contractId } });
-    const res = await api(ctx)
-      .post(`/api/v1/contracts/items/${item.id}/exclude-vest`)
-      .set(auth(ctx))
-      .expect(409);
+    const res = await setVest(item.id, false).expect(409);
     expect(res.body.error.code).toBe('INVALID_STATUS_TRANSITION');
   });
 });

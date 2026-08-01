@@ -93,6 +93,8 @@ interface ContractListVersionApiRow {
   versionStatus: ContractVersionStatus;
   totalAmount: string | number;
   completionDueDate?: string | null;
+  /** 목록의 "품목 구성" 열 계산용 — 라인 전체가 아니라 거래구분·품목·수량만 온다. */
+  lines?: { transactionType: TransactionType; productCategory: ProductCategory; quantity: number }[];
 }
 
 interface ContractListApiRow {
@@ -138,9 +140,13 @@ export interface ContractLine {
   quantity: number;
   unitPrice: number;
   amount: number;
-  /** 베스트(3피스) 포함 — 맞춤 정장 라인 전용. 품목표에서 베스트가 자기 행으로 보인다. */
+  /**
+   * 베스트(3피스) 포함 — 맞춤 정장 라인 전용. **읽기 전용이다.**
+   * 계약서는 더 이상 베스트를 다루지 않고(현업 확정 2026-08-01) 스타일 컨설팅에서 벌마다 정한다.
+   * 이 값은 이전 계약이 남긴 기록이라, 화면에 쓰지 않고 저장 본문에도 싣지 않는다.
+   */
   vestIncluded: boolean;
-  /** 베스트 포함 시 벌당 베스트 단가(수기) */
+  /** 베스트 포함 시 벌당 베스트 단가(수기). vestIncluded 와 같은 이유로 읽기 전용. */
   vestUnitPrice: number;
   note?: string;
   itemDescription?: string;
@@ -153,8 +159,6 @@ export interface ContractLineInput {
   quantity: number;
   unitPrice: number;
   amount: number;
-  vestIncluded?: boolean;
-  vestUnitPrice?: number;
   note?: string;
 }
 
@@ -173,6 +177,9 @@ export interface ContractListItem {
   /** 작성일 (`YYYY-MM-DD`). 계약일이 없는 초안의 목록 표시·정렬 기준. */
   createdAt?: string;
   completionDueDate?: string;
+  /** 품목 구성 — 거래구분별 품목 수량 합계. 라인이 없으면 빈 객체. */
+  customCounts: Partial<Record<ProductCategory, number>>;
+  rentalCounts: Partial<Record<ProductCategory, number>>;
 }
 
 /** 목록 요약 — 현재 필터 전체 기준(페이지 무관) */
@@ -261,7 +268,32 @@ function toVersion(row: ContractVersionApiRow): ContractVersion {
   };
 }
 
+/**
+ * 목록 행의 품목 구성 — 거래구분별로 품목 수량을 합친다.
+ * 라인은 같은 품목이 여러 줄로 나뉠 수 있어 수량을 더한다("정장 2" = 2벌).
+ * 표시 순서는 라인이 들어온 순서가 아니라 품목 순서(정장>셔츠>구두)로 고정한다 —
+ * 행마다 순서가 달라지면 같은 구성인지 눈으로 비교되지 않는다.
+ */
+const COMPOSITION_ORDER: ProductCategory[] = ['SUIT', 'SHIRT', 'SHOES'];
+
+function countByCategory(
+  lines: ContractListVersionApiRow['lines'],
+  transactionType: TransactionType,
+): Partial<Record<ProductCategory, number>> {
+  const summed = new Map<ProductCategory, number>();
+  for (const line of lines ?? []) {
+    if (line.transactionType !== transactionType) continue;
+    summed.set(line.productCategory, (summed.get(line.productCategory) ?? 0) + (line.quantity ?? 0));
+  }
+  const counts: Partial<Record<ProductCategory, number>> = {};
+  // 알려진 품목을 먼저 순서대로, 목록에 없는 새 품목은 뒤에 붙인다.
+  for (const c of COMPOSITION_ORDER) if (summed.has(c)) counts[c] = summed.get(c);
+  for (const [c, n] of summed) if (!(c in counts)) counts[c] = n;
+  return counts;
+}
+
 function toContractListItem(row: ContractListApiRow): ContractListItem {
+  const lines = row.currentVersion?.lines;
   return {
     id: row.id,
     contractNo: row.contractNo,
@@ -275,6 +307,8 @@ function toContractListItem(row: ContractListApiRow): ContractListItem {
     contractedAt: toDateOnly(row.contractedAt),
     createdAt: toDateOnly(row.createdAt),
     completionDueDate: toDateOnly(row.currentVersion?.completionDueDate),
+    customCounts: countByCategory(lines, 'CUSTOM'),
+    rentalCounts: countByCategory(lines, 'RENTAL'),
   };
 }
 
@@ -435,8 +469,8 @@ function toLinePayload(lines: ContractLineInput[]) {
     quantity: l.quantity,
     unitPrice: l.unitPrice,
     lineAmount: l.amount,
-    // 베스트는 포함일 때만 단가를 보낸다 (백엔드가 제외 라인의 단가를 null로 정규화).
-    ...(l.vestIncluded ? { vestIncluded: true, vestUnitPrice: l.vestUnitPrice ?? 0 } : {}),
+    // 베스트는 계약서가 다루지 않는다 (현업 확정 2026-08-01) — 보내지 않으면 백엔드가
+    // 맞춤 정장 기본값(포함)으로 채우고, 뺄지 말지는 스타일 컨설팅에서 벌마다 정한다.
     ...(l.note ? { notes: l.note } : {}),
   }));
 }
@@ -651,6 +685,8 @@ export interface ContractDocumentComponentOption {
 export interface ContractDocumentComponent {
   group: string;
   groupLabel: string;
+  /** 컨설팅에서 뺀 부위(베스트) — 계약서에 "제외"로 적는다 (현업 확정 2026-08-01) */
+  excluded: boolean;
   options: ContractDocumentComponentOption[];
 }
 
@@ -675,8 +711,6 @@ export interface ContractDocumentLine {
   unitPrice: number;
   lineAmount: number;
   notes?: string;
-  /** 베스트 파생 행 — 정장 라인의 베스트 금액을 자기 행으로 편 것 (현업 확정 2026-07-30) */
-  isVest: boolean;
   /** 주문품목 × 부위 × 유료옵션 계층 */
   items: ContractDocumentItem[];
 }
@@ -721,7 +755,6 @@ interface ContractDocumentLineApiRow {
   unitPrice?: string | number | null;
   lineAmount?: string | number | null;
   notes?: string | null;
-  isVest?: boolean;
   items?: ContractDocumentItemApiRow[] | null;
 }
 
@@ -734,6 +767,7 @@ interface ContractDocumentItemApiRow {
     | {
         group: string;
         groupLabel: string;
+        excluded?: boolean;
         options?: { stageName: string; optionName: string; extraPrice?: string | number | null }[] | null;
       }[]
     | null;
@@ -760,22 +794,25 @@ interface ContractDocumentApiRow {
 }
 
 /**
- * 스타일 컨설팅 중 베스트 제외 (현업 확정 2026-07-30 — 옵션 화면 [옵션 선택 안함]).
- * 계약서의 베스트 품목(금액)을 빼고 합계에서 자동 차감한다. 작성중 + 품목 미진행에서만 허용.
+ * 베스트 포함/제외 (현업 확정 2026-08-01 — 컨설팅 화면 [베스트 제외] 체크박스).
+ * 계약서는 베스트를 다루지 않으므로 이 API가 유일한 경로다. 작성중 + 품목 미진행에서만 허용.
+ * 금액은 건드리지 않는다 — 베스트 금액은 계약서에서 수기로 조정한다.
  */
-export interface ExcludeVestResult {
+export interface SetVestResult {
   contractItemId: string;
   contractId: string;
   contractNo: string;
-  vestIncluded: false;
-  /** 계약 합계에서 자동 차감된 베스트 금액 */
-  deductedAmount: number;
+  displayName: string;
+  vestIncluded: boolean;
+  /** 이미 같은 상태였으면 false — 안내 메시지를 띄울지 가른다 */
+  changed: boolean;
 }
 
-export function excludeVest(contractItemId: string): Promise<ExcludeVestResult> {
-  return request<ExcludeVestResult>({
-    url: `/contracts/items/${contractItemId}/exclude-vest`,
+export function setVestIncluded(contractItemId: string, included: boolean): Promise<SetVestResult> {
+  return request<SetVestResult>({
+    url: `/contracts/items/${contractItemId}/vest`,
     method: 'POST',
+    data: { included },
   });
 }
 
@@ -802,7 +839,6 @@ export function fetchContractDocument(id: string): Promise<ContractDocument> {
       unitPrice: toNumber(l.unitPrice) ?? 0,
       lineAmount: toNumber(l.lineAmount) ?? 0,
       notes: l.notes ?? undefined,
-      isVest: l.isVest ?? false,
       items: (l.items ?? []).map((it) => ({
         contractItemId: it.contractItemId,
         orderNo: it.orderNo ?? null,
@@ -811,6 +847,7 @@ export function fetchContractDocument(id: string): Promise<ContractDocument> {
         components: (it.components ?? []).map((c) => ({
           group: c.group,
           groupLabel: c.groupLabel,
+          excluded: c.excluded ?? false,
           options: (c.options ?? []).map((o) => ({
             stageName: o.stageName,
             optionName: o.optionName,

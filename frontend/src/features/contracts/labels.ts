@@ -12,6 +12,23 @@ export const TRANSACTION_TYPE_LABEL: Record<TransactionType, string> = {
   RENTAL: '렌탈',
 };
 
+/**
+ * 품목 표시 순서: 맞춤(정장>셔츠>구두) → 렌탈(정장>셔츠>구두).
+ * 계약 구분 관리 표시·저장과 계약서 작성 시 기본 품목 채우기에서 함께 쓴다.
+ */
+const TRANSACTION_ORDER: Record<string, number> = { CUSTOM: 0, RENTAL: 1 };
+const CATEGORY_ORDER: Record<string, number> = { SUIT: 0, SHIRT: 1, SHOES: 2 };
+
+export function sortByCatalogOrder<T extends { transactionType: string; productCategory: string }>(
+  lines: readonly T[],
+): T[] {
+  return [...lines].sort(
+    (a, b) =>
+      (TRANSACTION_ORDER[a.transactionType] ?? 99) - (TRANSACTION_ORDER[b.transactionType] ?? 99) ||
+      (CATEGORY_ORDER[a.productCategory] ?? 99) - (CATEGORY_ORDER[b.productCategory] ?? 99),
+  );
+}
+
 export const TRANSACTION_TYPE_TAG_COLOR: Record<TransactionType, string> = {
   CUSTOM: 'blue',
   RENTAL: 'purple',

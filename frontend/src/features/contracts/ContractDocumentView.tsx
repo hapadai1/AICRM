@@ -31,6 +31,8 @@ import {
 /** 부위 하나 — 유료 옵션이 붙은 것만 표시 대상 */
 interface RowComponent {
   label: string;
+  /** 컨설팅에서 뺀 부위(베스트) — 옵션명 대신 "제외"로 적는다 */
+  excluded: boolean;
   optionNames: string[];
 }
 
@@ -70,9 +72,16 @@ function buildRows(data?: ContractDocument): DocRow[] {
           quantity: 1,
           amount: line.unitPrice || (line.quantity ? line.lineAmount / line.quantity : 0),
           notes: line.notes,
+          // 유료 옵션이 붙은 부위 + 컨설팅에서 뺀 베스트("제외"로 남긴다 — 현업 확정 2026-08-01).
+          // 계약서가 베스트를 다루지 않게 되면서, 3피스로 계약하고 2피스로 만든다는 사실이
+          // 계약서에서 보이는 자리는 여기뿐이다.
           components: it.components
-            .filter((c) => c.options.length > 0)
-            .map((c) => ({ label: c.groupLabel, optionNames: c.options.map((o) => o.optionName) })),
+            .filter((c) => c.options.length > 0 || c.excluded)
+            .map((c) => ({
+              label: c.groupLabel,
+              excluded: c.excluded,
+              optionNames: c.options.map((o) => o.optionName),
+            })),
           optionTotal: it.components.reduce((s, c) => s + sumExtra(c.options), 0),
         });
       }
@@ -101,8 +110,16 @@ function OptionCell({ row }: { row: DocRow }) {
     <Flex vertical gap={2}>
       {row.components.map((c) => (
         <Space key={c.label} size={8} align="start" wrap>
-          <Tag style={{ margin: 0, minWidth: 76, textAlign: 'center' }}>{c.label}</Tag>
-          <Typography.Text style={{ fontSize: 13 }}>{c.optionNames.join(', ')}</Typography.Text>
+          <Tag color={c.excluded ? 'red' : undefined} style={{ margin: 0, minWidth: 76, textAlign: 'center' }}>
+            {c.label}
+          </Tag>
+          {c.excluded ? (
+            <Typography.Text strong style={{ fontSize: 13, color: '#cf1322' }}>
+              제외
+            </Typography.Text>
+          ) : (
+            <Typography.Text style={{ fontSize: 13 }}>{c.optionNames.join(', ')}</Typography.Text>
+          )}
         </Space>
       ))}
     </Flex>

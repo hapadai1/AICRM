@@ -69,14 +69,24 @@ describe('베스트 E2E — 계약 → 컨설팅 → 서명 → 계약완료 →
       },
     });
 
-    // [계약서 작성 → 임시저장] — 2피스 정장 1벌
+    // [계약서 작성 → 임시저장] — 2피스 정장 1벌.
+    // 맞춤 정장의 기본은 포함(3피스)이라, 2피스로 시작하려면 제외를 명시해 보낸다.
     const created = await api(ctx)
       .post('/api/v1/contracts')
       .set(auth(ctx))
       .send({
         customerId: customer.id,
         totalAmount: UNIT,
-        lines: [{ transactionType: 'CUSTOM', productCategory: 'SUIT', quantity: 1, unitPrice: UNIT, lineAmount: UNIT }],
+        lines: [
+          {
+            transactionType: 'CUSTOM',
+            productCategory: 'SUIT',
+            quantity: 1,
+            unitPrice: UNIT,
+            lineAmount: UNIT,
+            vestIncluded: false,
+          },
+        ],
       })
       .expect(201);
     contractId = created.body.data.id;
@@ -89,9 +99,11 @@ describe('베스트 E2E — 계약 → 컨설팅 → 서명 → 계약완료 →
 
   // ---------- 공용 버튼 헬퍼 ----------
 
-  /** [임시저장] — 라인 전체 교체 (베스트 포함/제외를 여기서 조작) */
-  async function saveLines(vestIncluded: boolean, expectStatus = 200) {
-    const total = vestIncluded ? UNIT + VEST : UNIT;
+  /**
+   * [임시저장] — 라인 전체 교체. 계약서는 베스트를 다루지 않는다 (현업 확정 2026-08-01).
+   * 베스트를 빼서 값을 깎는 것도 여기서 수기로 한다(자동 차감 없음).
+   */
+  async function saveLines(total: number, expectStatus = 200) {
     return api(ctx)
       .patch(`/api/v1/contracts/${contractId}`)
       .set(auth(ctx))
@@ -102,14 +114,17 @@ describe('베스트 E2E — 계약 → 컨설팅 → 서명 → 계약완료 →
             transactionType: 'CUSTOM',
             productCategory: 'SUIT',
             quantity: 1,
-            unitPrice: UNIT,
+            unitPrice: total,
             lineAmount: total,
-            ...(vestIncluded ? { vestIncluded: true, vestUnitPrice: VEST } : {}),
           },
         ],
       })
       .expect(expectStatus);
   }
+
+  /** 컨설팅 [베스트 제외] 체크박스 — 체크(제외)/해제(재포함) 한 엔드포인트 */
+  const setVest = (included: boolean) =>
+    api(ctx).post(`/api/v1/contracts/items/${itemId}/vest`).set(auth(ctx)).send({ included });
 
   async function flow() {
     const res = await api(ctx).get(`/api/v1/contracts/${contractId}/flow`).set(auth(ctx)).expect(200);
@@ -198,44 +213,49 @@ describe('베스트 E2E — 계약 → 컨설팅 → 서명 → 계약완료 →
 
   // ---------- A. 작성중 (주문 없음) ----------
 
-  it('A1. 2피스 작성중 — 옵션 화면에 베스트 단계가 없고, 문서에 베스트 행이 없다', async () => {
-    expect(await vestComponentStatus()).toBeNull();
+  it('A1. 작성중 기본 3피스 — 베스트 부위·단계가 처음부터 있고, 문서에 베스트 행은 없다', async () => {
+    // 계약 시점에는 3피스로 갈지 모르니 정장은 항상 세 부위로 만든다 (현업 확정 2026-08-01).
+    expect(await vestComponentStatus()).toBe('CREATED');
     const started = await api(ctx)
       .post(`/api/v1/contract-items/${itemId}/option-sessions`)
       .set(auth(ctx))
       .send({})
       .expect(201);
-    expect(started.body.data.totalStages).toBe(2); // 상의·하의만
-    expect(started.body.data.stages.map((s: { stageCode: string }) => s.stageCode)).not.toContain('VEST_STITCH');
+    expect(started.body.data.totalStages).toBe(4); // 상의·하의 + 베스트 2단계
+    expect(started.body.data.stages.map((s: { stageCode: string }) => s.stageCode)).toContain('VEST_STITCH');
 
+    // 계약서 품목표는 베스트 행을 따로 싣지 않는다 — 정장 한 행뿐이다.
     const doc = await api(ctx).get(`/api/v1/contracts/${contractId}/document`).set(auth(ctx)).expect(200);
     expect(doc.body.data.lines).toHaveLength(1);
+    expect(Number(doc.body.data.lines[0].lineAmount)).toBe(UNIT);
   });
 
-  it('A2. [베스트 제외] 체크 해제(계약서) — VEST 부위·단계가 열리고 합계가 오른다', async () => {
-    await saveLines(true);
-    expect(await vestComponentStatus()).toBe('CREATED');
-    expect(await totalAmount()).toBe(UNIT + VEST);
+  it('A2. [베스트 제외] 체크 — 부위·단계가 빠지고 계약 금액은 그대로다', async () => {
+    const res = await setVest(false).expect(200);
+    expect(res.body.data.vestIncluded).toBe(false);
+    expect(await vestComponentStatus()).toBe('CANCELLED');
+    // 베스트 값은 그때그때 달라 자동 차감하지 않는다 — 계약서에서 수기로 조정한다.
+    expect(await totalAmount()).toBe(UNIT);
 
     const session = await sessionDetail();
-    expect(session.totalStages).toBe(4); // 상의·하의 + 베스트 2단계
-
-    const doc = await api(ctx).get(`/api/v1/contracts/${contractId}/document`).set(auth(ctx)).expect(200);
-    const vestRow = doc.body.data.lines.find((l: { isVest: boolean }) => l.isVest);
-    expect(vestRow.categoryLabel).toBe('베스트');
-    expect(Number(vestRow.lineAmount)).toBe(VEST);
+    expect(session.totalStages).toBe(2); // 상의·하의만
   });
 
-  it('A3. 4단계 모두 선택·확정 — 서명 게이트가 열린다', async () => {
+  it('A3. 체크 해제 — 베스트가 되살아난다 (컨설팅이 유일한 경로라 왕복해야 한다)', async () => {
+    await setVest(true).expect(200);
+    expect(await vestComponentStatus()).toBe('CREATED');
+    expect((await sessionDetail()).totalStages).toBe(4);
+  });
+
+  it('A4. 4단계 모두 선택·확정 — 서명 게이트가 열린다', async () => {
     await confirmSession();
     expect((await flow()).consulting.ready).toBe(true);
   });
 
-  it('A4. [옵션 선택 안함](컨설팅) — 합계 자동 차감, 베스트 단계·선택값 정리, 게이트는 열린 채 유지', async () => {
-    const res = await api(ctx).post(`/api/v1/contracts/items/${itemId}/exclude-vest`).set(auth(ctx)).expect(200);
-    expect(Number(res.body.data.deductedAmount)).toBe(VEST);
-    expect(await totalAmount()).toBe(UNIT);
+  it('A5. 확정 후 [베스트 제외] — 단계·선택값이 정리되고 게이트는 열린 채 유지된다', async () => {
+    await setVest(false).expect(200);
     expect(await vestComponentStatus()).toBe('CANCELLED');
+    expect(await totalAmount()).toBe(UNIT);
 
     const session = await sessionDetail();
     expect(session.totalStages).toBe(2);
@@ -243,8 +263,8 @@ describe('베스트 E2E — 계약 → 컨설팅 → 서명 → 계약완료 →
     expect((await flow()).consulting.ready).toBe(true);
   });
 
-  it('A5. 작성중 재추가 — 베스트 단계가 선택될 때까지 서명 게이트가 잠기고, 선택하면 풀린다', async () => {
-    await saveLines(true);
+  it('A6. 다시 포함 — 베스트 단계가 선택될 때까지 서명 게이트가 잠기고, 선택하면 풀린다', async () => {
+    await setVest(true).expect(200);
     expect(await vestComponentStatus()).toBe('CREATED'); // 취소됐던 부위 되살림
     expect((await flow()).consulting.ready).toBe(false); // VEST 단계 미선택
 
@@ -260,8 +280,8 @@ describe('베스트 E2E — 계약 → 컨설팅 → 서명 → 계약완료 →
     await sign();
     expect((await flow()).status).toBe('SIGNED');
 
-    await saveLines(false, 409); // 계약서 수정 잠금 (CONTRACT_NOT_DRAFT)
-    const res = await api(ctx).post(`/api/v1/contracts/items/${itemId}/exclude-vest`).set(auth(ctx)).expect(409);
+    await saveLines(UNIT, 409); // 계약서 수정 잠금 (CONTRACT_NOT_DRAFT)
+    const res = await setVest(false).expect(409);
     expect(res.body.error.code).toBe('CONTRACT_NOT_DRAFT');
     expect(await vestComponentStatus()).toBe('CREATED');
   });
@@ -292,12 +312,12 @@ describe('베스트 E2E — 계약 → 컨설팅 → 서명 → 계약완료 →
   });
 
   it('C2. 계약완료 상태 — 계약서 수정·베스트 제외 잠김 (수정하기로만)', async () => {
-    await saveLines(false, 409);
-    const res = await api(ctx).post(`/api/v1/contracts/items/${itemId}/exclude-vest`).set(auth(ctx)).expect(409);
+    await saveLines(UNIT, 409);
+    const res = await setVest(false).expect(409);
     expect(res.body.error.code).toBe('CONTRACT_NOT_DRAFT');
   });
 
-  it('C3. [수정하기](버전업) 후 [옵션 선택 안함] — 재완료 시 주문 베스트 구성품이 취소된다', async () => {
+  it('C3. [수정하기](버전업) 후 [베스트 제외] — 재완료 시 주문 베스트 구성품이 취소된다', async () => {
     await api(ctx)
       .post(`/api/v1/contracts/${contractId}/revisions`)
       .set(auth(ctx))
@@ -306,11 +326,14 @@ describe('베스트 E2E — 계약 → 컨설팅 → 서명 → 계약완료 →
     expect((await flow()).status).toBe('DRAFT');
 
     // 품목 미진행(주문품목 CREATED)이므로 제외 허용
-    const res = await api(ctx).post(`/api/v1/contracts/items/${itemId}/exclude-vest`).set(auth(ctx)).expect(200);
-    expect(Number(res.body.data.deductedAmount)).toBe(VEST);
-    expect(await totalAmount()).toBe(UNIT);
+    await setVest(false).expect(200);
+    expect(await vestComponentStatus()).toBe('CANCELLED');
     // 주문 구성품은 재완료 전까지 그대로다 (계약서 반영은 계약완료 시점)
     expect(await orderVestStatus()).toBe('CREATED');
+
+    // 베스트 금액은 수기 조정 — 계약서에서 직접 깎는다.
+    await saveLines(UNIT - VEST);
+    expect(await totalAmount()).toBe(UNIT - VEST);
 
     await sign();
     await complete();
@@ -321,28 +344,29 @@ describe('베스트 E2E — 계약 → 컨설팅 → 서명 → 계약완료 →
     expect(orderItems).toHaveLength(1);
   });
 
-  it('C4. 다시 [수정하기] → 베스트 재추가 → 재완료 — 주문 베스트 구성품이 되살아난다', async () => {
+  it('C4. 다시 [수정하기] → 베스트 재포함 → 재완료 — 주문 베스트 구성품이 되살아난다', async () => {
     await api(ctx)
       .post(`/api/v1/contracts/${contractId}/revisions`)
       .set(auth(ctx))
       .send({ changeReason: '추가 방문 — 베스트 추가' })
       .expect(201);
-    await saveLines(true);
+    await setVest(true).expect(200);
     expect(await vestComponentStatus()).toBe('CREATED');
     expect((await flow()).consulting.ready).toBe(false); // 베스트 단계 다시 선택해야 함
 
     await api(ctx).post(`/api/v1/contract-items/${itemId}/option-sessions`).set(auth(ctx)).send({}).expect(201);
     await confirmSession();
+    await saveLines(UNIT); // 베스트 값을 다시 얹는 것도 수기
     await sign();
     await complete();
 
     expect(await orderVestStatus()).toBe('CREATED'); // 취소됐던 주문 구성품 되살림
-    expect(await totalAmount()).toBe(UNIT + VEST);
+    expect(await totalAmount()).toBe(UNIT);
   });
 
   // ---------- D. 제작 진행 중 ----------
 
-  it('D1. 제작요청 이후 — [옵션 선택 안함]도, 계약서 라인의 베스트 끄기도 차단된다', async () => {
+  it('D1. 제작요청 이후 — [베스트 제외]가 차단된다', async () => {
     await api(ctx)
       .post(`/api/v1/contracts/${contractId}/revisions`)
       .set(auth(ctx))
@@ -351,11 +375,8 @@ describe('베스트 E2E — 계약 → 컨설팅 → 서명 → 계약완료 →
     const orderItem = await ctx.prisma.orderItem.findFirstOrThrow({ where: { sourceContractItemId: itemId } });
     await ctx.prisma.orderItem.update({ where: { id: orderItem.id }, data: { status: 'PRODUCTION_REQUESTED' } });
 
-    const excluded = await api(ctx).post(`/api/v1/contracts/items/${itemId}/exclude-vest`).set(auth(ctx)).expect(409);
+    const excluded = await setVest(false).expect(409);
     expect(excluded.body.error.code).toBe('INVALID_STATUS_TRANSITION');
-
-    const saved = await saveLines(false, 409); // 계약서 경로도 같은 규칙
-    expect(saved.body.error.code).toBe('INVALID_STATUS_TRANSITION');
     expect(await vestComponentStatus()).toBe('CREATED'); // 그대로 유지
   });
 
@@ -363,8 +384,7 @@ describe('베스트 E2E — 계약 → 컨설팅 → 서명 → 계약완료 →
     const orderItem = await ctx.prisma.orderItem.findFirstOrThrow({ where: { sourceContractItemId: itemId } });
     await ctx.prisma.orderItem.update({ where: { id: orderItem.id }, data: { status: 'CREATED' } });
 
-    await api(ctx).post(`/api/v1/contracts/items/${itemId}/exclude-vest`).set(auth(ctx)).expect(200);
+    await setVest(false).expect(200);
     expect(await vestComponentStatus()).toBe('CANCELLED');
-    expect(await totalAmount()).toBe(UNIT);
   });
 });

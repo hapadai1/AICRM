@@ -40,6 +40,16 @@ describe('주문·품목·구성품 (Phase 2)', () => {
         ],
       })
       .expect(201);
+    // 정장은 항상 3피스로 만들어진다 (현업 확정 2026-08-01) — 아래 테스트가 주문에서
+    // VEST 구성품을 직접 추가하므로, 컨설팅 [베스트 제외] 체크로 2피스로 만들어 둔다.
+    const suitItem = await ctx.prisma.contractItem.findFirstOrThrow({
+      where: { contractId: created.body.data.id, productCategory: 'SUIT' },
+    });
+    await api(ctx)
+      .post(`/api/v1/contracts/items/${suitItem.id}/vest`)
+      .set(auth(ctx))
+      .send({ included: false })
+      .expect(200);
     // 주문은 계약완료 시점에 생긴다 (현업 확정 2026-07-30).
     const completed = await signAndCompleteContract(ctx, created.body.data.id);
     orderId = completed.orders.find((o) => o.tradeType === 'CUSTOM')!.id;

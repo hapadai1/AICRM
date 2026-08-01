@@ -9,7 +9,6 @@ import {
   Alert,
   Button,
   Card,
-  Checkbox,
   Grid,
   Modal,
   Progress,
@@ -19,10 +18,8 @@ import {
   message,
 } from 'antd';
 import { useEffect, useState } from 'react';
-import { excludeVest } from '../../api/contracts';
 import type { OptionSessionDetail, OptionStageView } from '../../api/options';
 import { fetchOptionSessionByItem, saveOptionStage, startOptionSession } from '../../api/options';
-import { formatKrw } from '../contracts/labels';
 import { ChoiceMedia } from './ChoiceMedia';
 
 interface Props {
@@ -128,37 +125,6 @@ export function OptionStageModal({ open, contractItemId, componentGroup, title, 
     (session?.contractStatus == null || session.contractStatus === 'DRAFT') &&
     !session?.inProduction;
 
-  /**
-   * 베스트 제외 (현업 확정 2026-07-30 — [옵션 선택 안함]).
-   * 계약서의 베스트 품목(금액)이 빠지고 합계에서 자동 차감된다. 재포함은 계약서 화면에서
-   * [베스트 포함]을 체크해 한다.
-   */
-  const excludeMutation = useMutation({
-    mutationFn: () => excludeVest(contractItemId),
-    onSuccess: (res) => {
-      message.success(
-        res.deductedAmount > 0
-          ? `베스트를 품목에서 제외했습니다. 계약 합계에서 ${formatKrw(res.deductedAmount)}이 차감되었습니다.`
-          : '베스트를 품목에서 제외했습니다.',
-      );
-      void queryClient.invalidateQueries({ queryKey: ['options'] });
-      void queryClient.invalidateQueries({ queryKey: ['contracts'] });
-      onClose();
-    },
-    onError: (e: Error) => message.error(e.message),
-  });
-
-  const handleExcludeVest = () => {
-    modal.confirm({
-      title: '베스트 옵션 선택 안함',
-      content:
-        '베스트를 계약 품목에서 제외합니다. 계약서의 베스트 금액이 합계에서 자동 차감되고, 이미 고른 베스트 옵션은 삭제됩니다. 다시 추가하려면 계약서 화면에서 [베스트 포함]을 체크하면 됩니다.',
-      okText: '베스트 제외',
-      okButtonProps: { danger: true },
-      cancelText: '취소',
-      onOk: () => excludeMutation.mutateAsync().then(() => undefined),
-    });
-  };
   const dirty = !!choiceId && choiceId !== stage?.selectedChoiceId;
   const done = stages.filter((s) => s.selectedChoiceId).length;
 
@@ -217,24 +183,11 @@ export function OptionStageModal({ open, contractItemId, componentGroup, title, 
       styles={{ body: { paddingTop: 8 } }}
     >
       {modalContextHolder}
-      {/* 베스트 탭 상단 [옵션 선택 안함] — 체크하면 베스트가 품목에서 빠지고 금액이 자동 차감된다 (현업 확정 2026-07-30). */}
-      {componentGroup === 'VEST' && session && canReedit && (
-        <Alert
-          type="warning"
-          style={{ marginBottom: 12 }}
-          message={
-            <Checkbox
-              checked={false}
-              disabled={excludeMutation.isPending}
-              onChange={(e) => {
-                if (e.target.checked) handleExcludeVest();
-              }}
-            >
-              옵션 선택 안함 — 베스트를 품목에서 제외합니다 (계약 금액 자동 차감)
-            </Checkbox>
-          }
-        />
-      )}
+      {/*
+        베스트를 뺄지 말지는 이 팝업이 아니라 컨설팅 목록의 [베스트 제외] 체크박스가 정한다
+        (현업 확정 2026-08-01) — 제외하면 그 부위의 옵션 버튼 자체가 사라지므로 여기까지
+        올 일이 없다. 팝업에 같은 조작을 또 두면 어느 쪽이 진짜인지 헷갈린다.
+      */}
       {loading ? (
         <Spin style={{ display: 'block', margin: '80px auto' }} size="large" />
       ) : sessionQuery.error ? (

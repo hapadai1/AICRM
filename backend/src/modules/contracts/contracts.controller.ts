@@ -21,6 +21,7 @@ import {
   CreateContractDto,
   CreateRevisionDto,
   SaveSignatureDto,
+  SetVestIncludedDto,
   UpdateContractDto,
 } from './contracts.dto';
 import { ContractsService } from './contracts.service';
@@ -68,14 +69,22 @@ export class ContractsController {
   }
 
   /**
-   * 스타일 컨설팅 중 베스트 제외 — 옵션 화면 베스트 탭의 [옵션 선택 안함] (현업 확정 2026-07-30).
-   * 계약서의 베스트 품목(금액)을 빼고 합계에서 자동 차감한다. 작성중(DRAFT) 한정.
+   * 베스트 포함/제외 — 스타일 컨설팅 화면 정장 베스트 행의 [베스트 제외] 체크박스
+   * (현업 확정 2026-08-01). 계약서는 베스트를 다루지 않으므로 이 API가 유일한 경로다.
+   * 체크(제외)와 해제(재포함)를 한 엔드포인트로 왕복한다. 작성중(DRAFT) 한정.
+   *
+   * 금액은 건드리지 않는다 — 베스트 값이 그때그때 달라 계약서에서 수기로 조정한다.
+   * (이미 계약금액에 반영한 베스트 **옵션 추가금**은 제외 시 자동으로 되돌린다.)
    */
-  @Post('items/:itemId/exclude-vest')
+  @Post('items/:itemId/vest')
   @HttpCode(HttpStatus.OK)
   @RequirePermission('CONTRACT_EDIT')
-  excludeVest(@Param('itemId') itemId: string, @CurrentUser() actor: AuthUser) {
-    return this.contracts.excludeVest(itemId, actor);
+  setVest(
+    @Param('itemId') itemId: string,
+    @Body() dto: SetVestIncludedDto,
+    @CurrentUser() actor: AuthUser,
+  ) {
+    return this.contracts.setVestIncluded(itemId, dto.included, actor);
   }
 
   /**

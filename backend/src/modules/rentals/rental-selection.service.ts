@@ -177,6 +177,8 @@ export class RentalSelectionService {
             notes: line?.notes ?? null,
             selectedInventoryItemId: line?.selectedInventoryItemId ?? null,
             selectedItemCode: line?.selectedInventoryItem?.managementCode ?? null,
+            // 컨설팅에서 [베스트 제외]한 부위 — 행은 남기되 실물 선택을 잠근다 (2026-08-01).
+            excluded: c.status === 'CANCELLED',
           };
         }),
       };

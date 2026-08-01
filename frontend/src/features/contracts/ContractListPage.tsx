@@ -16,10 +16,10 @@ import {
   DatePicker,
   Input,
   Radio,
-  Segmented,
   Select,
   Space,
   Table,
+  Tag,
   Typography,
 } from 'antd';
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
@@ -34,17 +34,32 @@ import {
   type ContractListItem,
   type ContractSearchParams,
   type ContractStatus,
+  type ProductCategory,
 } from '../../api/contracts';
 import { useModeStore } from '../../app/mode-store';
 import { Can } from '../../shared/Can';
-import { DataTable, PAGE_SIZE_OPTIONS } from '../../shared/DataTable';
+import { DataTable } from '../../shared/DataTable';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { LAYOUT } from '../../app/theme';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { autoWidth } from '../../shared/table-width';
-import { CONTRACT_STATUS_META, formatKrw, metaOf } from './labels';
+import {
+  CONTRACT_STATUS_META,
+  PRODUCT_CATEGORY_LABEL,
+  TRANSACTION_TYPE_LABEL,
+  TRANSACTION_TYPE_TAG_COLOR,
+  formatKrw,
+  metaOf,
+} from './labels';
 
 const { RangePicker } = DatePicker;
+
+/** 품목 구성 요약 — "정장 2 · 셔츠 1". 빈 맵이면 빈 문자열 (스타일 컨설팅 목록과 동일) */
+function itemComposition(counts: Partial<Record<ProductCategory, number>>): string {
+  return (Object.keys(counts) as ProductCategory[])
+    .map((c) => `${PRODUCT_CATEGORY_LABEL[c] ?? c} ${counts[c]}`)
+    .join(' · ');
+}
 
 /**
  * 상태를 "전체"로 되돌린 상태를 URL에 남기는 값.
@@ -54,7 +69,7 @@ const { RangePicker } = DatePicker;
 const STATUS_ALL = 'ALL';
 
 /**
- * 상태 선택 버튼 — 맨 앞이 전체, 나머지는 백엔드가 허용하는 상태만 사용한다
+ * 상태 셀렉트 항목 — 맨 앞이 전체, 나머지는 백엔드가 허용하는 상태만 사용한다
  * (CONTRACT_STATUSES 와 동일). 순서는 계약 흐름 순서다.
  */
 const STATUS_OPTIONS = [
@@ -236,7 +251,8 @@ export function ContractListPage({
   const columns: ColumnsType<ContractListItem> = [
     // 열 순서는 현업이 읽는 순서다 (현업 확정 2026-07-31):
     // 누구의(고객) 무슨(계약 구분) 계약이 언제(계약일) 시작해 언제(완료 예정일) 끝나고
-    // 얼마(계약금액)이며 지금 어디까지(상태) 왔나. 계약번호는 참고용이라 맨 뒤.
+    // 얼마(계약금액)이며 지금 어디까지(상태) 왔고 무엇을(품목 구성) 맞췄나.
+    // 계약번호는 참고용이라 자기 열 없이 계약 구분 아래에 붙인다.
     {
       title: '고객',
       dataIndex: 'customerName',
@@ -254,6 +270,15 @@ export function ContractListPage({
       title: '계약 구분',
       dataIndex: 'contractTypeName',
       ...autoWidth(110),
+      // 계약번호는 참고용이라 자기 열을 주지 않고 계약 구분 아래에 붙인다(고객 열의 전화번호와 같은 방식).
+      render: (name: string, row) => (
+        <Space direction="vertical" size={0}>
+          <Typography.Text>{name}</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {row.contractNo}
+          </Typography.Text>
+        </Space>
+      ),
       // 필터 버튼을 제목 글자 바로 옆에 배치 (index.css의 tx-type-filter-col) — 서버(contractTypeId)로 필터링
       className: 'tx-type-filter-col',
       filteredValue: filters.contractTypeId ? [filters.contractTypeId] : null,
@@ -285,8 +310,8 @@ export function ContractListPage({
       dataIndex: 'contractedAt',
       ...autoWidth(),
       // 계약일은 계약완료 시점에 정해진다. 그 전에는 빈 칸 대신 작성일을 보여 준다(기간 필터 기준과 동일).
-      render: (v: string | undefined, row) =>
-        v ?? (row.createdAt ? <Typography.Text type="secondary">{row.createdAt} (작성)</Typography.Text> : '-'),
+      // 작성일임을 "(작성)"으로 덧붙이거나 흐리게 쓰지 않는다 — 작성중인지는 상태 열이 이미 말한다.
+      render: (v: string | undefined, row) => v ?? row.createdAt ?? '-',
     },
     {
       title: '완료 예정일',
@@ -321,10 +346,31 @@ export function ContractListPage({
       },
     },
     {
-      title: '계약번호',
-      dataIndex: 'contractNo',
-      ...autoWidth(),
-      render: (v: string) => <Typography.Text type="secondary">{v}</Typography.Text>,
+      // 스타일 컨설팅 목록의 "품목 구성" 열과 같은 규칙:
+      // 품목이 늘면 "정장 2 · 셔츠 1 · 조끼 1"처럼 길어지는 유일한 열이라 잘라 둔다.
+      // 렌탈이 섞인 계약만 맞춤/렌탈 두 줄로 나눠 쓴다(거래구분 색은 계약 상세 품목표와 동일).
+      // 대부분의 계약은 맞춤뿐이라, 그때는 태그 없이 한 줄로 둬 목록이 시끄러워지지 않게 한다.
+      title: '품목 구성',
+      key: 'composition',
+      width: 200,
+      ellipsis: true,
+      render: (_, row) => {
+        const custom = itemComposition(row.customCounts);
+        const rental = itemComposition(row.rentalCounts);
+        if (!rental) return custom || '-';
+        return (
+          <Space direction="vertical" size={0}>
+            <Typography.Text ellipsis>
+              <Tag color={TRANSACTION_TYPE_TAG_COLOR.CUSTOM}>{TRANSACTION_TYPE_LABEL.CUSTOM}</Tag>
+              {custom}
+            </Typography.Text>
+            <Typography.Text ellipsis>
+              <Tag color={TRANSACTION_TYPE_TAG_COLOR.RENTAL}>{TRANSACTION_TYPE_LABEL.RENTAL}</Tag>
+              {rental}
+            </Typography.Text>
+          </Space>
+        );
+      },
     },
   ];
 
@@ -417,13 +463,15 @@ export function ContractListPage({
                 options={(typesQuery.data ?? []).map((t) => ({ value: t.id, label: t.name }))}
               />
               {/*
-                상태는 다섯 개로 고정돼 늘어나지 않으므로 접었다 펴는 셀렉트 대신
-                버튼으로 늘어놓는다 — 지금 무엇으로 보고 있는지가 열지 않아도 보인다
-                (채촌·스타일 컨설팅 목록과 같은 방식).
+                상태는 셀렉트 한 칸으로 고른다 — 검색 조건 줄을 계약 구분과 같은
+                모양으로 맞춘다 (현업 확정 2026-07-31). 기본값은 작성중이라
+                allowClear 대신 "전체" 항목을 넣는다: 지우면 URL 에서 status 가
+                빠져 다음 읽기에서 다시 작성중으로 되돌아간다.
               */}
-              <Segmented
+              <Select
+                style={{ width: LAYOUT.filterWidth }}
                 value={filters.status ?? STATUS_ALL}
-                onChange={(v) =>
+                onChange={(v: string) =>
                   update({ status: v === STATUS_ALL ? undefined : (v as ContractStatus) })
                 }
                 options={STATUS_OPTIONS}
@@ -458,12 +506,6 @@ export function ContractListPage({
             current: filters.page,
             pageSize: filters.size,
             total: data?.page.totalElements ?? 0,
-            showSizeChanger: true,
-            pageSizeOptions: PAGE_SIZE_OPTIONS,
-            showTotal: (total) => `총 ${total}건`,
-            // 건수·페이지 이동을 표 위아래 양쪽에 둔다 — 30건을 다 내려가야 다음 장으로
-            // 넘어갈 수 있으면 목록을 훑는 동안 스크롤을 왕복하게 된다.
-            position: ['topRight', 'bottomRight'],
           }}
           locale={{ emptyText: '조회 조건에 해당하는 계약이 없습니다.' }}
         />

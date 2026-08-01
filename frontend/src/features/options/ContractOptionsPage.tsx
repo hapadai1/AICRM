@@ -21,6 +21,7 @@ import {
   App,
   Button,
   Card,
+  Checkbox,
   Dropdown,
   Input,
   Modal,
@@ -35,7 +36,7 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { fetchContract } from '../../api/contracts';
+import { fetchContract, setVestIncluded } from '../../api/contracts';
 import type { OptionProgressItem } from '../../api/options';
 import {
   componentGroupLabel,
@@ -89,6 +90,8 @@ interface ComponentRow {
   itemRowSpan: number;
   /** 부위 코드 (맞춤 componentGroup / 렌탈 componentType) */
   group: string;
+  /** 베스트 부위가 이 벌에서 빠졌는가 — [베스트 제외] 체크 상태 (현업 확정 2026-08-01) */
+  vestExcluded?: boolean;
   /** 제작 진행 중 품목 — 계약이 작성중이어도 편집 잠금 (맞춤 행만 내려온다) */
   inProduction?: boolean;
   // 맞춤
@@ -260,6 +263,27 @@ export function ContractOptionsPage() {
     onError: (e: Error) => message.error(e.message),
   });
 
+  /**
+   * [베스트 제외] 체크박스 (현업 확정 2026-08-01) — 계약서가 아니라 여기서 벌마다 정한다.
+   * 체크하면 그 벌의 베스트 부위가 빠지고(고른 베스트 옵션도 정리) 옵션·렌탈 버튼이 잠긴다.
+   * 금액은 건드리지 않는다 — 베스트 값이 그때그때 달라 계약서에서 수기로 조정한다.
+   */
+  const vestMutation = useMutation({
+    mutationFn: ({ contractItemId, included }: { contractItemId: string; included: boolean }) =>
+      setVestIncluded(contractItemId, included),
+    onSuccess: (res) => {
+      message.success(
+        res.vestIncluded
+          ? `${res.displayName} 베스트를 다시 포함했습니다.`
+          : `${res.displayName} 베스트를 제외했습니다. 계약 금액은 계약서에서 조정해 주세요.`,
+      );
+      void queryClient.invalidateQueries({ queryKey: ['options'] });
+      void queryClient.invalidateQueries({ queryKey: ['rental-selection'] });
+      void queryClient.invalidateQueries({ queryKey: ['contracts'] });
+    },
+    onError: (e: Error) => message.error(e.message),
+  });
+
   const copyMutation = useMutation({
     mutationFn: ({ sessionId, targetId }: { sessionId: string; targetId: string }) =>
       copyOptionSession(sessionId, targetId),
@@ -310,6 +334,7 @@ export function ContractOptionsPage() {
           status: item.status,
           itemRowSpan: i === 0 ? groups.length : 0,
           group: c.componentGroup,
+          vestExcluded: c.excluded,
           inProduction: item.inProduction,
           sessionId: item.sessionId,
           completedStages: c.completedStages,
@@ -342,6 +367,7 @@ export function ContractOptionsPage() {
           status: item.status,
           itemRowSpan: i === 0 ? item.components.length : 0,
           group: c.componentType,
+          vestExcluded: c.excluded,
           sessionId: item.sessionId,
           contractItemComponentId: c.contractItemComponentId,
           colorName: c.colorName,
@@ -559,11 +585,43 @@ export function ContractOptionsPage() {
       },
     },
     {
+      /*
+        베스트 행에만 붙는 [베스트 제외] 체크박스 (현업 확정 2026-08-01).
+        계약 시점에는 3피스로 갈지 모르니 계약서는 베스트를 다루지 않고, 옷을 고르면서
+        벌마다 여기서 정한다. 체크하면 옆의 옵션·렌탈 버튼이 잠긴다.
+      */
+      title: '베스트 제외',
+      key: 'vest',
+      width: 96,
+      align: 'center',
+      render: (_, row) =>
+        row.group !== 'VEST' ? null : (
+          <Tooltip title={contractEditable ? '' : '작성중인 계약에서만 바꿀 수 있습니다.'}>
+            <span>
+              <Checkbox
+                checked={!!row.vestExcluded}
+                disabled={!contractEditable || row.inProduction === true || vestMutation.isPending}
+                aria-label={`${row.displayName} 베스트 제외`}
+                onChange={(e) =>
+                  vestMutation.mutate({
+                    contractItemId: row.contractItemId,
+                    included: !e.target.checked,
+                  })
+                }
+              />
+            </span>
+          </Tooltip>
+        ),
+    },
+    {
       title: '옵션',
       key: 'action',
       width: 150,
       render: (_, row) =>
-        row.kind === 'RENTAL' ? (
+        // 제외한 베스트는 고를 것이 없다 — 버튼 자리를 비우고 제외 상태만 남긴다.
+        row.vestExcluded ? (
+          <Typography.Text type="secondary">제외됨</Typography.Text>
+        ) : row.kind === 'RENTAL' ? (
           <Tooltip title={contractEditable ? '' : '작성중인 계약에서만 실물을 변경할 수 있습니다.'}>
             <span>
               <Button

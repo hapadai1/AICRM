@@ -258,6 +258,61 @@ export function fetchRentalInventorySummary(
   return request<RentalInventorySummary>({ url: '/rental-inventory/summary', params });
 }
 
+/**
+ * SKU(품목·컬러·사이즈) 한 줄의 수량. total = available + reserved + checkedOut + hold.
+ * 재고 화면은 개체가 아니라 이 수량을 다룬다 (현업 확정 2026-07-31).
+ */
+export interface RentalSkuSummaryRow {
+  componentType: RentalComponentType;
+  color: string;
+  size: string;
+  /** 폐기·비활성을 뺀 보유 수 */
+  total: number;
+  /** 오늘 바로 빌려줄 수 있는 수 */
+  available: number;
+  reserved: number;
+  checkedOut: number;
+  /** 세탁·수선 등으로 오늘 못 쓰는 수 */
+  hold: number;
+}
+
+/** SKU별 수량 집계 — GET /rental-inventory/sku-summary */
+export function fetchRentalSkuSummary(
+  filters: Pick<RentalItemFilters, 'componentType' | 'color' | 'skuSize'>,
+): Promise<RentalSkuSummaryRow[]> {
+  const params: Record<string, string> = {};
+  if (filters.componentType) params.componentType = filters.componentType;
+  if (filters.color) params.color = filters.color;
+  if (filters.skuSize) params.skuSize = filters.skuSize;
+  return request<RentalSkuSummaryRow[]>({ url: '/rental-inventory/sku-summary', params });
+}
+
+/**
+ * SKU 단위 수량 폐기 — POST /rental-inventory/retire-quantity.
+ * 어느 개체를 뺄지는 서버가 고른다(예약·출고 중인 실물은 제외).
+ */
+export function retireRentalQuantity(body: {
+  componentType: RentalComponentType;
+  color: string;
+  size: string;
+  quantity: number;
+  reason: string;
+}): Promise<{ retired: number }> {
+  return request({ url: '/rental-inventory/retire-quantity', method: 'POST', data: body });
+}
+
+/** SKU 단위 수량 상태 변경 (임시 사용불가 ↔ 대여 가능) — POST /rental-inventory/status-quantity */
+export function changeRentalStatusQuantity(body: {
+  componentType: RentalComponentType;
+  color: string;
+  size: string;
+  quantity: number;
+  newStatus: RentalItemStatus;
+  reason: string;
+}): Promise<{ changed: number }> {
+  return request({ url: '/rental-inventory/status-quantity', method: 'POST', data: body });
+}
+
 /** RENT-001 실물 목록 — GET /rental-inventory (§13.6, 계약 §5) */
 export function fetchRentalItems(filters: RentalItemFilters): Promise<ListResult<RentalItem>> {
   const params: Record<string, string | number> = {};
@@ -276,11 +331,12 @@ export function fetchRentalItems(filters: RentalItemFilters): Promise<ListResult
 }
 
 /**
- * 실물 등록 — POST /rental-inventory (계약 §5: managementCode 필수).
- * quantity가 2 이상이면 `${managementCode}-001` 형식 연번으로 일괄 생성된다.
+ * 실물 등록 — POST /rental-inventory.
+ * managementCode를 생략하면 서버가 `구분-컬러-사이즈-연번`으로 채번한다.
+ * 넘기는 경우 quantity가 2 이상이면 `${managementCode}-001` 형식 연번으로 일괄 생성된다.
  */
 export function createRentalItem(body: {
-  managementCode: string;
+  managementCode?: string;
   componentType: RentalComponentType;
   color: string;
   size: string;
@@ -399,13 +455,20 @@ export function fetchAvailability(params: {
   );
 }
 
-/** 실물 ID 배정 — POST /rental-orders/{id}/allocations (itemCode 대체 허용 — 계약 §5) */
+/**
+ * 렌탈 배정 — POST /rental-orders/{id}/allocations.
+ * 대상 실물은 inventoryItemId · itemCode · color+size 중 하나로 지정한다.
+ * color+size만 주면 서버가 그 기간에 비어 있는 실물 하나를 고른다 (현업 확정 2026-07-31).
+ */
 export function allocateRentalItem(
   orderId: string,
   body: {
     componentId?: string;
     inventoryItemId?: string;
     itemCode?: string;
+    /** 개체 대신 넘기는 SKU 조건 — 구분은 구성품에서 가져오므로 컬러·사이즈만 준다. */
+    color?: string;
+    size?: string;
     pickupDate: string;
     returnDueDate: string;
     /** 생략하면 반납 예정일과 같다 — 반납 다음 날부터 다른 예약을 받는다. */
@@ -418,7 +481,8 @@ export function allocateRentalItem(
 /** 배정 ID 변경 — POST /rental-allocations/{id}/change-item (§13.6, §14.7) */
 export function changeAllocationItem(
   allocationId: string,
-  body: { newInventoryItemId: string; reason: string; version: number },
+  /** newInventoryItemId를 생략하면 같은 규격의 비어 있는 다른 실물을 서버가 고른다. */
+  body: { newInventoryItemId?: string; reason: string; version: number },
 ): Promise<RentalAllocation> {
   return request<RentalAllocation>({
     url: `/rental-allocations/${allocationId}/change-item`,
@@ -643,6 +707,8 @@ export interface RentalProgressComponent {
   notes: string | null;
   selectedInventoryItemId: string | null;
   selectedItemCode: string | null;
+  /** 컨설팅에서 [베스트 제외]한 부위 — 행은 남되 실물 선택이 잠긴다 (현업 확정 2026-08-01) */
+  excluded?: boolean;
 }
 
 /**

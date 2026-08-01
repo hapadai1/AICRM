@@ -22,12 +22,15 @@ import {
 } from './contracts.dto';
 
 /**
- * 품목 대분류 → 기본 구성품 (설계서 7.2). 정장 기본은 2피스(상의·하의)다.
- * 베스트(3피스)는 계약서 라인의 [베스트 포함]을 체크해 추가한다(현업 확정 2026-07-30)
- * — syncContractItems 가 라인의 vestIncluded 를 보고 VEST 부위를 켜고 끈다.
+ * 품목 대분류 → 기본 구성품 (설계서 7.2).
+ *
+ * 정장은 맞춤·렌탈 가리지 않고 상의·하의·베스트 세 부위로 만든다 (현업 확정 2026-08-01).
+ * 계약 시점에는 베스트를 뺄지 알 수 없어 계약서는 베스트를 다루지 않고, 벌마다 뺄지 말지는
+ * 스타일 컨설팅에서 [베스트 제외] 체크로 정한다(setVestIncluded). 렌탈도 베스트 재고를
+ * 따로 갖고 있어 부위가 없으면 3피스를 빌려줄 수 없었다.
  */
 const COMPONENT_MAP: Record<string, string[]> = {
-  SUIT: ['JACKET', 'TROUSERS'],
+  SUIT: ['JACKET', 'TROUSERS', 'VEST'],
   SHIRT: ['SHIRT'],
   SHOES: ['SHOES'],
 };
@@ -40,6 +43,23 @@ const CATEGORY_LABEL: Record<string, string> = {
   SHIRT: '셔츠',
   SHOES: '구두',
 };
+
+/**
+ * 계약서 출력 품목 순서: 맞춤(정장>셔츠>구두) → 렌탈(정장>셔츠>구두).
+ * 저장 순서(sortOrder)와 무관하게 출력물(웹 계약서·엑셀)에서는 항상 이 순서로 싣는다.
+ */
+const TRANSACTION_ORDER: Record<string, number> = { CUSTOM: 0, RENTAL: 1 };
+const CATEGORY_ORDER: Record<string, number> = { SUIT: 0, SHIRT: 1, SHOES: 2 };
+
+function sortDocumentLines<T extends { transactionType: string; productCategory: string }>(
+  lines: readonly T[],
+): T[] {
+  return [...lines].sort(
+    (a, b) =>
+      (TRANSACTION_ORDER[a.transactionType] ?? 99) - (TRANSACTION_ORDER[b.transactionType] ?? 99) ||
+      (CATEGORY_ORDER[a.productCategory] ?? 99) - (CATEGORY_ORDER[b.productCategory] ?? 99),
+  );
+}
 
 /** 구성품(부위) 한글 라벨 (설계서 03 §5.3) */
 const COMPONENT_LABEL: Record<string, string> = {
@@ -108,6 +128,8 @@ const LIST_INCLUDE = {
       versionStatus: true,
       totalAmount: true,
       completionDueDate: true,
+      // 목록의 "품목 구성" 열용 — 거래구분·품목별 수량만 있으면 되므로 라인 전체는 싣지 않는다.
+      lines: { select: { transactionType: true, productCategory: true, quantity: true } },
     },
   },
 } satisfies Prisma.ContractInclude;
@@ -410,17 +432,20 @@ export class ContractsService {
   }
 
   /**
-   * 스타일 컨설팅 중 베스트 제외 (현업 확정 2026-07-30 — "옵션 선택 안함").
+   * 베스트 포함/제외 (현업 확정 2026-08-01) — 스타일 컨설팅 화면의 [베스트 제외] 체크박스.
    *
-   * 옵션 화면 베스트 탭의 [옵션 선택 안함] 체크가 이 API다. 계약서 품목표의 베스트는
-   * 라인 값(vestIncluded·vestUnitPrice)으로 관리하므로, 제외 = 그 벌의 베스트 값을 끄고
-   * **베스트 금액만큼 라인·합계에서 자동 차감**한다. 부위(VEST)는 CANCELLED, 이미 고른
-   * 베스트 옵션 선택·반영된 추가금액도 함께 정리한다.
+   * 계약서는 베스트를 다루지 않는다. 정장은 맞춤·렌탈 모두 상의·하의·베스트 세 부위로
+   * 만들어지고, 어느 벌에서 뺄지는 옷을 고르면서 여기서 정한다. 이 API가 유일한 경로라
+   * 체크(제외)와 해제(재포함)를 한 메서드로 왕복한다.
+   *
+   * **금액은 건드리지 않는다** — 베스트 값이 그때그때 달라 계약금액은 계약서에서 수기로
+   * 조정한다. 다만 이미 계약금액에 반영한 베스트 *옵션 추가금*은 되돌린다(고른 적 없는
+   * 옵션의 돈이 계약에 남으면 안 된다).
    *
    * 작성중(DRAFT)에서만 허용한다 — 서명·완료된 계약은 [수정하기]로 새 버전을 만든 뒤
-   * 같은 조작을 한다(재서명·재완료 흐름). 되돌리기(재포함)는 계약서 화면에서 체크를 풀어 한다.
+   * 같은 조작을 한다(재서명·재완료 흐름).
    */
-  async excludeVest(contractItemId: string, actor: AuthUser) {
+  async setVestIncluded(contractItemId: string, included: boolean, actor: AuthUser) {
     const item = await this.prisma.contractItem.findUnique({
       where: { id: contractItemId },
       include: {
@@ -435,82 +460,44 @@ export class ContractsService {
     if (contract.status !== 'DRAFT')
       throw new BusinessException(
         'CONTRACT_NOT_DRAFT',
-        '작성중인 계약에서만 베스트를 제외할 수 있습니다. 계약서 [수정하기]로 되돌린 뒤 진행해 주세요.',
+        '작성중인 계약에서만 베스트를 바꿀 수 있습니다. 계약서 [수정하기]로 되돌린 뒤 진행해 주세요.',
         undefined,
         { status: contract.status },
       );
-    // 제외는 '감소'다 — 컨설팅 잠금과 같은 규칙으로 제작 진행 중(제작요청 이후) 벌은 막는다 (0731).
+    // 컨설팅 잠금과 같은 규칙 — 제작 진행 중(제작요청 이후) 벌은 손대지 않는다 (0731).
     const inProduction = item.orderItems.some((o) => o.status !== 'CREATED' && o.status !== 'CANCELLED');
     if (inProduction)
       throw new BusinessException(
         'INVALID_STATUS_TRANSITION',
-        '제작 진행 중인 품목은 베스트를 제외할 수 없습니다. 제작·입출고 화면에서 상태를 되돌린 뒤 진행해 주세요.',
+        '제작 진행 중인 품목은 베스트를 바꿀 수 없습니다. 제작·입출고 화면에서 상태를 되돌린 뒤 진행해 주세요.',
       );
     if (!this.isVestCapable(item.transactionType, item.productCategory))
-      throw new BusinessException('VALIDATION_ERROR', '맞춤 정장 품목에서만 베스트를 제외할 수 있습니다.', [
-        { field: 'contractItemId', reason: 'NOT_CUSTOM_SUIT' },
+      throw new BusinessException('VALIDATION_ERROR', '정장 품목에서만 베스트를 바꿀 수 있습니다.', [
+        { field: 'contractItemId', reason: 'NOT_SUIT' },
       ]);
     if (item.status === 'CANCELLED')
       throw new BusinessException('VALIDATION_ERROR', '취소된 품목입니다.', [
         { field: 'contractItemId', reason: 'ITEM_CANCELLED' },
       ]);
-    const vest = item.components.find((c) => c.componentType === 'VEST' && c.status !== 'CANCELLED');
-    if (!vest)
-      throw new BusinessException('VALIDATION_ERROR', '이미 베스트가 제외된 품목입니다.', [
-        { field: 'contractItemId', reason: 'VEST_NOT_INCLUDED' },
-      ]);
 
-    const line = item.sourceContractLine;
-    const vestUnit = line?.vestIncluded ? Number(line.vestUnitPrice ?? 0) : 0;
+    const wasIncluded = item.components.some(
+      (c) => c.componentType === 'VEST' && c.status !== 'CANCELLED',
+    );
+    if (wasIncluded === included)
+      return {
+        contractItemId: item.id,
+        contractId: contract.id,
+        contractNo: contract.contractNo,
+        displayName: item.displayName,
+        vestIncluded: included,
+        changed: false,
+      };
 
     await this.prisma.$transaction(async (tx) => {
-      // 1) 계약서 라인 반영 — 베스트 품목(금액)을 빼고 합계에서 차감한다.
-      if (line?.vestIncluded) {
-        if (line.quantity > 1) {
-          // 한 라인에 여러 벌이 걸려 있으면 이 벌만 라인을 분리해 제외한다(다른 벌의 베스트 유지).
-          const perUnit = Math.round(Number(line.lineAmount) / line.quantity);
-          const split = await tx.contractLine.create({
-            data: {
-              id: randomUUID(),
-              contractVersionId: line.contractVersionId,
-              transactionType: line.transactionType,
-              productCategory: line.productCategory,
-              itemDescription: line.itemDescription,
-              quantity: 1,
-              unitPrice: line.unitPrice,
-              lineAmount: Math.max(perUnit - vestUnit, 0),
-              vestIncluded: false,
-              vestUnitPrice: null,
-              notes: line.notes,
-              sortOrder: line.sortOrder,
-            },
-          });
-          await tx.contractLine.update({
-            where: { id: line.id },
-            data: { quantity: { decrement: 1 }, lineAmount: { decrement: perUnit } },
-          });
-          await tx.contractItem.update({
-            where: { id: item.id },
-            data: { sourceContractLineId: split.id },
-          });
-        } else {
-          await tx.contractLine.update({
-            where: { id: line.id },
-            data: { vestIncluded: false, vestUnitPrice: null, lineAmount: { decrement: vestUnit } },
-          });
-        }
-        if (vestUnit > 0 && contract.currentVersionId)
-          await tx.contractVersion.update({
-            where: { id: contract.currentVersionId },
-            data: { totalAmount: { decrement: vestUnit } },
-          });
-      }
-
-      // 2) 부위 취소 + 베스트 옵션 선택·추가금 반영 정리
-      await tx.contractItemComponent.update({ where: { id: vest.id }, data: { status: 'CANCELLED' } });
-      await this.removeVestSelections(tx, item.id);
-
-      // 3) 낙관적 잠금·감사 — 계약서 내용(라인·합계)이 바뀌었다.
+      // 부위를 켜고 끈다(물리 삭제 없음). 제외면 그 벌의 베스트 옵션 선택·반영 추가금도 정리한다.
+      // 계약서 라인·합계는 건드리지 않는다 — 베스트 금액은 계약서에서 수기로 조정한다.
+      await this.syncVestComponent(tx, item, included);
+      // 낙관적 잠금·감사 — 계약 품목 구성이 바뀌었다.
       await tx.contract.update({ where: { id: contract.id }, data: { rowVersion: { increment: 1 } } });
       await this.audit.log(
         {
@@ -518,9 +505,11 @@ export class ContractsService {
           action: 'UPDATE',
           entityType: 'CONTRACT_ITEM',
           entityId: item.id,
-          before: { displayName: item.displayName, vestIncluded: true },
-          after: { displayName: item.displayName, vestIncluded: false, deductedAmount: vestUnit },
-          reason: '베스트 제외 (스타일 컨설팅 — 옵션 선택 안함)',
+          before: { displayName: item.displayName, vestIncluded: wasIncluded },
+          after: { displayName: item.displayName, vestIncluded: included },
+          reason: included
+            ? '베스트 포함 (스타일 컨설팅 — [베스트 제외] 해제)'
+            : '베스트 제외 (스타일 컨설팅 — [베스트 제외] 체크)',
         },
         asAuditClient(tx),
       );
@@ -530,9 +519,9 @@ export class ContractsService {
       contractItemId: item.id,
       contractId: contract.id,
       contractNo: contract.contractNo,
-      vestIncluded: false,
-      /** 계약 합계에서 자동 차감된 베스트 금액 */
-      deductedAmount: vestUnit,
+      displayName: item.displayName,
+      vestIncluded: included,
+      changed: true,
     };
   }
 
@@ -955,49 +944,26 @@ export class ContractsService {
             weddingDate: version.weddingDate,
           }
         : null,
-      // 베스트 포함 라인은 두 행으로 편다 — 정장 행(단가×수량) + 베스트 행(베스트 단가×수량).
-      // 품목별 가격 관리 원칙(현업 확정 2026-07-30): 베스트는 품목표에서 자기 행으로 금액을 갖는다.
-      lines: (version?.lines ?? []).flatMap((l) => {
-        const vestUnit = l.vestIncluded ? Number(l.vestUnitPrice ?? 0) : 0;
-        const vestAmount = vestUnit * l.quantity;
-        const base = {
-          transactionType: l.transactionType,
-          productCategory: l.productCategory,
-          categoryLabel: CATEGORY_LABEL[l.productCategory] ?? l.productCategory,
-          itemDescription: l.itemDescription,
-          // 주문 생성 전(계약 확정 전) 폴백용 세부품목 라벨
-          components: componentLabels(l.productCategory),
-          quantity: l.quantity,
-          unitPrice: l.unitPrice,
-          lineAmount: Number(l.lineAmount) - vestAmount,
-          vestIncluded: l.vestIncluded,
-          vestUnitPrice: l.vestUnitPrice,
-          notes: l.notes,
-          isVest: false,
-          // 주문품목 × 부위 × 유료옵션 계층 (주문 생성 전에는 빈 배열)
-          items:
-            itemTree.get(`line:${l.id}`) ??
-            itemTree.get(`${l.transactionType}|${l.productCategory}`) ??
-            [],
-        };
-        if (!l.vestIncluded) return [base];
-        return [
-          base,
-          {
-            ...base,
-            categoryLabel: '베스트',
-            itemDescription: null,
-            components: ['베스트'],
-            unitPrice: l.vestUnitPrice,
-            lineAmount: vestAmount,
-            vestIncluded: false,
-            vestUnitPrice: null,
-            notes: null,
-            isVest: true,
-            items: [],
-          },
-        ];
-      }),
+      // 품목표는 계약서 라인을 그대로 편다 — 베스트는 자기 행을 갖지 않는다 (현업 확정 2026-08-01).
+      // 정장은 상의·하의·베스트가 한 벌이고, 어느 벌에서 베스트를 뺄지는 스타일 컨설팅에서
+      // 정해 품목 계층(items)에 나타난다. 라인 금액은 저장된 값을 쪼개지 않고 그대로 싣는다.
+      lines: sortDocumentLines(version?.lines ?? []).map((l) => ({
+        transactionType: l.transactionType,
+        productCategory: l.productCategory,
+        categoryLabel: CATEGORY_LABEL[l.productCategory] ?? l.productCategory,
+        itemDescription: l.itemDescription,
+        // 주문 생성 전(계약 확정 전) 폴백용 세부품목 라벨
+        components: componentLabels(l.productCategory),
+        quantity: l.quantity,
+        unitPrice: l.unitPrice,
+        lineAmount: Number(l.lineAmount),
+        notes: l.notes,
+        // 주문품목 × 부위 × 유료옵션 계층 (주문 생성 전에는 빈 배열)
+        items:
+          itemTree.get(`line:${l.id}`) ??
+          itemTree.get(`${l.transactionType}|${l.productCategory}`) ??
+          [],
+      })),
       // 웹은 옵션명·추가금액을 노출한다 (D7). 추가금액 0원 옵션은 계약서에 싣지 않는다.
       options: options.map((o) => ({ optionName: o.optionName, extraPrice: o.extraPrice })),
       // 서명 상태 (엑셀 버튼·확정 버튼 게이팅용)
@@ -1371,18 +1337,15 @@ export class ContractsService {
       return { buffer: stored, fileName: `contract-${contract.contractNo}.xlsx` };
     }
 
-    // 베스트 포함 라인은 품목표에 "베스트" 행을 따로 싣는다 (현업 확정 2026-07-30).
-    const lines: ContractExcelLine[] = version.lines.flatMap((l) => [
-      {
-        category: CATEGORY_LABEL[l.productCategory] ?? l.productCategory,
-        components: componentLabels(l.productCategory),
-        quantity: l.quantity,
-      },
-      ...(l.vestIncluded
-        ? [{ category: '베스트', components: ['베스트'], quantity: l.quantity }]
-        : []),
-    ]);
-    const options = await this.loadContractOptions(id);
+    // 베스트는 자기 행을 갖지 않는다 (현업 확정 2026-08-01) — 웹 계약서와 같은 규칙.
+    const lines: ContractExcelLine[] = sortDocumentLines(version.lines).map((l) => ({
+      category: CATEGORY_LABEL[l.productCategory] ?? l.productCategory,
+      components: componentLabels(l.productCategory),
+      quantity: l.quantity,
+    }));
+    // 옵션 목록 뒤에 "베스트 제외 — 정장 #2"를 붙인다 (현업 확정 2026-08-01).
+    // 계약서가 베스트를 다루지 않으니, 3피스로 계약하고 2피스로 만든다는 사실이 종이에도 남아야 한다.
+    const options = [...(await this.loadContractOptions(id)), ...(await this.loadVestExclusions(id))];
 
     let signature: { pngBuffer: Buffer; signerName: string; signedAt: Date } | null = null;
     if (version.signatureFileId && version.signedAt) {
@@ -1516,8 +1479,6 @@ export class ContractsService {
           const seq = maxSeq + n;
           const slot = slots[baseLen + n - 1];
           const componentTypes = [...(COMPONENT_MAP[productCategory] ?? [productCategory])];
-          if (this.isVestCapable(transactionType, productCategory) && slot?.vestIncluded)
-            componentTypes.push('VEST');
           const created = await tx.contractItem.create({
             data: {
               id: randomUUID(),
@@ -1543,8 +1504,12 @@ export class ContractsService {
         }
       }
 
-      // 살아남은 벌을 슬롯과 짝지어 라인 참조를 다시 걸고, 맞춤 정장은 베스트 부위를 라인 값에 맞춘다.
+      // 살아남은 벌을 슬롯과 짝지어 라인 참조를 다시 건다.
       // (계약 수정·버전업으로 라인이 삭제·재생성돼 참조가 끊기는 문제도 여기서 함께 정합된다.)
+      //
+      // 베스트 부위는 여기서 건드리지 않는다 (현업 확정 2026-08-01) — 뺄지 말지는 컨설팅이
+      // 단독으로 갖는다. 예전처럼 라인 값에 맞추면, 컨설팅에서 뺀 뒤 계약서에서 금액을
+      // 수기로 고쳐 저장하는 순간(바로 그 흐름이다) 제외가 풀려 되살아난다.
       for (let idx = 0; idx < activeItems.length; idx += 1) {
         const item = activeItems[idx];
         const slot = slots[idx];
@@ -1554,23 +1519,23 @@ export class ContractsService {
             where: { id: item.id },
             data: { sourceContractLineId: slot.lineId },
           });
-        if (this.isVestCapable(transactionType, productCategory))
-          await this.syncVestComponent(tx, item, slot.vestIncluded);
       }
     }
   }
 
-  /** 베스트를 켜고 끌 수 있는 품목인가 — 맞춤 정장만 (렌탈·셔츠·구두 제외, 현업 확정 2026-07-30). */
-  private isVestCapable(transactionType: string, productCategory: string): boolean {
-    return transactionType === 'CUSTOM' && productCategory === 'SUIT';
+  /**
+   * 베스트를 켜고 끌 수 있는 품목인가 — 정장이면 맞춤·렌탈 모두 (현업 확정 2026-08-01).
+   * 셔츠·구두는 베스트가 없다.
+   */
+  private isVestCapable(_transactionType: string, productCategory: string): boolean {
+    return productCategory === 'SUIT';
   }
 
   /**
-   * 품목의 VEST 부위를 라인의 베스트 포함 여부에 맞춘다.
-   * - 포함: 취소된 부위가 있으면 되살리고, 없으면 새로 만든다. (추가는 언제나 자유 — 품목 추가 전용 규칙)
+   * 품목의 VEST 부위를 켜고 끈다 (컨설팅 [베스트 제외] 체크박스 — setVestIncluded 전용).
+   * - 포함: 취소된 부위가 있으면 되살리고, 없으면 새로 만든다.
    * - 제외: 부위를 CANCELLED로 두고(물리 삭제 금지) 그 품목의 베스트 옵션 선택도 정리한다.
-   *   제외는 '감소'라 **제작 진행 중(제작요청 이후) 벌은 저장을 거부**한다 — 옵션 화면
-   *   [옵션 선택 안함]과 계약서 라인 저장이 같은 규칙을 탄다 (현업 확정 2026-07-31).
+   *   제외는 '감소'라 **제작 진행 중(제작요청 이후) 벌은 거부**한다 (현업 확정 2026-07-31).
    * 주문품목 구성품은 여기서 건드리지 않는다 — 계약완료 시 syncOrders 가 증분 반영한다.
    */
   private async syncVestComponent(
@@ -1974,12 +1939,33 @@ export class ContractsService {
   }
 
   /**
+   * 컨설팅에서 베스트를 뺀 벌 — 계약서 옵션 목록에 "베스트 제외 — 정장 #2"로 싣는다
+   * (현업 확정 2026-08-01). 금액은 없다 — 베스트 값은 계약서에서 수기로 조정한다.
+   */
+  private async loadVestExclusions(
+    contractId: string,
+  ): Promise<Array<{ optionName: string; extraPrice: number }>> {
+    const items = await this.prisma.contractItem.findMany({
+      where: {
+        contractId,
+        status: { not: 'CANCELLED' },
+        components: { some: { componentType: 'VEST', status: 'CANCELLED' } },
+      },
+      select: { displayName: true },
+      orderBy: [{ productCategory: 'asc' }, { sequenceNo: 'asc' }],
+    });
+    return items.map((i) => ({ optionName: `베스트 제외 — ${i.displayName}`, extraPrice: 0 }));
+  }
+
+  /**
    * 계약서 웹 표시용 품목 계층 — `거래방식|품목` → 주문품목(정장 #1·#2) → 부위 → 유료 옵션.
    *
    * - 부위 축: 맞춤은 옵션 부위 그룹(상의·하의·베스트), 렌탈은 주문품목 구성품을 쓴다.
    *   (스타일 컨설팅 화면과 같은 축이라 두 화면의 부위 목록이 어긋나지 않는다.)
    * - 옵션은 현재 선택 세션의 값 중 **추가금액 > 0** 인 것만 담는다 (v2 계약관리 요구).
    * - 부위 행은 유료 옵션이 없어도 항상 남긴다 (구성품 자체가 계약서 정보).
+   * - 컨설팅에서 뺀 베스트도 "제외"로 남긴다 (현업 확정 2026-08-01) — 계약서가 베스트를
+   *   다루지 않게 되면서, 3피스로 계약하고 2피스로 만든다는 사실이 여기서만 보인다.
    */
   private async loadContractOptionTree(contractId: string) {
     // 컨설팅은 계약 품목(ContractItem)에서 하므로 계약완료 전에도 계약서 옵션을 보여줄 수 있다.
@@ -1988,9 +1974,9 @@ export class ContractsService {
       where: { contractId, status: { not: 'CANCELLED' } },
       include: {
         components: {
-          where: { status: { not: 'CANCELLED' } },
+          // 취소된 부위도 가져온다 — 베스트 제외를 계약서에 적어야 한다(아래 excluded).
           orderBy: [{ componentType: 'asc' }, { sequenceNo: 'asc' }],
-          select: { componentType: true },
+          select: { componentType: true, status: true },
         },
         orderItems: {
           where: { status: { not: 'CANCELLED' } },
@@ -2026,18 +2012,19 @@ export class ContractsService {
     }
 
     for (const item of items) {
-      // 맞춤도 실제 살아 있는 부위만 편다 — 베스트는 품목에 VEST 부위가 있을 때만 (2026-07-30).
-      const activeTypes = new Set(item.components.map((c) => c.componentType));
+      // 취소된 부위(= 컨설팅에서 뺀 베스트)도 행으로 남겨 "제외"로 표시한다 (2026-08-01).
+      const excludedTypes = new Set(
+        item.components.filter((c) => c.status === 'CANCELLED').map((c) => c.componentType),
+      );
       const groupCodes =
         item.transactionType === 'RENTAL'
           ? item.components.map((c) => c.componentType)
-          : componentGroupsFor(item.productCategory).filter(
-              (g) => g !== 'VEST' || activeTypes.has('VEST'),
-            );
+          : componentGroupsFor(item.productCategory);
       const components = (groupCodes.length > 0 ? groupCodes : [item.productCategory]).map(
         (group) => ({
           group,
           groupLabel: COMPONENT_GROUP_LABELS[group] ?? COMPONENT_LABEL[group] ?? group,
+          excluded: excludedTypes.has(group),
           options: [] as Array<{ stageName: string; optionName: string; extraPrice: number }>,
         }),
       );
@@ -2051,6 +2038,7 @@ export class ContractsService {
           target = {
             group,
             groupLabel: COMPONENT_GROUP_LABELS[group] ?? COMPONENT_LABEL[group] ?? group,
+            excluded: false,
             options: [],
           };
           components.push(target);
@@ -2059,7 +2047,7 @@ export class ContractsService {
           // 부위 미지정 단계(단일 부위 세트·구버전)는 부위가 하나면 그 부위, 아니면 '공통'으로 모은다.
           target = components.length === 1 ? components[0] : components.find((c) => c.group === 'COMMON');
           if (!target) {
-            target = { group: 'COMMON', groupLabel: '공통', options: [] };
+            target = { group: 'COMMON', groupLabel: '공통', excluded: false, options: [] };
             components.push(target);
           }
         }
@@ -2297,7 +2285,9 @@ export class ContractsService {
 
   private toLineData(line: ContractLineDto, index: number) {
     // 베스트는 맞춤 정장 라인에서만 켤 수 있다 (현업 확정 2026-07-30).
-    const vestIncluded = line.vestIncluded ?? false;
+    // 값을 주지 않으면 맞춤 정장은 포함(3피스)이 기본이다 (현업 확정 2026-07-31).
+    const vestIncluded =
+      line.vestIncluded ?? this.isVestCapable(line.transactionType, line.productCategory);
     if (vestIncluded && !this.isVestCapable(line.transactionType, line.productCategory))
       throw new BusinessException('VALIDATION_ERROR', '베스트는 맞춤 정장 품목에만 추가할 수 있습니다.', [
         { field: `lines[${index}].vestIncluded`, reason: 'NOT_CUSTOM_SUIT' },

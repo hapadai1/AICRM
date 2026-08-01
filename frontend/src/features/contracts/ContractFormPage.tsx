@@ -58,7 +58,7 @@ import {
   THOUSANDS,
   type EditableLine,
 } from './ContractLineEditor';
-import { formatKrw } from './labels';
+import { formatKrw, sortByCatalogOrder } from './labels';
 import { useUnsavedWarning } from './use-unsaved-warning';
 
 /**
@@ -189,8 +189,6 @@ export function ContractFormPage() {
         quantity: l.quantity,
         unitPrice: l.unitPrice,
         amount: l.amount,
-        vestIncluded: l.vestIncluded,
-        vestUnitPrice: l.vestUnitPrice,
         note: l.note,
       }),
     );
@@ -244,8 +242,6 @@ export function ContractFormPage() {
         quantity: l.quantity,
         unitPrice: l.unitPrice,
         amount: l.amount,
-        vestIncluded: l.vestIncluded,
-        vestUnitPrice: l.vestUnitPrice,
         note: l.note?.trim() || undefined,
       })),
     };
@@ -320,8 +316,10 @@ export function ContractFormPage() {
   const applyContractType = (typeId: string) => {
     const t = types?.find((x) => x.id === typeId);
     if (!t) return;
+    // 계약 구분의 기본 품목은 맞춤(정장>셔츠>구두) → 렌탈(정장>셔츠>구두) 순으로 채운다.
+    // 채운 뒤에는 다시 정렬하지 않는다 — 편집 중 행이 움직이지 않도록.
     setLines(
-      t.lines.map((l) =>
+      sortByCatalogOrder(t.lines).map((l) =>
         createLine({
           transactionType: l.transactionType,
           productCategory: l.productCategory,

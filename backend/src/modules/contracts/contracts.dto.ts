@@ -50,7 +50,8 @@ export class ContractLineDto {
 
   /**
    * 베스트(3피스) 포함 — 맞춤 정장(CUSTOM×SUIT) 라인만 허용 (현업 확정 2026-07-30).
-   * 계약서 화면의 [베스트 포함] 체크박스를 켜면 true. 기본 false(2피스).
+   * 맞춤 정장의 기본은 포함(3피스)이라 값을 주지 않으면 true로 채운다 (현업 확정 2026-07-31).
+   * 계약서 화면의 [베스트 제외] 체크박스를 켜면 false(2피스)로 온다.
    */
   @IsOptional()
   @IsBoolean()
@@ -232,6 +233,15 @@ export class SaveSignatureDto {
   @Type(() => Number)
   @IsInt()
   version?: number;
+}
+
+/**
+ * 베스트 포함/제외 (현업 확정 2026-08-01) — 컨설팅 화면 [베스트 제외] 체크박스.
+ * 체크 = 제외(false), 해제 = 재포함(true).
+ */
+export class SetVestIncludedDto {
+  @IsBoolean()
+  included: boolean;
 }
 
 export class CancelContractDto {
