@@ -11,7 +11,7 @@
  */
 import { Skeleton, Table } from 'antd';
 import type { TableProps } from 'antd';
-import type { ColumnGroupType, ColumnType } from 'antd/es/table';
+import type { ColumnGroupType, ColumnType, TablePaginationConfig } from 'antd/es/table';
 
 /** 액션 열로 인식할 컬럼 key */
 const ACTION_KEYS = new Set(['actions', 'action']);
@@ -32,6 +32,30 @@ export interface DataTableProps<T> extends TableProps<T> {
   stickyActions?: boolean;
   /** 첫 로딩 때 보여줄 Skeleton 줄 수. 기본 6 */
   skeletonRows?: number;
+  /** 총 건수 뒤에 붙일 단위. 기본 '건'(고객 목록은 '명'). */
+  totalUnit?: string;
+}
+
+/**
+ * 목록 페이지네이션 공통 규격.
+ * 화면은 current/pageSize/total/onChange 같은 데이터만 넘기고,
+ * 보이는 모양(총 건수·페이지 크기 선택·상하단 배치)은 여기서 정한다.
+ * 화면이 같은 키를 직접 넘기면 그 값이 이긴다(모달 등 예외용).
+ */
+function withListDefaults(
+  config: TablePaginationConfig,
+  totalUnit: string,
+): TablePaginationConfig {
+  return {
+    defaultPageSize: DEFAULT_PAGE_SIZE,
+    showSizeChanger: true,
+    pageSizeOptions: PAGE_SIZE_OPTIONS,
+    showTotal: (total) => `총 ${total}${totalUnit}`,
+    // 건수·페이지 이동을 표 위아래 양쪽에 둔다 — 한 페이지를 다 내려가야 다음 장으로
+    // 넘어갈 수 있으면 목록을 훑는 동안 스크롤을 왕복하게 된다.
+    position: ['topRight', 'bottomRight'],
+    ...config,
+  };
 }
 
 export function DataTable<T extends object>({
@@ -42,6 +66,8 @@ export function DataTable<T extends object>({
   skeletonRows = 6,
   scroll,
   size,
+  pagination,
+  totalUnit = '건',
   ...rest
 }: DataTableProps<T>) {
   // 첫 로딩(표시할 행이 아직 없음)에서는 표 대신 자리표시자를 그린다.
@@ -57,6 +83,12 @@ export function DataTable<T extends object>({
       )
     : columns;
 
+  // pagination={false}(상세화면 안의 보조 표)는 그대로 두고, 목록 표만 규격을 입힌다.
+  const resolvedPagination =
+    pagination === false || pagination === undefined
+      ? pagination
+      : withListDefaults(pagination, totalUnit);
+
   return (
     <Table<T>
       size={size ?? 'middle'}
@@ -64,6 +96,7 @@ export function DataTable<T extends object>({
       columns={resolvedColumns}
       loading={loading}
       dataSource={dataSource}
+      pagination={resolvedPagination}
       {...rest}
     />
   );

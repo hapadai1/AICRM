@@ -25,7 +25,7 @@ import dayjs, { type Dayjs } from 'dayjs';
 import { useState } from 'react';
 import { ApiError } from '../../api/client';
 import { LAYOUT } from '../../app/theme';
-import { DataTable, PAGE_SIZE_OPTIONS } from '../../shared/DataTable';
+import { DataTable } from '../../shared/DataTable';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { fetchCustomers } from '../../api/customers';
 import {
@@ -335,9 +335,6 @@ export function RepairsPage() {
             current: page,
             pageSize: size,
             total: listQuery.data?.page.totalElements ?? 0,
-            showSizeChanger: true,
-            pageSizeOptions: PAGE_SIZE_OPTIONS,
-            showTotal: (total) => `총 ${total}건`,
             onChange: (nextPage, nextSize) => {
               setPage(nextSize !== size ? 1 : nextPage);
               setSize(nextSize);

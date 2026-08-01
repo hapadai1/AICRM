@@ -252,7 +252,7 @@ export function ProductionPage() {
             loading={itemsQuery.isLoading}
             dataSource={rows}
             columns={columns}
-            pagination={false}
+            pagination={{}}
             onRow={(r) => ({
               onClick: () => navigate(`/contracts/${r.contractId}/production`),
               style: { cursor: 'pointer' },

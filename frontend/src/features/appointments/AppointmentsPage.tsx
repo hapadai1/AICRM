@@ -22,7 +22,7 @@ import {
 import { ApiError } from '../../api/client';
 import { LAYOUT, SEMANTIC_COLOR } from '../../app/theme';
 import { Can } from '../../shared/Can';
-import { DataTable, DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS } from '../../shared/DataTable';
+import { DataTable } from '../../shared/DataTable';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
 import {
@@ -381,7 +381,7 @@ export function AppointmentsPage() {
             loading={isLoading}
             columns={columns}
             dataSource={appointments}
-            pagination={{ pageSize: DEFAULT_PAGE_SIZE, showSizeChanger: true, pageSizeOptions: PAGE_SIZE_OPTIONS }}
+            pagination={{}}
             onRow={(r) => ({ onClick: () => openDetail(r.id), style: { cursor: 'pointer' } })}
             locale={{ emptyText: <Empty description="조건에 해당하는 예약이 없습니다." /> }}
           />

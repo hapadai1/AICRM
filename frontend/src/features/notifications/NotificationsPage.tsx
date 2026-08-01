@@ -40,7 +40,7 @@ import type { NotificationRecord, NotificationStatus } from '../../api/notificat
 import { Can } from '../../shared/Can';
 import { autoWidth } from '../../shared/table-width';
 import { metaOf } from '../../shared/status-meta';
-import { DataTable, PAGE_SIZE_OPTIONS } from '../../shared/DataTable';
+import { DataTable } from '../../shared/DataTable';
 import { PageCard, PageShell } from '../../shared/PageShell';
 
 /** 이력 탭 상태 필터 옵션 */
@@ -207,9 +207,6 @@ export function NotificationsPage() {
             current: page,
             pageSize: size,
             total: historyQuery.data?.page.totalElements ?? 0,
-            showSizeChanger: true,
-            pageSizeOptions: PAGE_SIZE_OPTIONS,
-            showTotal: (total) => `총 ${total}건`,
             onChange: (nextPage, nextSize) => {
               setPage(nextSize !== size ? 1 : nextPage);
               setSize(nextSize);

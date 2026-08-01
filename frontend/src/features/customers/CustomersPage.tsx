@@ -7,7 +7,7 @@ import { useNavigate } from 'react-router-dom';
 import { LAYOUT } from '../../app/theme';
 import { fetchCustomers, type CustomerListItem } from '../../api/customers';
 import { Can } from '../../shared/Can';
-import { DataTable, PAGE_SIZE_OPTIONS } from '../../shared/DataTable';
+import { DataTable } from '../../shared/DataTable';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { autoWidth } from '../../shared/table-width';
@@ -168,17 +168,15 @@ export function CustomersPage() {
             loading={isLoading}
             columns={columns}
             dataSource={data?.data ?? []}
+            totalUnit="명"
             pagination={{
               current: page,
               pageSize: size,
               total: data?.page.totalElements ?? 0,
-              showSizeChanger: true,
-              pageSizeOptions: PAGE_SIZE_OPTIONS,
               onChange: (p, s) => {
                 setPage(p);
                 setSize(s);
               },
-              showTotal: (total) => `총 ${total}명`,
             }}
             onRow={(r) => ({ onClick: () => navigate(`/customers/${r.id}`), style: { cursor: 'pointer' } })}
             locale={{ emptyText: <Empty description="조건에 해당하는 고객이 없습니다." /> }}
