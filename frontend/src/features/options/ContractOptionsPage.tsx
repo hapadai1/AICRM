@@ -3,8 +3,8 @@
  * (설계서 04 §2 맞춤 부위별 원단·컬러·패턴 / §4 렌탈 부위별 컬러·사이즈·비고)
  *
  * - 맞춤 부위 행: 원단·컬러·패턴 수기 입력 → 부위별 attr 저장(작업지시서 엑셀 부위 칸으로 연결)
- * - 렌탈 부위 행: 컬러·사이즈(기준정보 코드) 선택 + 비고 수기 → [실물 검색] 팝업에서 후보 선택
- * - 옵션 선택·실물 검색은 목록을 벗어나지 않도록 둘 다 팝업으로 띄운다.
+ * - 렌탈 부위 행: 비고만 수기, 조건(기간·컬러·사이즈)과 재고 선택은 [렌탈 검색] 팝업에서 한다
+ * - 옵션 선택·렌탈 검색은 목록을 벗어나지 않도록 둘 다 팝업으로 띄운다.
  */
 import {
   CopyOutlined,
@@ -26,7 +26,6 @@ import {
   Modal,
   Progress,
   Radio,
-  Select,
   Space,
   Spin,
   Table,
@@ -35,7 +34,6 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useState } from 'react';
-import { codesFor } from '../rentals/rental-constants';
 import { useNavigate, useParams } from 'react-router-dom';
 import { fetchContract } from '../../api/contracts';
 import type { OptionProgressItem } from '../../api/options';
@@ -45,14 +43,14 @@ import {
   fetchOptionProgress,
   startOptionSession,
 } from '../../api/options';
+import type { RentalComponentType } from '../../api/rentals';
 import {
-  fetchRentalColors,
   fetchRentalSelectionProgress,
-  fetchRentalSizes,
   saveRentalLine,
   startRentalSelection,
 } from '../../api/rentals';
 import { RentalCandidateModal } from '../rentals/RentalCandidateModal';
+import { useRentalCodeNames } from '../rentals/rental-codes';
 import { BackButton } from '../../shared/BackButton';
 import { PdfViewerModal } from '../../shared/PdfViewerModal';
 import { StatusBadge } from '../../shared/StatusBadge';
@@ -147,10 +145,9 @@ export function ContractOptionsPage() {
     enabled: !!id,
   });
 
-  // 부위별로 쓰는 컬러·사이즈가 달라(정장 12색 / 셔츠 흰색 / 구두 검정·브라운),
-  // 전체를 한 번 받아 행의 부위(row.group)로 걸러 쓴다.
-  const colorsQuery = useQuery({ queryKey: ['rental-colors'], queryFn: () => fetchRentalColors() });
-  const sizesQuery = useQuery({ queryKey: ['rental-sizes'], queryFn: () => fetchRentalSizes() });
+  // 렌탈 행에 저장된 코드(BLACK/46)를 표시명으로 바꾼다. 조건 선택은 [렌탈 검색] 팝업이 맡고,
+  // 목록은 이미 정해진 조건을 읽기만 한다.
+  const rentalCodes = useRentalCodeNames();
 
   // 부위별 입력 초안 — 키는 `${contractItemId}:${부위}`
   const [attrDrafts, setAttrDrafts] = useState<Record<string, AttrDraft>>({});
@@ -184,18 +181,19 @@ export function ContractOptionsPage() {
     });
   }, [customItems]);
 
+  // 렌탈은 컬러·사이즈가 읽기 전용이라(팝업에서만 바뀐다) 서버 값으로 항상 맞춘다 —
+  // 비고만 이 화면에서 치므로 입력 중 덮어쓰지 않게 처음 한 번만 채운다.
   useEffect(() => {
     setRentalDrafts((prev) => {
       const next = { ...prev };
       for (const item of rentalItems)
         for (const c of item.components) {
           const key = `${item.contractItemId}:${c.contractItemComponentId}`;
-          if (!(key in next))
-            next[key] = {
-              colorCode: c.colorCode,
-              sizeCode: c.sizeCode,
-              notes: c.notes ?? '',
-            };
+          next[key] = {
+            colorCode: c.colorCode,
+            sizeCode: c.sizeCode,
+            notes: key in next ? next[key].notes : (c.notes ?? ''),
+          };
         }
       return next;
     });
@@ -434,28 +432,19 @@ export function ContractOptionsPage() {
       ),
     },
     {
-      // 맞춤은 원단(수기), 렌탈은 컬러(12색 코드 선택) — 부위 행의 첫 지정 항목이다.
-      title: '원단 · 컬러(렌탈)',
+      // 맞춤은 원단(수기), 렌탈은 선택한 물품의 사이즈 — 부위 행의 첫 지정 항목이다.
+      title: '원단 · 사이즈 (렌탈)',
       key: 'first',
       width: 240,
       render: (_, row) => {
+        // 렌탈은 사이즈를 여기서 고르지 않는다 — [렌탈 검색] 팝업에서 고른 물품의 규격을 읽기만 한다.
+        // 셀에서 고르면 고를 때마다 저장돼 토스트가 연달아 떴다 (현업 확정 2026-07-31).
         if (row.kind === 'RENTAL') {
           const draft = rentalDrafts[row.key] ?? EMPTY_RENTAL;
-          return (
-            <Select
-              style={{ width: '100%' }}
-              placeholder="컬러 선택"
-              allowClear
-              disabled={isLocked(row)}
-              loading={colorsQuery.isLoading}
-              value={draft.colorCode}
-              options={codesFor(colorsQuery.data, row.group).map((c) => ({ value: c.code, label: c.name }))}
-              onChange={(value: string | undefined) => {
-                const next = { ...draft, colorCode: value ?? null };
-                setRentalDrafts((prev) => ({ ...prev, [row.key]: next }));
-                saveRental(row, next);
-              }}
-            />
+          return draft.sizeCode ? (
+            <Typography.Text>{rentalCodes.sizeName(draft.sizeCode)}</Typography.Text>
+          ) : (
+            <Typography.Text type="secondary">미지정</Typography.Text>
           );
         }
         const draft = attrDrafts[row.key] ?? EMPTY_ATTR;
@@ -472,27 +461,17 @@ export function ContractOptionsPage() {
       },
     },
     {
-      title: '컬러 · 사이즈(렌탈)',
+      title: '컬러 (렌탈)',
       key: 'second',
       width: 200,
       render: (_, row) => {
+        // 렌탈은 고른 물품의 컬러를 읽기만 한다 — 변경은 [렌탈 검색] 팝업에서만 한다.
         if (row.kind === 'RENTAL') {
           const draft = rentalDrafts[row.key] ?? EMPTY_RENTAL;
-          return (
-            <Select
-              style={{ width: '100%' }}
-              placeholder="사이즈 선택"
-              allowClear
-              disabled={isLocked(row)}
-              loading={sizesQuery.isLoading}
-              value={draft.sizeCode}
-              options={codesFor(sizesQuery.data, row.group).map((s) => ({ value: s.code, label: s.name }))}
-              onChange={(value: string | undefined) => {
-                const next = { ...draft, sizeCode: value ?? null };
-                setRentalDrafts((prev) => ({ ...prev, [row.key]: next }));
-                saveRental(row, next);
-              }}
-            />
+          return draft.colorCode ? (
+            <Typography.Text>{rentalCodes.colorName(draft.colorCode)}</Typography.Text>
+          ) : (
+            <Typography.Text type="secondary">미지정</Typography.Text>
           );
         }
         const draft = attrDrafts[row.key] ?? EMPTY_ATTR;
@@ -593,7 +572,7 @@ export function ContractOptionsPage() {
                 disabled={!row.contractItemComponentId || !contractEditable}
                 onClick={() => setRentalTarget(row)}
               >
-                실물 검색
+                렌탈 검색
               </Button>
             </span>
           </Tooltip>
@@ -759,9 +738,10 @@ export function ContractOptionsPage() {
           open
           contractItemId={rentalTarget.contractItemId}
           contractItemComponentId={rentalTarget.contractItemComponentId!}
-          title={`${rentalTarget.displayName} · ${componentGroupLabel(rentalTarget.group)} 실물 검색`}
-          colorName={rentalTarget.colorName ?? null}
-          sizeName={rentalTarget.sizeName ?? null}
+          title={`${rentalTarget.displayName} · ${componentGroupLabel(rentalTarget.group)} 렌탈 검색`}
+          componentType={rentalTarget.group as RentalComponentType}
+          colorCode={rentalDrafts[rentalTarget.key]?.colorCode ?? null}
+          sizeCode={rentalDrafts[rentalTarget.key]?.sizeCode ?? null}
           selectedInventoryItemId={
             rentalItems
               .find((i) => i.contractItemId === rentalTarget.contractItemId)
