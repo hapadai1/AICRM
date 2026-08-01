@@ -647,6 +647,9 @@ export function ContractOptionsPage() {
     },
   ];
 
+  /** 고정 레이아웃의 표 전체 너비 — 열 정의의 width 합이라 열을 늘리면 같이 늘어난다. */
+  const TABLE_WIDTH = columns.reduce((sum, c) => sum + (typeof c.width === 'number' ? c.width : 0), 0);
+
   const error = customQuery.error ?? rentalQuery.error;
   if (error) {
     return (
@@ -692,7 +695,10 @@ export function ContractOptionsPage() {
           ) : (
             <Table<ComponentRow>
               rowKey="key"
-              scroll={{ x: 'max-content' }}
+              // 열 너비를 칸 내용에 맡기면(x: 'max-content') 원단·비고를 칠 때마다 표가 흔들린다.
+              // 지정한 width 합(=TABLE_WIDTH)으로 고정해 입력 중에도 열이 움직이지 않게 한다.
+              tableLayout="fixed"
+              scroll={{ x: TABLE_WIDTH }}
               dataSource={rows}
               columns={columns}
               pagination={false}
