@@ -171,7 +171,12 @@ export class MeasurementsService {
             contractId: true,
             completionDueDate: true,
             contract: {
-              select: { contractNo: true, customer: { select: { id: true, name: true, phone: true } } },
+              select: {
+                contractNo: true,
+                contractedAt: true,
+                createdAt: true,
+                customer: { select: { id: true, name: true, phone: true } },
+              },
             },
           },
         },
@@ -188,6 +193,8 @@ export class MeasurementsService {
     interface Row {
       contractId: string;
       contractNo: string;
+      /** 계약일 (YYYY-MM-DD) — 목록 기간 필터의 기준. 없는 초안은 등록일로 갈음한다. */
+      contractDate: string;
       /** 신규 채촌을 이 계약에 연결하기 위한 대표 주문 */
       orderId: string;
       customerId: string;
@@ -220,6 +227,8 @@ export class MeasurementsService {
       const row = rows.get(order.contractId) ?? {
         contractId: order.contractId,
         contractNo: order.contract.contractNo,
+        // 계약일이 없는 초안(임시저장)은 등록일로 갈음한다 — 계약 목록의 기간 필터와 같은 규칙.
+        contractDate: toDateString(order.contract.contractedAt ?? order.contract.createdAt),
         orderId: order.id,
         customerId: customer.id,
         customerName: customer.name,
@@ -298,17 +307,20 @@ export class MeasurementsService {
     });
   }
 
-  /** MEAS-001 채촌 이력: 버전 목록(최신 순) + 현재 연결 품목 */
+  /**
+   * MEAS-001 채촌 이력: 이 고객이 저장한 채촌 기록(최근 순) + 현재 연결 품목.
+   * 채촌은 버전 관리를 하지 않으므로(현업 확정 2026-08-01) 채촌일 기준으로 정렬한다.
+   */
   async listByCustomer(customerId: string) {
     const customer = await this.prisma.customer.findUnique({ where: { id: customerId } });
     if (!customer) throw new BusinessException('CUSTOMER_NOT_FOUND', '고객이 없습니다.');
 
     const sessions = await this.prisma.measurementSession.findMany({
       where: { customerId },
-      orderBy: { versionNo: 'desc' },
+      orderBy: [{ measurementDate: 'desc' }, { versionNo: 'desc' }],
       include: {
         createdByUser: { select: { id: true, displayName: true } },
-        _count: { select: { values: true } },
+        _count: { select: { values: true, workOrderVersions: true } },
         orderItemLinks: {
           where: { isCurrent: true },
           select: { orderItem: { select: { id: true, displayName: true, productCategory: true } } },
@@ -324,6 +336,8 @@ export class MeasurementsService {
       fitPreference: s.fitPreference,
       completed: s.completedAt !== null,
       completedAt: s.completedAt,
+      // 작업지시서 출력 근거로 쓰여 수정·삭제가 막힌 기록 (목록에서 바로 구분해야 한다)
+      locked: s._count.workOrderVersions > 0,
       createdBy: s.createdByUser,
       createdAt: s.createdAt,
       valueCount: s._count.values,

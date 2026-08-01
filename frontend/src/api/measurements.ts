@@ -405,6 +405,8 @@ export async function searchCustomers(q: string): Promise<CustomerOption[]> {
 export interface MeasurementTargetRow {
   contractId: string;
   contractNo: string;
+  /** 계약일 (YYYY-MM-DD) — 기간 필터 기준. 계약일 없는 초안은 등록일로 갈음된 값 */
+  contractDate: string;
   /** 신규 채촌을 이 계약에 연결할 때 쓰는 대표 주문 */
   orderId: string;
   customerId: string;

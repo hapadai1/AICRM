@@ -18,7 +18,8 @@
     "seed:shoes-design": "ts-node prisma/seed-shoes-design-options.ts",
     "seed:option-demo": "ts-node prisma/seed-option-surcharge-demo.ts",
     "seed:shoes-custom": "ts-node prisma/seed-shoes-custom-demo.ts",
-    "seed:all": "npm run prisma:seed && npm run seed:demo && npm run seed:more && npm run seed:journeys && npm run seed:suit-design && npm run seed:shirt-design && npm run seed:shoes-design && npm run seed:option-demo && npm run seed:shoes-custom",
+    "seed:stages": "ts-node prisma/seed-stage-matrix.ts",
+    "seed:all": "npm run prisma:seed && npm run seed:demo && npm run seed:more && npm run seed:journeys && npm run seed:suit-design && npm run seed:shirt-design && npm run seed:shoes-design && npm run seed:option-demo && npm run seed:shoes-custom && npm run seed:stages",
     "test": "jest --config jest.config.js"
   },
   "prisma": {

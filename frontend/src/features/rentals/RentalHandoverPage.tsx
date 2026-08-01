@@ -27,7 +27,6 @@ import {
   changeAllocationItem,
   checkoutAllocation,
   fetchAllocations,
-  fetchAvailability,
   returnAllocation,
   type RentalAllocation,
   type RentalItemStatus,
@@ -50,7 +49,7 @@ export function RentalHandoverPage() {
 
   const [checkoutForm] = Form.useForm<{ checkoutDate: Dayjs; notes?: string }>();
   const [returnForm] = Form.useForm<{ returnDate: Dayjs; availableFrom: Dayjs; nextStatus: RentalItemStatus }>();
-  const [changeForm] = Form.useForm<{ newInventoryItemId: string; reason: string }>();
+  const [changeForm] = Form.useForm<{ reason: string }>();
 
   // 진행 단계 카드 등에서 특정 주문으로 걸러 들어올 수 있게 한다 (?q=ORD-...).
   // q가 있으면 서버가 날짜 제한을 풀어 미래 픽업 예약·이미 출고된 건까지 함께 반환한다.
@@ -76,18 +75,7 @@ export function RentalHandoverPage() {
   const autoTab = q && pickups.length === 0 && returns.length > 0 ? 'return' : 'pickup';
   const activeTab = tabOverride ?? autoTab;
 
-  // ID 변경 다이얼로그: 배정 기간 기준 가용 실물 조회
-  const changeCandidatesQuery = useQuery({
-    queryKey: ['rentals', 'change-candidates', checkoutTarget?.id, checkoutTarget?.managementCode],
-    queryFn: () =>
-      fetchAvailability({
-        // 백엔드 필수 파라미터 — 같은 구분의 실물끼리만 교체할 수 있다.
-        componentType: checkoutTarget!.componentType!,
-        pickupDate: checkoutTarget!.pickupDate,
-        availabilityEndDate: checkoutTarget!.availabilityEndDate,
-      }),
-    enabled: changeOpen && !!checkoutTarget?.componentType,
-  });
+  // 교체 후보 조회는 없앴다 — 개체를 고르지 않고 서버가 같은 규격에서 하나를 집는다.
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['rentals'] });
 
@@ -99,7 +87,7 @@ export function RentalHandoverPage() {
         version: checkoutTarget!.version,
       }),
     onSuccess: (alloc) => {
-      message.success(`관리 ID ${alloc.managementCode} 출고 처리되었습니다.`);
+      message.success(`${allocLabel(alloc)} 출고 처리되었습니다.`);
       setCheckoutTarget(null);
       void invalidate();
     },
@@ -107,19 +95,20 @@ export function RentalHandoverPage() {
   });
 
   const changeMutation = useMutation({
-    mutationFn: (v: { newInventoryItemId: string; reason: string }) =>
+    // 개체는 지정하지 않는다 — 같은 규격에서 비어 있는 다른 실물을 서버가 고른다.
+    // 규격이 같은 옷이 여러 벌이면 코드 목록을 보여 줘도 고를 근거가 없다.
+    mutationFn: (v: { reason: string }) =>
       changeAllocationItem(checkoutTarget!.id, {
-        newInventoryItemId: v.newInventoryItemId,
         reason: v.reason,
         version: checkoutTarget!.version,
       }),
     onSuccess: (alloc) => {
-      message.success(`배정 실물이 ${alloc.managementCode}(으)로 변경되었습니다. 이어서 출고하세요.`);
+      message.success('같은 규격의 다른 실물로 교체했습니다. 이어서 출고하세요.');
       setChangeOpen(false);
       setCheckoutTarget(alloc); // 변경된 배정으로 이어서 출고
       void invalidate();
     },
-    onError: (e) => message.error(e instanceof ApiError ? e.message : 'ID 변경에 실패했습니다.'),
+    onError: (e) => message.error(e instanceof ApiError ? e.message : '실물 교체에 실패했습니다.'),
   });
 
   const returnMutation = useMutation({
@@ -131,7 +120,7 @@ export function RentalHandoverPage() {
         version: returnTarget!.version,
       }),
     onSuccess: (alloc) => {
-      message.success(`관리 ID ${alloc.managementCode} 반납 처리되었습니다.`);
+      message.success(`${allocLabel(alloc)} 반납 처리되었습니다.`);
       setReturnTarget(null);
       void invalidate();
     },
@@ -182,19 +171,24 @@ export function RentalHandoverPage() {
       ),
     },
     {
-      title: '실물',
-      dataIndex: 'managementCode',
-      width: 200,
-      render: (code: string, r) => (
-        <Space direction="vertical" size={0}>
-          <Typography.Text strong>{code}</Typography.Text>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {codes.colorName(r.color)} / {codes.sizeName(r.size)}
-          </Typography.Text>
-        </Space>
+      // 관리코드는 걷어냈다 — 현장에서 실물과 코드가 1:1로 맞지 않아 쓸 수 없는 값이다
+      // (현업 확정 2026-07-31). 옷은 규격(컬러·사이즈)으로 가린다.
+      title: '규격',
+      dataIndex: 'color',
+      width: 150,
+      render: (color: string, r) => (
+        <Typography.Text>
+          {codes.colorName(color)} / {codes.sizeName(r.size)}
+        </Typography.Text>
       ),
     },
   ];
+
+  /** "홍길동 · 상의(자켓)" — 관리코드 대신 이 표기로 처리 결과를 알린다. */
+  const allocLabel = (r: RentalAllocation) => {
+    const type = r.componentType ? (RENTAL_COMPONENT_TYPE_LABELS[r.componentType] ?? r.componentType) : null;
+    return type ? `${r.customerName} · ${type}` : r.customerName;
+  };
 
   const pickupColumns: ColumnsType<RentalAllocation> = [
     ...commonColumns,
@@ -334,7 +328,7 @@ export function RentalHandoverPage() {
 
       {/* 출고 모달: 확인 ID 검증 → 불일치 시 RENTAL_ID_MISMATCH → ID 변경 */}
       <Modal
-        title={checkoutTarget ? `출고 — ${checkoutTarget.customerName} · ${checkoutTarget.displayName ?? checkoutTarget.managementCode}` : '출고'}
+        title={checkoutTarget ? `출고 — ${checkoutTarget.customerName} · ${checkoutTarget.displayName ?? allocLabel(checkoutTarget)}` : '출고'}
         open={!!checkoutTarget}
         onCancel={() => setCheckoutTarget(null)}
         onOk={() => checkoutForm.submit()}
@@ -346,10 +340,9 @@ export function RentalHandoverPage() {
         {checkoutTarget && (
           <Space direction="vertical" size="middle" style={{ width: '100%' }}>
             <Descriptions size="small" bordered column={1}>
-              <Descriptions.Item label="예약 실물">
+              <Descriptions.Item label="예약 규격">
                 <Space>
-                  <Typography.Text strong>{checkoutTarget.managementCode}</Typography.Text>
-                  <Typography.Text type="secondary">
+                  <Typography.Text strong>
                     {codes.colorName(checkoutTarget.color)} / {codes.sizeName(checkoutTarget.size)}
                   </Typography.Text>
                   {/*
@@ -393,7 +386,7 @@ export function RentalHandoverPage() {
               <Form.Item name="notes" label="비고 (선택)">
                 <Input.TextArea
                   rows={3}
-                  placeholder="예: 예약된 JKT-BLACK-48-001 대신 JKT-BLACK-50-001로 출고 (사이즈 교환 요청)"
+                  placeholder="예: 예약된 48호 대신 50호로 출고 (사이즈 교환 요청)"
                 />
               </Form.Item>
             </Form>
@@ -401,22 +394,27 @@ export function RentalHandoverPage() {
         )}
       </Modal>
 
-      {/* ID 변경 다이얼로그: 신규 실물 선택 + 사유 → 재검증 후 출고 */}
+      {/* 실물 교체: 사유만 받고 같은 규격의 다른 실물로 서버가 바꿔 준다 */}
       <Modal
-        title="배정 실물 ID 변경"
+        title="실물 교체"
         open={changeOpen}
         onCancel={() => setChangeOpen(false)}
         onOk={() => changeForm.submit()}
-        okText="ID 변경"
+        okText="교체"
         cancelText="취소"
         confirmLoading={changeMutation.isPending}
         destroyOnClose
       >
         <Alert
-          type="warning"
+          type="info"
           showIcon
           style={{ marginBottom: 16 }}
-          message="예약된 실물과 실제 출고 실물이 다르면 먼저 배정 ID를 변경해야 합니다. 변경 후 확인 ID를 다시 검증합니다."
+          message={
+            checkoutTarget
+              ? `${codes.colorName(checkoutTarget.color)} / ${codes.sizeName(checkoutTarget.size)} — 같은 규격에서 그 기간에 비어 있는 다른 실물로 바꿉니다.`
+              : '같은 규격에서 그 기간에 비어 있는 다른 실물로 바꿉니다.'
+          }
+          description="다른 규격으로 바꾸려면 예약을 다시 잡아야 합니다."
         />
         <Form
           form={changeForm}
@@ -424,27 +422,9 @@ export function RentalHandoverPage() {
           onFinish={(values) => changeMutation.mutate(values)}
         >
           <Form.Item
-            name="newInventoryItemId"
-            label="신규 실물 (배정 기간 가용 실물)"
-            rules={[{ required: true, message: '신규 실물을 선택해 주세요.' }]}
-          >
-            <Select
-              showSearch
-              loading={changeCandidatesQuery.isLoading}
-              placeholder="가용 실물 선택"
-              optionFilterProp="label"
-              options={(changeCandidatesQuery.data ?? [])
-                .filter((it) => it.id !== checkoutTarget?.inventoryItemId)
-                .map((it) => ({
-                  value: it.id,
-                  label: `${it.managementCode} · ${it.color} · ${it.size} (${metaOf(RENTAL_ITEM_STATUS_META, it.status).label})`,
-                }))}
-            />
-          </Form.Item>
-          <Form.Item
             name="reason"
-            label="변경 사유"
-            rules={[{ required: true, message: '변경 사유를 입력해 주세요.' }]}
+            label="교체 사유"
+            rules={[{ required: true, message: '교체 사유를 입력해 주세요.' }]}
           >
             <Input.TextArea rows={2} placeholder="예: 오염 확인으로 동일 규격 실물 교체" />
           </Form.Item>
@@ -453,7 +433,7 @@ export function RentalHandoverPage() {
 
       {/* 반납 모달: 실반납일 + 대여 가능 예정일 + 다음 상태 */}
       <Modal
-        title={returnTarget ? `반납 — ${returnTarget.customerName} · ${returnTarget.managementCode}` : '반납'}
+        title={returnTarget ? `반납 — ${allocLabel(returnTarget)}` : '반납'}
         open={!!returnTarget}
         onCancel={() => setReturnTarget(null)}
         onOk={() => returnForm.submit()}

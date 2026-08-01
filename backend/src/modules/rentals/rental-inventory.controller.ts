@@ -9,6 +9,8 @@ import {
   ImportInventoryDto,
   InventoryListQueryDto,
   RetireInventoryDto,
+  RetireQuantityDto,
+  StatusQuantityDto,
   UpdateInventoryDto,
 } from './rentals.dto';
 
@@ -35,6 +37,26 @@ export class RentalInventoryController {
   @RequirePermission('RENTAL_VIEW')
   summary(@Query() query: InventoryListQueryDto) {
     return this.service.summary(query);
+  }
+
+  /** SKU별 수량 집계 (재고 화면 기본 뷰). ':id'보다 먼저 선언해야 경로가 안 먹힌다. */
+  @Get('sku-summary')
+  @RequirePermission('RENTAL_VIEW')
+  skuSummary(@Query() query: InventoryListQueryDto) {
+    return this.service.skuSummary(query);
+  }
+
+  /** SKU 단위 수량 폐기·상태 변경. ':id'보다 먼저 선언해야 경로가 안 먹힌다. */
+  @Post('retire-quantity')
+  @RequirePermission('RENTAL_EDIT')
+  retireQuantity(@Body() dto: RetireQuantityDto, @CurrentUser() actor: AuthUser) {
+    return this.service.retireQuantity(dto, actor);
+  }
+
+  @Post('status-quantity')
+  @RequirePermission('RENTAL_EDIT')
+  changeStatusQuantity(@Body() dto: StatusQuantityDto, @CurrentUser() actor: AuthUser) {
+    return this.service.changeStatusQuantity(dto, actor);
   }
 
   @Get()

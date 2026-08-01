@@ -9,10 +9,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { fetchFileObjectUrl } from '../../api/client';
 import {
+  MEASUREMENT_TYPE_LABELS,
   fetchMeasurement,
   fetchMeasurementImages,
   type MeasurementImage,
 } from '../../api/measurements';
+import { labelOf } from '../../shared/status-meta';
 
 /** cols = ceil(sqrt(N)). 17장 이상은 밀도 경고와 함께 5열 상한으로 묶는다. */
 function gridCols(n: number): number {
@@ -142,7 +144,9 @@ export function MeasurementPhotoPrint() {
           <Space align="center" wrap style={{ justifyContent: 'space-between', width: '100%' }}>
             <Typography.Title level={4} style={{ margin: 0 }}>
               사진 인쇄 — {session?.customerName ?? ''}
-              {session ? ` · ${session.measurementDate} · V${session.versionNo}` : ''}
+              {session
+                ? ` · ${labelOf(MEASUREMENT_TYPE_LABELS, session.measurementType)} · ${session.measurementDate}`
+                : ''}
             </Typography.Title>
             <Space>
               <Button onClick={() => setSelected(new Set(images.map((im) => im.fileId)))}>전체 선택</Button>

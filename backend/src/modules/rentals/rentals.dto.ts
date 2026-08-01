@@ -52,8 +52,12 @@ export class CreateInventoryDto {
   @IsString() @IsNotEmpty() @MaxLength(80) color: string;
   @IsString() @IsNotEmpty() @MaxLength(40) size: string;
   @IsOptional() @IsString() skuDescription?: string;
-  /** quantity=1이면 그대로, quantity>1이면 `${managementCode}-001` 형식 연번 생성 */
-  @IsString() @IsNotEmpty() @MaxLength(60) managementCode: string;
+  /**
+   * quantity=1이면 그대로, quantity>1이면 `${managementCode}-001` 형식 연번 생성.
+   * 생략하면 `구분-컬러-사이즈-연번`으로 서버가 채번한다 — 재고를 수량으로만 관리하는
+   * 화면에서는 사용자가 코드를 알 필요가 없다 (현업 확정 2026-07-31).
+   */
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(60) managementCode?: string;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(500) quantity?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) startNo?: number;
   @IsOptional() @IsIn(RENTAL_ITEM_STATUSES) status?: string;
@@ -110,6 +114,36 @@ export class RetireInventoryDto {
   reason: string;
 }
 
+/**
+ * SKU 단위 수량 폐기 — 어느 개체를 뺄지는 서버가 고른다.
+ * 재고 화면이 개체를 다루지 않으므로 사용자는 "블랙 46호 2벌"까지만 지정한다.
+ */
+export class RetireQuantityDto {
+  @IsIn(RENTAL_COMPONENT_TYPES) componentType: string;
+  @IsString() @IsNotEmpty() @MaxLength(80) color: string;
+  @IsString() @IsNotEmpty() @MaxLength(40) size: string;
+  @Type(() => Number) @IsInt() @Min(1) @Max(500) quantity: number;
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @IsNotEmpty({ message: '폐기 사유를 입력해 주세요.' })
+  @MaxLength(500)
+  reason: string;
+}
+
+/** SKU 단위 수량 상태 변경 (임시 사용불가 ↔ 대여 가능). 대상 개체는 서버가 고른다. */
+export class StatusQuantityDto {
+  @IsIn(RENTAL_COMPONENT_TYPES) componentType: string;
+  @IsString() @IsNotEmpty() @MaxLength(80) color: string;
+  @IsString() @IsNotEmpty() @MaxLength(40) size: string;
+  @Type(() => Number) @IsInt() @Min(1) @Max(500) quantity: number;
+  @IsIn(RENTAL_ITEM_STATUSES) newStatus: string;
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @IsNotEmpty({ message: '사유를 입력해 주세요.' })
+  @MaxLength(500)
+  reason: string;
+}
+
 export class AvailabilityQueryDto {
   @IsIn(RENTAL_COMPONENT_TYPES) componentType: string;
   @IsOptional() @IsString() color?: string;
@@ -136,10 +170,17 @@ export class AvailabilityCalendarQueryDto {
 
 export class CreateAllocationDto {
   @IsUUID() componentId: string;
-  /** 실물 UUID — itemCode와 둘 중 하나 필수 */
+  /**
+   * 실물 UUID. 셋(inventoryItemId·itemCode·color+size) 중 하나는 있어야 한다.
+   * 재고를 수량으로만 관리하는 화면은 개체를 모르므로 color+size만 넘기고,
+   * 그때는 서버가 그 기간에 비어 있는 실물 하나를 고른다 (현업 확정 2026-07-31).
+   */
   @IsOptional() @IsUUID() inventoryItemId?: string;
   /** 실물 관리코드 — inventoryItemId 대신 허용(코드→id 해석) */
   @IsOptional() @IsString() @IsNotEmpty() @MaxLength(60) itemCode?: string;
+  /** 개체 대신 넘기는 SKU 조건 — 구분은 구성품에서 가져오므로 컬러·사이즈만 받는다. */
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(80) color?: string;
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(40) size?: string;
   @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) pickupDate: string;
   @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) returnDueDate: string;
   /**
@@ -151,7 +192,12 @@ export class CreateAllocationDto {
 }
 
 export class ChangeItemDto {
-  @IsUUID() newInventoryItemId: string;
+  /**
+   * 바꿀 실물. 생략하면 같은 규격(구분·컬러·사이즈)에서 그 기간에 비어 있는 다른 실물을
+   * 서버가 고른다 — 규격이 같은 옷이 여러 벌이면 코드 목록을 보여 줘도 고를 근거가 없다
+   * (현업 확정 2026-07-31).
+   */
+  @IsOptional() @IsUUID() newInventoryItemId?: string;
   @IsString() @IsNotEmpty() reason: string;
   @IsInt() version: number;
 }

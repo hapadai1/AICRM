@@ -229,8 +229,6 @@ export class RentalAllocationsService {
    * 실물 지정은 inventoryItemId 또는 itemCode(관리코드) 둘 중 하나로 받는다.
    */
   async allocate(orderId: string, dto: CreateAllocationDto, actor: AuthUser) {
-    const inventoryItemId = await this.resolveInventoryItemId(dto.inventoryItemId, dto.itemCode, 'inventoryItemId');
-
     const order = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!order) throw new NotFoundException('주문이 없습니다.');
     if (order.transactionType !== 'RENTAL')
@@ -259,6 +257,12 @@ export class RentalAllocationsService {
         '기간이 올바르지 않습니다. 픽업일 <= 반납예정일 <= 가용종료일이어야 합니다.',
         [{ field: 'availabilityEndDate', reason: 'INVALID_PERIOD' }],
       );
+
+    // 개체를 지정했으면 그것을, 컬러·사이즈만 왔으면 그 기간에 비어 있는 실물 하나를 고른다.
+    const inventoryItemId =
+      dto.inventoryItemId || dto.itemCode
+        ? await this.resolveInventoryItemId(dto.inventoryItemId, dto.itemCode, 'inventoryItemId')
+        : await this.pickAssignableItem(component.componentType, dto.color, dto.size, pickup, end);
 
     const allocationId = randomUUID();
     const allocation = await this.runOverlapGuarded(async (tx) => {
@@ -321,7 +325,10 @@ export class RentalAllocationsService {
   async changeItem(id: string, dto: ChangeItemDto, actor: AuthUser) {
     const allocation = await this.prisma.rentalAllocation.findUnique({
       where: { id },
-      include: { rentalInventoryItem: true, orderItemComponent: { select: { componentType: true } } },
+      include: {
+        rentalInventoryItem: { include: { rentalSku: true } },
+        orderItemComponent: { select: { componentType: true } },
+      },
     });
     if (!allocation) throw new NotFoundException('렌탈 배정이 없습니다.');
     if (allocation.status !== 'RESERVED')
@@ -335,15 +342,28 @@ export class RentalAllocationsService {
       ]);
 
     const oldItemId = allocation.rentalInventoryItemId;
+    // 지정이 없으면 같은 규격에서 비어 있는 다른 실물을 서버가 고른다.
+    const sku = allocation.rentalInventoryItem.rentalSku;
+    const newItemId =
+      dto.newInventoryItemId ??
+      (await this.pickAssignableItem(
+        sku.componentType,
+        sku.color,
+        sku.size,
+        allocation.pickupDate,
+        allocation.availabilityEndDate,
+        oldItemId,
+      ));
+
     const updated = await this.runOverlapGuarded(async (tx) => {
-      await this.assertItemAssignable(tx, dto.newInventoryItemId, allocation.pickupDate, allocation.availabilityEndDate, {
+      await this.assertItemAssignable(tx, newItemId, allocation.pickupDate, allocation.availabilityEndDate, {
         componentType: allocation.orderItemComponent.componentType,
         excludeAllocationId: id,
       });
 
       const after = await tx.rentalAllocation.update({
         where: { id },
-        data: { rentalInventoryItemId: dto.newInventoryItemId, rowVersion: { increment: 1 } },
+        data: { rentalInventoryItemId: newItemId, rowVersion: { increment: 1 } },
         include: ALLOCATION_INCLUDE,
       });
 
@@ -354,7 +374,7 @@ export class RentalAllocationsService {
       if (remaining === 0) {
         await this.changeItemStatus(tx, oldItemId, 'AVAILABLE', actor, `배정 실물 변경 해제 (${id})`);
       }
-      await this.changeItemStatus(tx, dto.newInventoryItemId, 'RESERVED', actor, `배정 실물 변경 (${id})`);
+      await this.changeItemStatus(tx, newItemId, 'RESERVED', actor, `배정 실물 변경 (${id})`);
 
       await tx.rentalAllocationEvent.create({
         data: {
@@ -362,7 +382,7 @@ export class RentalAllocationsService {
           rentalAllocationId: id,
           eventType: ALLOCATION_EVENT_TYPES.ITEM_CHANGED,
           oldInventoryItemId: oldItemId,
-          newInventoryItemId: dto.newInventoryItemId,
+          newInventoryItemId: newItemId,
           reason: dto.reason,
           actorId: actor.id,
         },
@@ -550,6 +570,60 @@ export class RentalAllocationsService {
   }
 
   /** 실물 UUID 또는 관리코드 중 하나를 실물 UUID로 해석한다 (연동정합화 계약 §5). */
+  /**
+   * 컬러·사이즈만 받아 그 기간에 배정 가능한 실물 하나를 고른다.
+   *
+   * 재고를 수량으로 관리하는 화면은 개체를 모르므로 어느 옷을 쓸지는 여기서 정한다
+   * (현업 확정 2026-07-31). 판정 기준은 가용 검색(rental-inventory.availability)과 같아야 한다 —
+   * 두 화면이 다른 답을 내면 "가용 2건"이라고 보여 준 날짜에 배정이 실패한다.
+   * 고른 뒤에도 트랜잭션 안에서 assertItemAssignable이 다시 검증하고, 최종 방어선은
+   * rental_allocation_no_overlap EXCLUDE 제약이다.
+   */
+  private async pickAssignableItem(
+    componentType: string,
+    color: string | undefined,
+    size: string | undefined,
+    pickup: Date,
+    end: Date,
+    /** 이 실물은 후보에서 뺀다 (실물 교체 — 지금 배정된 것 말고 다른 옷을 찾는다) */
+    excludeItemId?: string,
+  ): Promise<string> {
+    if (!color || !size)
+      throw new BusinessException(
+        'VALIDATION_ERROR',
+        '실물 ID·관리코드 또는 컬러·사이즈 중 하나는 필수입니다.',
+        [{ field: 'inventoryItemId', reason: 'ITEM_OR_SKU_REQUIRED' }],
+      );
+
+    const item = await this.prisma.rentalInventoryItem.findFirst({
+      where: {
+        active: true,
+        ...(excludeItemId ? { id: { not: excludeItemId } } : {}),
+        status: { in: ASSIGNABLE_ITEM_STATUSES },
+        OR: [{ availableFrom: null }, { availableFrom: { lte: pickup } }],
+        rentalSku: { componentType, color, size },
+        allocations: {
+          none: {
+            status: { not: 'CANCELLED' },
+            pickupDate: { lte: end },
+            availabilityEndDate: { gte: pickup },
+          },
+        },
+      },
+      orderBy: { managementCode: 'asc' },
+      select: { id: true },
+    });
+    if (!item)
+      throw new BusinessException(
+        'VALIDATION_ERROR',
+        excludeItemId
+          ? '같은 규격으로 바꿀 수 있는 다른 실물이 없습니다.'
+          : '그 기간에 빌려줄 수 있는 실물이 없습니다. 날짜나 컬러·사이즈를 바꿔 주세요.',
+        [{ field: 'pickupDate', reason: 'NO_ASSIGNABLE_ITEM' }],
+      );
+    return item.id;
+  }
+
   private async resolveInventoryItemId(
     inventoryItemId: string | undefined,
     itemCode: string | undefined,

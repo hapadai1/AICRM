@@ -183,7 +183,7 @@ export function WorkOrderPreviewPage() {
     versions.find((v) => v.id === preview.currentVersionId) ?? versions[0] ?? undefined;
 
   const measurementSummary = measurement
-    ? `V${measurement.versionNo} · ${measurement.measurementDate} · ${metaOf(MEASUREMENT_TYPE_META, measurement.measurementType).label}`
+    ? `${metaOf(MEASUREMENT_TYPE_META, measurement.measurementType).label} · ${measurement.measurementDate}`
     : '-';
 
   const openIssueDialog = () => {
@@ -192,7 +192,7 @@ export function WorkOrderPreviewPage() {
       content: (
         <Space direction="vertical" size={4}>
           <Typography.Text>
-            사용 채촌 버전: <Typography.Text strong>{measurementSummary}</Typography.Text>
+            사용 채촌: <Typography.Text strong>{measurementSummary}</Typography.Text>
           </Typography.Text>
           <Typography.Text>비고: {note.trim() || '(없음)'}</Typography.Text>
           <Typography.Text type="secondary">
@@ -318,12 +318,12 @@ export function WorkOrderPreviewPage() {
                   size="large"
                   style={{ minWidth: 260, height: 44 }}
                   value={measurement?.measurementSessionId}
-                  placeholder="채촌 버전 선택"
+                  placeholder="채촌 기록 선택"
                   loading={previewQuery.isFetching}
                   onChange={setPickedMeasurementId}
                   options={preview.measurementCandidates.map((c) => ({
                     value: c.measurementSessionId,
-                    label: `V${c.versionNo} · ${c.measurementDate} · ${metaOf(MEASUREMENT_TYPE_META, c.measurementType).label}${
+                    label: `${metaOf(MEASUREMENT_TYPE_META, c.measurementType).label} · ${c.measurementDate}${
                       c.isLinked ? ' (연결됨)' : ''
                     }${c.completed ? '' : ' (작성중)'}`,
                     disabled: !c.completed,
@@ -350,7 +350,7 @@ export function WorkOrderPreviewPage() {
                 size="small"
               />
             ) : (
-              <Alert type="warning" showIcon message="연결된 채촌 버전이 없습니다. 채촌을 먼저 완료해 주세요." />
+              <Alert type="warning" showIcon message="연결된 채촌이 없습니다. 채촌을 먼저 완료해 주세요." />
             )}
           </Card>
         </Col>

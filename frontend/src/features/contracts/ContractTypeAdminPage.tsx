@@ -33,7 +33,7 @@ import {
 } from '../../api/contracts';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
-import { PRODUCT_CATEGORY_LABEL, TRANSACTION_TYPE_LABEL } from './labels';
+import { PRODUCT_CATEGORY_LABEL, sortByCatalogOrder, TRANSACTION_TYPE_LABEL } from './labels';
 
 /** CONT-001 계약 구분 관리 — 기본 품목 구성 CRUD·복제·사용 중지 */
 
@@ -144,7 +144,11 @@ export function ContractTypeAdminPage() {
   const handleSubmit = async () => {
     const raw = await form.validateFields();
     // 백엔드가 forbidNonWhitelisted라 DTO에 없는 필드(id·contractTypeId·createdAt 등)를 보내면 400이 난다.
-    const values: TypeFormValues = { ...raw, lines: (raw.lines ?? []).map(pickLineFields) };
+    // 저장 순서도 표시 순서와 같게 맞춘다 — 계약서 작성 시 이 순서 그대로 기본 품목이 채워진다.
+    const values: TypeFormValues = {
+      ...raw,
+      lines: sortByCatalogOrder((raw.lines ?? []).map(pickLineFields)),
+    };
     const doSave = () => saveMutation.mutate(values);
     // 중복명 경고 (저장 자체는 허용 — 문서 03 §6.1)
     const duplicated = types?.some((t) => t.name === values.name.trim() && t.id !== editing?.id);
@@ -178,7 +182,7 @@ export function ContractTypeAdminPage() {
       render: (lines: ContractTypeLine[]) => (
         // 품목은 한 줄에 하나씩 세로로 나열한다
         <Space direction="vertical" size={4} align="start">
-          {lines.map((l, i) => (
+          {sortByCatalogOrder(lines).map((l, i) => (
             <Tag key={i} color={l.transactionType === 'CUSTOM' ? 'blue' : 'purple'}>
               {TRANSACTION_TYPE_LABEL[l.transactionType]} {PRODUCT_CATEGORY_LABEL[l.productCategory]} ×
               {l.defaultQuantity}

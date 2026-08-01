@@ -280,7 +280,9 @@ export function OrderDetailPage() {
                     <Typography.Text type="secondary">채촌</Typography.Text>
                     <Typography.Text>
                       {item.measurement.linked
-                        ? `V${item.measurement.versionNo} ${item.measurement.completed ? '완료' : '작성중'}`
+                        ? item.measurement.completed
+                          ? '완료'
+                          : '작성중'
                         : '미연결'}
                     </Typography.Text>
                   </Space>

@@ -63,6 +63,37 @@ interface AllocateFormValues {
   returnDueDate: Dayjs;
 }
 
+/**
+ * 그 날짜에 빌려줄 수 있는 SKU 한 줄. 개체 목록을 이 단위로 접어 보여 준다 —
+ * 관리코드는 현장에서 실물과 맞지 않아 쓰지 않는다 (현업 확정 2026-07-31).
+ */
+interface SkuGroup {
+  componentType: RentalComponentType;
+  color: string;
+  size: string;
+  /** 그 날짜 가용 수 */
+  count: number;
+}
+
+/** 개체 목록을 SKU별로 접는다. */
+function groupBySku(items: RentalCalendarItem[]): SkuGroup[] {
+  const map = new Map<string, SkuGroup>();
+  for (const it of items) {
+    const key = `${it.componentType}|${it.color}|${it.size}`;
+    const row = map.get(key) ?? {
+      componentType: it.componentType,
+      color: it.color,
+      size: it.size,
+      count: 0,
+    };
+    row.count += 1;
+    map.set(key, row);
+  }
+  return [...map.values()].sort(
+    (a, b) => a.color.localeCompare(b.color) || a.size.localeCompare(b.size),
+  );
+}
+
 export function RentalAllocatePage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -78,8 +109,9 @@ export function RentalAllocatePage() {
    */
   const [filters, setFilters] = useState<FilterValues>(DEFAULT_FILTERS);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
-  // 배정 실행 대상 실물 (달력에서 [배정] 클릭 시 설정) — 모달을 연다.
-  const [allocateItem, setAllocateItem] = useState<RentalCalendarItem | null>(null);
+  // 배정 실행 대상 SKU (달력 아래 표에서 [배정] 클릭 시 설정) — 모달을 연다.
+  // 개체가 아니라 SKU다: 어느 실물을 쓸지는 서버가 고른다 (현업 확정 2026-07-31).
+  const [allocateSku, setAllocateSku] = useState<SkuGroup | null>(null);
 
   const from = month.startOf('month').format('YYYY-MM-DD');
   const to = month.endOf('month').format('YYYY-MM-DD');
@@ -118,41 +150,45 @@ export function RentalAllocatePage() {
   // 컬러·사이즈 선택지와 표시명 — 고른 품목의 코드만 내려온다.
   const codes = useRentalCodeNames(filters.componentType);
 
-  // 배정 대상 렌탈 주문 구성품 — 선택한 실물과 같은 구분(componentType)의 미배정 구성품만 노출.
+  // 배정 대상 렌탈 주문 구성품 — 선택한 SKU와 같은 구분(componentType)의 미배정 구성품만 노출.
   const targetsQuery = useQuery({
-    queryKey: ['rentals', 'order-components', allocateItem?.componentType],
+    queryKey: ['rentals', 'order-components', allocateSku?.componentType],
     queryFn: () => fetchRentalComponentTargets(),
-    enabled: !!allocateItem,
+    enabled: !!allocateSku,
   });
   const allocatableTargets = useMemo(
     () =>
       (targetsQuery.data ?? []).filter(
-        (t) => t.componentType === allocateItem?.componentType && t.currentAllocation === null,
+        (t) => t.componentType === allocateSku?.componentType && t.currentAllocation === null,
       ),
-    [targetsQuery.data, allocateItem],
+    [targetsQuery.data, allocateSku],
   );
 
   const allocateMutation = useMutation({
     mutationFn: (v: AllocateFormValues) => {
       const target = allocatableTargets.find((t) => t.componentId === v.componentId);
       if (!target) throw new Error('배정 대상 구성품을 찾을 수 없습니다.');
+      // 개체(inventoryItemId)를 넘기지 않는다 — 컬러·사이즈만 주면 서버가 그 기간에
+      // 비어 있는 실물 하나를 고른다. 이중예약은 DB EXCLUDE 제약이 계속 막는다.
       return allocateRentalItem(target.orderId, {
         componentId: v.componentId,
-        inventoryItemId: allocateItem!.id,
+        color: allocateSku!.color,
+        size: allocateSku!.size,
         pickupDate: v.pickupDate.format('YYYY-MM-DD'),
         returnDueDate: v.returnDueDate.format('YYYY-MM-DD'),
       });
     },
-    onSuccess: (alloc) => {
-      message.success(`관리 ID ${alloc.managementCode} 배정되었습니다.`);
-      setAllocateItem(null);
+    onSuccess: (_alloc, v) => {
+      const target = allocatableTargets.find((t) => t.componentId === v.componentId);
+      message.success(`${target?.customerName ?? '고객'} · ${skuLabel(allocateSku!)} 예약되었습니다.`);
+      setAllocateSku(null);
       void queryClient.invalidateQueries({ queryKey: ['rentals'] });
     },
     onError: (e) => message.error(e instanceof ApiError ? e.message : '배정에 실패했습니다.'),
   });
 
-  const openAllocate = (item: RentalCalendarItem, preselectComponentId?: string) => {
-    setAllocateItem(item);
+  const openAllocate = (sku: SkuGroup, preselectComponentId?: string) => {
+    setAllocateSku(sku);
     const pickup = selectedDate ? dayjs(selectedDate) : dayjs();
     allocForm.setFieldsValue({
       componentId: (preselectComponentId ?? undefined) as unknown as string,
@@ -168,7 +204,9 @@ export function RentalAllocatePage() {
       ?.rentalAllocatePrefill;
     const first = prefill?.items?.[0];
     if (first) {
-      openAllocate(first.item, first.componentId);
+      // 프리필은 실물 하나를 담아 오지만, 여기서는 그 실물의 SKU만 쓴다(개체는 서버가 고른다).
+      const { componentType, color, size } = first.item;
+      openAllocate({ componentType, color, size, count: 1 }, first.componentId);
       // 새로고침·뒤로가기 시 모달이 다시 열리지 않도록 state를 비운다.
       navigate('.', { replace: true, state: null });
     }
@@ -177,11 +215,14 @@ export function RentalAllocatePage() {
   }, []);
 
   const selectedItems = selectedDate ? (byDate.get(selectedDate)?.items ?? []) : [];
+  // 관리코드로 한 줄씩 늘어놓지 않고 SKU로 접는다 — 사용자가 고르는 단위가 "블랙 46호"다.
+  const selectedSkus = useMemo(() => groupBySku(selectedItems), [selectedItems]);
 
-  const columns: ColumnsType<RentalCalendarItem> = [
-    // 렌탈 재고와 같은 순서·표기: 관리코드가 앞, 컬러·사이즈는 코드가 아니라 표시명.
-    // 실물 상세 화면은 없앴다 — 실물은 폐기하고 다시 등록하는 방식이라 편집할 게 없다.
-    { title: '관리코드', dataIndex: 'managementCode', width: 200 },
+  /** "상의(자켓) · 블랙 / 46호" — 개체 대신 이 표기로 대상을 가리킨다. */
+  const skuLabel = (sku: SkuGroup) =>
+    `${RENTAL_COMPONENT_TYPE_LABELS[sku.componentType] ?? sku.componentType} · ${codes.colorName(sku.color)} / ${codes.sizeName(sku.size)}`;
+
+  const columns: ColumnsType<SkuGroup> = [
     {
       title: '구분',
       dataIndex: 'componentType',
@@ -191,12 +232,23 @@ export function RentalAllocatePage() {
     { title: '컬러', dataIndex: 'color', width: 140, render: (v: string) => codes.colorName(v) },
     { title: '사이즈', dataIndex: 'size', width: 100, render: (v: string) => codes.sizeName(v) },
     {
-      title: '배정',
+      title: '가용',
+      dataIndex: 'count',
+      width: 80,
+      align: 'center',
+      render: (v: number) => (
+        <Typography.Text strong type="success">
+          {v}
+        </Typography.Text>
+      ),
+    },
+    {
+      title: '예약',
       key: 'allocate',
       width: 90,
       render: (_, r) => (
         <Button size="small" type="primary" onClick={() => openAllocate(r)}>
-          배정
+          예약
         </Button>
       ),
     },
@@ -211,21 +263,8 @@ export function RentalAllocatePage() {
           품목 대분류는 매번 쓰는 축이라 [조회]를 거치지 않고 누르는 즉시 달력이 갱신된다.
           재고 화면과 달리 '전체'는 두지 않는다 — 예약은 어느 한 품목을 놓고 잡는 일이라
           전 품목을 섞어 센 가용 수는 쓸 데가 없다. 건수 배지도 달력 셀이 이미 날짜별로 보여 준다.
+          조회 기간 안내문은 뺐다 — 달력이 보고 있는 달을 그대로 보여 주므로 같은 말이 두 번이었다.
         */}
-        <Radio.Group
-          value={filters.componentType}
-          optionType="button"
-          buttonStyle="solid"
-          style={{ marginBottom: 12 }}
-          onChange={(e: RadioChangeEvent) => onComponentChange(e.target.value as RentalComponentType)}
-        >
-          {componentTypeOptions.map((o) => (
-            <Radio.Button key={o.value} value={o.value}>
-              {o.label}
-            </Radio.Button>
-          ))}
-        </Radio.Group>
-
         <ListToolbar
           filters={
             <Form<FilterValues>
@@ -235,7 +274,23 @@ export function RentalAllocatePage() {
               style={{ rowGap: 8, columnGap: 0 }}
               onFinish={onSearch}
             >
-              {/* 컬러·사이즈는 코드값이라 손으로 칠 수 없다 — 위에서 고른 품목의 코드만 목록으로 준다. */}
+              {/* 품목 대분류도 같은 줄에 둔다 — 필터가 두 줄로 갈리지 않게 한다.
+                  Form 안에 있지만 값은 filters 로 직접 다루므로 Form.Item name 을 주지 않는다. */}
+              <Form.Item>
+                <Radio.Group
+                  value={filters.componentType}
+                  optionType="button"
+                  buttonStyle="solid"
+                  onChange={(e: RadioChangeEvent) => onComponentChange(e.target.value as RentalComponentType)}
+                >
+                  {componentTypeOptions.map((o) => (
+                    <Radio.Button key={o.value} value={o.value}>
+                      {o.label}
+                    </Radio.Button>
+                  ))}
+                </Radio.Group>
+              </Form.Item>
+              {/* 컬러·사이즈는 코드값이라 손으로 칠 수 없다 — 앞에서 고른 품목의 코드만 목록으로 준다. */}
               <Form.Item name="color">
                 <Select
                   allowClear
@@ -265,11 +320,6 @@ export function RentalAllocatePage() {
               </Form.Item>
             </Form>
           }
-          info={
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              조회 기간: {from} ~ {to} (달력의 월을 이동하면 자동 재조회됩니다)
-            </Typography.Text>
-          }
         />
       </PageCard>
 
@@ -298,40 +348,39 @@ export function RentalAllocatePage() {
         />
       </PageCard>
 
-      <PageCard title={selectedDate ? `${selectedDate} 가용 실물 (${selectedItems.length}건)` : '가용 실물'}>
+      <PageCard title={selectedDate ? `${selectedDate} 가용 재고 (${selectedItems.length}벌)` : '가용 재고'}>
         {selectedDate ? (
-          <DataTable<RentalCalendarItem>
-            rowKey="id"
-            dataSource={selectedItems}
+          <DataTable<SkuGroup>
+            rowKey={(r) => `${r.componentType}|${r.color}|${r.size}`}
+            dataSource={selectedSkus}
             columns={columns}
             pagination={false}
-            locale={{ emptyText: '이 날짜에 가용한 실물이 없습니다.' }}
+            locale={{ emptyText: '이 날짜에 빌려줄 수 있는 재고가 없습니다.' }}
           />
         ) : (
-          <Empty description="달력에서 날짜를 선택하면 그날 가용한 실물이 표시됩니다." image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          <Empty description="달력에서 날짜를 선택하면 그날 빌려줄 수 있는 재고가 표시됩니다." image={Empty.PRESENTED_IMAGE_SIMPLE} />
         )}
       </PageCard>
 
-      {/* 배정 실행 모달: 실물 → 렌탈 주문·구성품 선택 + 대여 기간 → 배정 생성 */}
+      {/* 예약 실행 모달: SKU → 렌탈 주문·구성품 선택 + 대여 기간 → 배정 생성 (실물은 서버가 고른다) */}
       <Modal
-        title={allocateItem ? `배정 — ${allocateItem.managementCode}` : '배정'}
-        open={!!allocateItem}
-        onCancel={() => setAllocateItem(null)}
+        title={allocateSku ? `예약 — ${skuLabel(allocateSku)}` : '예약'}
+        open={!!allocateSku}
+        onCancel={() => setAllocateSku(null)}
         onOk={() => allocForm.submit()}
-        okText="배정"
+        okText="예약"
         cancelText="취소"
         confirmLoading={allocateMutation.isPending}
         destroyOnClose
       >
-        {allocateItem && (
+        {allocateSku && (
           <Space direction="vertical" size="middle" style={{ width: '100%' }}>
             <Descriptions size="small" bordered column={1}>
-              <Descriptions.Item label="실물">
-                <Typography.Text strong>{allocateItem.managementCode}</Typography.Text>
-              </Descriptions.Item>
               <Descriptions.Item label="규격">
-                {RENTAL_COMPONENT_TYPE_LABELS[allocateItem.componentType] ?? allocateItem.componentType} ·{' '}
-                {allocateItem.color} · {allocateItem.size}
+                <Typography.Text strong>{skuLabel(allocateSku)}</Typography.Text>
+              </Descriptions.Item>
+              <Descriptions.Item label="가용">
+                {selectedDate ? `${selectedDate} 기준 ${allocateSku.count}벌` : `${allocateSku.count}벌`}
               </Descriptions.Item>
             </Descriptions>
 

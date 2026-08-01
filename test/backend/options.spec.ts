@@ -790,6 +790,94 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
     expect(set.activeVersionId).toBe(versionV2);
   });
 
+  // -------------------------------------------------------------------------
+  // 확정 = 계약금액 반영 (현업 확정 2026-07-31)
+  //   확정된 세션에 미반영 차액이 남지 않는다 — 별도 [계약금액 반영]을 누를 필요가 없다.
+  // -------------------------------------------------------------------------
+
+  it('확정하면 옵션 추가금액이 계약금액에 함께 반영된다', async () => {
+    // 활성 버전 1단계의 B 선택지에 추가금액을 붙인다 (ACTIVE라 가격 API가 막혀 DB로 직접 넣는다).
+    const stage1 = await ctx.prisma.optionStage.findFirstOrThrow({
+      where: { optionSetVersionId: versionV2 },
+      orderBy: { sequenceNo: 'asc' },
+      include: { choices: true },
+    });
+    const paidChoice = stage1.choices.find((c) => c.choiceCode === 'B')!;
+    await ctx.prisma.optionChoice.update({
+      where: { id: paidChoice.id },
+      data: { extraPrice: 55000 },
+    });
+
+    // 반영 대상은 계약의 현재 버전이다 — 이 스펙 픽스처는 현재 버전을 걸어두지 않았다.
+    const item = await ctx.prisma.contractItem.findUniqueOrThrow({
+      where: { id: contractItem2 },
+      select: { contractId: true },
+    });
+    const version = await ctx.prisma.contractVersion.findFirstOrThrow({
+      where: { contractId: item.contractId },
+      orderBy: { versionNo: 'desc' },
+    });
+    const versionId = version.id;
+    await ctx.prisma.contract.update({
+      where: { id: item.contractId },
+      data: { currentVersionId: versionId },
+    });
+    const before = Number(
+      (await ctx.prisma.contractVersion.findUniqueOrThrow({ where: { id: versionId } })).totalAmount,
+    );
+
+    const created = await api(ctx)
+      .post(`/api/v1/contract-items/${contractItem2}/option-sessions`)
+      .set(auth(ctx))
+      .send({})
+      .expect(201);
+    const sid = created.body.data.sessionId as string;
+
+    const view = await api(ctx).get(`/api/v1/option-sessions/${sid}`).set(auth(ctx)).expect(200);
+    let rowVersion = view.body.data.version as number;
+    for (const st of view.body.data.stages as StageView[]) {
+      // 1단계는 유료(B), 나머지는 첫 선택지를 고른다.
+      const choiceId = st.stageId === stage1.id ? paidChoice.id : st.choices[0].id;
+      const saved = await api(ctx)
+        .put(`/api/v1/option-sessions/${sid}/stages/${st.stageId}`)
+        .set(auth(ctx))
+        .send({ choiceId, version: rowVersion })
+        .expect(200);
+      rowVersion = saved.body.data.version as number;
+    }
+
+    const res = await api(ctx)
+      .post(`/api/v1/option-sessions/${sid}/confirm`)
+      .set(auth(ctx))
+      .send({ version: rowVersion })
+      .expect(200);
+    expect(res.body.data.status).toBe('CONFIRMED');
+    // 확정 응답 시점에 이미 반영이 끝나 있어야 한다.
+    expect(res.body.data.surcharge.total).toBe(55000);
+    expect(res.body.data.surcharge.applied).toBe(55000);
+    expect(res.body.data.surcharge.pending).toBe(0);
+    expect(res.body.data.surcharge.appliable).toBe(false);
+
+    const after = Number(
+      (await ctx.prisma.contractVersion.findUniqueOrThrow({ where: { id: versionId } })).totalAmount,
+    );
+    expect(after).toBe(before + 55000);
+
+    // 계약금액 수정 감사로그가 남는다.
+    const audits = await ctx.prisma.auditLog.count({
+      where: { entityType: 'CONTRACT_VERSION', entityId: versionId, action: 'UPDATE' },
+    });
+    expect(audits).toBeGreaterThanOrEqual(1);
+
+    // 반영할 차액이 없으므로 수동 반영은 거부된다.
+    const denied = await api(ctx)
+      .post(`/api/v1/option-sessions/${sid}/surcharge/apply`)
+      .set(auth(ctx))
+      .send({})
+      .expect(400);
+    expect(denied.body.error.code).toBe('VALIDATION_ERROR');
+  });
+
   it('일반 직원 권한(OPTION_SELECT 없음이 아닌 마스터 권한 없음)으로 마스터 API는 403이다', async () => {
     // STAFF 역할 사용자 생성: OPTION_SELECT는 있으나 OPTION_MASTER_EDIT 없음
     // (users는 truncate 대상이 아니므로 재실행 안전하게 고유 loginId를 사용한다)
