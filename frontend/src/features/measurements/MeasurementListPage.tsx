@@ -17,9 +17,8 @@ import { DataTable } from '../../shared/DataTable';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { metaOf } from '../../shared/status-meta';
-import { autoWidth } from '../../shared/table-width';
-import { PRODUCT_CATEGORY_LABEL } from '../contracts/labels';
-import { MEASUREMENT_TYPE_META } from './meas-meta';
+import { autoWidth, wrapAt } from '../../shared/table-width';
+import { CONTRACT_STATUS_META, PRODUCT_CATEGORY_LABEL } from '../contracts/labels';
 
 /** 품목 구성 요약 — "정장 2 · 셔츠 1" */
 function itemComposition(counts: MeasurementTargetRow['categoryCounts']): string {
@@ -172,6 +171,7 @@ export function MeasurementListPage({
     update({ page: pagination.current ?? 1, size: pagination.pageSize ?? filters.size });
   };
 
+  // 앞 다섯 열(고객·계약 구분·계약일·완료 예정일·상태)은 계약 목록과 같은 규격·같은 값이다.
   const columns: ColumnsType<MeasurementTargetRow> = [
     {
       title: '고객',
@@ -186,20 +186,59 @@ export function MeasurementListPage({
         </Space>
       ),
     },
-    { title: '계약번호', dataIndex: 'contractNo', ...autoWidth() },
+    {
+      // 계약번호는 참고용이라 자기 열 없이 계약 구분 아래에 붙인다(계약 목록과 같은 방식).
+      title: '계약 구분',
+      dataIndex: 'contractTypeName',
+      ...autoWidth(110),
+      render: (name: string | null, row) => (
+        <Space direction="vertical" size={0}>
+          <Typography.Text>{name ?? '-'}</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {row.contractNo}
+          </Typography.Text>
+        </Space>
+      ),
+    },
     // 기간 필터의 기준값이라 표에도 둔다 — 왜 이 건이 걸렸는지 열에서 바로 확인되어야 한다.
+    // 계약일 전(작성중)은 작성일이 대신 들어온다 — 그 구분은 상태 열이 한다.
     { title: '계약일', dataIndex: 'contractDate', ...autoWidth() },
     {
-      title: '품목 구성',
-      key: 'composition',
-      ...autoWidth(),
-      render: (_, row) => itemComposition(row.categoryCounts) || '-',
-    },
-    {
-      title: '완성 예정일',
+      title: '완료 예정일',
       dataIndex: 'dueDate',
       ...autoWidth(),
       render: (v: string | null) => v ?? <Typography.Text type="secondary">미정</Typography.Text>,
+    },
+    {
+      /*
+       * 계약 상태 — 이 목록은 계약 상태로 거르지 않고 "맞춤 주문이 생긴 계약"을 모두 보여 준다.
+       * 주문은 계약완료에서만 생기므로 대부분 계약완료지만, 수정하기로 되돌아간 계약은
+       * 주문을 그대로 둔 채 작성중·서명완료로 돌아온다. 채촌하러 들어가기 전에 그 사실이 보여야 한다.
+       * 취소 계약은 주문이 있으면 취소 자체가 막혀 여기 나타나지 않는다.
+       */
+      title: '상태',
+      dataIndex: 'contractStatus',
+      ...autoWidth(),
+      render: (v: string) => {
+        const meta = metaOf(CONTRACT_STATUS_META, v);
+        return <StatusBadge label={meta.label} color={meta.color} />;
+      },
+    },
+    {
+      /*
+       * 품목이 늘면 "정장 2 · 셔츠 1 · 구두 1"처럼 길어지는 유일한 열이다.
+       * 계약 목록처럼 width+ellipsis 로 막을 수 없다 — 이 표는 액션 열을 오른쪽에 고정해
+       * rc-table 이 table-layout: auto 를 고르고, auto 에서는 width 가 힌트일 뿐이라
+       * 값이 길어지면 열이 늘고 나머지 열이 그만큼 쪼그라든다(계약 목록은 fixed 라 안 그렇다).
+       * 그래서 셀 안쪽에서 접는다 — table-width.ts 의 wrapAt 이 이 경우를 위한 것이다.
+       * 채촌 대상은 맞춤 품목뿐이라 렌탈 줄은 없다.
+       */
+      title: '품목 구성',
+      key: 'composition',
+      ...autoWidth(),
+      render: (_, row) => (
+        <Typography.Text style={wrapAt(200)}>{itemComposition(row.categoryCounts) || '-'}</Typography.Text>
+      ),
     },
     {
       title: '스타일 컨설팅',
@@ -225,28 +264,6 @@ export function MeasurementListPage({
         const state = measurementStateOf(row);
         return <StatusBadge label={state.label} color={state.color} />;
       },
-    },
-    {
-      title: '최근 채촌',
-      key: 'lastMeasurement',
-      ...autoWidth(),
-      render: (_, row) =>
-        row.lastMeasurementDate ? (
-          <Space direction="vertical" size={0}>
-            <Typography.Text strong>{row.lastMeasurementDate}</Typography.Text>
-            <Space size={4}>
-              <StatusBadge
-                label={metaOf(MEASUREMENT_TYPE_META, row.lastMeasurementType ?? '').label}
-                color={metaOf(MEASUREMENT_TYPE_META, row.lastMeasurementType ?? '').color}
-              />
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {row.measurementCount}건
-              </Typography.Text>
-            </Space>
-          </Space>
-        ) : (
-          <Typography.Text type="secondary">-</Typography.Text>
-        ),
     },
     {
       title: '액션',

@@ -169,12 +169,17 @@ export class MeasurementsService {
           select: {
             id: true,
             contractId: true,
-            completionDueDate: true,
             contract: {
               select: {
                 contractNo: true,
                 contractedAt: true,
                 createdAt: true,
+                status: true,
+                contractType: { select: { name: true } },
+                // 완료 예정일은 주문 사본이 아니라 계약서 현재 버전에서 읽는다 —
+                // 수정하기로 날짜만 바꾸고 아직 계약완료를 다시 누르지 않은 사이에도
+                // 계약 목록과 같은 값이 보여야 한다.
+                currentVersion: { select: { completionDueDate: true } },
                 customer: { select: { id: true, name: true, phone: true } },
               },
             },
@@ -193,6 +198,10 @@ export class MeasurementsService {
     interface Row {
       contractId: string;
       contractNo: string;
+      /** 계약 구분명. 구분을 지정하지 않은 계약은 null */
+      contractTypeName: string | null;
+      /** 계약 상태 (DRAFT·SIGNED·COMPLETED). 취소 계약은 주문이 없어 여기 오지 않는다. */
+      contractStatus: string;
       /** 계약일 (YYYY-MM-DD) — 목록 기간 필터의 기준. 없는 초안은 등록일로 갈음한다. */
       contractDate: string;
       /** 신규 채촌을 이 계약에 연결하기 위한 대표 주문 */
@@ -207,7 +216,7 @@ export class MeasurementsService {
       consultingConfirmedCount: number;
       /** 스타일 컨설팅 전체 완료 여부 */
       consultingComplete: boolean;
-      /** 계약 내 가장 이른 납기 (YYYY-MM-DD). 없으면 null */
+      /** 계약서 현재 버전의 완료 예정일 (YYYY-MM-DD). 없으면 null */
       dueDate: string | null;
       /** 이 계약에 연결된 채촌 건수 */
       measurementCount: number;
@@ -227,6 +236,8 @@ export class MeasurementsService {
       const row = rows.get(order.contractId) ?? {
         contractId: order.contractId,
         contractNo: order.contract.contractNo,
+        contractTypeName: order.contract.contractType?.name ?? null,
+        contractStatus: order.contract.status,
         // 계약일이 없는 초안(임시저장)은 등록일로 갈음한다 — 계약 목록의 기간 필터와 같은 규칙.
         contractDate: toDateString(order.contract.contractedAt ?? order.contract.createdAt),
         orderId: order.id,
@@ -237,7 +248,9 @@ export class MeasurementsService {
         itemCount: 0,
         consultingConfirmedCount: 0,
         consultingComplete: false,
-        dueDate: null,
+        dueDate: order.contract.currentVersion?.completionDueDate
+          ? toDateString(order.contract.currentVersion.completionDueDate)
+          : null,
         measurementCount: 0,
         measurementCompletedCount: 0,
         lastSessionId: null,
@@ -250,8 +263,6 @@ export class MeasurementsService {
       row.categoryCounts[item.productCategory] = (row.categoryCounts[item.productCategory] ?? 0) + 1;
       if (item.sourceContractItem.optionSelectionSessions[0]?.status === 'CONFIRMED')
         row.consultingConfirmedCount += 1;
-      const due = order.completionDueDate ? toDateString(order.completionDueDate) : null;
-      if (due && (!row.dueDate || due < row.dueDate)) row.dueDate = due;
       rows.set(order.contractId, row);
     }
     for (const row of rows.values()) {

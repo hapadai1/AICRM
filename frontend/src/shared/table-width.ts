@@ -18,3 +18,12 @@ export function autoWidth(minWidth?: number) {
   const style = { whiteSpace: 'nowrap' as const, ...(minWidth ? { minWidth } : {}) };
   return { onHeaderCell: () => ({ style }), onCell: () => ({ style }) };
 }
+
+/**
+ * 값이 길어 열이 무한정 넓어지는 걸 막는다. 셀 안쪽 요소에 상한 폭을 줘서 그 폭을 넘으면 줄을 바꾼다.
+ * 열에 width 를 주는 대신 안쪽에서 접으므로 표 레이아웃(auto)은 그대로 둔다.
+ * @param maxWidth 이 폭을 넘으면 줄바꿈한다.
+ */
+export function wrapAt(maxWidth: number) {
+  return { whiteSpace: 'normal' as const, maxWidth, display: 'inline-block' as const };
+}
