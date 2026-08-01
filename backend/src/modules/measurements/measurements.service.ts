@@ -329,6 +329,10 @@ export class MeasurementsService {
     });
     return sessions.map((s) => ({
       id: s.id,
+      // 고객 화면에서 넘어와도 이름을 보여줄 수 있게 함께 내려 준다.
+      customerId: customer.id,
+      customerName: customer.name,
+      customerPhone: customer.phone,
       versionNo: s.versionNo,
       measurementDate: toDateString(s.measurementDate),
       measurementType: s.measurementType,

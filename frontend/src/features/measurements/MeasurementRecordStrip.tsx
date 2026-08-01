@@ -3,8 +3,9 @@
  * 채촌 화면 맨 위에 깔아 두고, 누르면 그 기록을 그대로 열어 본다.
  * 버전이 아니라 "구분 + 채촌일"로 고르는 것이 핵심이다.
  */
-import { LockOutlined, PlusOutlined } from '@ant-design/icons';
+import { CopyOutlined, LockOutlined, PlusOutlined } from '@ant-design/icons';
 import { Button, Card, Empty, Space, Spin, Tag, Typography } from 'antd';
+import { useState } from 'react';
 import type { MeasurementSummary } from '../../api/measurements';
 import { buildRecordTitles } from './record-label';
 
@@ -16,6 +17,8 @@ interface MeasurementRecordStripProps {
   onSelect: (id: string) => void;
   /** 없으면 [새 채촌] 버튼을 감춘다 (이미 신규 작성 화면일 때) */
   onCreate?: () => void;
+  /** 신규 작성 화면에서만 — 가장 최근 채촌의 치수를 그대로 끌어온다 */
+  onLoadPrevious?: () => void | Promise<void>;
 }
 
 export function MeasurementRecordStrip({
@@ -24,7 +27,9 @@ export function MeasurementRecordStrip({
   currentId,
   onSelect,
   onCreate,
+  onLoadPrevious,
 }: MeasurementRecordStripProps) {
+  const [loadingPrevious, setLoadingPrevious] = useState(false);
   const titles = buildRecordTitles(records);
   // 최근 것을 왼쪽에 둔다 — 회차 번호는 오래된 순으로 매긴 값을 그대로 쓴다.
   const chips = records
@@ -43,11 +48,29 @@ export function MeasurementRecordStrip({
       title={`저장한 채촌 ${records.length}건`}
       style={{ marginBottom: 16 }}
       extra={
-        onCreate && (
-          <Button type="primary" icon={<PlusOutlined />} onClick={onCreate}>
-            새 채촌
-          </Button>
-        )
+        <Space>
+          {onLoadPrevious && (
+            <Button
+              icon={<CopyOutlined />}
+              loading={loadingPrevious}
+              onClick={async () => {
+                setLoadingPrevious(true);
+                try {
+                  await onLoadPrevious();
+                } finally {
+                  setLoadingPrevious(false);
+                }
+              }}
+            >
+              직전 채촌 값 불러오기
+            </Button>
+          )}
+          {onCreate && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={onCreate}>
+              새 채촌
+            </Button>
+          )}
+        </Space>
       }
     >
       {loading ? (
