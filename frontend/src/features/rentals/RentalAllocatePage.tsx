@@ -43,8 +43,8 @@ interface FilterValues {
   size?: string;
 }
 
-/** 화면을 열었을 때의 기본 조회 조건 (현업에서 가장 많이 찾는 조합) */
-const DEFAULT_FILTERS: FilterValues = { componentType: 'JACKET', color: 'BLACK', size: '46' };
+/** 화면을 열었을 때 라디오가 잡고 있는 품목 — 조회 조건이 아니라 '고르는 중'인 값이다. */
+const DEFAULT_COMPONENT_TYPE: RentalComponentType = 'JACKET';
 
 /** 가용 수에 따른 배지 색 — 0건은 회색, 소량은 주황, 여유는 초록. */
 function countColor(count: number): string {
@@ -105,10 +105,15 @@ export function RentalAllocatePage() {
 
   const [month, setMonth] = useState<Dayjs>(dayjs());
   /*
-   * 예약은 언제나 한 품목을 놓고 잡는 일이라 '전체'가 필요 없다.
-   * 가장 많이 찾는 조합(상의·블랙·46호)으로 열어 두어, 들어오자마자 그 달력을 보게 한다.
+   * 조회를 누르기 전에는 아무것도 조회하지 않는다 (현업 확정 2026-08-03).
+   * 직원이 고르지 않은 조건으로 전 컬러·전 사이즈를 합친 가용 수가 먼저 떠 버리면
+   * 그 숫자를 자기가 찾던 규격의 재고로 오독한다.
+   *
+   * componentType = 라디오가 잡고 있는 '고르는 중'인 품목,
+   * filters = [조회]로 확정된 조건. filters 가 null 이면 달력은 비어 있다.
    */
-  const [filters, setFilters] = useState<FilterValues>(DEFAULT_FILTERS);
+  const [componentType, setComponentType] = useState<RentalComponentType>(DEFAULT_COMPONENT_TYPE);
+  const [filters, setFilters] = useState<FilterValues | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   // 배정 실행 대상 SKU (달력 아래 표에서 [배정] 클릭 시 설정) — 모달을 연다.
   // 개체가 아니라 SKU다: 어느 실물을 쓸지는 서버가 고른다 (현업 확정 2026-07-31).
@@ -117,10 +122,12 @@ export function RentalAllocatePage() {
   const from = month.startOf('month').format('YYYY-MM-DD');
   const to = month.endOf('month').format('YYYY-MM-DD');
 
-  const queryFilters: RentalCalendarFilters = { from, to, ...filters };
+  // 달을 넘기는 건 이미 확정한 조건 그대로 보는 일이라 [조회] 없이 따라 움직인다.
+  const queryFilters: RentalCalendarFilters = { from, to, ...(filters ?? {}) };
   const calendarQuery = useQuery({
     queryKey: ['rentals', 'availability-calendar', queryFilters],
     queryFn: () => fetchAvailabilityCalendar(queryFilters),
+    enabled: !!filters,
   });
 
   // 날짜별 사전 버킷팅 — 셀마다 전체 배열을 훑지 않게 한다 (MonthCalendar 패턴).
@@ -132,24 +139,25 @@ export function RentalAllocatePage() {
     return map;
   }, [calendarQuery.data]);
 
-  // 품목은 Form 밖에 있으므로 조회 시 덮어쓰지 않도록 이전 값을 남긴다(렌탈 재고와 동일).
+  // 품목은 Form 밖에 있으므로 조회 시 라디오가 잡고 있는 값을 합쳐 확정한다(렌탈 재고와 동일).
   const onSearch = (values: FilterValues) => {
-    setFilters((prev) => ({ ...values, componentType: prev.componentType }));
+    setFilters({ ...values, componentType });
     setSelectedDate(null);
   };
 
   /**
-   * 품목 대분류 전환 — 즉시 재조회.
+   * 품목 대분류 전환 — 조회는 하지 않고 앞선 조회 결과만 지운다.
    * 앞 품목에서 고른 컬러·사이즈는 새 품목에 없는 코드라(구두 260 → 상의) 함께 비운다.
    */
-  const onComponentChange = (componentType: RentalComponentType) => {
+  const onComponentChange = (next: RentalComponentType) => {
+    setComponentType(next);
     form.setFieldsValue({ color: undefined, size: undefined });
-    setFilters((prev) => ({ ...prev, componentType, color: undefined, size: undefined }));
+    setFilters(null);
     setSelectedDate(null);
   };
 
-  // 컬러·사이즈 선택지와 표시명 — 고른 품목의 코드만 내려온다.
-  const codes = useRentalCodeNames(filters.componentType);
+  // 컬러·사이즈 선택지와 표시명 — 고르는 중인 품목의 코드만 내려온다.
+  const codes = useRentalCodeNames(componentType);
 
   // 배정 대상 렌탈 주문 구성품 — 선택한 SKU와 같은 구분(componentType)의 미배정 구성품만 노출.
   const targetsQuery = useQuery({
@@ -206,8 +214,10 @@ export function RentalAllocatePage() {
     const first = prefill?.items?.[0];
     if (first) {
       // 프리필은 실물 하나를 담아 오지만, 여기서는 그 실물의 SKU만 쓴다(개체는 서버가 고른다).
-      const { componentType, color, size } = first.item;
-      openAllocate({ componentType, color, size, count: 1 }, first.componentId);
+      const { componentType: prefillType, color, size } = first.item;
+      // 모달의 컬러·사이즈 표시명이 그 품목 코드로 나오도록 라디오도 함께 맞춘다.
+      setComponentType(prefillType);
+      openAllocate({ componentType: prefillType, color, size, count: 1 }, first.componentId);
       // 새로고침·뒤로가기 시 모달이 다시 열리지 않도록 state를 비운다.
       navigate('.', { replace: true, state: null });
     }
@@ -261,7 +271,8 @@ export function RentalAllocatePage() {
         {/* 제목은 헤더가 이미 "렌탈 예약"으로 보여 준다 — 카드 안에서 반복하지 않는다.
             화면끼리 잇던 [출고·반납으로]·[렌탈 재고로] 버튼도 좌측 메뉴와 겹쳐 뺐다. */}
         {/*
-          품목 대분류는 매번 쓰는 축이라 [조회]를 거치지 않고 누르는 즉시 달력이 갱신된다.
+          품목·컬러·사이즈 무엇을 건드리든 [조회]를 눌러야 달력이 채워진다 — 고르지 않은 조건으로
+          센 가용 수를 먼저 보여 주지 않는다. 품목을 바꾸면 앞서 본 달력은 지워진다.
           재고 화면과 달리 '전체'는 두지 않는다 — 예약은 어느 한 품목을 놓고 잡는 일이라
           전 품목을 섞어 센 가용 수는 쓸 데가 없다. 건수 배지도 달력 셀이 이미 날짜별로 보여 준다.
           조회 기간 안내문은 뺐다 — 달력이 보고 있는 달을 그대로 보여 주므로 같은 말이 두 번이었다.
@@ -271,7 +282,6 @@ export function RentalAllocatePage() {
             <Form<FilterValues>
               form={form}
               layout="inline"
-              initialValues={{ color: DEFAULT_FILTERS.color, size: DEFAULT_FILTERS.size }}
               style={{ rowGap: 8, columnGap: 0 }}
               onFinish={onSearch}
             >
@@ -279,7 +289,7 @@ export function RentalAllocatePage() {
                   Form 안에 있지만 값은 filters 로 직접 다루므로 Form.Item name 을 주지 않는다. */}
               <Form.Item>
                 <Radio.Group
-                  value={filters.componentType}
+                  value={componentType}
                   optionType="button"
                   buttonStyle="solid"
                   onChange={(e: RadioChangeEvent) => onComponentChange(e.target.value as RentalComponentType)}
@@ -325,6 +335,11 @@ export function RentalAllocatePage() {
       </PageCard>
 
       <PageCard styles={{ body: { paddingTop: 0 } }}>
+        {!filters && (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            조회 전입니다 — 품목·컬러·사이즈를 고르고 [조회]를 누르면 날짜별 가용 수가 표시됩니다.
+          </Typography.Text>
+        )}
         <Calendar
           value={month}
           onPanelChange={(value) => {
@@ -332,6 +347,8 @@ export function RentalAllocatePage() {
             setSelectedDate(null);
           }}
           onSelect={(date, info) => {
+            // 조회 전 달력은 빈 껍데기라 날짜를 눌러도 "재고 없음"만 보여 주게 된다 — 막는다.
+            if (!filters) return;
             if (info?.source === 'date') setSelectedDate(date.format('YYYY-MM-DD'));
           }}
           cellRender={(current, info) => {
@@ -350,7 +367,9 @@ export function RentalAllocatePage() {
       </PageCard>
 
       <PageCard title={selectedDate ? `${selectedDate} 가용 재고 (${selectedItems.length}벌)` : '가용 재고'}>
-        {selectedDate ? (
+        {!filters ? (
+          <Empty description="조건을 고르고 [조회]를 누르세요." image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        ) : selectedDate ? (
           <DataTable<SkuGroup>
             rowKey={(r) => `${r.componentType}|${r.color}|${r.size}`}
             dataSource={selectedSkus}
