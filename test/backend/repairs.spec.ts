@@ -517,7 +517,7 @@ describe('수선 (RepairsModule)', () => {
       expect(none.body.page.totalElements).toBe(0);
     });
 
-    it('excludeReleased=true면 출고완료 건은 목록에서 빠진다(상태 지정 시 예외)', async () => {
+    it('전체 상태(phase)로 진행중·완료를 가르고, 세부 상태를 주면 그쪽이 이긴다', async () => {
       const { customer } = await seedRepairCustomer(ctx.prisma);
       const repairId = await createGeneralRepair(customer.id);
       await requestAndReturnAll(repairId);
@@ -528,21 +528,21 @@ describe('수선 (RepairsModule)', () => {
         .send({})
         .expect(201);
 
-      // 완료건 제외 — 목록에서 빠진다
-      const excluded = await api(ctx)
-        .get(`/api/v1/repairs?customerId=${customer.id}&excludeReleased=true`)
-        .set(auth(ctx))
-        .expect(200);
-      expect(excluded.body.data.find((r: { id: string }) => r.id === repairId)).toBeUndefined();
+      const idsOf = async (queryString: string) => {
+        const res = await api(ctx)
+          .get(`/api/v1/repairs?customerId=${customer.id}${queryString}`)
+          .set(auth(ctx))
+          .expect(200);
+        return (res.body.data as { id: string }[]).map((r) => r.id);
+      };
 
-      // 상태를 직접 고르면 제외 옵션보다 우선한다
-      const explicit = await api(ctx)
-        .get(`/api/v1/repairs?customerId=${customer.id}&status=RELEASED&excludeReleased=true`)
-        .set(auth(ctx))
-        .expect(200);
-      expect(
-        explicit.body.data.find((r: { id: string; status: string }) => r.id === repairId)?.status,
-      ).toBe('RELEASED');
+      // 출고까지 끝난 건은 진행중 목록에서 빠지고 완료 목록에 잡힌다
+      expect(await idsOf('&phase=IN_PROGRESS')).not.toContain(repairId);
+      expect(await idsOf('&phase=DONE')).toContain(repairId);
+      // 전체 상태를 비우면 전부 — '전체'가 곧 조건 없음이다
+      expect(await idsOf('')).toContain(repairId);
+      // 세부 상태를 함께 주면 그쪽이 이긴다(같은 묶음 안의 값이라 교집합할 이유가 없다)
+      expect(await idsOf('&phase=IN_PROGRESS&status=RELEASED')).toContain(repairId);
     });
 
     it('PATCH로 완료예정일·내용을 수정한다', async () => {

@@ -40,3 +40,14 @@
   border-radius: 8px;
   box-sizing: border-box;
 }
+
+/* 수선 행 펼침 — 단계별 품목 표의 글자를 단계 줄 내용과 같은 자리에서 시작시킨다.
+ * antd는 펼친 행 안의 표에 자체 들여쓰기(margin-inline-start)를 넣는데, 그러면
+ * 표 글자가 단계 줄 내용보다 오른쪽으로 밀려 위아래 두 줄이 어긋난다.
+ * 들여쓰기는 단계 이름 칸 폭으로 우리가 직접 준다(RepairsPage STEP_BODY_INDENT).
+ * antd 규칙(.ant-table-wrapper .ant-table-expanded-row ... .ant-table)이 클래스 다섯 개짜리라
+ * 여기서 이기려면 !important 가 필요하다.
+ */
+.repair-step-body .ant-table {
+  margin-inline-start: 0 !important;
+}

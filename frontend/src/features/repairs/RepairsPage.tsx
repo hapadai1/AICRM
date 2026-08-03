@@ -109,6 +109,18 @@ const STAGE_BY_STATUS: Partial<Record<RepairStatus, RepairProgressStage>> = {
  */
 const TARGET_WIDTH = 350;
 
+/**
+ * 행 펼침 단계 줄의 이름 칸 폭. 가장 긴 이름이 네 자(수선 요청·수선 입고·고객 연락·출고 완료)라
+ * 그 폭에 칸 사이 간격을 더한 값이다 — 다섯 단계의 내용이 같은 자리에서 시작한다.
+ */
+const STEP_LABEL_WIDTH = 88;
+
+/**
+ * 단계 밑 품목 표를 들여쓰는 폭. 표를 이름 칸 폭만큼 밀면 표 테두리는 맞지만 글자는
+ * 셀 여백(8px)만큼 오른쪽으로 밀린다 — 눈이 맞추는 건 테두리가 아니라 글자라 그만큼 뺀다.
+ */
+const STEP_BODY_INDENT = STEP_LABEL_WIDTH - 8;
+
 /** 접수·출고 방식 칸 — 방문 수거·배송이면 주소까지 같이 보여 준다(우리가 갈 곳이다). */
 function methodCell(method: string | undefined, address: string | undefined) {
   if (!method) return '-';
@@ -439,49 +451,63 @@ export function RepairsPage() {
                 statusMutation.isPending && statusMutation.variables?.repair.id === r.id;
 
               /**
-               * 단계 머리글 밑 한 줄 — 날짜·담당자와 그 단계 전체 상태를 한 줄에 붙인다.
-               * (`2026-08-01 · 관리자 · 전체 수선요청 완료`)
+               * 단계 한 줄 — 단계명 옆에 날짜·담당자·그 단계 전체 상태를 이어 붙인다.
+               * (`접수    2026-08-01 · 관리자 · 수선내용 : 기장 전체 적을  +5cm`)
+               * 밑으로 내리면 단계마다 두 줄이 되어 5단계가 화면을 한참 넘긴다.
+               *
+               * 접수는 밑에 붙일 게 수선 내용 글자뿐이라 이 줄에 같이 태운다.
+               * 나머지 단계의 품목 표·버튼은 글자가 아니라서 밑에 남는다.
+               * 담당자가 적은 그대로 보여 준다 — 줄바꿈·띄어쓰기를 접어 버리면
+               * "기장 전체  적을 +5cm"처럼 칸을 맞춰 적은 메모가 뭉개진다.
                */
-              const headline = (status: RepairStatus) => {
+              const stepTitle = (status: RepairStatus) => {
+                const label = repairStatusMeta(status).label;
                 const ev = eventByStatus.get(status);
                 const stage = STAGE_BY_STATUS[status];
                 const summary = stage ? repairStageSummary(detail.items, stage) : undefined;
-                if (!ev && !summary) return null;
+                // 꼬리 공백·개행만 턴다 — 그대로 두면 단계 밑에 빈 줄이 하나 생긴다.
+                // 가운데 띄어쓰기는 칸을 맞춰 적은 것이라 건드리지 않는다.
+                const notes = r.notes?.trimEnd();
+                const memo =
+                  status === 'RECEIVED'
+                    ? `수선내용 : ${r.description.trimEnd()}${notes ? ` · 비고 : ${notes}` : ''}`
+                    : '';
+                if (!ev && !summary && !memo) return label;
+                const dot = (before: boolean) => (before ? ' · ' : '');
                 return (
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {ev ? `${ev.eventDate} · ${ev.actorName}` : ''}
-                    {ev && summary ? ' · ' : ''}
-                    {summary && (
-                      <Typography.Text
-                        type={summary.done ? 'success' : 'secondary'}
-                        strong={summary.done}
-                        style={{ fontSize: 12 }}
-                      >
-                        {summary.text}
-                      </Typography.Text>
-                    )}
-                  </Typography.Text>
+                  <>
+                    {/*
+                      단계 이름과 내용은 쌍점이 아니라 빈칸으로 가른다 — 한 줄이지만 읽을 때는
+                      왼쪽(어느 단계)과 오른쪽(무슨 일이 있었나)이 다른 칸이다.
+                      이름 칸에 폭을 줘 다섯 단계의 내용 시작 위치를 맞춘다 — 이름 길이가
+                      2~4자로 제각각이라 그냥 띄우면 시작 위치가 단계마다 어긋난다.
+                    */}
+                    <span style={{ display: 'inline-block', minWidth: STEP_LABEL_WIDTH }}>
+                      {label}
+                    </span>
+                    {/*
+                      글자는 본문 크기·본문 색이다. 줄여 흐리게 두면 정작 읽어야 할
+                      수선 내용이 안 보인다.
+                    */}
+                    <span style={{ whiteSpace: 'pre-wrap', fontWeight: 400 }}>
+                      {ev ? `${ev.eventDate} · ${ev.actorName}` : ''}
+                      {summary && (
+                        <Typography.Text type={summary.done ? 'success' : undefined} strong>
+                          {dot(!!ev)}
+                          {summary.text}
+                        </Typography.Text>
+                      )}
+                      {memo && `${dot(!!ev || !!summary)}${memo}`}
+                    </span>
+                  </>
                 );
               };
 
-              // 단계마다 그 단계에서 할 일을 붙인다 — 접수는 수선 내용, 수선요청·입고·출고는
-              // 품목별 버튼, 고객 연락은 발송 버튼. 표를 따로 두지 않으니 지금 눌러야 할 칸이
+              // 단계마다 그 단계에서 할 일을 붙인다 — 수선요청·입고·출고는 품목별 버튼,
+              // 고객 연락은 발송 버튼. 표를 따로 두지 않으니 지금 눌러야 할 칸이
               // 어느 단계인지 한눈에 보인다(2026-08-01 현업 요청).
+              // 접수는 글자뿐이라 단계 줄에 실었다 — stepTitle 참고.
               const stepBody: Partial<Record<RepairStatus, React.ReactNode>> = {
-                // 담당자가 적은 그대로 보여 준다 — 줄바꿈·띄어쓰기를 접어 버리면
-                // "기장 전체  적을 +5cm"처럼 칸을 맞춰 적은 메모가 뭉개진다.
-                RECEIVED: (
-                  <Space direction="vertical" size={0}>
-                    <Typography.Text style={{ whiteSpace: 'pre-wrap' }}>
-                      수선내용 : {r.description}
-                    </Typography.Text>
-                    {r.notes && (
-                      <Typography.Text type="secondary" style={{ whiteSpace: 'pre-wrap' }}>
-                        비고 : {r.notes}
-                      </Typography.Text>
-                    )}
-                  </Space>
-                ),
                 REQUESTED: <RepairItemProgress repair={detail} stage="REQUEST" showSummary={false} />,
                 RETURNED_TO_SHOP: (
                   <RepairItemProgress repair={detail} stage="RETURN" showSummary={false} />
@@ -514,15 +540,21 @@ export function RepairsPage() {
                 RELEASED: <RepairItemProgress repair={detail} stage="RELEASE" showSummary={false} />,
               };
 
-              const stepItems = REPAIR_STATUS_FLOW.map((status) => ({
-                title: repairStatusMeta(status).label,
-                description: (
-                  <Space direction="vertical" size={4} style={{ paddingBottom: 4 }}>
-                    {headline(status)}
-                    {stepBody[status]}
-                  </Space>
-                ),
-              }));
+              const stepItems = REPAIR_STATUS_FLOW.map((status) => {
+                const body = stepBody[status];
+                return {
+                  title: stepTitle(status),
+                  // 붙일 게 없는 단계는 설명 칸을 아예 비운다 — 빈 칸도 높이를 차지한다.
+                  description: body ? (
+                    <div
+                      className="repair-step-body"
+                      style={{ paddingLeft: STEP_BODY_INDENT, paddingBottom: 4 }}
+                    >
+                      {body}
+                    </div>
+                  ) : undefined,
+                };
+              });
 
               return (
                 <Space direction="vertical" size="middle" style={{ width: '100%' }}>
