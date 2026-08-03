@@ -285,24 +285,37 @@ const SUIT_3PC = ['JACKET', 'TROUSERS', 'VEST'];
 const SUIT_2PC = ['JACKET', 'TROUSERS'];
 const JACKET_ONLY = ['JACKET'];
 
-const RENTAL_COLORS: Array<{ code: string; name: string; componentTypes: string[] }> = [
+/**
+ * tone은 반납 후 정비(세탁) 소요일을 가른다 — LIGHT는 화이트·베이지 계열로 오염이 그대로
+ * 보여 하루 더 잡는다(현업 확정 2026-08-01). 숄카라·스트라이프는 바탕색으로 판단하고,
+ * 그레이·카키·하운투스는 블랙 타입으로 둔다. 소요일 자체는 rental_return_policies에 있다.
+ */
+const RENTAL_COLORS: Array<{ code: string; name: string; componentTypes: string[]; tone?: 'LIGHT' }> = [
   { code: 'BLACK', name: '블랙', componentTypes: SUIT_3PC },
   { code: 'CHARCOAL', name: '챠콜', componentTypes: SUIT_3PC },
   { code: 'NAVY', name: '네이비', componentTypes: SUIT_2PC },
   { code: 'GREY', name: '그레이', componentTypes: SUIT_3PC },
   { code: 'BROWN', name: '부라운', componentTypes: SUIT_3PC },
-  { code: 'BEIGE', name: '베이지', componentTypes: SUIT_3PC },
+  { code: 'BEIGE', name: '베이지', componentTypes: SUIT_3PC, tone: 'LIGHT' },
   { code: 'KHAKI', name: '카키', componentTypes: SUIT_2PC },
-  { code: 'WHITE', name: '화이트', componentTypes: SUIT_3PC },
-  { code: 'WHITE_SHAWL', name: '화이트 숄카라', componentTypes: JACKET_ONLY },
+  { code: 'WHITE', name: '화이트', componentTypes: SUIT_3PC, tone: 'LIGHT' },
+  { code: 'WHITE_SHAWL', name: '화이트 숄카라', componentTypes: JACKET_ONLY, tone: 'LIGHT' },
   { code: 'VELVET', name: '벨벳', componentTypes: JACKET_ONLY },
-  { code: 'BEIGE_STRIPE', name: '베이지 스트라이프', componentTypes: JACKET_ONLY },
+  { code: 'BEIGE_STRIPE', name: '베이지 스트라이프', componentTypes: JACKET_ONLY, tone: 'LIGHT' },
   { code: 'HOUNDSTOOTH', name: '하운투스', componentTypes: JACKET_ONLY },
   // 셔츠·구두 전용 색
-  { code: 'SHIRT_WHITE', name: '흰색', componentTypes: ['SHIRT'] },
+  { code: 'SHIRT_WHITE', name: '흰색', componentTypes: ['SHIRT'], tone: 'LIGHT' },
   { code: 'SHOE_BLACK', name: '검정', componentTypes: ['SHOES'] },
   { code: 'SHOE_BROWN', name: '브라운', componentTypes: ['SHOES'] },
 ];
+
+/** 반납 후 정비 기준 — 한 행만 둔다. id는 백엔드 RENTAL_RETURN_POLICY_ID와 같아야 한다. */
+const RENTAL_RETURN_POLICY = {
+  id: '00000000-0000-4000-8000-00000000c1ea',
+  lightCleaningDays: 2,
+  darkCleaningDays: 1,
+  autoRelease: true,
+};
 
 /*
  * 사이즈는 품목마다 체계가 다르다. 한 목록을 공유하면 상의 등록 화면에 구두 사이즈가 뜬다.
@@ -357,7 +370,13 @@ const CODE_PREFIX: Record<string, string> = {
 async function seedRentalColors(): Promise<void> {
   for (let i = 0; i < RENTAL_COLORS.length; i += 1) {
     const c = RENTAL_COLORS[i];
-    const data = { name: c.name, componentTypes: c.componentTypes, sortOrder: i + 1, active: true };
+    const data = {
+      name: c.name,
+      componentTypes: c.componentTypes,
+      tone: c.tone ?? 'DARK',
+      sortOrder: i + 1,
+      active: true,
+    };
     await prisma.rentalColor.upsert({
       where: { code: c.code },
       update: data,
@@ -371,6 +390,15 @@ async function seedRentalColors(): Promise<void> {
     data: { active: false },
   });
   console.log(`rental_colors: ${RENTAL_COLORS.length}건 (예전 색 ${deactivated.count}건 비활성)`);
+}
+
+/** 정비 기준은 관리자가 화면에서 바꾸는 값이라, 이미 있으면 덮지 않는다. */
+async function seedRentalReturnPolicy(): Promise<void> {
+  const { id, ...defaults } = RENTAL_RETURN_POLICY;
+  await prisma.rentalReturnPolicy.upsert({ where: { id }, update: {}, create: { id, ...defaults } });
+  console.log(
+    `rental_return_policies: 밝은색 ${defaults.lightCleaningDays}일 / 블랙 타입 ${defaults.darkCleaningDays}일`,
+  );
 }
 
 async function seedRentalSizes(): Promise<void> {
@@ -533,6 +561,7 @@ async function main(): Promise<void> {
   await seedAppointmentPurposes();
   await seedRentalColors();
   await seedRentalSizes();
+  await seedRentalReturnPolicy();
   await seedRentalInventory();
   await seedOptionSets();
   await seedContractTypes();

@@ -15,6 +15,7 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import { createHash, randomUUID } from 'crypto';
 import { mkdirSync, writeFileSync } from 'fs';
 import { dirname, join, resolve } from 'path';
+import { repairItemRow } from './repair-item-seed';
 
 const prisma = new PrismaClient();
 
@@ -1168,7 +1169,7 @@ async function main(): Promise<void> {
             orderId: args.orderId ?? null,
             orderItemId: args.orderItemId ?? null,
             items: args.targetProduct
-              ? { create: { id: uuid(), targetProduct: args.targetProduct, quantity: args.quantity ?? 1, sequenceNo: 1 } }
+              ? { create: repairItemRow(args.targetProduct, args.quantity ?? 1, args.status, args.requestDate) }
               : undefined,
             repairType: args.repairType,
             requestDate: args.requestDate,

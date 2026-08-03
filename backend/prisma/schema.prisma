@@ -1013,9 +1013,12 @@ model RentalInventoryStatusEvent {
 /// 렌탈 컬러. componentTypes = 이 색이 존재하는 품목 목록(예: 3피스는 상의·하의·베스트).
 /// 비어 있으면 전 품목 공통으로 본다.
 model RentalColor {
-  id             String   @id @db.Uuid
-  code           String   @unique @map("code") @db.VarChar(30)
-  name           String   @map("name") @db.VarChar(100)
+  id   String @id @db.Uuid
+  code String @unique @map("code") @db.VarChar(30)
+  name String @map("name") @db.VarChar(100)
+  /// 반납 후 정비(세탁) 소요일을 가르는 색 계열. LIGHT=화이트·베이지 계열, DARK=그 외.
+  /// 소요일 자체는 rental_return_policies에 있다 — 여기서는 어느 쪽인지만 정한다.
+  tone           String   @default("DARK") @map("tone") @db.VarChar(10)
   componentTypes String[] @map("component_types")
   sortOrder      Int      @default(0) @map("sort_order")
   active         Boolean  @default(true) @map("active")
@@ -1023,6 +1026,23 @@ model RentalColor {
   updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@map("rental_colors")
+}
+
+/// 렌탈 반납 후 정비 기준 (ADMIN-001 "렌탈 정비 기준"). 항상 한 행만 둔다 —
+/// 매장이 하나뿐이라 기준도 하나다. id는 SINGLETON_POLICY_ID 고정값.
+model RentalReturnPolicy {
+  id String @id @db.Uuid
+  /// 밝은색(tone=LIGHT) 정비 소요일 — 세탁 확인이 필요해 기본 2일
+  lightCleaningDays Int @default(2) @map("light_cleaning_days")
+  /// 블랙 타입(tone=DARK) 정비 소요일 — 기본 1일
+  darkCleaningDays Int @default(1) @map("dark_cleaning_days")
+  /// 정비일이 도래한 반납 대기 실물을 자동으로 대여 가능으로 올릴지
+  autoRelease Boolean  @default(true) @map("auto_release")
+  updatedBy   String?  @map("updated_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("rental_return_policies")
 }
 
 /// 렌탈 사이즈 기준정보 (ADMIN-001, type=rental-sizes).
@@ -1144,30 +1164,63 @@ model RepairRequest {
  * 계약에 등록된 주문 품목과 무관하게 자유 선택한다.
  */
 model RepairRequestItem {
-  id              String @id @db.Uuid
-  repairRequestId String @map("repair_request_id") @db.Uuid
-  targetProduct   String @map("target_product") @db.VarChar(30)
-  quantity        Int    @default(1) @map("quantity")
-  sequenceNo      Int    @map("sequence_no")
+  id              String    @id @db.Uuid
+  repairRequestId String    @map("repair_request_id") @db.Uuid
+  targetProduct   String    @map("target_product") @db.VarChar(30)
+  quantity        Int       @default(1) @map("quantity")
+  sequenceNo      Int       @map("sequence_no")
+  /// 수선요청(수선집에 보냄)을 끝낸 시점. null이면 아직 요청 전 — 요청은 줄 단위로 한 번 누른다.
+  requestedAt     DateTime? @map("requested_at") @db.Date
 
-  repairRequest RepairRequest @relation(fields: [repairRequestId], references: [id], onDelete: Cascade)
+  repairRequest RepairRequest           @relation(fields: [repairRequestId], references: [id], onDelete: Cascade)
+  units         RepairRequestItemUnit[]
+  statusEvents  RepairStatusEvent[]
 
   @@index([repairRequestId, sequenceNo])
   @@map("repair_request_items")
 }
 
-model RepairStatusEvent {
-  id              String   @id @db.Uuid
-  repairRequestId String   @map("repair_request_id") @db.Uuid
-  previousStatus  String?  @map("previous_status") @db.VarChar(25)
-  newStatus       String   @map("new_status") @db.VarChar(25)
-  eventDate       DateTime @map("event_date") @db.Date
-  notes           String?  @map("notes")
-  actorId         String   @map("actor_id") @db.Uuid
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+/**
+ * 입고·출고를 세는 최소 단위. 접수 줄의 수량만큼 생성한다(상의 2 → #1·#2).
+ * 같은 품목이라도 수선집에서 따로 나오고 고객이 따로 찾아가므로 개별로 센다.
+ * 수선요청은 줄 단위라 여기 없다 — 상태는 대기(PENDING)→입고(RETURNED)→출고(RELEASED) 한 줄이다.
+ */
+model RepairRequestItemUnit {
+  id                  String @id @db.Uuid
+  repairRequestItemId String @map("repair_request_item_id") @db.Uuid
+  /// 줄 안에서의 번호 (1..quantity) — 화면 표시가 흔들리지 않게 굳혀 둔다.
+  unitNo              Int    @map("unit_no")
+  status              String @default("PENDING") @map("status") @db.VarChar(20)
 
-  repairRequest RepairRequest @relation(fields: [repairRequestId], references: [id])
-  actor         User          @relation("RepairStatusEventActor", fields: [actorId], references: [id])
+  item         RepairRequestItem   @relation(fields: [repairRequestItemId], references: [id], onDelete: Cascade)
+  statusEvents RepairStatusEvent[]
+
+  @@unique([repairRequestItemId, unitNo])
+  @@map("repair_request_item_units")
+}
+
+/**
+ * 수선 진행 이력. 건 단위 전이(접수·고객 연락·롤업 결과)는 item/unit이 모두 null이고,
+ * 줄 단위(수선요청)는 itemId, 유닛 단위(입고·출고)는 unitId가 채워진다.
+ */
+model RepairStatusEvent {
+  id                      String   @id @db.Uuid
+  repairRequestId         String   @map("repair_request_id") @db.Uuid
+  /// 줄 단위 이벤트(수선요청)면 그 줄
+  repairRequestItemId     String?  @map("repair_request_item_id") @db.Uuid
+  /// 유닛 단위 이벤트(입고·출고)면 그 유닛
+  repairRequestItemUnitId String?  @map("repair_request_item_unit_id") @db.Uuid
+  previousStatus          String?  @map("previous_status") @db.VarChar(25)
+  newStatus               String   @map("new_status") @db.VarChar(25)
+  eventDate               DateTime @map("event_date") @db.Date
+  notes                   String?  @map("notes")
+  actorId                 String   @map("actor_id") @db.Uuid
+  createdAt               DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  repairRequest RepairRequest          @relation(fields: [repairRequestId], references: [id])
+  item          RepairRequestItem?     @relation(fields: [repairRequestItemId], references: [id], onDelete: Cascade)
+  unit          RepairRequestItemUnit? @relation(fields: [repairRequestItemUnitId], references: [id], onDelete: Cascade)
+  actor         User                   @relation("RepairStatusEventActor", fields: [actorId], references: [id])
 
   @@index([repairRequestId, eventDate])
   @@map("repair_status_events")

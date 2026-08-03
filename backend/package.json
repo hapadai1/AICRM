@@ -19,7 +19,8 @@
     "seed:option-demo": "ts-node prisma/seed-option-surcharge-demo.ts",
     "seed:shoes-custom": "ts-node prisma/seed-shoes-custom-demo.ts",
     "seed:stages": "ts-node prisma/seed-stage-matrix.ts",
-    "seed:all": "npm run prisma:seed && npm run seed:demo && npm run seed:more && npm run seed:journeys && npm run seed:suit-design && npm run seed:shirt-design && npm run seed:shoes-design && npm run seed:option-demo && npm run seed:shoes-custom && npm run seed:stages",
+    "seed:measurements": "ts-node prisma/seed-measurement-records.ts",
+    "seed:all": "npm run prisma:seed && npm run seed:demo && npm run seed:more && npm run seed:journeys && npm run seed:suit-design && npm run seed:shirt-design && npm run seed:shoes-design && npm run seed:option-demo && npm run seed:shoes-custom && npm run seed:stages && npm run seed:measurements",
     "test": "jest --config jest.config.js"
   },
   "prisma": {
@@ -32,6 +33,7 @@
     "@nestjs/jwt": "^10.2.0",
     "@nestjs/passport": "^10.0.3",
     "@nestjs/platform-express": "^10.4.15",
+    "@nestjs/schedule": "^4.1.2",
     "@prisma/client": "^6.7.0",
     "bcryptjs": "^2.4.3",
     "class-transformer": "^0.5.1",
