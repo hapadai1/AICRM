@@ -33,6 +33,22 @@ export const ACTIVE_ALLOCATION_STATUSES = ['RESERVED', 'CHECKED_OUT'];
 /** 반납 처리 시 실물이 가질 수 있는 다음 상태 (RENT-004) */
 export const RETURN_NEXT_ITEM_STATUSES = ['RETURNED_HOLD', 'ALTERATION', 'UNAVAILABLE', 'AVAILABLE'];
 
+/**
+ * 색 계열 — 반납 후 정비(세탁) 소요일을 가르는 축.
+ * LIGHT = 화이트·베이지 계열(오염이 보여 세탁 확인 필요), DARK = 그 외.
+ */
+export const RENTAL_COLOR_TONES = ['LIGHT', 'DARK'];
+
+/** 정비 기준은 항상 한 행이다 — 이 id로만 읽고 쓴다 (마이그레이션이 심는 값과 같아야 한다). */
+export const RENTAL_RETURN_POLICY_ID = '00000000-0000-4000-8000-00000000c1ea';
+
+/** 정책 행이 아직 없을 때 쓰는 기본값 (현업 확정 2026-08-01: 밝은색 2일, 블랙 타입 1일) */
+export const DEFAULT_RETURN_POLICY = {
+  lightCleaningDays: 2,
+  darkCleaningDays: 1,
+  autoRelease: true,
+} as const;
+
 /** 배정 이벤트 타입 (데이터모델설계서 11.4) */
 export const ALLOCATION_EVENT_TYPES = {
   ASSIGNED: 'ASSIGNED',
@@ -52,6 +68,18 @@ export function parseDateOnly(value: string): Date {
 /** Date → 'YYYY-MM-DD' */
 export function toDateOnlyString(value: Date): string {
   return value.toISOString().slice(0, 10);
+}
+
+/** 'YYYY-MM-DD' + n일 → 'YYYY-MM-DD'. 날짜 컬럼이 UTC 자정이라 시간대 보정이 필요 없다. */
+export function addDaysToDateOnly(value: string, days: number): string {
+  const date = parseDateOnly(value);
+  date.setUTCDate(date.getUTCDate() + days);
+  return toDateOnlyString(date);
+}
+
+/** 오늘 'YYYY-MM-DD' */
+export function todayDateOnly(): string {
+  return toDateOnlyString(new Date());
 }
 
 /**

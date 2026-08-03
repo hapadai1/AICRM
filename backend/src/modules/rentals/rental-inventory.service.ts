@@ -46,6 +46,12 @@ interface SkuSummaryRow {
   checkedOut: number;
   /** 세탁·수선 등으로 오늘 못 쓰는 수 */
   hold: number;
+  /**
+   * 대기 중인 것 가운데 가장 이른 대여 가능 예정일. 정비가 끝나기를 기다리는 것뿐이라면
+   * "언제부터 쓸 수 있는가"가 곧 답이다 — 날짜를 안 보여 주면 대기 수량만 보고
+   * 다른 색을 권하게 된다. 수선·사용중지처럼 기한이 없는 대기는 여기 잡히지 않는다.
+   */
+  holdUntil: string | null;
 }
 
 /**
@@ -188,15 +194,30 @@ export class RentalInventoryService {
       const key = `${componentType}|${color}|${size}`;
       const row =
         rows.get(key) ??
-        { componentType, color, size, total: 0, available: 0, reserved: 0, checkedOut: 0, hold: 0 };
+        {
+          componentType,
+          color,
+          size,
+          total: 0,
+          available: 0,
+          reserved: 0,
+          checkedOut: 0,
+          hold: 0,
+          holdUntil: null,
+        };
       row.total += 1;
       const occupying = item.allocations;
+      const waitingUntil = item.availableFrom && item.availableFrom > today ? item.availableFrom : null;
       if (occupying.some((a) => a.status === 'CHECKED_OUT')) row.checkedOut += 1;
       else if (occupying.length > 0) row.reserved += 1;
       // 세탁·수선·사용중지, 그리고 "이 날짜부터 다시 가용"이 아직 안 온 것은 지금 못 쓴다.
-      else if (HOLD_ITEM_STATUSES.includes(item.status)) row.hold += 1;
-      else if (item.availableFrom && item.availableFrom > today) row.hold += 1;
-      else row.available += 1;
+      else if (HOLD_ITEM_STATUSES.includes(item.status) || waitingUntil) {
+        row.hold += 1;
+        if (waitingUntil) {
+          const until = toDateOnlyString(waitingUntil);
+          if (!row.holdUntil || until < row.holdUntil) row.holdUntil = until;
+        }
+      } else row.available += 1;
       rows.set(key, row);
     }
 

@@ -136,6 +136,8 @@ interface WorkOrderPreviewApi {
   option: OptionSnapshotApi;
   measurement: MeasurementSnapshotApi | null;
   measurementCandidates: MeasurementCandidateApi[];
+  measurementAutoSelected?: boolean;
+  canChangeMeasurement?: boolean;
   currentVersionNo: number | null;
   currentVersionId: string | null;
   lastIssuedAt: string | null;
@@ -244,6 +246,10 @@ export interface WorkOrderPreview {
   optionStages: WorkOrderOptionStage[];
   measurement?: WorkOrderPreviewMeasurement;
   measurementCandidates: WorkOrderMeasurementCandidate[];
+  /** 연결이 없어 최신 완료 채촌을 자동으로 고른 상태 — 출력 시 이 채촌으로 확정된다 */
+  measurementAutoSelected: boolean;
+  /** 작업요청 전이라 채촌을 아직 바꿀 수 있는지 (현업 확정 2026-08-03) */
+  canChangeMeasurement: boolean;
   /** 정식 Excel 출력 가능 여부 (옵션 확정 + 채촌 완료) — 백엔드 판정 */
   optionConfirmed: boolean;
   measurementCompleted: boolean;
@@ -363,6 +369,8 @@ function toPreview(raw: WorkOrderPreviewApi): WorkOrderPreview {
       ...c,
       measurementDate: toDateOnly(c.measurementDate) ?? '',
     })),
+    measurementAutoSelected: raw.measurementAutoSelected ?? false,
+    canChangeMeasurement: raw.canChangeMeasurement ?? false,
     optionConfirmed: raw.optionConfirmed ?? false,
     measurementCompleted: raw.measurementCompleted ?? false,
     printable: raw.printable ?? false,

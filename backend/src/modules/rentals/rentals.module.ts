@@ -3,6 +3,9 @@ import { RentalAllocationsController } from './rental-allocations.controller';
 import { RentalAllocationsService } from './rental-allocations.service';
 import { RentalInventoryController } from './rental-inventory.controller';
 import { RentalInventoryService } from './rental-inventory.service';
+import { RentalPolicyController } from './rental-policy.controller';
+import { RentalPolicyService } from './rental-policy.service';
+import { RentalReleaseScheduler } from './rental-release.scheduler';
 import { RentalSelectionController } from './rental-selection.controller';
 import { RentalSelectionService } from './rental-selection.service';
 
@@ -12,7 +15,14 @@ import { RentalSelectionService } from './rental-selection.service';
     RentalInventoryController,
     RentalAllocationsController,
     RentalSelectionController,
+    RentalPolicyController,
   ],
-  providers: [RentalInventoryService, RentalAllocationsService, RentalSelectionService],
+  providers: [
+    RentalInventoryService,
+    RentalAllocationsService,
+    RentalSelectionService,
+    RentalPolicyService,
+    RentalReleaseScheduler,
+  ],
 })
 export class RentalsModule {}

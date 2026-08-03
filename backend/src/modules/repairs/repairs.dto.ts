@@ -72,7 +72,7 @@ export class CreateRepairDto extends RepairMethodDto {
   @IsOptional() @IsDateString() dueDate?: string;
   @IsString() @IsNotEmpty() description: string;
   @IsOptional() @IsString() notes?: string;
-  /** 대상 품목·개수. CUSTOM_DURING / AFTER_SALE 은 1줄 이상 필수 (service.assertItems) */
+  /** 대상 품목·개수. 유형과 무관하게 1줄 이상 필수 (service.assertItems) */
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(20)
@@ -98,4 +98,10 @@ export class CreateRepairStatusEventDto {
   @IsString() @IsNotEmpty() newStatus: string;
   @IsOptional() @IsDateString() eventDate?: string;
   @IsOptional() @IsString() notes?: string;
+}
+
+/** 품목 줄·벌 진행(수선요청·입고·출고) 공통 입력 — 날짜를 안 주면 오늘로 찍는다. */
+export class RepairProgressDto {
+  @IsOptional() @IsDateString() eventDate?: string;
+  @IsOptional() @IsString() @MaxLength(300) notes?: string;
 }

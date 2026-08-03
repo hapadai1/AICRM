@@ -21,6 +21,20 @@ async function seedRepairCustomer(prisma: PrismaService) {
   return { admin, customer };
 }
 
+interface RepairUnitBody {
+  id: string;
+  unitNo: number;
+  status: string;
+}
+interface RepairItemBody {
+  id: string;
+  targetProduct: string;
+  quantity: number;
+  sequenceNo: number;
+  requestedAt: string | null;
+  units: RepairUnitBody[];
+}
+
 describe('수선 (RepairsModule)', () => {
   let ctx: TestContext;
 
@@ -33,14 +47,56 @@ describe('수선 (RepairsModule)', () => {
     await ctx.app.close();
   });
 
-  /** 상태 흐름·연락 제안 테스트가 공유하는 일반 수선 1건 생성 */
-  async function createGeneralRepair(customerId: string): Promise<string> {
+  /** 상태 흐름·연락 제안 테스트가 공유하는 일반 수선 1건 생성 (대상 품목은 모든 유형에서 필수다) */
+  async function createGeneralRepair(
+    customerId: string,
+    items: { targetProduct: string; quantity: number }[] = [{ targetProduct: 'JACKET', quantity: 1 }],
+  ): Promise<string> {
     const res = await api(ctx)
       .post('/api/v1/repairs')
       .set(auth(ctx))
-      .send({ customerId, repairType: 'GENERAL', requestDate: '2026-07-21', description: '수선 흐름 테스트' })
+      .send({
+        customerId,
+        repairType: 'GENERAL',
+        requestDate: '2026-07-21',
+        description: '수선 흐름 테스트',
+        items,
+      })
       .expect(201);
     return res.body.data.id;
+  }
+
+  async function detailOf(repairId: string) {
+    const res = await api(ctx).get(`/api/v1/repairs/${repairId}`).set(auth(ctx)).expect(200);
+    return res.body.data as {
+      status: string;
+      items: RepairItemBody[];
+      statusEvents: {
+        newStatus: string;
+        notes: string | null;
+        repairRequestItemId: string | null;
+        repairRequestItemUnitId: string | null;
+      }[];
+    };
+  }
+
+  /** 줄 수선요청 → 그 줄의 벌을 전부 입고 (부분 진행을 만들 때는 직접 호출한다) */
+  async function requestAndReturnAll(repairId: string) {
+    const detail = await detailOf(repairId);
+    for (const item of detail.items) {
+      await api(ctx)
+        .post(`/api/v1/repairs/${repairId}/items/${item.id}/request`)
+        .set(auth(ctx))
+        .send({})
+        .expect(201);
+      for (const unit of item.units) {
+        await api(ctx)
+          .post(`/api/v1/repairs/${repairId}/units/${unit.id}/return`)
+          .set(auth(ctx))
+          .send({})
+          .expect(201);
+      }
+    }
   }
 
   // 수선구분 코드 집합의 단일 출처는 기준정보 상수(admin-master/code-labels.constants)다.
@@ -60,33 +116,32 @@ describe('수선 (RepairsModule)', () => {
         repairType: 'NOT_A_REPAIR_TYPE',
         requestDate: '2026-07-21',
         description: '허용되지 않는 유형',
+        items: [{ targetProduct: 'JACKET', quantity: 1 }],
       })
       .expect(400);
     expect(rejected.body.error.code).toBe('VALIDATION_ERROR');
   });
 
   describe('수선 접수 — 대상 품목 검증', () => {
-    it('CUSTOM 수선은 대상 품목 없이는 접수할 수 없다', async () => {
+    // 진행(수선요청·입고·출고)이 품목 위에서 돌아가므로 품목 없는 건은 누를 것이 없다.
+    it.each([...REPAIR_TYPES])('%s 수선은 대상 품목 없이는 접수할 수 없다', async (repairType) => {
       const { customer } = await seedRepairCustomer(ctx.prisma);
       const res = await api(ctx)
         .post('/api/v1/repairs')
         .set(auth(ctx))
         .send({
           customerId: customer.id,
-          repairType: 'CUSTOM_DURING',
+          repairType,
           requestDate: '2026-07-21',
           description: '소매 수선',
         })
         .expect(400);
       expect(res.body.error.code).toBe('VALIDATION_ERROR');
-      expect(res.body.error.fieldErrors?.[0]).toMatchObject({
-        field: 'items',
-        reason: 'REQUIRED_FOR_CUSTOM',
-      });
+      expect(res.body.error.fieldErrors?.[0]).toMatchObject({ field: 'items', reason: 'REQUIRED' });
     });
 
     // 계약에 등록된 주문 품목을 찾아 연결하던 방식은 폐기됐다 — 품목만 자유롭게 고른다.
-    it('대상 품목은 계약 이력과 무관하게 구성품 코드에서 고른다', async () => {
+    it('대상 품목은 계약 이력과 무관하게 구성품 코드에서 고르고, 수량만큼 벌이 생긴다', async () => {
       const { customer } = await seedRepairCustomer(ctx.prisma);
       const res = await api(ctx)
         .post('/api/v1/repairs')
@@ -109,6 +164,12 @@ describe('수선 (RepairsModule)', () => {
         expect.objectContaining({ targetProduct: 'JACKET', quantity: 1, sequenceNo: 1 }),
         expect.objectContaining({ targetProduct: 'TROUSERS', quantity: 2, sequenceNo: 2 }),
       ]);
+      // 입고·출고는 벌 단위다 — 하의 2벌은 #1·#2로 따로 센다.
+      const items = res.body.data.items as RepairItemBody[];
+      expect(items.map((i) => i.units.length)).toEqual([1, 2]);
+      expect(items[1].units.map((u) => u.unitNo)).toEqual([1, 2]);
+      expect(items.every((i) => i.requestedAt === null)).toBe(true);
+      expect(items.flatMap((i) => i.units).every((u) => u.status === 'PENDING')).toBe(true);
       // 주문 품목·구성품 연결은 더 이상 만들지 않는다.
       expect(res.body.data.orderItem).toBeNull();
       expect(res.body.data.component).toBeNull();
@@ -144,27 +205,10 @@ describe('수선 (RepairsModule)', () => {
           repairType,
           requestDate: '2026-07-21',
           description: '단추 교체',
+          items: [{ targetProduct: 'JACKET', quantity: 1 }],
         })
         .expect(400);
       expect(res.body.error.code).toBe('VALIDATION_ERROR');
-    });
-
-    it('GENERAL 수선은 대상 품목 없이 접수된다', async () => {
-      const { customer } = await seedRepairCustomer(ctx.prisma);
-      const ok = await api(ctx)
-        .post('/api/v1/repairs')
-        .set(auth(ctx))
-        .send({
-          customerId: customer.id,
-          repairType: 'GENERAL',
-          requestDate: '2026-07-21',
-          description: '외부 구입 자켓 소매 수선',
-        })
-        .expect(201);
-      expect(ok.body.data.customer.id).toBe(customer.id);
-      expect(ok.body.data.orderItem).toBeNull();
-      // 수선 응답에는 렌탈 실물 연결 자체가 없다 (렌탈 수선은 렌탈 진행에서 관리)
-      expect(ok.body.data.rentalInventoryItem).toBeUndefined();
     });
 
     it('GENERAL 수선은 대상 설명(description)이 필수다', async () => {
@@ -172,7 +216,12 @@ describe('수선 (RepairsModule)', () => {
       const res = await api(ctx)
         .post('/api/v1/repairs')
         .set(auth(ctx))
-        .send({ customerId: customer.id, repairType: 'GENERAL', requestDate: '2026-07-21' })
+        .send({
+          customerId: customer.id,
+          repairType: 'GENERAL',
+          requestDate: '2026-07-21',
+          items: [{ targetProduct: 'JACKET', quantity: 1 }],
+        })
         .expect(400);
       expect(res.body.error.code).toBe('VALIDATION_ERROR');
     });
@@ -220,116 +269,236 @@ describe('수선 (RepairsModule)', () => {
     });
   });
 
-  describe('수선 상태 흐름', () => {
-
-    it('접수→요청→진행→입고→연락→출고 순서로만 진행된다', async () => {
+  /**
+   * 품목별 진행 (현업 확정 2026-08-01).
+   * 수선요청은 접수 줄 단위, 입고·출고는 벌 단위이고 건 상태는 그 진행에서 계산된다.
+   */
+  describe('품목별 진행', () => {
+    it('수선요청 전에는 입고할 수 없다', async () => {
       const { customer } = await seedRepairCustomer(ctx.prisma);
       const repairId = await createGeneralRepair(customer.id);
+      const detail = await detailOf(repairId);
 
-      // 단계 건너뛰기 차단
-      const skip = await api(ctx)
+      const res = await api(ctx)
+        .post(`/api/v1/repairs/${repairId}/units/${detail.items[0].units[0].id}/return`)
+        .set(auth(ctx))
+        .send({})
+        .expect(409);
+      expect(res.body.error.code).toBe('INVALID_STATUS_TRANSITION');
+    });
+
+    it('모든 줄을 요청해야 건이 수선 요청으로 넘어간다', async () => {
+      const { customer } = await seedRepairCustomer(ctx.prisma);
+      const repairId = await createGeneralRepair(customer.id, [
+        { targetProduct: 'JACKET', quantity: 1 },
+        { targetProduct: 'TROUSERS', quantity: 1 },
+      ]);
+      const detail = await detailOf(repairId);
+
+      await api(ctx)
+        .post(`/api/v1/repairs/${repairId}/items/${detail.items[0].id}/request`)
+        .set(auth(ctx))
+        .send({})
+        .expect(201);
+      expect((await detailOf(repairId)).status).toBe('RECEIVED');
+
+      await api(ctx)
+        .post(`/api/v1/repairs/${repairId}/items/${detail.items[1].id}/request`)
+        .set(auth(ctx))
+        .send({})
+        .expect(201);
+      expect((await detailOf(repairId)).status).toBe('REQUESTED');
+    });
+
+    it('전 벌 입고로 수선 입고가 되고, 전 벌 출고로 출고 완료가 된다', async () => {
+      const { customer } = await seedRepairCustomer(ctx.prisma);
+      // 상의 2벌 — 한 벌만 입고된 중간 상태를 확인하기 위해 수량을 나눈다.
+      const repairId = await createGeneralRepair(customer.id, [
+        { targetProduct: 'JACKET', quantity: 2 },
+      ]);
+      const before = await detailOf(repairId);
+      const [item] = before.items;
+
+      await api(ctx)
+        .post(`/api/v1/repairs/${repairId}/items/${item.id}/request`)
+        .set(auth(ctx))
+        .send({})
+        .expect(201);
+      await api(ctx)
+        .post(`/api/v1/repairs/${repairId}/units/${item.units[0].id}/return`)
+        .set(auth(ctx))
+        .send({})
+        .expect(201);
+      // 한 벌은 아직 수선집에 있다 — 건은 수선 요청에 머문다.
+      expect((await detailOf(repairId)).status).toBe('REQUESTED');
+
+      // 입고된 벌은 연락 전이라도 먼저 내줄 수 있다(부분 출고).
+      await api(ctx)
+        .post(`/api/v1/repairs/${repairId}/units/${item.units[0].id}/release`)
+        .set(auth(ctx))
+        .send({})
+        .expect(201);
+      expect((await detailOf(repairId)).status).toBe('REQUESTED');
+
+      await api(ctx)
+        .post(`/api/v1/repairs/${repairId}/units/${item.units[1].id}/return`)
+        .set(auth(ctx))
+        .send({})
+        .expect(201);
+      expect((await detailOf(repairId)).status).toBe('RETURNED_TO_SHOP');
+
+      await api(ctx)
+        .post(`/api/v1/repairs/${repairId}/units/${item.units[1].id}/release`)
+        .set(auth(ctx))
+        .send({})
+        .expect(201);
+      const done = await detailOf(repairId);
+      expect(done.status).toBe('RELEASED');
+      // 연락 없이 전량 출고되면 건너뛴 단계를 자동으로 채워 순서를 지킨다.
+      expect(
+        done.statusEvents.find((e) => e.newStatus === 'CUSTOMER_NOTIFIED')?.notes,
+      ).toBe('연락 전 출고로 자동 정리');
+    });
+
+    it('벌 진행을 한 칸 되돌리면 건 상태도 따라 내려온다', async () => {
+      const { customer } = await seedRepairCustomer(ctx.prisma);
+      const repairId = await createGeneralRepair(customer.id);
+      await requestAndReturnAll(repairId);
+      expect((await detailOf(repairId)).status).toBe('RETURNED_TO_SHOP');
+
+      const detail = await detailOf(repairId);
+      const unitId = detail.items[0].units[0].id;
+      await api(ctx)
+        .delete(`/api/v1/repairs/${repairId}/units/${unitId}/status`)
+        .set(auth(ctx))
+        .expect(200);
+      const back = await detailOf(repairId);
+      expect(back.status).toBe('REQUESTED');
+      expect(back.items[0].units[0].status).toBe('PENDING');
+    });
+
+    it('입고된 벌이 있으면 그 줄의 수선요청은 되돌릴 수 없다', async () => {
+      const { customer } = await seedRepairCustomer(ctx.prisma);
+      const repairId = await createGeneralRepair(customer.id);
+      await requestAndReturnAll(repairId);
+
+      const detail = await detailOf(repairId);
+      const res = await api(ctx)
+        .delete(`/api/v1/repairs/${repairId}/items/${detail.items[0].id}/request`)
+        .set(auth(ctx))
+        .expect(409);
+      expect(res.body.error.code).toBe('INVALID_STATUS_TRANSITION');
+    });
+
+    it('한 번 연락한 건은 출고를 되돌려도 고객 연락에 머문다', async () => {
+      const { customer } = await seedRepairCustomer(ctx.prisma);
+      const repairId = await createGeneralRepair(customer.id);
+      await requestAndReturnAll(repairId);
+      await api(ctx)
+        .post(`/api/v1/repairs/${repairId}/status-events`)
+        .set(auth(ctx))
+        .send({ newStatus: 'CUSTOMER_NOTIFIED' })
+        .expect(201);
+
+      const detail = await detailOf(repairId);
+      const unitId = detail.items[0].units[0].id;
+      await api(ctx)
+        .post(`/api/v1/repairs/${repairId}/units/${unitId}/release`)
+        .set(auth(ctx))
+        .send({})
+        .expect(201);
+      expect((await detailOf(repairId)).status).toBe('RELEASED');
+
+      await api(ctx)
+        .delete(`/api/v1/repairs/${repairId}/units/${unitId}/status`)
+        .set(auth(ctx))
+        .expect(200);
+      // 연락은 이미 나간 사실이라 '수선 입고'로 내려가지 않는다(연락 버튼이 다시 뜨면 안 된다).
+      expect((await detailOf(repairId)).status).toBe('CUSTOMER_NOTIFIED');
+    });
+
+    it('진행 이력은 건·줄·벌을 구분해 남고 감사로그도 쌓인다', async () => {
+      const { customer } = await seedRepairCustomer(ctx.prisma);
+      const repairId = await createGeneralRepair(customer.id);
+      await requestAndReturnAll(repairId);
+
+      const detail = await detailOf(repairId);
+      const scopes = detail.statusEvents.map((e) =>
+        e.repairRequestItemUnitId ? 'unit' : e.repairRequestItemId ? 'item' : 'repair',
+      );
+      // 접수(건) · 수선요청(줄) · 롤업(건) · 입고(벌) · 롤업(건)
+      expect(scopes).toEqual(['repair', 'item', 'repair', 'unit', 'repair']);
+
+      const logs = await ctx.prisma.auditLog.findMany({
+        where: { entityType: 'REPAIR_REQUEST', entityId: repairId, action: 'STATUS_CHANGE' },
+      });
+      expect(logs.length).toBe(2); // 수선 요청 · 수선 입고
+    });
+  });
+
+  describe('건 단위 상태 변경은 고객 연락만 허용한다', () => {
+    it.each(['REQUESTED', 'RELEASED'])('%s로 직접 전이할 수 없다', async (newStatus) => {
+      const { customer } = await seedRepairCustomer(ctx.prisma);
+      const repairId = await createGeneralRepair(customer.id);
+      const res = await api(ctx)
+        .post(`/api/v1/repairs/${repairId}/status-events`)
+        .set(auth(ctx))
+        .send({ newStatus })
+        .expect(400);
+      expect(res.body.error.code).toBe('VALIDATION_ERROR');
+      expect(res.body.error.fieldErrors?.[0]).toMatchObject({
+        field: 'newStatus',
+        reason: 'NOT_MANUAL',
+      });
+    });
+
+    it('수선 입고는 품목별 입고로만 정해진다 (연락 되돌리기 경로만 허용)', async () => {
+      const { customer } = await seedRepairCustomer(ctx.prisma);
+      const repairId = await createGeneralRepair(customer.id);
+      const res = await api(ctx)
         .post(`/api/v1/repairs/${repairId}/status-events`)
         .set(auth(ctx))
         .send({ newStatus: 'RETURNED_TO_SHOP' })
         .expect(409);
-      expect(skip.body.error.code).toBe('INVALID_STATUS_TRANSITION');
-
-      for (const status of ['REQUESTED', 'RETURNED_TO_SHOP', 'CUSTOMER_NOTIFIED', 'RELEASED']) {
-        const res = await api(ctx)
-          .post(`/api/v1/repairs/${repairId}/status-events`)
-          .set(auth(ctx))
-          .send({ newStatus: status, eventDate: '2026-07-22' })
-          .expect(201);
-        expect(res.body.data.newStatus).toBe(status);
-      }
-
-      // 출고 완료 후 추가 전이 불가
-      const after = await api(ctx)
-        .post(`/api/v1/repairs/${repairId}/status-events`)
-        .set(auth(ctx))
-        .send({ newStatus: 'REQUESTED' })
-        .expect(409);
-      expect(after.body.error.code).toBe('INVALID_STATUS_TRANSITION');
-
-      const detail = await api(ctx).get(`/api/v1/repairs/${repairId}`).set(auth(ctx)).expect(200);
-      expect(detail.body.data.status).toBe('RELEASED');
-      expect(detail.body.data.statusEvents.length).toBe(5); // 접수 + 4회 전이
+      expect(res.body.error.code).toBe('INVALID_STATUS_TRANSITION');
     });
 
-    it('바로 이전 단계로 되돌릴 수 있다', async () => {
+    it('취소(CANCELLED)로는 전이할 수 없다', async () => {
       const { customer } = await seedRepairCustomer(ctx.prisma);
       const repairId = await createGeneralRepair(customer.id);
-      await api(ctx)
-        .post(`/api/v1/repairs/${repairId}/status-events`)
-        .set(auth(ctx))
-        .send({ newStatus: 'REQUESTED' })
-        .expect(201);
-      // 수선 요청 → 접수로 한 단계 되돌리기
-      const back = await api(ctx)
-        .post(`/api/v1/repairs/${repairId}/status-events`)
-        .set(auth(ctx))
-        .send({ newStatus: 'RECEIVED', notes: '잘못 눌러 되돌림' })
-        .expect(201);
-      expect(back.body.data.newStatus).toBe('RECEIVED');
-      const detail = await api(ctx).get(`/api/v1/repairs/${repairId}`).set(auth(ctx)).expect(200);
-      expect(detail.body.data.status).toBe('RECEIVED');
-    });
-
-    it('두 단계 이상 되돌리거나 취소(CANCELLED)로 전이할 수 없다', async () => {
-      const { customer } = await seedRepairCustomer(ctx.prisma);
-      const repairId = await createGeneralRepair(customer.id);
-      for (const status of ['REQUESTED', 'RETURNED_TO_SHOP']) {
-        await api(ctx)
-          .post(`/api/v1/repairs/${repairId}/status-events`)
-          .set(auth(ctx))
-          .send({ newStatus: status })
-          .expect(201);
-      }
-      // 수선 입고 → 접수로 두 단계 되돌리기 차단
-      const jump = await api(ctx)
-        .post(`/api/v1/repairs/${repairId}/status-events`)
-        .set(auth(ctx))
-        .send({ newStatus: 'RECEIVED' })
-        .expect(409);
-      expect(jump.body.error.code).toBe('INVALID_STATUS_TRANSITION');
-
-      // 취소 전이는 더 이상 허용되지 않는다 (흐름 밖 코드)
-      const cancel = await api(ctx)
+      const res = await api(ctx)
         .post(`/api/v1/repairs/${repairId}/status-events`)
         .set(auth(ctx))
         .send({ newStatus: 'CANCELLED', notes: '고객 취소' })
         .expect(400);
-      expect(cancel.body.error.code).toBe('VALIDATION_ERROR');
+      expect(res.body.error.code).toBe('VALIDATION_ERROR');
     });
 
-    it('상태 변경 시 감사로그가 남는다', async () => {
+    it('전 벌 입고 후 고객 연락하고, 되돌릴 수 있다', async () => {
       const { customer } = await seedRepairCustomer(ctx.prisma);
       const repairId = await createGeneralRepair(customer.id);
+      await requestAndReturnAll(repairId);
+
       await api(ctx)
         .post(`/api/v1/repairs/${repairId}/status-events`)
         .set(auth(ctx))
-        .send({ newStatus: 'REQUESTED' })
+        .send({ newStatus: 'CUSTOMER_NOTIFIED' })
         .expect(201);
-      const logs = await ctx.prisma.auditLog.findMany({
-        where: { entityType: 'REPAIR_REQUEST', entityId: repairId, action: 'STATUS_CHANGE' },
-      });
-      expect(logs.length).toBe(1);
+      expect((await detailOf(repairId)).status).toBe('CUSTOMER_NOTIFIED');
+
+      await api(ctx)
+        .post(`/api/v1/repairs/${repairId}/status-events`)
+        .set(auth(ctx))
+        .send({ newStatus: 'RETURNED_TO_SHOP', notes: '잘못 눌러 되돌림' })
+        .expect(201);
+      expect((await detailOf(repairId)).status).toBe('RETURNED_TO_SHOP');
     });
   });
 
   describe('수선 목록·수정', () => {
     it('상태·고객 필터로 페이지네이션 목록을 조회한다', async () => {
       const { customer } = await seedRepairCustomer(ctx.prisma);
-      await api(ctx)
-        .post('/api/v1/repairs')
-        .set(auth(ctx))
-        .send({
-          customerId: customer.id,
-          repairType: 'GENERAL',
-          requestDate: '2026-07-21',
-          description: '외부 구입 자켓 얼룩 제거',
-        })
-        .expect(201);
+      await createGeneralRepair(customer.id);
 
       const res = await api(ctx)
         .get(`/api/v1/repairs?status=RECEIVED&customerId=${customer.id}&page=1&size=10`)
@@ -338,6 +507,8 @@ describe('수선 (RepairsModule)', () => {
       expect(res.body.page.totalElements).toBe(1);
       expect(res.body.data[0].customer.id).toBe(customer.id);
       expect(res.body.data[0].status).toBe('RECEIVED');
+      // 목록도 품목·벌을 함께 준다 — 화면이 목록에서 바로 진행 표를 그린다.
+      expect(res.body.data[0].items[0].units).toHaveLength(1);
 
       const none = await api(ctx)
         .get(`/api/v1/repairs?status=RELEASED&customerId=${customer.id}`)
@@ -349,13 +520,13 @@ describe('수선 (RepairsModule)', () => {
     it('excludeReleased=true면 출고완료 건은 목록에서 빠진다(상태 지정 시 예외)', async () => {
       const { customer } = await seedRepairCustomer(ctx.prisma);
       const repairId = await createGeneralRepair(customer.id);
-      for (const status of ['REQUESTED', 'RETURNED_TO_SHOP', 'CUSTOMER_NOTIFIED', 'RELEASED']) {
-        await api(ctx)
-          .post(`/api/v1/repairs/${repairId}/status-events`)
-          .set(auth(ctx))
-          .send({ newStatus: status })
-          .expect(201);
-      }
+      await requestAndReturnAll(repairId);
+      const detail = await detailOf(repairId);
+      await api(ctx)
+        .post(`/api/v1/repairs/${repairId}/units/${detail.items[0].units[0].id}/release`)
+        .set(auth(ctx))
+        .send({})
+        .expect(201);
 
       // 완료건 제외 — 목록에서 빠진다
       const excluded = await api(ctx)
@@ -376,20 +547,61 @@ describe('수선 (RepairsModule)', () => {
 
     it('PATCH로 완료예정일·내용을 수정한다', async () => {
       const { customer } = await seedRepairCustomer(ctx.prisma);
-      const created = await api(ctx)
-        .post('/api/v1/repairs')
-        .set(auth(ctx))
-        .send({ customerId: customer.id, repairType: 'GENERAL', requestDate: '2026-07-21', description: '수선' })
-        .expect(201);
+      const repairId = await createGeneralRepair(customer.id);
 
       const res = await api(ctx)
-        .patch(`/api/v1/repairs/${created.body.data.id}`)
+        .patch(`/api/v1/repairs/${repairId}`)
         .set(auth(ctx))
         .send({ dueDate: '2026-08-05', description: '바지 기장 수선', notes: '급행' })
         .expect(200);
       expect(res.body.data.description).toBe('바지 기장 수선');
       expect(res.body.data.dueDate).toContain('2026-08-05');
       expect(res.body.data.notes).toBe('급행');
+    });
+
+    it('진행 전 품목은 자유롭게 바꾸고, 수량을 늘리면 벌이 늘어난다', async () => {
+      const { customer } = await seedRepairCustomer(ctx.prisma);
+      const repairId = await createGeneralRepair(customer.id);
+
+      const res = await api(ctx)
+        .patch(`/api/v1/repairs/${repairId}`)
+        .set(auth(ctx))
+        .send({ items: [{ targetProduct: 'SHIRT', quantity: 3 }] })
+        .expect(200);
+      const items = res.body.data.items as RepairItemBody[];
+      expect(items).toHaveLength(1);
+      expect(items[0].targetProduct).toBe('SHIRT');
+      expect(items[0].units.map((u) => u.unitNo)).toEqual([1, 2, 3]);
+    });
+
+    it('진행이 시작된 품목은 지우거나 바꿀 수 없다', async () => {
+      const { customer } = await seedRepairCustomer(ctx.prisma);
+      const repairId = await createGeneralRepair(customer.id, [
+        { targetProduct: 'JACKET', quantity: 2 },
+      ]);
+      await requestAndReturnAll(repairId);
+
+      const changed = await api(ctx)
+        .patch(`/api/v1/repairs/${repairId}`)
+        .set(auth(ctx))
+        .send({ items: [{ targetProduct: 'SHIRT', quantity: 2 }] })
+        .expect(409);
+      expect(changed.body.error.code).toBe('REPAIR_ITEM_IN_PROGRESS');
+
+      // 이미 움직인 벌 아래로는 수량도 줄일 수 없다.
+      const shrunk = await api(ctx)
+        .patch(`/api/v1/repairs/${repairId}`)
+        .set(auth(ctx))
+        .send({ items: [{ targetProduct: 'JACKET', quantity: 1 }] })
+        .expect(409);
+      expect(shrunk.body.error.code).toBe('REPAIR_ITEM_IN_PROGRESS');
+
+      const removed = await api(ctx)
+        .patch(`/api/v1/repairs/${repairId}`)
+        .set(auth(ctx))
+        .send({ items: [] })
+        .expect(400);
+      expect(removed.body.error.code).toBe('VALIDATION_ERROR');
     });
 
     it('없는 수선 요청 조회는 404', async () => {
@@ -406,22 +618,11 @@ describe('수선 (RepairsModule)', () => {
    * 공유하고, 실제 발송·이력은 화면 확인창의 POST /notifications/send에서 남는다.
    */
   describe('고객 연락 제안', () => {
-    it("'고객 연락' 전이에만 연락 제안이 실리고, 다른 전이에는 null이다", async () => {
+    it("'고객 연락' 전이에만 연락 제안이 실린다", async () => {
       const { customer } = await seedRepairCustomer(ctx.prisma);
       const repairId = await createGeneralRepair(customer.id);
+      await requestAndReturnAll(repairId);
 
-      // 연락 시점이 아닌 전이는 제안이 없다.
-      for (const status of ['REQUESTED', 'RETURNED_TO_SHOP']) {
-        const res = await api(ctx)
-          .post(`/api/v1/repairs/${repairId}/status-events`)
-          .set(auth(ctx))
-          .send({ newStatus: status })
-          .expect(201);
-        expect(res.body.data.suggestedNotification).toBeNull();
-        expect(res.body.data.newStatus).toBe(status);
-      }
-
-      // 고객 연락 전이에는 수선 입고 안내 문구가 실린다.
       const notified = await api(ctx)
         .post(`/api/v1/repairs/${repairId}/status-events`)
         .set(auth(ctx))
@@ -438,12 +639,22 @@ describe('수선 (RepairsModule)', () => {
       });
       // 고객명이 치환돼 본문에 들어간다.
       expect(notified.body.data.suggestedNotification.renderedBody).toContain(customer.name);
+
+      // 연락을 되돌리는 전이에는 제안이 실리지 않는다.
+      const back = await api(ctx)
+        .post(`/api/v1/repairs/${repairId}/status-events`)
+        .set(auth(ctx))
+        .send({ newStatus: 'RETURNED_TO_SHOP' })
+        .expect(201);
+      expect(back.body.data.suggestedNotification).toBeNull();
     });
   });
+
   /** 개발설계서 05 G-07 — 설계 PDF 1페이지 "수선 물품 방문" 대응 */
   describe('접수·출고 방식', () => {
     it('방문 수거/배송이면 주소를 요구하고, 저장 후 응답에 담긴다', async () => {
       const { customer } = await seedRepairCustomer(ctx.prisma);
+      const items = [{ targetProduct: 'TROUSERS', quantity: 1 }];
 
       const missing = await api(ctx)
         .post('/api/v1/repairs')
@@ -453,6 +664,7 @@ describe('수선 (RepairsModule)', () => {
           repairType: 'GENERAL',
           requestDate: '2026-07-21',
           description: '바지 기장',
+          items,
           receiptMethod: 'PICKUP',
         });
       expect(missing.status).toBe(400);
@@ -469,6 +681,7 @@ describe('수선 (RepairsModule)', () => {
           repairType: 'GENERAL',
           requestDate: '2026-07-21',
           description: '바지 기장',
+          items,
           receiptMethod: 'PICKUP',
           pickupAddress: '서울시 강남구 테헤란로 1',
           releaseMethod: 'VISIT',
@@ -512,6 +725,7 @@ describe('수선 (RepairsModule)', () => {
           repairType: 'GENERAL',
           requestDate: '2026-07-21',
           description: '단추 교체',
+          items: [{ targetProduct: 'JACKET', quantity: 1 }],
         })
         .expect(201);
       expect(res.body.data.receiptMethod).toBeNull();

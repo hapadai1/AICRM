@@ -7,7 +7,7 @@ import { defaultLabelsOf } from '../admin-master/code-labels.constants';
 const REPAIR_TARGET_PRODUCT_LABELS = defaultLabelsOf('component-type');
 
 /**
- * 수선 대상 표기: `상의 ×1 · 하의 ×2`.
+ * 수선 대상 표기: `상의 1 · 하의 2`.
  * 줄이 없으면 undefined — 부르는 쪽이 예전 방식(주문 품목·구성품 연결) 라벨로 폴백한다.
  */
 export function repairItemsLabel(
@@ -15,6 +15,6 @@ export function repairItemsLabel(
 ): string | undefined {
   if (!items.length) return undefined;
   return items
-    .map((i) => `${REPAIR_TARGET_PRODUCT_LABELS[i.targetProduct] ?? i.targetProduct} ×${i.quantity}`)
+    .map((i) => `${REPAIR_TARGET_PRODUCT_LABELS[i.targetProduct] ?? i.targetProduct} ${i.quantity}`)
     .join(' · ');
 }

@@ -1,8 +1,9 @@
 /**
  * ADMIN-001 기준정보 관리
- * - 탭: 예약 목적 / 품목·구성품 / 결제수단 / 수선 구분
- * - 예약 목적·결제수단: DB 마스터 테이블 → 표시명·정렬·사용여부 편집 가능
+ * - 탭: 예약 목적 / 품목·구성품 / 수선 구분 / 렌탈 정비 기준
+ * - 예약 목적: DB 마스터 테이블 → 표시명·정렬·사용여부 편집 가능
  * - 품목·구성품·수선 구분: 코드 상수(고정) 기준정보 → 표시명만 편집(코드 추가·삭제 불가)
+ * - 렌탈 정비 기준: 반납 후 세탁 소요일과 색 계열(AdminRentalCleaningCard)
  */
 import { PlusOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -34,6 +35,7 @@ import {
   type CodeLabelDomain,
   type CodeLabelItem,
 } from '../../api/code-labels';
+import { AdminRentalCleaningCard } from './AdminRentalCleaningCard';
 
 interface EditFormValues {
   name: string;
@@ -375,6 +377,11 @@ export function AdminMasterPage() {
             key: 'repair-type',
             label: '수선 구분',
             children: <CodeLabelTable domain="repair-type" title="수선 구분" />,
+          },
+          {
+            key: 'rental-cleaning',
+            label: '렌탈 정비 기준',
+            children: <AdminRentalCleaningCard />,
           },
         ]}
       />

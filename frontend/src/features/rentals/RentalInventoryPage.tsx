@@ -11,10 +11,12 @@ import {
   Radio,
   Select,
   Space,
+  Tooltip,
   Typography,
 } from 'antd';
 import type { RadioChangeEvent } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import dayjs from 'dayjs';
 import { useMemo, useState } from 'react';
 import { ApiError } from '../../api/client';
 import {
@@ -250,7 +252,22 @@ export function RentalInventoryPage() {
       dataIndex: 'hold',
       align: 'center',
       ...autoWidth(),
-      render: (v: number) => qtyCell(v),
+      // 정비를 기다리는 중이면 언제부터 쓸 수 있는지까지 보여 준다 —
+      // 수량만 보면 다른 색을 권하게 되는데 실은 모레면 나온다.
+      // 날짜만 적어 두면 그게 무슨 날인지 읽히지 않아 "…부터 가용"까지 쓴다.
+      render: (v: number, row) =>
+        v > 0 && row.holdUntil ? (
+          <Tooltip title={`정비 중인 ${v}벌은 ${dayjs(row.holdUntil).format('M월 D일')}부터 다시 빌려줄 수 있습니다.`}>
+            <Space size={6}>
+              {qtyCell(v)}
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {dayjs(row.holdUntil).format('M/D')}부터 가용
+              </Typography.Text>
+            </Space>
+          </Tooltip>
+        ) : (
+          qtyCell(v)
+        ),
     },
     {
       title: '액션',

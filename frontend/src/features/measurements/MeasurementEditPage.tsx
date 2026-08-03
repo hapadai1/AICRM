@@ -623,11 +623,11 @@ export function MeasurementEditPage() {
   return (
     <Row gutter={16}>
       <Col xs={24} lg={15} xl={16} style={{ paddingBottom: keypadSheetOpen ? 340 : 0 }}>
-        {/* 지금까지 저장한 채촌 — 눌러서 기존 기록을 그대로 열어 본다 (현업 확정 2026-08-01) */}
+        {/* 지금까지 저장한 채촌 — 눌러서 기존 기록을 그대로 열어 본다 (현업 확정 2026-08-01).
+            저장한 기록이 0건이면 줄 자체가 나오지 않는다. */}
         {listCustomerId && (
           <MeasurementRecordStrip
             records={records}
-            loading={recordsQuery.isLoading}
             currentId={session?.id}
             onSelect={openRecord}
             onCreate={isNew ? undefined : startNewRecord}

@@ -26,17 +26,6 @@ export const REPAIR_TYPE_LABELS = REPAIR_TYPE_LABELS_MAP;
  */
 export const REPAIR_TARGET_PRODUCTS = COMPONENT_TYPE_CODES;
 
-/**
- * 대상 품목이 필수인 코드. 필수 규칙(백엔드 assertTargetProduct)이 이 코드들에 묶여 있어
- * 코드 집합과 달리 정적으로 둔다 — 새 코드는 선택 입력으로 취급된다.
- */
-const CUSTOM_TYPES = ['CUSTOM_DURING', 'AFTER_SALE'];
-
-/** 대상 품목 필수 여부 (백엔드 assertItems 규칙) */
-export function isTargetProductRequired(type: string): boolean {
-  return CUSTOM_TYPES.includes(type);
-}
-
 /** 수선 진행 상태 — 접수→수선 요청→수선 입고→고객 연락→출고 완료 (CANCELLED는 과거 데이터 표시용) */
 export type RepairStatus =
   | 'RECEIVED'
@@ -47,8 +36,8 @@ export type RepairStatus =
   | 'CANCELLED';
 
 /**
- * 진행 단계 순서. 백엔드는 "바로 다음 단계"(진행) 또는 "바로 이전 단계"(되돌리기)만 허용한다.
- * 상태는 "그 단계를 끝낸 시점"을 뜻한다 — 접수 등록이 곧 접수 완료다.
+ * 진행 단계 순서. 상태는 "그 단계를 끝낸 시점"을 뜻한다 — 접수 등록이 곧 접수 완료다.
+ * 고객 연락을 빼면 모두 품목 진행에서 계산되는 값이다(백엔드 rollupStatus).
  */
 export const REPAIR_STATUS_FLOW: RepairStatus[] = [
   'RECEIVED',
@@ -58,16 +47,14 @@ export const REPAIR_STATUS_FLOW: RepairStatus[] = [
   'RELEASED',
 ];
 
-/**
- * 업무 버튼 — 각 버튼은 "그 단계를 끝냈다"를 기록한다(수선 화면 하단 업무 처리).
- * 접수는 등록으로 이미 끝났으므로 버튼이 없다.
- */
-export const REPAIR_WORK_ACTIONS: { status: RepairStatus; label: string }[] = [
-  { status: 'REQUESTED', label: '수선요청 완료' },
-  { status: 'RETURNED_TO_SHOP', label: '입고 완료' },
-  { status: 'CUSTOMER_NOTIFIED', label: '고객 연락' },
-  { status: 'RELEASED', label: '출고 완료' },
-];
+/** 벌 하나의 진행 — 대기 → 입고 완료 → 출고 완료 */
+export type RepairUnitStatus = 'PENDING' | 'RETURNED' | 'RELEASED';
+
+export const REPAIR_UNIT_STATUS_LABELS: Record<RepairUnitStatus, string> = {
+  PENDING: '대기',
+  RETURNED: '입고 완료',
+  RELEASED: '출고 완료',
+};
 
 export interface StatusMeta {
   label: string;
@@ -132,10 +119,14 @@ interface RepairItemApiRow {
   targetProduct: string;
   quantity: number;
   sequenceNo: number;
+  requestedAt?: string | null;
+  units?: { id: string; unitNo: number; status: string }[];
 }
 
 interface RepairEventApiRow {
   id: string;
+  repairRequestItemId?: string | null;
+  repairRequestItemUnitId?: string | null;
   previousStatus?: string | null;
   newStatus: string;
   eventDate: string;
@@ -144,19 +135,58 @@ interface RepairEventApiRow {
   actor?: { id: string; displayName: string } | null;
 }
 
-/** 수선 대상 한 줄 — 품목(component-type 코드)과 개수 */
+/**
+ * 수선 대상 한 줄 — 품목(component-type 코드)과 개수.
+ * 수선요청은 이 줄 단위로 한 번(상의 2벌은 같이 나간다), 입고·출고는 아래 벌 단위다.
+ */
 export interface RepairItem {
+  id: string;
   targetProduct: string;
   quantity: number;
+  /** 수선요청을 끝낸 날짜. 없으면 아직 요청 전 */
+  requestedAt?: string;
+  units: RepairUnit[];
+}
+
+/** 입고·출고를 세는 최소 단위(벌) */
+export interface RepairUnit {
+  id: string;
+  unitNo: number;
+  status: RepairUnitStatus;
 }
 
 export interface RepairEvent {
   id: string;
+  /** 줄 단위 이벤트(수선요청)면 그 줄 id */
+  itemId?: string;
+  /** 벌 단위 이벤트(입고·출고)면 그 벌 id */
+  unitId?: string;
   previousStatus?: string;
   newStatus: string;
   eventDate: string;
   notes?: string;
   actorName: string;
+}
+
+/** 건 전체 진척 — 표 아래 "입고 1/3 · 출고 0/3" 표기용 */
+export interface RepairProgress {
+  requestedLines: number;
+  totalLines: number;
+  returned: number;
+  released: number;
+  totalUnits: number;
+}
+
+export function repairProgress(items: RepairItem[]): RepairProgress {
+  const units = items.flatMap((item) => item.units);
+  return {
+    requestedLines: items.filter((item) => item.requestedAt).length,
+    totalLines: items.length,
+    // 출고된 벌도 입고를 지나왔다 — 입고 수는 누적으로 센다.
+    returned: units.filter((unit) => unit.status !== 'PENDING').length,
+    released: units.filter((unit) => unit.status === 'RELEASED').length,
+    totalUnits: units.length,
+  };
 }
 
 /** 접수·출고 방식 (개발설계서 05 G-07) — 택배는 운영하지 않는다 */
@@ -181,7 +211,7 @@ export interface Repair {
   customerPhone: string;
   /** 대상 품목·개수 (접수 입력 순서) */
   items: RepairItem[];
-  /** 대상 표시 문자열 (품목 ×개수 / 구방식 연결 품목·구성품 / 없으면 '-') */
+  /** 대상 표시 문자열 (품목 개수 / 구방식 연결 품목·구성품 / 없으면 '-') */
   targetLabel: string;
   orderNo?: string;
   requestDate: string;
@@ -200,9 +230,9 @@ function toDateOnly(value?: string | null): string | undefined {
   return value ? value.slice(0, 10) : undefined;
 }
 
-/** 대상 품목 한 줄의 표시명: `상의 ×2` */
-export function repairItemLabel(item: RepairItem): string {
-  return `${COMPONENT_TYPE_LABELS[item.targetProduct] ?? item.targetProduct} ×${item.quantity}`;
+/** 대상 품목 한 줄의 표시명: `상의 2` */
+export function repairItemLabel(item: { targetProduct: string; quantity: number }): string {
+  return `${COMPONENT_TYPE_LABELS[item.targetProduct] ?? item.targetProduct} ${item.quantity}`;
 }
 
 function targetLabelOf(row: RepairApiRow): string {
@@ -226,8 +256,15 @@ function toRepair(row: RepairApiRow): Repair {
     customerName: row.customer.name,
     customerPhone: row.customer.phone,
     items: (row.items ?? []).map((i) => ({
+      id: i.id,
       targetProduct: i.targetProduct,
       quantity: i.quantity,
+      requestedAt: toDateOnly(i.requestedAt),
+      units: (i.units ?? []).map((u) => ({
+        id: u.id,
+        unitNo: u.unitNo,
+        status: u.status as RepairUnitStatus,
+      })),
     })),
     targetLabel: targetLabelOf(row),
     orderNo: row.order?.orderNo,
@@ -241,6 +278,8 @@ function toRepair(row: RepairApiRow): Repair {
     deliveryAddress: row.deliveryAddress ?? undefined,
     events: (row.statusEvents ?? []).map((e) => ({
       id: e.id,
+      itemId: e.repairRequestItemId ?? undefined,
+      unitId: e.repairRequestItemUnitId ?? undefined,
       previousStatus: e.previousStatus ?? undefined,
       newStatus: e.newStatus,
       eventDate: toDateOnly(e.eventDate) ?? '',
@@ -290,8 +329,8 @@ export interface CreateRepairInput {
   dueDate?: string;
   description: string;
   notes?: string;
-  /** 대상 품목·개수. 맞춤 수선은 1줄 이상 필수 */
-  items?: RepairItem[];
+  /** 대상 품목·개수. 유형과 무관하게 1줄 이상 필수 */
+  items?: { targetProduct: string; quantity: number }[];
 }
 
 /** 수선 접수 — POST /repairs */
@@ -320,12 +359,64 @@ export interface RepairStatusEventResult extends RepairEventApiRow {
   suggestedNotification: RepairNotificationSuggestion | null;
 }
 
-/** 수선 상태 변경 — POST /repairs/{id}/status-events */
+/**
+ * 건 단위 상태 변경 — POST /repairs/{id}/status-events.
+ * 이제 고객 연락(과 되돌리기)만 이 경로를 쓴다. 나머지 단계는 품목 진행에서 계산된다.
+ */
 export function postRepairStatusEvent(
   repairId: string,
   body: { newStatus: RepairStatus; eventDate?: string; notes?: string },
 ): Promise<RepairStatusEventResult> {
   return request({ url: `/repairs/${repairId}/status-events`, method: 'POST', data: body });
+}
+
+/** 품목 진행 입력 — 날짜를 안 주면 서버가 오늘로 찍는다 */
+export interface RepairProgressInput {
+  eventDate?: string;
+  notes?: string;
+}
+
+/** 수선요청 완료 (줄 단위) — POST /repairs/{id}/items/{itemId}/request */
+export function requestRepairItem(
+  repairId: string,
+  itemId: string,
+  body: RepairProgressInput = {},
+): Promise<Repair> {
+  return request<RepairApiRow>({
+    url: `/repairs/${repairId}/items/${itemId}/request`,
+    method: 'POST',
+    data: body,
+  }).then(toRepair);
+}
+
+/** 수선요청 되돌리기 — DELETE /repairs/{id}/items/{itemId}/request */
+export function revertRepairItemRequest(repairId: string, itemId: string): Promise<Repair> {
+  return request<RepairApiRow>({
+    url: `/repairs/${repairId}/items/${itemId}/request`,
+    method: 'DELETE',
+  }).then(toRepair);
+}
+
+/** 벌 하나 입고·출고 — POST /repairs/{id}/units/{unitId}/return|release */
+export function advanceRepairUnit(
+  repairId: string,
+  unitId: string,
+  toStatus: Exclude<RepairUnitStatus, 'PENDING'>,
+  body: RepairProgressInput = {},
+): Promise<Repair> {
+  return request<RepairApiRow>({
+    url: `/repairs/${repairId}/units/${unitId}/${toStatus === 'RETURNED' ? 'return' : 'release'}`,
+    method: 'POST',
+    data: body,
+  }).then(toRepair);
+}
+
+/** 벌 진행 한 칸 되돌리기 — DELETE /repairs/{id}/units/{unitId}/status */
+export function revertRepairUnit(repairId: string, unitId: string): Promise<Repair> {
+  return request<RepairApiRow>({
+    url: `/repairs/${repairId}/units/${unitId}/status`,
+    method: 'DELETE',
+  }).then(toRepair);
 }
 
 export { COMPONENT_TYPE_LABELS as REPAIR_COMPONENT_TYPE_LABELS };

@@ -1,7 +1,7 @@
 /** WO-002 작업지시서 미리보기·Excel 출력 — 확정 옵션·연결 채촌 검토, 출력 시 버전 생성 */
-import { DownloadOutlined, EyeOutlined, FileExcelOutlined } from '@ant-design/icons';
+import { DownloadOutlined, EyeOutlined, FileExcelOutlined, SearchOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Button, Card, Col, Input, Modal, Row, Select, Space, Spin, Table, Typography, message } from 'antd';
+import { Alert, Button, Card, Col, Input, Modal, Row, Space, Spin, Table, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -17,6 +17,7 @@ import {
   issueWorkOrderVersion,
 } from '../../api/workorders';
 import { BackButton } from '../../shared/BackButton';
+import { MeasurementPickerModal } from './MeasurementPickerModal';
 import { WorkOrderFormPreviewModal } from './WorkOrderFormPreviewModal';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { metaOf } from '../../shared/status-meta';
@@ -28,14 +29,14 @@ export function WorkOrderPreviewPage() {
   const queryClient = useQueryClient();
   const [modal, modalContextHolder] = Modal.useModal();
   const [note, setNote] = useState('');
-  /** 미리보기용으로 골라본 채촌 세션. undefined면 품목에 연결된 채촌을 쓴다. */
-  const [pickedMeasurementId, setPickedMeasurementId] = useState<string | undefined>(undefined);
+  /** 채촌 선택 팝업 열림 여부 — 고른 채촌은 품목 연결로 바로 확정된다. */
+  const [pickerOpen, setPickerOpen] = useState(false);
   /** 양식 미리보기 대상 — 'draft'는 출력 전 현재 값, 그 외는 저장된 버전 id */
   const [formPreviewTarget, setFormPreviewTarget] = useState<'draft' | string | null>(null);
 
   const previewQuery = useQuery({
-    queryKey: ['workorders', 'preview', orderItemId, pickedMeasurementId ?? null],
-    queryFn: () => fetchWorkOrderPreview(orderItemId ?? '', pickedMeasurementId),
+    queryKey: ['workorders', 'preview', orderItemId],
+    queryFn: () => fetchWorkOrderPreview(orderItemId ?? ''),
     enabled: !!orderItemId,
     placeholderData: (prev) => prev,
   });
@@ -309,37 +310,37 @@ export function WorkOrderPreviewPage() {
         </Col>
         <Col xs={24} lg={12}>
           <Card
-            title="채촌 (사용 버전)"
+            title="채촌 (사용 기록)"
             size="small"
             style={{ marginBottom: 16 }}
             extra={
-              preview.measurementCandidates.length > 0 ? (
-                <Select
+              preview.canChangeMeasurement && preview.measurementCandidates.length > 0 ? (
+                <Button
                   size="large"
-                  style={{ minWidth: 260, height: 44 }}
-                  value={measurement?.measurementSessionId}
-                  placeholder="채촌 기록 선택"
+                  icon={<SearchOutlined />}
                   loading={previewQuery.isFetching}
-                  onChange={setPickedMeasurementId}
-                  options={preview.measurementCandidates.map((c) => ({
-                    value: c.measurementSessionId,
-                    label: `${metaOf(MEASUREMENT_TYPE_META, c.measurementType).label} · ${c.measurementDate}${
-                      c.isLinked ? ' (연결됨)' : ''
-                    }${c.completed ? '' : ' (작성중)'}`,
-                    disabled: !c.completed,
-                  }))}
-                />
+                  onClick={() => setPickerOpen(true)}
+                >
+                  채촌 변경
+                </Button>
               ) : null
             }
           >
-            {measurement && !measurement.isLinked && (
-              <Alert
-                style={{ marginBottom: 12 }}
-                type="info"
-                showIcon
-                message="품목에 연결된 채촌이 아닌 다른 버전을 미리보는 중입니다. 이 상태로 출력하면 이 버전이 사용됩니다."
-              />
-            )}
+            <Space direction="vertical" size={4} style={{ marginBottom: 12 }}>
+              <Space size={8} wrap>
+                <Typography.Text type="secondary">사용 채촌</Typography.Text>
+                <Typography.Text strong style={{ fontSize: 16 }}>
+                  {measurementSummary}
+                </Typography.Text>
+              </Space>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {preview.measurementAutoSelected
+                  ? '가장 최근 완료 채촌을 자동으로 골랐습니다. 출력하면 이 채촌으로 확정됩니다.'
+                  : preview.canChangeMeasurement
+                    ? '이 품목에 확정된 채촌입니다.'
+                    : '작업요청이 끝나 채촌이 확정되었습니다.'}
+              </Typography.Text>
+            </Space>
             {measurement ? (
               <Table<WorkOrderMeasurementValue>
                 rowKey="key"
@@ -377,6 +378,17 @@ export function WorkOrderPreviewPage() {
       <Card>
         <BackButton />
       </Card>
+
+      {/* 채촌 변경 — 이 고객의 채촌만 띄워 고르고, 고른 즉시 품목 연결로 확정한다. */}
+      <MeasurementPickerModal
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        orderItemId={orderItemId ?? ''}
+        customerId={preview.customerId}
+        customerName={preview.customerName}
+        currentSessionId={measurement?.measurementSessionId}
+        onPicked={() => void previewQuery.refetch()}
+      />
 
       <WorkOrderFormPreviewModal
         open={formPreviewTarget != null}

@@ -1,12 +1,10 @@
-import { CheckOutlined } from '@ant-design/icons';
+import { NotificationOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Button, Empty, Select, Space, Steps, Tag, Typography } from 'antd';
+import { Button, Empty, Select, Space, Steps, Typography } from 'antd';
 import { useState } from 'react';
 import {
   REPAIR_STATUS_FLOW,
-  REPAIR_WORK_ACTIONS,
   fetchRepairs,
-  repairItemLabel,
   repairStatusMeta,
   repairTypeLabel,
   type Repair,
@@ -15,6 +13,18 @@ import {
 import { Can } from '../../shared/Can';
 import { PageCard } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
+import {
+  RepairItemProgress,
+  repairStageSummary,
+  type RepairProgressStage,
+} from './RepairItemProgress';
+
+/** 업무 처리 카드는 세로 Steps가 없으므로 단계 이름을 표 위에 직접 적는다. */
+const STAGE_LABELS: Record<RepairProgressStage, string> = {
+  REQUEST: '수선요청',
+  RETURN: '수선 입고',
+  RELEASE: '출고',
+};
 
 interface RepairWorkCardProps {
   customerOptions: { value: string; label: string }[];
@@ -98,6 +108,9 @@ function RepairWorkRow({ repair, pending, onWork }: RepairWorkRowProps) {
   const doneIndex = REPAIR_STATUS_FLOW.indexOf(repair.status as RepairStatus);
   // 상태 = 그 단계를 끝낸 시점이므로 진행중 표시는 다음 칸이다(출고 완료면 전부 완료).
   const current = cancelled ? -1 : doneIndex + 1;
+  // 건 상태는 품목 진행에서 계산된다 — 여기서 손으로 누르는 건 고객 연락뿐이다.
+  const notifiable = !cancelled && repair.status === 'RETURNED_TO_SHOP';
+  const revertNotify = !cancelled && repair.status === 'CUSTOMER_NOTIFIED';
 
   return (
     <Space
@@ -106,7 +119,7 @@ function RepairWorkRow({ repair, pending, onWork }: RepairWorkRowProps) {
       style={{ width: '100%', borderTop: '1px solid rgba(128,128,128,0.2)', paddingTop: 12 }}
     >
       <Space wrap size={8}>
-        <Tag>{repairTypeLabel(repair.repairType)}</Tag>
+        <Typography.Text strong>{repairTypeLabel(repair.repairType)}</Typography.Text>
         <StatusBadge {...repairStatusMeta(repair.status)} />
         <Typography.Text type="secondary">접수 {repair.requestDate}</Typography.Text>
         {repair.dueDate && (
@@ -122,36 +135,46 @@ function RepairWorkRow({ repair, pending, onWork }: RepairWorkRowProps) {
         items={REPAIR_STATUS_FLOW.map((status) => ({ title: repairStatusMeta(status).label }))}
       />
 
-      <Space wrap size={4}>
-        <Typography.Text type="secondary">품목:</Typography.Text>
-        {repair.items.length === 0 ? (
-          <Typography.Text>{repair.targetLabel}</Typography.Text>
-        ) : (
-          repair.items.map((item, index) => <Tag key={index}>{repairItemLabel(item)}</Tag>)
-        )}
-      </Space>
       <Typography.Text>내용: {repair.description}</Typography.Text>
+
+      {/* 수선요청은 줄마다, 입고·출고는 벌마다 — 수선 목록 상세와 같은 표를 단계별로 쓴다. */}
+      {(['REQUEST', 'RETURN', 'RELEASE'] as const).map((stage) => {
+        // 단계 이름과 전체 상태는 한 줄에 붙인다 (`수선요청 · 전체 수선요청 완료`).
+        const summary = repairStageSummary(repair.items, stage);
+        return (
+          <Space key={stage} direction="vertical" size={2} style={{ width: '100%' }}>
+            <Typography.Text strong style={{ fontSize: 12 }}>
+              {STAGE_LABELS[stage]}
+              <Typography.Text
+                type={summary.done ? 'success' : 'secondary'}
+                strong={summary.done}
+                style={{ fontSize: 12 }}
+              >
+                {` · ${summary.text}`}
+              </Typography.Text>
+            </Typography.Text>
+            <RepairItemProgress repair={repair} stage={stage} showSummary={false} />
+          </Space>
+        );
+      })}
 
       <Can permission="REPAIR_EDIT">
         <Space wrap size={8}>
-          {REPAIR_WORK_ACTIONS.map((action) => {
-            const stepIndex = REPAIR_STATUS_FLOW.indexOf(action.status);
-            const done = !cancelled && doneIndex >= stepIndex;
-            const isNext = !cancelled && doneIndex === stepIndex - 1;
-            return (
-              <Button
-                key={action.status}
-                type={isNext ? 'primary' : 'default'}
-                icon={done ? <CheckOutlined /> : undefined}
-                disabled={!isNext}
-                loading={pending && isNext}
-                onClick={() => onWork(repair, action.status)}
-              >
-                {action.label}
-                {done ? ' 완료' : ''}
-              </Button>
-            );
-          })}
+          {notifiable && (
+            <Button
+              type="primary"
+              icon={<NotificationOutlined />}
+              loading={pending}
+              onClick={() => onWork(repair, 'CUSTOMER_NOTIFIED')}
+            >
+              고객 연락
+            </Button>
+          )}
+          {revertNotify && (
+            <Button loading={pending} onClick={() => onWork(repair, 'RETURNED_TO_SHOP')}>
+              고객 연락 되돌리기
+            </Button>
+          )}
           {cancelled && <Typography.Text type="danger">취소된 건입니다.</Typography.Text>}
         </Space>
       </Can>

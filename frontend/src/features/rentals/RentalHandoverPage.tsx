@@ -190,6 +190,17 @@ export function RentalHandoverPage() {
     return type ? `${r.customerName} · ${type}` : r.customerName;
   };
 
+  /**
+   * 반납 모달 안내문. 세탁 확인 때문에 반납 즉시 다시 빌려줄 수 없고, 며칠 잡는지는
+   * 색 계열마다 다르다 — 몇 일인지 말해 주지 않으면 날짜가 왜 그렇게 찍혔는지 알 수 없다.
+   */
+  const cleaningNotice = (r: RentalAllocation | null) => {
+    const days = r?.cleaningDays;
+    const color = r?.color ? codes.colorName(r.color) : null;
+    if (!days) return '반납 후에는 정비 기간이 지나야 다시 대여할 수 있습니다.';
+    return `${color ? `${color} — ` : ''}세탁 확인에 ${days}일이 걸립니다. 그날이 되면 자동으로 대여 가능으로 바뀝니다.`;
+  };
+
   const pickupColumns: ColumnsType<RentalAllocation> = [
     ...commonColumns,
     {
@@ -257,7 +268,10 @@ export function RentalHandoverPage() {
             setReturnTarget(r);
             returnForm.setFieldsValue({
               returnDate: dayjs(),
-              availableFrom: dayjs().add(2, 'day'),
+              // 정비 소요일은 색 계열마다 다르다 — 서버가 계산한 값을 그대로 쓴다.
+              availableFrom: r.suggestedAvailableFrom
+                ? dayjs(r.suggestedAvailableFrom)
+                : dayjs().add(r.cleaningDays ?? 1, 'day'),
               nextStatus: 'RETURNED_HOLD',
             });
           }}
@@ -446,9 +460,22 @@ export function RentalHandoverPage() {
           type="info"
           showIcon
           style={{ marginBottom: 16 }}
-          message="반납만으로 자동 대여 가능 처리되지 않습니다. 정비 완료 후 상태를 직접 전환하세요."
+          message={cleaningNotice(returnTarget)}
         />
-        <Form form={returnForm} layout="vertical" onFinish={(values) => returnMutation.mutate(values)}>
+        <Form
+          form={returnForm}
+          layout="vertical"
+          onFinish={(values) => returnMutation.mutate(values)}
+          // 반납일을 바꾸면 대여 가능 예정일도 같은 정비일만큼 따라 움직인다 —
+          // 어제 들어온 옷을 오늘 입력할 때 날짜를 두 번 고쳐야 했다.
+          onValuesChange={(changed: { returnDate?: Dayjs }) => {
+            if (!changed.returnDate || !returnTarget?.cleaningDays) return;
+            returnForm.setFieldValue(
+              'availableFrom',
+              changed.returnDate.add(returnTarget.cleaningDays, 'day'),
+            );
+          }}
+        >
           <Form.Item
             name="returnDate"
             label="실제 반납일"
@@ -460,6 +487,7 @@ export function RentalHandoverPage() {
             name="availableFrom"
             label="대여 가능 예정일"
             rules={[{ required: true, message: '대여 가능 예정일을 선택해 주세요.' }]}
+            extra="정비 기준으로 채워집니다. 세탁이 빨리 끝났거나 더 걸리면 직접 고치세요."
           >
             <DatePicker style={{ width: '100%' }} />
           </Form.Item>

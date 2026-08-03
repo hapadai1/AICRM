@@ -129,6 +129,12 @@ export interface RentalAllocation {
   returnDate?: string;
   /** 기준일 대비 픽업/반납 지연 여부 (목록 뷰) */
   overdue?: boolean;
+  /**
+   * 반납 뷰 전용 — 이 색의 정비(세탁) 소요일과 기준일에 반납했을 때의 대여 가능 예정일.
+   * 화면이 날짜를 직접 계산하지 않는다. 기준은 관리자 화면(렌탈 정비 기준)에서 바꾼다.
+   */
+  cleaningDays?: number;
+  suggestedAvailableFrom?: string;
   version: number;
 }
 
@@ -274,6 +280,8 @@ export interface RentalSkuSummaryRow {
   checkedOut: number;
   /** 세탁·수선 등으로 오늘 못 쓰는 수 */
   hold: number;
+  /** 대기 중 가장 이른 대여 가능 예정일 (정비 대기만 잡힌다 — 수선·사용중지는 기한이 없어 null) */
+  holdUntil?: string | null;
 }
 
 /** SKU별 수량 집계 — GET /rental-inventory/sku-summary */
@@ -506,10 +514,13 @@ export function checkoutAllocation(
   });
 }
 
-/** 렌탈 반납 — POST /rental-allocations/{id}/return (계약 §5: returnDate) */
+/**
+ * 렌탈 반납 — POST /rental-allocations/{id}/return (계약 §5: returnDate)
+ * availableFrom을 빼면 서버가 정비 기준(반납일 + 색 계열별 정비일)으로 채운다.
+ */
 export function returnAllocation(
   allocationId: string,
-  body: { returnDate: string; availableFrom: string; nextStatus: RentalItemStatus; version: number },
+  body: { returnDate: string; availableFrom?: string; nextStatus: RentalItemStatus; version: number },
 ): Promise<RentalAllocation> {
   return request<RentalAllocation>({
     url: `/rental-allocations/${allocationId}/return`,

@@ -5,10 +5,12 @@ import { BusinessException } from '../../common/business.exception';
 import { AuthUser } from '../../common/decorators';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { RentalPolicyService } from './rental-policy.service';
 import {
   ACTIVE_ALLOCATION_STATUSES,
   ALLOCATION_EVENT_TYPES,
   ASSIGNABLE_ITEM_STATUSES,
+  addDaysToDateOnly,
   isRentalOverlapDbError,
   parseDateOnly,
   toDateOnlyString,
@@ -70,6 +72,7 @@ export class RentalAllocationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly policy: RentalPolicyService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -120,7 +123,14 @@ export class RentalAllocationsService {
           ? [{ pickupDate: 'asc' }, { createdAt: 'asc' }]
           : [{ returnDueDate: 'asc' }, { createdAt: 'asc' }],
     });
-    return rows.map((row) => this.toAllocationView(row, date));
+
+    // 반납 뷰에만 정비 소요일을 실어 준다 — 화면이 대여 가능 예정일을 스스로 계산하지 않고
+    // 서버가 준 값을 그대로 채우게 하려는 것이다(예전에는 화면이 "오늘+2일"을 박아 뒀다).
+    const cleaningDays =
+      query.view === 'return'
+        ? await this.policy.cleaningDaysByColor(rows.map((r) => r.rentalInventoryItem.rentalSku.color))
+        : null;
+    return rows.map((row) => this.toAllocationView(row, date, cleaningDays));
   }
 
   // ---------------------------------------------------------------------------
@@ -471,12 +481,17 @@ export class RentalAllocationsService {
 
   /**
    * 배정 RETURNED + 실물 RETURNED_HOLD(또는 요청 상태) + available_from 저장.
-   * 반납만으로 자동 AVAILABLE 전환하지 않는다 — 가용 전환은 status-events로 직원이 수동 처리.
+   *
+   * 반납한 옷은 세탁 여부를 확인해야 해서 바로 못 빌려준다. availableFrom을 안 주면
+   * 반납일 + 색 계열별 정비일(밝은색 2 / 블랙 타입 1)로 서버가 채운다.
+   * 그날이 오면 스케줄러(RentalReleaseScheduler)가 AVAILABLE로 올린다.
    */
   async return(id: string, dto: ReturnDto, actor: AuthUser) {
     const allocation = await this.prisma.rentalAllocation.findUnique({
       where: { id },
-      include: { rentalInventoryItem: { select: { id: true, status: true } } },
+      include: {
+        rentalInventoryItem: { select: { id: true, status: true, rentalSku: { select: { color: true } } } },
+      },
     });
     if (!allocation) throw new NotFoundException('렌탈 배정이 없습니다.');
     if (allocation.status !== 'CHECKED_OUT')
@@ -486,7 +501,14 @@ export class RentalAllocationsService {
     this.assertVersion(dto.version, allocation.rowVersion);
 
     const nextStatus = dto.nextStatus ?? 'RETURNED_HOLD';
-    const availableFrom = parseDateOnly(dto.availableFrom);
+    const colorCode = allocation.rentalInventoryItem.rentalSku.color;
+    const cleaningDays = await this.policy.cleaningDaysFor(colorCode);
+    const availableFromStr = dto.availableFrom ?? addDaysToDateOnly(dto.returnDate, cleaningDays);
+    const availableFrom = parseDateOnly(availableFromStr);
+    // 상태 이력만 봐도 "왜 이 날짜인가"가 읽혀야 한다 — 기준으로 잡은 건지 직원이 바꾼 건지.
+    const reason = dto.availableFrom
+      ? `렌탈 반납 (${id}) — 대여 가능 예정일 직접 지정`
+      : `렌탈 반납 (${id}) — 정비 ${cleaningDays}일 (${colorCode})`;
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const after = await tx.rentalAllocation.update({
@@ -509,7 +531,7 @@ export class RentalAllocationsService {
           previousStatus: allocation.rentalInventoryItem.status,
           newStatus: nextStatus,
           availableFrom,
-          reason: `렌탈 반납 (${id})`,
+          reason,
           actorId: actor.id,
         },
       });
@@ -536,7 +558,8 @@ export class RentalAllocationsService {
         ...returnIdentity,
         status: 'RETURNED',
         itemStatus: nextStatus,
-        availableFrom: dto.availableFrom,
+        availableFrom: availableFromStr,
+        cleaningDays,
       },
     });
     return updated;
@@ -644,9 +667,10 @@ export class RentalAllocationsService {
   }
 
   /** 출고·반납 목록 평면 뷰 — 배정 필드 + 실물 관리코드/속성 + 고객명/주문번호/구성품 */
-  private toAllocationView(row: AllocationViewRow, baseDate: Date) {
+  private toAllocationView(row: AllocationViewRow, baseDate: Date, cleaningDays: Map<string, number> | null) {
     const sku = row.rentalInventoryItem.rentalSku;
     const orderItem = row.orderItemComponent.orderItem;
+    const days = cleaningDays?.get(sku.color);
     return {
       id: row.id,
       status: row.status,
@@ -672,6 +696,13 @@ export class RentalAllocationsService {
       customerPhone: orderItem.order.contract.customer.phone,
       /** 반납 뷰: 기준일 기준 반납예정일 경과(지연) 여부 */
       overdue: row.status === 'CHECKED_OUT' && row.returnDueDate < baseDate,
+      /** 반납 뷰: 이 색의 정비 소요일과, 기준일에 반납한다고 볼 때의 대여 가능 예정일 */
+      ...(days === undefined
+        ? {}
+        : {
+            cleaningDays: days,
+            suggestedAvailableFrom: addDaysToDateOnly(toDateOnlyString(baseDate), days),
+          }),
     };
   }
 

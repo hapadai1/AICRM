@@ -233,10 +233,24 @@ export class RentalOrderComponentsQueryDto {
 
 export class ReturnDto {
   @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) returnDate: string;
-  /** 반납 후 직원이 지정하는 대여 가능 예정일 (RENT-004 필수) */
-  @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) availableFrom: string;
+  /**
+   * 대여 가능 예정일. 생략하면 서버가 정비 기준으로 채운다
+   * (반납일 + 색 계열별 정비일 — 밝은색 2일 / 블랙 타입 1일).
+   * 화면은 같은 값을 미리 채워 보여 주되, 현장 판단으로 당기거나 미룰 수 있어 값도 받는다.
+   */
+  @IsOptional() @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) availableFrom?: string;
   @IsOptional() @IsIn(RETURN_NEXT_ITEM_STATUSES) nextStatus?: string;
   @IsOptional() @IsInt() version?: number;
+}
+
+/** 렌탈 정비 기준 수정 (ADMIN-001 "렌탈 정비 기준") */
+export class UpdateRentalReturnPolicyDto {
+  /** 밝은색(화이트·베이지 계열) 정비 소요일 */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(30) lightCleaningDays?: number;
+  /** 블랙 타입 정비 소요일 */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(30) darkCleaningDays?: number;
+  /** 정비일 도래 시 자동 대여 가능 전환 */
+  @IsOptional() @IsBoolean() autoRelease?: boolean;
 }
 
 // ---------------------------------------------------------------------------

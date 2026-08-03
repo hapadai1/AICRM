@@ -632,7 +632,14 @@ describe('진행 단계 (JOURNEY) — v2 재정의', () => {
       const repair = await api(ctx)
         .post('/api/v1/repairs')
         .set(auth(ctx))
-        .send({ customerId, repairType: 'GENERAL', requestDate: '2026-07-21', description: '바지 기장 수선' })
+        // 대상 품목은 모든 수선구분에서 필수다 — 진행(수선요청·입고·출고)이 품목 위에서 돈다.
+        .send({
+          customerId,
+          repairType: 'GENERAL',
+          requestDate: '2026-07-21',
+          description: '바지 기장 수선',
+          items: [{ targetProduct: 'TROUSERS', quantity: 1 }],
+        })
         .expect(201);
       const repairId = repair.body.data.id;
       const journey = await ctx.prisma.customerJourney.findFirstOrThrow({
@@ -705,21 +712,34 @@ describe('진행 단계 (JOURNEY) — v2 재정의', () => {
       };
     }
 
-    /** 수선 상태를 흐름대로 목표 상태까지 밀어올린다. */
-    async function pushRepairStatus(repairId: string, ...statuses: string[]) {
-      for (const newStatus of statuses) {
+    /**
+     * 수선 건을 목표 상태까지 밀어올린다.
+     * 건 상태는 품목 진행에서 계산되므로(2026-08-01) 줄 수선요청·벌 입고를 눌러서 올린다.
+     */
+    async function pushRepairStatus(repairId: string, target: 'REQUESTED' | 'RETURNED_TO_SHOP') {
+      const detail = await api(ctx).get(`/api/v1/repairs/${repairId}`).set(auth(ctx)).expect(200);
+      const items = detail.body.data.items as { id: string; units: { id: string }[] }[];
+      for (const item of items) {
         await api(ctx)
-          .post(`/api/v1/repairs/${repairId}/status-events`)
+          .post(`/api/v1/repairs/${repairId}/items/${item.id}/request`)
           .set(auth(ctx))
-          .send({ newStatus })
+          .send({})
           .expect(201);
+        if (target === 'REQUESTED') continue;
+        for (const unit of item.units) {
+          await api(ctx)
+            .post(`/api/v1/repairs/${repairId}/units/${unit.id}/return`)
+            .set(auth(ctx))
+            .send({})
+            .expect(201);
+        }
       }
     }
 
     it('수선 입고 안내를 발송하면 수선 상태가 고객 연락으로 함께 넘어간다', async () => {
       const { repairId, journeyId, eventId, suggestion } = await advanceToCheckedIn();
       // 진행과 별개로 수선 건은 5단계 흐름을 따라 '수선 입고'까지 와 있다.
-      await pushRepairStatus(repairId, 'REQUESTED', 'RETURNED_TO_SHOP');
+      await pushRepairStatus(repairId, 'RETURNED_TO_SHOP');
 
       const sent = await api(ctx)
         .post('/api/v1/notifications/send')
@@ -755,7 +775,7 @@ describe('진행 단계 (JOURNEY) — v2 재정의', () => {
     it('수선 입고 전이거나 발송하지 않았으면 수선 상태를 건드리지 않는다', async () => {
       // (1) 발송하지 않고 보류 → 상태 유지
       const deferredCase = await advanceToCheckedIn();
-      await pushRepairStatus(deferredCase.repairId, 'REQUESTED', 'RETURNED_TO_SHOP');
+      await pushRepairStatus(deferredCase.repairId, 'RETURNED_TO_SHOP');
       await api(ctx)
         .post(`/api/v1/journeys/${deferredCase.journeyId}/events/${deferredCase.eventId}/notification-outcome`)
         .set(auth(ctx))

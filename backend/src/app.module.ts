@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
+import { ScheduleModule } from '@nestjs/schedule';
 import { GlobalExceptionFilter } from './common/global-exception.filter';
 import { HealthController } from './common/health.controller';
 import { ResponseInterceptor } from './common/response.interceptor';
@@ -28,6 +29,8 @@ import { PrismaModule } from './prisma/prisma.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    // 렌탈 정비 완료 자동 가용 전환(매일 00:05)에 쓴다.
+    ScheduleModule.forRoot(),
     PrismaModule,
     AuditModule,
     AuthModule,

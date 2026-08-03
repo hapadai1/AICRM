@@ -19,7 +19,7 @@ import {
   renderStoredWorkOrderHtml,
   type WorkOrderExcelData,
 } from './work-order-excel';
-import { resolveWorkOrderStatus } from './work-order-status';
+import { canChangeWorkOrderMeasurement, resolveWorkOrderStatus } from './work-order-status';
 import {
   IssueWorkOrderVersionDto,
   WORK_ORDER_LIST_STATUSES,
@@ -191,18 +191,23 @@ export class WorkOrdersService {
    */
   async preview(orderItemId: string, measurementSessionId?: string) {
     const item = await this.loadOrderItem(orderItemId);
+    // 연결이 없어도 쓸 채촌이 있으면(완료 채촌 1건 이상) 전제 미충족으로 보지 않는다.
     const { session, measurementSession: linkedSession, link } = this.requirePrerequisites(item, {
-      measurementOptional: measurementSessionId != null,
+      measurementOptional: await this.hasUsableMeasurement(item, measurementSessionId),
     });
-    const measurementSession = measurementSessionId
-      ? await this.resolveMeasurementSession(item, linkedSession, measurementSessionId)
-      : linkedSession;
+    // 연결이 없으면 그 고객의 가장 최근 완료 채촌을 기본으로 보여 준다.
+    // 조회 단계에서는 연결을 만들지 않는다 — 실제 확정은 출력(issue) 때 한다.
+    const measurementSession = await this.resolveWorkOrderMeasurement(
+      item,
+      linkedSession,
+      measurementSessionId,
+    );
     const currentVersion = item.workOrder?.currentVersion ?? null;
 
-    // 채촌 버전 교체 후보: 같은 고객의 모든 채촌 세션 (최신 버전부터)
+    // 채촌 교체 후보: 같은 고객의 모든 채촌 (최근 채촌일부터)
     const candidates = await this.prisma.measurementSession.findMany({
       where: { customerId: item.order.contract.customer.id },
-      orderBy: { versionNo: 'desc' },
+      orderBy: [{ measurementDate: 'desc' }, { versionNo: 'desc' }],
       select: {
         id: true,
         versionNo: true,
@@ -243,6 +248,10 @@ export class WorkOrdersService {
         completed: c.completedAt != null,
         isLinked: !!link && c.id === link.measurementSessionId,
       })),
+      // 연결 없이 최신 채촌으로 자동 선택된 상태인지 — 화면 문구를 가르는 값이다.
+      measurementAutoSelected: !link && measurementSession != null,
+      // 작업요청(제작 착수) 뒤에는 채촌을 바꿀 수 없다 (현업 확정 2026-08-03).
+      canChangeMeasurement: canChangeWorkOrderMeasurement(item.status),
       currentVersionNo: currentVersion?.versionNo ?? null,
       // 미리보기 화면에서 최신 출력본을 바로 내려받게 하려면 버전 id가 필요하다.
       currentVersionId: currentVersion?.id ?? null,
@@ -337,10 +346,11 @@ export class WorkOrdersService {
     }
 
     const item = await this.loadOrderItem(orderItemId);
-    const { session, measurementSession: linkedSession } = this.requirePrerequisites(item, {
-      measurementOptional: dto.measurementSessionId != null,
+    const { session, measurementSession: linkedSession, link } = this.requirePrerequisites(item, {
+      measurementOptional: await this.hasUsableMeasurement(item, dto.measurementSessionId),
     });
-    const measurementSession = await this.resolveMeasurementSession(
+    // 연결이 없으면 최신 완료 채촌으로 출력하고, 아래에서 그 채촌으로 연결을 확정한다.
+    const measurementSession = await this.resolveWorkOrderMeasurement(
       item,
       linkedSession,
       dto.measurementSessionId,
@@ -436,6 +446,48 @@ export class WorkOrdersService {
           where: { id: workOrder.id },
           data: { currentVersionId: versionId },
         });
+
+        // 출력에 실제로 쓴 채촌으로 품목 연결을 확정한다 (현업 확정 2026-08-03).
+        // 출력 시점에 쓴 것이 곧 기준이며, 뒤에 더 최근 채촌이 생겨도 저절로 바뀌지 않는다.
+        // 미완료 채촌은 연결 규칙상 기준이 될 수 없으므로 그대로 둔다.
+        if (measurementSession.completedAt != null && link?.measurementSessionId !== measurementSession.id) {
+          await tx.orderItemMeasurement.updateMany({
+            where: { orderItemId, isCurrent: true, NOT: { measurementSessionId: measurementSession.id } },
+            data: { isCurrent: false },
+          });
+          const existing = await tx.orderItemMeasurement.findFirst({
+            where: { orderItemId, measurementSessionId: measurementSession.id },
+          });
+          if (existing) {
+            await tx.orderItemMeasurement.update({
+              where: { id: existing.id },
+              data: { isCurrent: true, linkedBy: actor.id, linkedAt: issuedAt },
+            });
+          } else {
+            await tx.orderItemMeasurement.create({
+              data: {
+                id: randomUUID(),
+                orderItemId,
+                measurementSessionId: measurementSession.id,
+                isCurrent: true,
+                linkedBy: actor.id,
+                linkedAt: issuedAt,
+              },
+            });
+          }
+          await this.audit.log(
+            {
+              userId: actor.id,
+              action: 'LINK',
+              entityType: 'ORDER_ITEM_MEASUREMENT',
+              entityId: orderItemId,
+              before: link ? { measurementSessionId: link.measurementSessionId } : null,
+              after: { measurementSessionId: measurementSession.id, isCurrent: true },
+              reason: '작업지시서 출력 시 채촌 확정',
+            },
+            tx,
+          );
+        }
         if (dto.version !== undefined) {
           await tx.orderItem.update({
             where: { id: orderItemId },
@@ -559,6 +611,55 @@ export class WorkOrdersService {
       link,
       measurementSession: link?.measurementSession as MeasurementSessionWithValues,
     };
+  }
+
+  /**
+   * 연결이 없어도 대신 쓸 채촌이 있는지 — 지목한 채촌이 있거나, 그 고객에게 완료 채촌이 있으면 참.
+   * 전제 미충족(422) 판정에서 "채촌 연결"을 요구할지 가르는 값이다.
+   */
+  private async hasUsableMeasurement(
+    item: OrderItemWithSources,
+    measurementSessionId: string | undefined,
+  ): Promise<boolean> {
+    if (measurementSessionId) return true;
+    const completed = await this.prisma.measurementSession.count({
+      where: { customerId: item.order.contract.customer.id, completedAt: { not: null } },
+    });
+    return completed > 0;
+  }
+
+  /**
+   * 작업지시서가 쓸 채촌을 정한다 (현업 확정 2026-08-03).
+   *
+   * 1) 요청이 특정 채촌을 지목하면 그것,
+   * 2) 품목에 연결된 채촌이 있으면 그것,
+   * 3) 둘 다 없으면 그 고객의 **가장 최근 완료 채촌**.
+   *
+   * 셋 다 없으면(완료 채촌 0건) 출력 전제 미충족이다.
+   */
+  private async resolveWorkOrderMeasurement(
+    item: OrderItemWithSources,
+    linkedSession: MeasurementSessionWithValues | undefined,
+    measurementSessionId: string | undefined,
+  ): Promise<MeasurementSessionWithValues> {
+    if (measurementSessionId)
+      return this.resolveMeasurementSession(item, linkedSession, measurementSessionId);
+    if (linkedSession) return linkedSession;
+
+    const latest = await this.prisma.measurementSession.findFirst({
+      where: { customerId: item.order.contract.customer.id, completedAt: { not: null } },
+      orderBy: [{ measurementDate: 'desc' }, { versionNo: 'desc' }],
+      include: { values: { orderBy: [{ sortOrder: 'asc' }, { measurementCode: 'asc' }] } },
+    });
+    if (!latest) {
+      throw new BusinessException(
+        'WORK_ORDER_PREREQUISITE_MISSING',
+        '완료된 채촌이 없습니다. 채촌을 먼저 완료해 주세요.',
+        undefined,
+        { orderItemId: item.id, missing: ['MEASUREMENT_LINKED'] },
+      );
+    }
+    return latest;
   }
 
   /** 요청 본문 measurementSessionId가 있으면 해당 채촌 세션으로 교체 (WO-002 채촌 변경) */

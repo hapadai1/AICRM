@@ -1,9 +1,4 @@
-import {
-  MinusCircleOutlined,
-  PlusOutlined,
-  RollbackOutlined,
-  SwapOutlined,
-} from '@ant-design/icons';
+import { MinusCircleOutlined, NotificationOutlined, PlusOutlined, RollbackOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   App,
@@ -36,10 +31,8 @@ import {
   createRepair,
   fetchRepair,
   fetchRepairs,
-  isTargetProductRequired,
-  nextRepairStatus,
-  prevRepairStatus,
   postRepairStatusEvent,
+  repairProgress,
   repairStatusMeta,
   repairTypeLabel,
   REPAIR_METHOD_LABELS,
@@ -53,10 +46,15 @@ import {
   type RepairStatus,
 } from '../../api/repairs';
 import { Can } from '../../shared/Can';
+import {
+  RepairItemProgress,
+  repairStageSummary,
+  type RepairProgressStage,
+} from './RepairItemProgress';
 import { RepairWorkCard } from './RepairWorkCard';
 import { NotificationConfirmModal } from '../../shared/NotificationConfirmModal';
 import { StatusBadge } from '../../shared/StatusBadge';
-import { autoWidth } from '../../shared/table-width';
+import { autoWidth, wrapAt } from '../../shared/table-width';
 
 interface ReceiptValues {
   customerId: string;
@@ -83,6 +81,28 @@ const STATUS_FILTER_OPTIONS = [...REPAIR_STATUS_FLOW, 'CANCELLED' as const].map(
   value: s,
   label: repairStatusMeta(s).label,
 }));
+
+/** 단계(건 상태)와 품목 진행 단계의 대응 — 접수·고객 연락은 품목 단위가 아니라 비어 있다. */
+const STAGE_BY_STATUS: Partial<Record<RepairStatus, RepairProgressStage>> = {
+  REQUESTED: 'REQUEST',
+  RETURNED_TO_SHOP: 'RETURN',
+  RELEASED: 'RELEASE',
+};
+
+/** 접수·출고 방식 칸 — 방문 수거·배송이면 주소까지 같이 보여 준다(우리가 갈 곳이다). */
+function methodCell(method: string | undefined, address: string | undefined) {
+  if (!method) return '-';
+  return (
+    <Space direction="vertical" size={0}>
+      <Typography.Text>{REPAIR_METHOD_LABELS[method] ?? method}</Typography.Text>
+      {address && (
+        <Typography.Text type="secondary" style={{ fontSize: 12, ...wrapAt(180) }}>
+          {address}
+        </Typography.Text>
+      )}
+    </Space>
+  );
+}
 
 /** REPAIR-001 수선 접수·진행 */
 export function RepairsPage() {
@@ -127,9 +147,6 @@ export function RepairsPage() {
       fetchCustomers({ q: customerKeyword || undefined, scope: 'CONTRACT', size: 20 }),
   });
 
-  const receiptType = Form.useWatch('repairType', receiptForm);
-  const targetRequired = isTargetProductRequired(receiptType ?? 'AFTER_SALE');
-
   const detailQuery = useQuery({
     queryKey: ['repairs', 'detail', expandedId],
     queryFn: () => fetchRepair(expandedId as string),
@@ -154,7 +171,7 @@ export function RepairsPage() {
         releaseMethod: v.releaseMethod,
         pickupAddress: v.pickupAddress,
         deliveryAddress: v.deliveryAddress,
-        // 빈 줄(품목 미선택)은 보내지 않는다 — 일반 수선은 품목 없이도 접수된다.
+        // 빈 줄(품목 미선택)은 보내지 않는다 — 첫 줄은 화면에서 필수로 받는다.
         items: (v.items ?? [])
           .filter((i) => i?.targetProduct)
           .map((i) => ({ targetProduct: i.targetProduct as string, quantity: i.quantity ?? 1 })),
@@ -220,22 +237,32 @@ export function RepairsPage() {
       title: '유형',
       dataIndex: 'repairType',
       ...autoWidth(),
-      render: (t: string) => <Tag>{repairTypeLabel(t)}</Tag>,
+      render: (t: string) => repairTypeLabel(t),
     },
     {
       title: '대상',
       dataIndex: 'targetLabel',
       ...autoWidth(140),
-      render: (label: string, r) => (
-        <Space direction="vertical" size={0}>
-          <Typography.Text>{label}</Typography.Text>
-          {r.orderNo && (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {r.orderNo}
-            </Typography.Text>
-          )}
-        </Space>
-      ),
+      render: (label: string, r) => {
+        // 건 상태만으로는 "몇 벌이 들어왔는지"를 알 수 없다 — 진척을 한 줄 붙인다.
+        const p = repairProgress(r.items);
+        return (
+          <Space direction="vertical" size={0}>
+            {/* 대상 품목이 늘어도 열이 계속 넓어지지 않게 셀 안에서 접는다 */}
+            <Typography.Text style={wrapAt(260)}>{label}</Typography.Text>
+            {p.totalUnits > 0 && (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                입고 {p.returned}/{p.totalUnits} · 출고 {p.released}/{p.totalUnits}
+              </Typography.Text>
+            )}
+            {r.orderNo && (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {r.orderNo}
+              </Typography.Text>
+            )}
+          </Space>
+        );
+      },
     },
     { title: '접수일', dataIndex: 'requestDate', ...autoWidth() },
     {
@@ -260,6 +287,19 @@ export function RepairsPage() {
         const meta = repairStatusMeta(s);
         return <StatusBadge label={meta.label} color={meta.color} />;
       },
+    },
+    {
+      // 방문 수거·배송이면 우리가 움직여야 하는 건이지만, 매번 보는 값은 아니라 맨 뒤에 둔다.
+      title: '접수 방식',
+      dataIndex: 'receiptMethod',
+      ...autoWidth(),
+      render: (m: string | undefined, r) => methodCell(m, r.pickupAddress),
+    },
+    {
+      title: '출고 방식',
+      dataIndex: 'releaseMethod',
+      ...autoWidth(),
+      render: (m: string | undefined, r) => methodCell(m, r.deliveryAddress),
     },
   ];
 
@@ -344,14 +384,15 @@ export function RepairsPage() {
             showExpandColumn: false,
             expandedRowKeys: expandedId ? [expandedId] : [],
             expandedRowRender: (r) => {
-              const detail = detailQuery.data?.id === r.id ? detailQuery.data : undefined;
-              const events = detail?.events ?? r.events;
+              const detail = detailQuery.data?.id === r.id ? detailQuery.data : r;
+              const events = detail.events;
               // 단계별 이벤트를 상태 코드로 매핑 — 되돌리기로 같은 단계를 여러 번 거치면
               // 가장 최근 전이를 남긴다(그 단계의 최신 날짜·담당자·사유가 보이도록).
               // events는 백엔드에서 시간순(오름차순)으로 오므로 그냥 덮어쓰면 최신이 남는다.
+              // 품목·벌 이벤트는 아래 품목 표가 보여주므로 건 단위 전이만 추린다.
               const eventByStatus = new Map<string, RepairEvent>();
               for (const ev of events) {
-                eventByStatus.set(ev.newStatus, ev);
+                if (!ev.itemId && !ev.unitId) eventByStatus.set(ev.newStatus, ev);
               }
               const cancelled = r.status === 'CANCELLED';
               const cancelEvent = eventByStatus.get('CANCELLED');
@@ -359,83 +400,114 @@ export function RepairsPage() {
               // 다음 단계로 한 칸 민다 — 출고 완료면 flow 길이가 되어 전 단계가 완료로 찍힌다.
               const currentIndex = REPAIR_STATUS_FLOW.indexOf(r.status as RepairStatus) + 1;
 
-              const stepItems = REPAIR_STATUS_FLOW.map((status) => {
-                const ev = eventByStatus.get(status);
-                return {
-                  title: repairStatusMeta(status).label,
-                  description: ev ? (
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {ev.eventDate} · {ev.actorName}
-                      {ev.notes ? ` · 비고: ${ev.notes}` : ''}
-                    </Typography.Text>
-                  ) : undefined,
-                };
-              });
-
-              const next = nextRepairStatus(r.status);
-              // 취소된 건은 되돌릴 수 없고, 접수(첫 단계)는 이전 단계가 없다.
-              const prev = cancelled ? undefined : prevRepairStatus(r.status);
+              // 건 상태는 품목 진행에서 계산된다 — 손으로 누르는 건 고객 연락뿐이다.
+              // 연락은 전 벌이 들어온 뒤(수선 입고)에 열리고, 되돌리기는 연락 직후에만 가능하다.
+              const notifiable = !cancelled && r.status === 'RETURNED_TO_SHOP';
+              const revertNotify = !cancelled && r.status === 'CUSTOMER_NOTIFIED';
               const pending =
                 statusMutation.isPending && statusMutation.variables?.repair.id === r.id;
 
+              /**
+               * 단계 머리글 밑 한 줄 — 날짜·담당자와 그 단계 전체 상태를 한 줄에 붙인다.
+               * (`2026-08-01 · 관리자 · 전체 수선요청 완료`)
+               */
+              const headline = (status: RepairStatus) => {
+                const ev = eventByStatus.get(status);
+                const stage = STAGE_BY_STATUS[status];
+                const summary = stage ? repairStageSummary(detail.items, stage) : undefined;
+                if (!ev && !summary) return null;
+                return (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {ev ? `${ev.eventDate} · ${ev.actorName}` : ''}
+                    {ev && summary ? ' · ' : ''}
+                    {summary && (
+                      <Typography.Text
+                        type={summary.done ? 'success' : 'secondary'}
+                        strong={summary.done}
+                        style={{ fontSize: 12 }}
+                      >
+                        {summary.text}
+                      </Typography.Text>
+                    )}
+                  </Typography.Text>
+                );
+              };
+
+              // 단계마다 그 단계에서 할 일을 붙인다 — 접수는 수선 내용, 수선요청·입고·출고는
+              // 품목별 버튼, 고객 연락은 발송 버튼. 표를 따로 두지 않으니 지금 눌러야 할 칸이
+              // 어느 단계인지 한눈에 보인다(2026-08-01 현업 요청).
+              const stepBody: Partial<Record<RepairStatus, React.ReactNode>> = {
+                // 담당자가 적은 그대로 보여 준다 — 줄바꿈·띄어쓰기를 접어 버리면
+                // "기장 전체  적을 +5cm"처럼 칸을 맞춰 적은 메모가 뭉개진다.
+                RECEIVED: (
+                  <Space direction="vertical" size={0}>
+                    <Typography.Text style={{ whiteSpace: 'pre-wrap' }}>
+                      수선내용 : {r.description}
+                    </Typography.Text>
+                    {r.notes && (
+                      <Typography.Text type="secondary" style={{ whiteSpace: 'pre-wrap' }}>
+                        비고 : {r.notes}
+                      </Typography.Text>
+                    )}
+                  </Space>
+                ),
+                REQUESTED: <RepairItemProgress repair={detail} stage="REQUEST" showSummary={false} />,
+                RETURNED_TO_SHOP: (
+                  <RepairItemProgress repair={detail} stage="RETURN" showSummary={false} />
+                ),
+                CUSTOMER_NOTIFIED: (notifiable || revertNotify) && (
+                  <Can permission="REPAIR_EDIT">
+                    {notifiable ? (
+                      <Button
+                        size="small"
+                        type="primary"
+                        ghost
+                        icon={<NotificationOutlined />}
+                        loading={pending}
+                        onClick={() => openStatusChange(r, 'CUSTOMER_NOTIFIED')}
+                      >
+                        고객 연락
+                      </Button>
+                    ) : (
+                      <Button
+                        size="small"
+                        icon={<RollbackOutlined />}
+                        loading={pending}
+                        onClick={() => openStatusChange(r, 'RETURNED_TO_SHOP')}
+                      >
+                        고객 연락 되돌리기
+                      </Button>
+                    )}
+                  </Can>
+                ),
+                RELEASED: <RepairItemProgress repair={detail} stage="RELEASE" showSummary={false} />,
+              };
+
+              const stepItems = REPAIR_STATUS_FLOW.map((status) => ({
+                title: repairStatusMeta(status).label,
+                description: (
+                  <Space direction="vertical" size={4} style={{ paddingBottom: 4 }}>
+                    {headline(status)}
+                    {stepBody[status]}
+                  </Space>
+                ),
+              }));
+
               return (
                 <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-                  {detailQuery.isLoading && !detail ? (
-                    <Typography.Text type="secondary">단계 정보를 불러오는 중…</Typography.Text>
-                  ) : (
-                    <Steps
-                      size="small"
-                      direction="vertical"
-                      current={cancelled ? -1 : currentIndex}
-                      status={cancelled ? 'error' : r.status === 'RELEASED' ? 'finish' : 'process'}
-                      items={stepItems}
-                    />
-                  )}
+                  <Steps
+                    size="small"
+                    direction="vertical"
+                    current={cancelled ? -1 : currentIndex}
+                    status={cancelled ? 'error' : r.status === 'RELEASED' ? 'finish' : 'process'}
+                    items={stepItems}
+                  />
                   {cancelled && (
                     <Typography.Text type="danger">
                       취소됨{cancelEvent ? ` · ${cancelEvent.eventDate}` : ''}
                       {cancelEvent?.notes ? ` · 사유: ${cancelEvent.notes}` : ''}
                     </Typography.Text>
                   )}
-                  <Typography.Text>내용: {r.description}</Typography.Text>
-                  {(r.receiptMethod || r.releaseMethod) && (
-                    <Typography.Text type="secondary">
-                      접수·출고:{' '}
-                      {[
-                        r.receiptMethod && `접수 ${REPAIR_METHOD_LABELS[r.receiptMethod]}`,
-                        r.releaseMethod && `출고 ${REPAIR_METHOD_LABELS[r.releaseMethod]}`,
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')}
-                      {r.pickupAddress ? ` / 수거 주소: ${r.pickupAddress}` : ''}
-                      {r.deliveryAddress ? ` / 배송 주소: ${r.deliveryAddress}` : ''}
-                    </Typography.Text>
-                  )}
-                  {r.notes && <Typography.Text type="secondary">비고: {r.notes}</Typography.Text>}
-                  <Can permission="REPAIR_EDIT">
-                    <Space wrap>
-                      {next && (
-                        <Button
-                          type="primary"
-                          ghost
-                          icon={<SwapOutlined />}
-                          loading={pending}
-                          onClick={() => openStatusChange(r, next)}
-                        >
-                          {repairStatusMeta(r.status).label} → {repairStatusMeta(next).label} 처리
-                        </Button>
-                      )}
-                      {prev && (
-                        <Button
-                          icon={<RollbackOutlined />}
-                          loading={pending}
-                          onClick={() => openStatusChange(r, prev)}
-                        >
-                          이전 단계로 ({repairStatusMeta(prev).label})
-                        </Button>
-                      )}
-                    </Space>
-                  </Can>
                 </Space>
               );
             },
@@ -496,13 +568,16 @@ export function RepairsPage() {
             <Select options={REPAIR_TYPES.map((t) => ({ value: t, label: repairTypeLabel(t) }))} />
           </Form.Item>
 
-          {/* 계약에 등록된 물품을 찾아 연결하지 않는다 — 품목과 개수를 줄 단위로 적는다. */}
+          {/*
+            계약에 등록된 물품을 찾아 연결하지 않는다 — 품목과 개수를 줄 단위로 적는다.
+            진행(수선요청·입고·출고)이 품목 위에서 돌아가므로 유형과 무관하게 필수다.
+          */}
           <Form.List name="items" initialValue={[{ quantity: 1 }]}>
             {(fields, { add, remove }) => (
               <Form.Item
                 label="대상 품목"
-                required={targetRequired}
-                extra={targetRequired ? undefined : '일반 수선은 품목 없이도 접수할 수 있습니다.'}
+                required
+                extra="입고·출고는 벌 단위로 처리합니다 — 개수를 정확히 적어 주세요."
               >
                 <Space direction="vertical" size={8} style={{ width: '100%' }}>
                   {fields.map((field, index) => (
@@ -512,7 +587,7 @@ export function RepairsPage() {
                         noStyle
                         rules={
                           // 첫 줄만 필수 — 나머지는 비워 두면 접수 시 버린다.
-                          targetRequired && index === 0
+                          index === 0
                             ? [{ required: true, message: '대상 품목을 선택해 주세요.' }]
                             : []
                         }
@@ -567,7 +642,6 @@ export function RepairsPage() {
             name="description"
             label="수선 내용"
             rules={[{ required: true, message: '수선 내용을 입력해 주세요.' }]}
-            extra={!targetRequired ? '일반 수선은 대상 설명을 내용에 함께 적어 주세요.' : undefined}
           >
             <Input.TextArea rows={3} placeholder="예: 하의 기장 1.5cm 줄임" />
           </Form.Item>

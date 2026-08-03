@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import { ITEM_STATUS_FLOW } from '../production/production-status';
 import { WorkOrderListStatus } from './work-orders.dto';
 
 /**
@@ -60,6 +61,18 @@ export function resolveWorkOrderStatus(
     (t) => t != null && t.getTime() > currentVersion.issuedAt.getTime(),
   );
   return changedAfterIssue ? 'REPRINT_NEEDED' : 'CURRENT';
+}
+
+/**
+ * 채촌을 바꿀 수 있는 단계인지 (현업 확정 2026-08-03).
+ * 작업요청(PRODUCTION_REQUESTED)부터는 공장이 이미 그 치수로 일을 시작한 뒤라 확정으로 본다.
+ */
+export function canChangeWorkOrderMeasurement(itemStatus: string): boolean {
+  const frozenFrom = ITEM_STATUS_FLOW.indexOf('PRODUCTION_REQUESTED');
+  const current = ITEM_STATUS_FLOW.indexOf(itemStatus as (typeof ITEM_STATUS_FLOW)[number]);
+  // 흐름에 없는 상태(CANCELLED 등)는 바꿀 일이 없다.
+  if (current < 0) return false;
+  return current < frozenFrom;
 }
 
 /** 작업지시서 뷰 서브객체 (제작 목록·코크핏에서 한 행에 얹어 표시) */
