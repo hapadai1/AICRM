@@ -36,6 +36,7 @@ import { DataTable } from '../../shared/DataTable';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { metaOf } from '../../shared/status-meta';
+import { COL } from '../../shared/table-width';
 import { useRentalCodeNames } from './rental-codes';
 
 /** RENT-004 렌탈 출고·반납 */
@@ -141,7 +142,7 @@ export function RentalHandoverPage() {
     {
       title: '고객',
       dataIndex: 'customerName',
-      width: 130,
+      width: COL.name,
       render: (name: string, r) => (
         <Space direction="vertical" size={0}>
           <Typography.Text>{name}</Typography.Text>
@@ -153,11 +154,11 @@ export function RentalHandoverPage() {
         </Space>
       ),
     },
-    { title: '주문번호', dataIndex: 'orderNo', width: 150 },
+    { title: '주문번호', dataIndex: 'orderNo', width: COL.code },
     {
       title: '주문 품목',
       dataIndex: 'displayName',
-      width: 150,
+      width: COL.wide,
       render: (v: string | undefined, r) => (
         <Space direction="vertical" size={0}>
           <Typography.Text>{v ?? '-'}</Typography.Text>
@@ -175,7 +176,7 @@ export function RentalHandoverPage() {
       // (현업 확정 2026-07-31). 옷은 규격(컬러·사이즈)으로 가린다.
       title: '규격',
       dataIndex: 'color',
-      width: 150,
+      width: COL.color,
       render: (color: string, r) => (
         <Typography.Text>
           {codes.colorName(color)} / {codes.sizeName(r.size)}
@@ -206,7 +207,7 @@ export function RentalHandoverPage() {
     {
       title: '픽업일',
       dataIndex: 'pickupDate',
-      width: 120,
+      width: COL.name,
       render: (d: string) => (
         <Space size={4}>
           {d}
@@ -214,11 +215,11 @@ export function RentalHandoverPage() {
         </Space>
       ),
     },
-    { title: '반납 예정일', dataIndex: 'returnDueDate', width: 110 },
+    { title: '반납 예정일', dataIndex: 'returnDueDate', width: COL.name },
     {
       title: '액션',
       key: 'actions',
-      width: 110,
+      width: COL.action1,
       render: (_, r) => (
         <Button
           size="small"
@@ -240,14 +241,14 @@ export function RentalHandoverPage() {
     {
       title: '출고일',
       dataIndex: 'checkoutDate',
-      width: 110,
+      width: COL.name,
       // 예정일이 아니라 실제로 나간 날. 백엔드 뷰는 actualPickupAt으로 내려 준다.
       render: (d: string | undefined, r) => d ?? r.actualPickupAt?.slice(0, 10) ?? '-',
     },
     {
       title: '반납 예정일',
       dataIndex: 'returnDueDate',
-      width: 130,
+      width: COL.wide,
       render: (d: string) => (
         <Space size={4}>
           {d}
@@ -259,7 +260,7 @@ export function RentalHandoverPage() {
     {
       title: '액션',
       key: 'actions',
-      width: 110,
+      width: COL.action1,
       render: (_, r) => (
         <Button
           size="small"

@@ -47,6 +47,26 @@ export const REPAIR_STATUS_FLOW: RepairStatus[] = [
   'RELEASED',
 ];
 
+/**
+ * 전체 상태 — 세부 5단계+취소를 현업이 목록을 여는 기준으로 묶은 값(백엔드 REPAIR_PHASE_STATUSES와 같은 표).
+ * 저장하는 값이 아니라 검색조건 전용이다 — 건에 남는 건 여전히 세부 status 하나뿐이다.
+ */
+export const REPAIR_PHASES = ['IN_PROGRESS', 'DONE', 'CANCELLED'] as const;
+export type RepairPhase = (typeof REPAIR_PHASES)[number];
+
+export const REPAIR_PHASE_LABELS: Record<RepairPhase, string> = {
+  IN_PROGRESS: '진행중',
+  DONE: '완료',
+  CANCELLED: '취소',
+};
+
+/** 전체 상태에 속한 세부 상태 — 세부 상태 선택지를 좁히는 데 쓴다. */
+export const REPAIR_PHASE_STATUSES: Record<RepairPhase, RepairStatus[]> = {
+  IN_PROGRESS: ['RECEIVED', 'REQUESTED', 'RETURNED_TO_SHOP', 'CUSTOMER_NOTIFIED'],
+  DONE: ['RELEASED'],
+  CANCELLED: ['CANCELLED'],
+};
+
 /** 벌 하나의 진행 — 대기 → 입고 완료 → 출고 완료 */
 export type RepairUnitStatus = 'PENDING' | 'RETURNED' | 'RELEASED';
 
@@ -292,8 +312,8 @@ function toRepair(row: RepairApiRow): Repair {
 export interface RepairListParams {
   status?: string;
   customerId?: string;
-  /** 출고완료(RELEASED) 건 제외 — 상태를 지정하지 않았을 때만 적용된다 */
-  excludeReleased?: boolean;
+  /** 전체 상태(진행중·완료·취소) — 세부 status를 함께 주면 그쪽이 이긴다 */
+  phase?: RepairPhase;
   page?: number;
   size?: number;
 }
@@ -305,7 +325,7 @@ export function fetchRepairs(params: RepairListParams): Promise<ListResult<Repai
     params: {
       status: params.status || undefined,
       customerId: params.customerId || undefined,
-      excludeReleased: params.excludeReleased ? true : undefined,
+      phase: params.phase || undefined,
       page: params.page ?? 1,
       size: params.size ?? 30,
     },

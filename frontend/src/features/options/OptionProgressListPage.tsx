@@ -12,6 +12,7 @@ import { fetchOptionProgress } from '../../api/options';
 import type { RentalProgressItem } from '../../api/rentals';
 import { fetchRentalSelectionProgress } from '../../api/rentals';
 import { DataTable, DEFAULT_PAGE_SIZE } from '../../shared/DataTable';
+import { COL } from '../../shared/table-width';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { LAYOUT } from '../../app/theme';
@@ -225,7 +226,7 @@ export function OptionProgressListPage({
       // 고객명·전화번호를 한 칸에 겹쳐 쓴다 — 채촌 목록·계약 목록과 같은 규격.
       title: '고객',
       key: 'customer',
-      width: 150,
+      width: COL.name,
       render: (_, row) => (
         <Space direction="vertical" size={0}>
           <Typography.Text strong ellipsis>
@@ -243,7 +244,7 @@ export function OptionProgressListPage({
       // 대부분의 계약은 맞춤뿐이라, 그때는 태그 없이 한 줄로 둬 목록이 시끄러워지지 않게 한다.
       title: '품목 구성',
       key: 'composition',
-      width: 200,
+      width: COL.wide,
       ellipsis: true,
       render: (_, row) => {
         const custom = itemComposition(row.customCounts);
@@ -264,7 +265,7 @@ export function OptionProgressListPage({
       },
     },
     // 계약의 전체 품목 수(맞춤+렌탈). 확정 열의 분모(맞춤만)와 다를 수 있다.
-    { title: '건수', dataIndex: 'itemCount', key: 'itemCount', width: 70, align: 'center' },
+    { title: '건수', dataIndex: 'itemCount', key: 'itemCount', width: COL.count, align: 'center' },
     {
       // 기간 검색 기준이 계약일이라 값이 보여야 한다. 계약일 전(작성중)은 작성일을 대신 쓴다.
       // 그 구분은 계약 상태 열이 대신한다 — 계약일이 생기는 상태는 계약완료뿐이라,
@@ -272,19 +273,19 @@ export function OptionProgressListPage({
       title: '계약일',
       dataIndex: 'contractDate',
       key: 'contractDate',
-      width: 120,
+      width: COL.name,
     },
     {
       title: '완성 예정일',
       dataIndex: 'dueDate',
       key: 'dueDate',
-      width: 120,
+      width: COL.name,
       render: (v: string | null) => v ?? <Typography.Text type="secondary">미정</Typography.Text>,
     },
     {
       title: 'D-day',
       key: 'dday',
-      width: 90,
+      width: COL.count,
       render: (_, row) =>
         row.dueDate ? <DdayTag due={row.dueDate} /> : <Typography.Text type="secondary">-</Typography.Text>,
     },
@@ -293,7 +294,7 @@ export function OptionProgressListPage({
       title: '계약 상태',
       dataIndex: 'contractStatus',
       key: 'contractStatus',
-      width: 100,
+      width: COL.status,
       render: (v: string) => {
         const meta = metaOf(CONTRACT_STATUS_META, v);
         return <StatusBadge label={meta.label} color={meta.color} />;
@@ -303,7 +304,7 @@ export function OptionProgressListPage({
       // 분모는 건수와 같은 전체 품목 수 — 맞춤은 옵션 확정, 렌탈은 실물 선정 확정을 센다.
       title: '확정',
       key: 'confirmed',
-      width: 100,
+      width: COL.status,
       render: (_, row) =>
         row.confirmedCount === row.itemCount ? (
           <Tag color="green">전체 확정</Tag>
@@ -317,7 +318,7 @@ export function OptionProgressListPage({
       // 막대 오른쪽 숫자를 퍼센트 대신 단계수(3/8)로 바꿔, 따로 있던 '단계' 열을 흡수했다.
       title: '진행률',
       key: 'progress',
-      width: 180,
+      width: COL.wide,
       render: (_, row) => (
         <Progress
           percent={row.totalStages ? Math.round((row.completedStages / row.totalStages) * 100) : 0}
@@ -344,17 +345,12 @@ export function OptionProgressListPage({
   // 임베드(고객모드)는 이미 고객이 정해진 화면이라 고객 열을 뺀다.
   const shownColumns = embedded ? columns.filter((c) => c.key !== 'customer') : columns;
   // 폭을 다 고정했으니 표 폭도 합으로 확정한다 — 'max-content'로 두면 다시 데이터가 폭을 정한다.
-  const tableWidth = shownColumns.reduce((sum, c) => sum + (Number(c.width) || 0), 0);
 
   const tableEl = (
     <DataTable<ContractRow>
       rowKey="contractId"
       loading={isLoading || rentalQuery.isLoading}
       dataSource={rows}
-      // 필터(전체/미완료/완료)에 따라 열 폭이 흔들려 마지막 열이 가로 스크롤 밖으로
-      // 밀려나던 문제 때문에 이 화면만 폭 고정을 쓴다(shared/table-width.ts 규칙의 예외).
-      tableLayout="fixed"
-      scroll={{ x: tableWidth }}
       columns={shownColumns}
       // 임베드(고객모드)는 한 고객의 계약 몇 건뿐이라 페이징 없이 다 보여준다.
       pagination={

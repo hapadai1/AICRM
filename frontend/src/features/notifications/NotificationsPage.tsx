@@ -38,7 +38,7 @@ import {
 } from '../../api/notifications';
 import type { NotificationRecord, NotificationStatus } from '../../api/notifications';
 import { Can } from '../../shared/Can';
-import { autoWidth } from '../../shared/table-width';
+import { COL } from '../../shared/table-width';
 import { metaOf } from '../../shared/status-meta';
 import { DataTable } from '../../shared/DataTable';
 import { PageCard, PageShell } from '../../shared/PageShell';
@@ -91,14 +91,14 @@ export function NotificationsPage() {
     {
       title: '발송일시',
       key: 'sentAt',
-      ...autoWidth(),
+      width: COL.datetime,
       // 미발송(요청·실패) 건은 sentAt이 null이므로 이력 생성 시각으로 대체한다.
       render: (_, record) => record.sentAt ?? record.createdAt ?? '-',
     },
     {
       title: '고객',
       key: 'customer',
-      ...autoWidth(),
+      width: COL.wide,
       render: (_, record) => (
         <Typography.Text style={{ maxWidth: 180 }} ellipsis={{ tooltip: `${record.customerName ?? ''} ${record.phone}` }}>
           {record.customerName ?? '-'}
@@ -112,7 +112,7 @@ export function NotificationsPage() {
     {
       title: '채널',
       dataIndex: 'channel',
-      ...autoWidth(),
+      width: COL.status,
       render: (c: NotificationRecord['channel']) => {
         const meta = metaOf(NOTIFICATION_CHANNEL_META, c);
         return <Tag color={meta.color}>{meta.label}</Tag>;
@@ -121,6 +121,7 @@ export function NotificationsPage() {
     {
       title: '템플릿',
       dataIndex: 'templateName',
+      width: COL.wide,
       render: (v?: string) => (
         <Typography.Text style={{ maxWidth: 160 }} ellipsis={{ tooltip: v }}>
           {v || '-'}
@@ -130,6 +131,7 @@ export function NotificationsPage() {
     {
       title: '내용',
       dataIndex: 'content',
+      width: COL.text,
       render: (v: string) => (
         <Typography.Text style={{ maxWidth: 360 }} ellipsis={{ tooltip: v }}>
           {v || '-'}
@@ -139,7 +141,7 @@ export function NotificationsPage() {
     {
       title: '상태',
       dataIndex: 'status',
-      ...autoWidth(),
+      width: COL.status,
       render: (s: NotificationRecord['status']) => {
         const meta = metaOf(NOTIFICATION_STATUS_META, s);
         return <Tag color={meta.color}>{meta.label}</Tag>;
@@ -148,6 +150,7 @@ export function NotificationsPage() {
     {
       title: '실패 사유',
       dataIndex: 'failReason',
+      width: COL.text,
       render: (v?: string) => (
         <Typography.Text style={{ maxWidth: 220 }} ellipsis={{ tooltip: v }}>
           {v ?? '-'}
@@ -157,7 +160,7 @@ export function NotificationsPage() {
     {
       title: '작업',
       key: 'action',
-      ...autoWidth(),
+      width: COL.action1,
       render: (_, record) =>
         record.status === 'FAILED' ? (
           <Can permission="NOTIFICATION_SEND">

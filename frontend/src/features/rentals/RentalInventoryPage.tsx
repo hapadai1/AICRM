@@ -11,7 +11,6 @@ import {
   Radio,
   Select,
   Space,
-  Tooltip,
   Typography,
 } from 'antd';
 import type { RadioChangeEvent } from 'antd';
@@ -21,6 +20,7 @@ import { useMemo, useState } from 'react';
 import { ApiError } from '../../api/client';
 import {
   RENTAL_COMPONENT_TYPE_LABELS,
+  RENTAL_ITEM_STATUS_META,
   changeRentalStatusQuantity,
   createRentalItem,
   fetchRentalColors,
@@ -33,7 +33,8 @@ import {
 import { Can } from '../../shared/Can';
 import { DataTable } from '../../shared/DataTable';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
-import { autoWidth } from '../../shared/table-width';
+import { metaOf } from '../../shared/status-meta';
+import { COL } from '../../shared/table-width';
 import { componentTypeOptions } from './rental-constants';
 import { useRentalCodeNames } from './rental-codes';
 
@@ -224,55 +225,85 @@ export function RentalInventoryPage() {
       title: '구분',
       dataIndex: 'componentType',
       render: (c: RentalComponentType) => RENTAL_COMPONENT_TYPE_LABELS[c] ?? c,
-      ...autoWidth(),
+      width: COL.status,
     },
     // 실물이 들고 다니는 값은 코드(BLACK/46)다 — 검색 드롭다운과 같은 말이 되게 이름으로 바꿔 보여 준다.
-    { title: '컬러', dataIndex: 'color', render: (v: string) => codes.colorName(v), ...autoWidth() },
-    { title: '사이즈', dataIndex: 'size', render: (v: string) => codes.sizeName(v), ...autoWidth() },
+    { title: '컬러', dataIndex: 'color', width: COL.color, render: (v: string) => codes.colorName(v) },
+    { title: '사이즈', dataIndex: 'size', width: COL.status, render: (v: string) => codes.sizeName(v) },
     {
       title: '보유',
       dataIndex: 'total',
       align: 'center',
-      ...autoWidth(),
+      width: COL.count,
       render: (v: number) => qtyCell(v, true),
     },
     {
-      // 이 화면에서 가장 자주 찾는 값이다 — "지금 몇 벌 빌려줄 수 있나".
-      title: '가용',
-      dataIndex: 'available',
-      align: 'center',
-      ...autoWidth(),
-      render: (v: number) =>
-        v === 0 ? <Typography.Text type="secondary">0</Typography.Text> : <Typography.Text strong type="success">{v}</Typography.Text>,
+      /*
+       * 네 열을 한 지붕 아래 둔다 — 보유 = 가용 + 예약 + 출고 + 대기가 눈에 들어와야
+       * "세 벌인데 왜 하나만 빌려줄 수 있나"를 표에서 바로 읽는다.
+       */
+      title: '현재 상태',
+      children: [
+        {
+          // 이 화면에서 가장 자주 찾는 값이다 — "지금 몇 벌 빌려줄 수 있나".
+          title: '가용',
+          dataIndex: 'available',
+          align: 'center',
+          width: COL.count,
+          render: (v: number) =>
+            v === 0 ? <Typography.Text type="secondary">0</Typography.Text> : <Typography.Text strong type="success">{v}</Typography.Text>,
+        },
+        { title: '예약', dataIndex: 'reserved', align: 'center', width: COL.count, render: (v: number) => qtyCell(v) },
+        { title: '출고', dataIndex: 'checkedOut', align: 'center', width: COL.count, render: (v: number) => qtyCell(v) },
+        {
+          // 수량 옆에 사유만 쓴다 — 날짜는 비고가 받는다.
+          title: '대기',
+          dataIndex: 'hold',
+          align: 'center',
+          width: COL.name,
+          render: (v: number, row) => {
+            const reasons = [...new Set((row.holds ?? []).map((h) => metaOf(RENTAL_ITEM_STATUS_META, h.status).label))];
+            if (v === 0 || reasons.length === 0) return qtyCell(v);
+            return (
+              <Space size={6}>
+                {qtyCell(v)}
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {reasons.join(' · ')}
+                </Typography.Text>
+              </Space>
+            );
+          },
+        },
+      ],
     },
-    { title: '예약', dataIndex: 'reserved', align: 'center', ...autoWidth(), render: (v: number) => qtyCell(v) },
-    { title: '출고', dataIndex: 'checkedOut', align: 'center', ...autoWidth(), render: (v: number) => qtyCell(v) },
     {
-      title: '대기',
-      dataIndex: 'hold',
-      align: 'center',
-      ...autoWidth(),
-      // 정비를 기다리는 중이면 언제부터 쓸 수 있는지까지 보여 준다 —
-      // 수량만 보면 다른 색을 권하게 되는데 실은 모레면 나온다.
-      // 날짜만 적어 두면 그게 무슨 날인지 읽히지 않아 "…부터 가용"까지 쓴다.
-      render: (v: number, row) =>
-        v > 0 && row.holdUntil ? (
-          <Tooltip title={`정비 중인 ${v}벌은 ${dayjs(row.holdUntil).format('M월 D일')}부터 다시 빌려줄 수 있습니다.`}>
-            <Space size={6}>
-              {qtyCell(v)}
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {dayjs(row.holdUntil).format('M/D')}부터 가용
+      /*
+       * 대기가 언제 풀리는지. 날짜의 뜻이 상태마다 다르다 — 반납 대기(세탁 정비)는 그날
+       * 자동으로 대여 가능이 되지만, 수선·사용 불가는 담당자가 [사용 재개]를 눌러야 풀리는
+       * 예정일일 뿐이다. 같은 말로 쓰면 오지 않을 날짜를 기다리게 된다.
+       */
+      title: '비고',
+      key: 'note',
+      width: COL.text,
+      render: (_, row) => {
+        const holds = (row.holds ?? []).filter((h) => h.availableFrom);
+        if (holds.length === 0) return <Typography.Text type="secondary">-</Typography.Text>;
+        return (
+          <Space direction="vertical" size={0}>
+            {holds.map((h) => (
+              <Typography.Text key={`${h.status}-${h.availableFrom}`} style={{ fontSize: 12 }}>
+                {dayjs(h.availableFrom).format('M/D')}{' '}
+                {h.status === 'RETURNED_HOLD' ? '자동 가용' : '가용 예정'} ({h.count}벌)
               </Typography.Text>
-            </Space>
-          </Tooltip>
-        ) : (
-          qtyCell(v)
-        ),
+            ))}
+          </Space>
+        );
+      },
     },
     {
       title: '액션',
       key: 'actions',
-      ...autoWidth(),
+      width: COL.action2,
       render: (_, row) => (
         <Can permission="RENTAL_EDIT">
           <Space size="small">

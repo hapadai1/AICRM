@@ -11,7 +11,7 @@ import { LAYOUT } from '../../app/theme';
 import { DataTable } from '../../shared/DataTable';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { metaOf } from '../../shared/status-meta';
-import { autoWidth } from '../../shared/table-width';
+import { COL } from '../../shared/table-width';
 import { PRODUCT_CATEGORY_LABEL } from '../contracts/labels';
 import { WORK_ORDER_STATUS_META } from '../workorders/wo-meta';
 
@@ -131,47 +131,47 @@ export function ProductionPage() {
     {
       title: '고객명',
       key: 'customerName',
-      ...autoWidth(),
+      width: COL.name,
       render: (_, r) => <Typography.Text strong>{r.customerName}</Typography.Text>,
     },
     {
       title: '전화번호',
       dataIndex: 'customerPhone',
       key: 'customerPhone',
-      ...autoWidth(),
+      width: COL.code,
       render: (v: string) => v || <Typography.Text type="secondary">-</Typography.Text>,
     },
-    { title: '계약번호', dataIndex: 'contractNo', key: 'contractNo', ...autoWidth() },
+    { title: '계약번호', dataIndex: 'contractNo', key: 'contractNo', width: COL.code },
     {
       title: '품목 구성',
       key: 'composition',
-      ...autoWidth(),
+      width: COL.wide,
       render: (_, r) => itemComposition(r.categoryCounts),
     },
     {
       title: '건수',
       dataIndex: 'itemCount',
       key: 'itemCount',
-      ...autoWidth(),
+      width: COL.count,
       align: 'center',
     },
     {
       title: '완성 예정일',
       dataIndex: 'dueDate',
       key: 'dueDate',
-      ...autoWidth(),
+      width: COL.name,
       render: (v: string | null) => v ?? <Typography.Text type="secondary">미정</Typography.Text>,
     },
     {
       title: 'D-day',
       key: 'dday',
-      ...autoWidth(),
+      width: COL.count,
       render: (_, r) => (r.dueDate ? <DdayTag due={r.dueDate} /> : <Typography.Text type="secondary">-</Typography.Text>),
     },
     {
       title: '제작 진행률',
       key: 'progress',
-      ...autoWidth(160),
+      width: COL.wide,
       render: (_, r) => {
         const pct = r.progressCount ? Math.round((r.progressSum / r.progressCount) * 100) : 0;
         return <Progress percent={pct} size="small" style={{ minWidth: 120 }} />;
@@ -180,7 +180,7 @@ export function ProductionPage() {
     {
       title: '입고',
       key: 'received',
-      ...autoWidth(),
+      width: COL.status,
       render: (_, r) =>
         r.releasedCount === r.itemCount ? (
           <Tag color="green">전체 출고</Tag>
@@ -195,7 +195,7 @@ export function ProductionPage() {
     {
       title: '작업지시서',
       key: 'workOrder',
-      ...autoWidth(),
+      width: COL.wide,
       render: (_, r) =>
         r.woUnorderedCount === 0 && r.woReprintCount === 0 ? (
           <Tag color="green">전체 최신</Tag>

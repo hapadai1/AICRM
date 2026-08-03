@@ -280,8 +280,19 @@ export interface RentalSkuSummaryRow {
   checkedOut: number;
   /** 세탁·수선 등으로 오늘 못 쓰는 수 */
   hold: number;
-  /** 대기 중 가장 이른 대여 가능 예정일 (정비 대기만 잡힌다 — 수선·사용중지는 기한이 없어 null) */
-  holdUntil?: string | null;
+  /** 대기 수량의 내역 — 비고 칸이 이걸 줄줄이 쓴다. 이른 예정일부터, 기한 미정은 맨 뒤. */
+  holds?: RentalSkuHold[];
+}
+
+/**
+ * 대기 한 묶음 — "왜 못 쓰는지 · 언제 풀리는지 · 몇 벌".
+ * 날짜의 뜻은 상태마다 다르다: 반납 대기(세탁 정비)는 그날 자동으로 대여 가능이 되지만,
+ * 수선·사용 불가는 담당자가 [사용 재개]로 풀어야 하는 예정일일 뿐이다.
+ */
+export interface RentalSkuHold {
+  status: RentalItemStatus;
+  availableFrom: string | null;
+  count: number;
 }
 
 /** SKU별 수량 집계 — GET /rental-inventory/sku-summary */

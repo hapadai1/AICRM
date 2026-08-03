@@ -33,6 +33,17 @@ const ITEM_WITH_SKU = { rentalSku: true } as const;
 /** 실물이 살아 있지만 지금은 빌려줄 수 없는 상태 (세탁·수선 대기 등) */
 const HOLD_ITEM_STATUSES = ['RETURNED_HOLD', 'ALTERATION', 'UNAVAILABLE'];
 
+/**
+ * 대기 한 묶음 — "왜 못 쓰는지(상태) + 언제 풀리는지(예정일) + 몇 벌".
+ * 상태만으로는 언제 나오는지 모르고, 날짜만으로는 저절로 풀리는지 사람이 풀어야 하는지 모른다.
+ */
+interface SkuHold {
+  status: string;
+  /** 예정일이 없는 대기(기한 미정)는 null */
+  availableFrom: string | null;
+  count: number;
+}
+
 /** SKU 수량 집계 한 줄 — total = available + reserved + checkedOut + hold */
 interface SkuSummaryRow {
   componentType: string;
@@ -47,11 +58,11 @@ interface SkuSummaryRow {
   /** 세탁·수선 등으로 오늘 못 쓰는 수 */
   hold: number;
   /**
-   * 대기 중인 것 가운데 가장 이른 대여 가능 예정일. 정비가 끝나기를 기다리는 것뿐이라면
-   * "언제부터 쓸 수 있는가"가 곧 답이다 — 날짜를 안 보여 주면 대기 수량만 보고
-   * 다른 색을 권하게 된다. 수선·사용중지처럼 기한이 없는 대기는 여기 잡히지 않는다.
+   * 그 대기 수량의 내역. 화면 '비고' 칸이 이걸 그대로 줄줄이 쓴다 —
+   * 수량만 보면 다른 색을 권하게 되는데 실은 모레면 나오는 경우가 있다.
+   * 이른 예정일부터, 기한 미정은 맨 뒤.
    */
-  holdUntil: string | null;
+  holds: SkuHold[];
 }
 
 /**
@@ -203,7 +214,7 @@ export class RentalInventoryService {
           reserved: 0,
           checkedOut: 0,
           hold: 0,
-          holdUntil: null,
+          holds: [],
         };
       row.total += 1;
       const occupying = item.allocations;
@@ -213,13 +224,26 @@ export class RentalInventoryService {
       // 세탁·수선·사용중지, 그리고 "이 날짜부터 다시 가용"이 아직 안 온 것은 지금 못 쓴다.
       else if (HOLD_ITEM_STATUSES.includes(item.status) || waitingUntil) {
         row.hold += 1;
-        if (waitingUntil) {
-          const until = toDateOnlyString(waitingUntil);
-          if (!row.holdUntil || until < row.holdUntil) row.holdUntil = until;
-        }
+        // 같은 사유·같은 날짜끼리 묶는다 — 세 벌이 같은 날 수선에서 나오면 세 줄이 아니라 한 줄이다.
+        const availableFrom = waitingUntil ? toDateOnlyString(waitingUntil) : null;
+        const same = row.holds.find((h) => h.status === item.status && h.availableFrom === availableFrom);
+        if (same) same.count += 1;
+        else row.holds.push({ status: item.status, availableFrom, count: 1 });
       } else row.available += 1;
       rows.set(key, row);
     }
+
+    // 이른 예정일부터. 기한이 안 잡힌 대기(언제 풀릴지 모르는 것)는 맨 뒤로 민다.
+    for (const row of rows.values())
+      row.holds.sort((a, b) =>
+        a.availableFrom === b.availableFrom
+          ? a.status.localeCompare(b.status)
+          : !a.availableFrom
+            ? 1
+            : !b.availableFrom
+              ? -1
+              : a.availableFrom.localeCompare(b.availableFrom),
+      );
 
     return [...rows.values()].sort(
       (a, b) =>

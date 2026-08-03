@@ -12,6 +12,7 @@ import {
   CreateRepairDto,
   CreateRepairStatusEventDto,
   ListRepairsQueryDto,
+  REPAIR_PHASE_STATUSES,
   RepairItemDto,
   RepairProgressDto,
   UpdateRepairDto,
@@ -79,7 +80,7 @@ const REPAIR_SUMMARY_SELECT = {
   orderItem: { select: { id: true, displayName: true, productCategory: true } },
   component: { select: { id: true, componentType: true, sequenceNo: true } },
   // 목록에도 이력을 함께 준다 — 품목 표가 벌마다 "언제·누가" 처리했는지 보여주는데,
-  // 목록(고객 업무 처리)과 상세가 같은 표를 쓰므로 목록에서만 날짜가 비면 안 된다.
+  // 목록의 행 펼침과 상세가 같은 표를 쓰므로 목록에서만 날짜가 비면 안 된다.
   statusEvents: {
     select: {
       id: true,
@@ -123,11 +124,12 @@ export class RepairsService {
 
   async list(query: ListRepairsQueryDto) {
     const where: Prisma.RepairRequestWhereInput = {
-      // 상태를 지정하면 그대로, 아니면 excludeReleased일 때 출고완료만 뺀다.
+      // 세부 상태를 지정하면 그대로, 아니면 전체 상태(진행중·완료·취소)를 세부 상태 묶음으로 푼다.
+      // 둘 다 없으면 전부 — 전체 상태를 비우는 게 곧 '전체'다.
       ...(query.status
         ? { status: query.status }
-        : query.excludeReleased
-          ? { status: { not: 'RELEASED' } }
+        : query.phase
+          ? { status: { in: [...REPAIR_PHASE_STATUSES[query.phase]] } }
           : {}),
       ...(query.customerId ? { customerId: query.customerId } : {}),
     };

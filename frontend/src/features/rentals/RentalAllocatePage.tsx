@@ -33,6 +33,7 @@ import {
   type RentalCalendarItem,
   type RentalComponentType,
 } from '../../api/rentals';
+import { COL } from '../../shared/table-width';
 import { componentTypeOptions } from './rental-constants';
 import { useRentalCodeNames } from './rental-codes';
 
@@ -226,15 +227,15 @@ export function RentalAllocatePage() {
     {
       title: '구분',
       dataIndex: 'componentType',
-      width: 120,
+      width: COL.status,
       render: (c: RentalComponentType) => RENTAL_COMPONENT_TYPE_LABELS[c] ?? c,
     },
-    { title: '컬러', dataIndex: 'color', width: 140, render: (v: string) => codes.colorName(v) },
-    { title: '사이즈', dataIndex: 'size', width: 100, render: (v: string) => codes.sizeName(v) },
+    { title: '컬러', dataIndex: 'color', width: COL.color, render: (v: string) => codes.colorName(v) },
+    { title: '사이즈', dataIndex: 'size', width: COL.status, render: (v: string) => codes.sizeName(v) },
     {
       title: '가용',
       dataIndex: 'count',
-      width: 80,
+      width: COL.count,
       align: 'center',
       render: (v: number) => (
         <Typography.Text strong type="success">
@@ -245,7 +246,7 @@ export function RentalAllocatePage() {
     {
       title: '예약',
       key: 'allocate',
-      width: 90,
+      width: COL.action1,
       render: (_, r) => (
         <Button size="small" type="primary" onClick={() => openAllocate(r)}>
           예약

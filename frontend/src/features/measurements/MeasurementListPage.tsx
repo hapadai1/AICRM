@@ -17,7 +17,7 @@ import { DataTable } from '../../shared/DataTable';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { metaOf } from '../../shared/status-meta';
-import { autoWidth, wrapAt } from '../../shared/table-width';
+import { COL, wrapAt } from '../../shared/table-width';
 import { CONTRACT_STATUS_META, PRODUCT_CATEGORY_LABEL } from '../contracts/labels';
 
 /** 품목 구성 요약 — "정장 2 · 셔츠 1" */
@@ -176,7 +176,7 @@ export function MeasurementListPage({
     {
       title: '고객',
       key: 'customer',
-      ...autoWidth(140),
+      width: COL.name,
       render: (_, row) => (
         <Space direction="vertical" size={0}>
           <Typography.Text strong>{row.customerName}</Typography.Text>
@@ -190,7 +190,7 @@ export function MeasurementListPage({
       // 계약번호는 참고용이라 자기 열 없이 계약 구분 아래에 붙인다(계약 목록과 같은 방식).
       title: '계약 구분',
       dataIndex: 'contractTypeName',
-      ...autoWidth(110),
+      width: COL.code,
       render: (name: string | null, row) => (
         <Space direction="vertical" size={0}>
           <Typography.Text>{name ?? '-'}</Typography.Text>
@@ -202,11 +202,11 @@ export function MeasurementListPage({
     },
     // 기간 필터의 기준값이라 표에도 둔다 — 왜 이 건이 걸렸는지 열에서 바로 확인되어야 한다.
     // 계약일 전(작성중)은 작성일이 대신 들어온다 — 그 구분은 상태 열이 한다.
-    { title: '계약일', dataIndex: 'contractDate', ...autoWidth() },
+    { title: '계약일', dataIndex: 'contractDate', width: COL.name },
     {
       title: '완료 예정일',
       dataIndex: 'dueDate',
-      ...autoWidth(),
+      width: COL.name,
       render: (v: string | null) => v ?? <Typography.Text type="secondary">미정</Typography.Text>,
     },
     {
@@ -218,7 +218,7 @@ export function MeasurementListPage({
        */
       title: '상태',
       dataIndex: 'contractStatus',
-      ...autoWidth(),
+      width: COL.status,
       render: (v: string) => {
         const meta = metaOf(CONTRACT_STATUS_META, v);
         return <StatusBadge label={meta.label} color={meta.color} />;
@@ -227,15 +227,12 @@ export function MeasurementListPage({
     {
       /*
        * 품목이 늘면 "정장 2 · 셔츠 1 · 구두 1"처럼 길어지는 유일한 열이다.
-       * 계약 목록처럼 width+ellipsis 로 막을 수 없다 — 이 표는 액션 열을 오른쪽에 고정해
-       * rc-table 이 table-layout: auto 를 고르고, auto 에서는 width 가 힌트일 뿐이라
-       * 값이 길어지면 열이 늘고 나머지 열이 그만큼 쪼그라든다(계약 목록은 fixed 라 안 그렇다).
-       * 그래서 셀 안쪽에서 접는다 — table-width.ts 의 wrapAt 이 이 경우를 위한 것이다.
+       * 열 폭은 COL.wide 로 고정되므로, 값이 그보다 길면 셀 안에서 줄을 바꾼다.
        * 채촌 대상은 맞춤 품목뿐이라 렌탈 줄은 없다.
        */
       title: '품목 구성',
       key: 'composition',
-      ...autoWidth(),
+      width: COL.wide,
       render: (_, row) => (
         <Typography.Text style={wrapAt(200)}>{itemComposition(row.categoryCounts) || '-'}</Typography.Text>
       ),
@@ -243,7 +240,7 @@ export function MeasurementListPage({
     {
       title: '스타일 컨설팅',
       key: 'consulting',
-      ...autoWidth(),
+      width: COL.wide,
       render: (_, row) =>
         row.consultingComplete ? (
           <Tag color="green">전체 완료</Tag>
@@ -259,7 +256,7 @@ export function MeasurementListPage({
     {
       title: '채촌 상태',
       key: 'measurement',
-      ...autoWidth(),
+      width: COL.status,
       render: (_, row) => {
         const state = measurementStateOf(row);
         return <StatusBadge label={state.label} color={state.color} />;
@@ -268,7 +265,7 @@ export function MeasurementListPage({
     {
       title: '액션',
       key: 'actions',
-      ...autoWidth(),
+      width: COL.action2,
       render: (_, row) => (
         <Space size={4} onClick={(e) => e.stopPropagation()}>
           <Button

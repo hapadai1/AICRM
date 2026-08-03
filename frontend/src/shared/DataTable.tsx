@@ -24,6 +24,23 @@ function isActionColumn<T>(column: ColumnGroupType<T> | ColumnType<T>): boolean 
   return ACTION_KEYS.has(key) || ACTION_TITLES.has(title);
 }
 
+/**
+ * 남는 가로 공간을 흡수하는 빈 열.
+ *
+ * 열마다 폭(COL)을 정해 둬도 표는 컨테이너를 채우려 하기 때문에, 남는 자리를 열들에
+ * 비례 배분한다 — 그러면 열이 다섯 개인 화면이 열 개인 화면보다 더 벌어져서 폭을 정해 둔
+ * 의미가 없어진다. 폭 없는 열을 하나 두면 남는 자리가 전부 그리로 가고 나머지는 선언한
+ * 폭 그대로 있는다. 표가 컨테이너보다 넓을 때는 0폭이라 없는 것과 같다.
+ */
+const SPACER_COLUMN = { key: '__spacer', title: '', render: () => null };
+
+/** 여백 열은 오른쪽 고정(액션) 열 앞에 넣는다 — 뒤에 두면 고정 열과 겹친다. */
+function withSpacer<T>(columns: (ColumnGroupType<T> | ColumnType<T>)[]) {
+  const firstFixedRight = columns.findIndex((c) => c.fixed === 'right');
+  const at = firstFixedRight === -1 ? columns.length : firstFixedRight;
+  return [...columns.slice(0, at), SPACER_COLUMN as ColumnType<T>, ...columns.slice(at)];
+}
+
 export interface DataTableProps<T> extends TableProps<T> {
   /**
    * 액션 열을 오른쪽에 고정할지. 기본 true.
@@ -66,6 +83,7 @@ export function DataTable<T extends object>({
   skeletonRows = 6,
   scroll,
   size,
+  tableLayout,
   pagination,
   totalUnit = '건',
   ...rest
@@ -77,11 +95,12 @@ export function DataTable<T extends object>({
     return <Skeleton active title={false} paragraph={{ rows: skeletonRows, width: '100%' }} />;
   }
 
-  const resolvedColumns = stickyActions
+  const fixedColumns = stickyActions
     ? columns?.map((column) =>
         isActionColumn(column) ? { ...column, fixed: 'right' as const } : column,
       )
     : columns;
+  const resolvedColumns = fixedColumns ? withSpacer(fixedColumns) : fixedColumns;
 
   // pagination={false}(상세화면 안의 보조 표)는 그대로 두고, 목록 표만 규격을 입힌다.
   const resolvedPagination =
@@ -92,6 +111,9 @@ export function DataTable<T extends object>({
   return (
     <Table<T>
       size={size ?? 'middle'}
+      // 열 폭(COL)을 선언한 대로 쓰려면 고정 레이아웃이어야 한다. auto로 두면 width는 힌트일 뿐이라
+      // 브라우저가 값 길이에 맞춰 다시 나눈다 — 검색 결과가 바뀔 때마다 열이 흔들리던 원인이다.
+      tableLayout={tableLayout ?? 'fixed'}
       scroll={scroll ?? { x: 'max-content' }}
       columns={resolvedColumns}
       loading={loading}

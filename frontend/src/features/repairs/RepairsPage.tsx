@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   App,
   Button,
-  Checkbox,
   DatePicker,
   Form,
   Input,
@@ -21,6 +20,7 @@ import { useState } from 'react';
 import { ApiError } from '../../api/client';
 import { LAYOUT } from '../../app/theme';
 import { DataTable } from '../../shared/DataTable';
+import { COL } from '../../shared/table-width';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { fetchCustomers } from '../../api/customers';
 import {
@@ -36,11 +36,15 @@ import {
   repairStatusMeta,
   repairTypeLabel,
   REPAIR_METHOD_LABELS,
+  REPAIR_PHASES,
+  REPAIR_PHASE_LABELS,
+  REPAIR_PHASE_STATUSES,
   REPAIR_RECEIPT_METHODS,
   REPAIR_RELEASE_METHODS,
   type Repair,
   type RepairEvent,
   type RepairNotificationSuggestion,
+  type RepairPhase,
   type RepairReceiptMethod,
   type RepairReleaseMethod,
   type RepairStatus,
@@ -51,10 +55,8 @@ import {
   repairStageSummary,
   type RepairProgressStage,
 } from './RepairItemProgress';
-import { RepairWorkCard } from './RepairWorkCard';
 import { NotificationConfirmModal } from '../../shared/NotificationConfirmModal';
 import { StatusBadge } from '../../shared/StatusBadge';
-import { autoWidth, wrapAt } from '../../shared/table-width';
 
 interface ReceiptValues {
   customerId: string;
@@ -77,10 +79,21 @@ interface StatusChangeState {
   toStatus: RepairStatus;
 }
 
-const STATUS_FILTER_OPTIONS = [...REPAIR_STATUS_FLOW, 'CANCELLED' as const].map((s) => ({
-  value: s,
-  label: repairStatusMeta(s).label,
-}));
+/** 두 상태 셀렉트 모두 맨 앞이 '전체'다 — 지우기(X) 대신 고를 수 있는 항목으로 둔다. */
+const FILTER_ALL = 'ALL';
+
+const PHASE_FILTER_OPTIONS = [
+  { value: FILTER_ALL, label: '전체' },
+  ...REPAIR_PHASES.map((p) => ({ value: p, label: REPAIR_PHASE_LABELS[p] })),
+];
+
+const statusOptionsOf = (statuses: RepairStatus[]) => [
+  { value: FILTER_ALL, label: '전체' },
+  ...statuses.map((s) => ({ value: s, label: repairStatusMeta(s).label })),
+];
+
+/** 세부 상태 선택지 — 전체 상태를 고르면 그 묶음 안으로 좁힌다. */
+const ALL_STATUS_OPTIONS = statusOptionsOf([...REPAIR_STATUS_FLOW, 'CANCELLED']);
 
 /** 단계(건 상태)와 품목 진행 단계의 대응 — 접수·고객 연락은 품목 단위가 아니라 비어 있다. */
 const STAGE_BY_STATUS: Partial<Record<RepairStatus, RepairProgressStage>> = {
@@ -89,6 +102,13 @@ const STAGE_BY_STATUS: Partial<Record<RepairStatus, RepairProgressStage>> = {
   RELEASED: 'RELEASE',
 };
 
+/**
+ * 대상 열 폭. 품목은 다섯 가지(상의·하의·베스트·셔츠·구두)가 전부라 최대 길이가 정해져 있고,
+ * `상의(자켓) 1 · 하의(바지) 1 · 베스트 1 · 셔츠 1 · 구두 1`이 한 줄에 들어가야 한다.
+ * COL.wide(품목 구성)로는 모자라 이 화면에서만 넓게 잡는다.
+ */
+const TARGET_WIDTH = 350;
+
 /** 접수·출고 방식 칸 — 방문 수거·배송이면 주소까지 같이 보여 준다(우리가 갈 곳이다). */
 function methodCell(method: string | undefined, address: string | undefined) {
   if (!method) return '-';
@@ -96,7 +116,7 @@ function methodCell(method: string | undefined, address: string | undefined) {
     <Space direction="vertical" size={0}>
       <Typography.Text>{REPAIR_METHOD_LABELS[method] ?? method}</Typography.Text>
       {address && (
-        <Typography.Text type="secondary" style={{ fontSize: 12, ...wrapAt(180) }}>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           {address}
         </Typography.Text>
       )}
@@ -109,9 +129,9 @@ export function RepairsPage() {
   const { message } = App.useApp();
   const queryClient = useQueryClient();
 
-  const [statusFilter, setStatusFilter] = useState<string | undefined>();
-  // 완료된 건은 기본적으로 숨긴다 (상태를 직접 고르면 그 선택이 우선한다).
-  const [excludeReleased, setExcludeReleased] = useState(true);
+  const [statusFilter, setStatusFilter] = useState<RepairStatus | undefined>();
+  // 목록을 여는 이유는 대개 "지금 처리할 게 뭐냐"라 진행중으로 시작한다(비우면 전체).
+  const [phaseFilter, setPhaseFilter] = useState<RepairPhase | undefined>('IN_PROGRESS');
   const [customerFilter, setCustomerFilter] = useState<string | undefined>();
   const [customerKeyword, setCustomerKeyword] = useState('');
   const [page, setPage] = useState(1);
@@ -127,12 +147,12 @@ export function RepairsPage() {
   const [noteForm] = Form.useForm<{ notes?: string }>();
 
   const listQuery = useQuery({
-    queryKey: ['repairs', 'list', { statusFilter, customerFilter, excludeReleased, page, size }],
+    queryKey: ['repairs', 'list', { statusFilter, customerFilter, phaseFilter, page, size }],
     queryFn: () =>
       fetchRepairs({
         status: statusFilter,
         customerId: customerFilter,
-        excludeReleased,
+        phase: phaseFilter,
         page,
         size,
       }),
@@ -203,6 +223,12 @@ export function RepairsPage() {
     onError: (e) => message.error(e instanceof ApiError ? e.message : '상태 변경에 실패했습니다.'),
   });
 
+  // 전체 상태를 고르면 세부 상태 선택지도 그 묶음 안으로 좁힌다 —
+  // '진행중'을 보면서 '출고 완료'를 고를 수 있으면 결과가 항상 0건이라 고를 이유가 없다.
+  const statusOptions = phaseFilter
+    ? statusOptionsOf(REPAIR_PHASE_STATUSES[phaseFilter])
+    : ALL_STATUS_OPTIONS;
+
   const customerOptions = (customerQuery.data?.data ?? []).map((c) => ({
     value: c.id,
     label: `${c.name} (${c.phone})`,
@@ -223,7 +249,7 @@ export function RepairsPage() {
     {
       title: '고객',
       dataIndex: 'customerName',
-      ...autoWidth(140),
+      width: COL.name,
       render: (name: string, r) => (
         <Space direction="vertical" size={0}>
           <Typography.Text strong>{name}</Typography.Text>
@@ -236,20 +262,19 @@ export function RepairsPage() {
     {
       title: '유형',
       dataIndex: 'repairType',
-      ...autoWidth(),
+      width: COL.status,
       render: (t: string) => repairTypeLabel(t),
     },
     {
       title: '대상',
       dataIndex: 'targetLabel',
-      ...autoWidth(140),
+      width: TARGET_WIDTH,
       render: (label: string, r) => {
         // 건 상태만으로는 "몇 벌이 들어왔는지"를 알 수 없다 — 진척을 한 줄 붙인다.
         const p = repairProgress(r.items);
         return (
           <Space direction="vertical" size={0}>
-            {/* 대상 품목이 늘어도 열이 계속 넓어지지 않게 셀 안에서 접는다 */}
-            <Typography.Text style={wrapAt(260)}>{label}</Typography.Text>
+            <Typography.Text>{label}</Typography.Text>
             {p.totalUnits > 0 && (
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 입고 {p.returned}/{p.totalUnits} · 출고 {p.released}/{p.totalUnits}
@@ -264,11 +289,11 @@ export function RepairsPage() {
         );
       },
     },
-    { title: '접수일', dataIndex: 'requestDate', ...autoWidth() },
+    { title: '접수일', dataIndex: 'requestDate', width: COL.name },
     {
       title: '완료 예정일',
       dataIndex: 'dueDate',
-      ...autoWidth(),
+      width: COL.name,
       render: (d: string | undefined, r) => (
         <Space size={4}>
           {d ?? '-'}
@@ -281,8 +306,9 @@ export function RepairsPage() {
     {
       title: '상태',
       dataIndex: 'status',
-      ...autoWidth(),
-      align: 'center',
+      width: COL.status,
+      // 이 표에서 가운데 정렬은 상태 하나뿐이었다. 자기 몫 여백이 좌우로 갈려
+      // 배지가 옆 열에 붙어 보이므로 나머지 열과 같은 왼쪽 정렬로 맞춘다.
       render: (s: string) => {
         const meta = repairStatusMeta(s);
         return <StatusBadge label={meta.label} color={meta.color} />;
@@ -292,13 +318,15 @@ export function RepairsPage() {
       // 방문 수거·배송이면 우리가 움직여야 하는 건이지만, 매번 보는 값은 아니라 맨 뒤에 둔다.
       title: '접수 방식',
       dataIndex: 'receiptMethod',
-      ...autoWidth(),
+      // 값은 '고객 방문' 같은 짧은 분류값이다. 주소는 방문 수거·배송일 때만 붙는 예외라
+      // 그 한 줄에 맞춰 열을 넓히지 않고 셀 안에서 접는다.
+      width: COL.status,
       render: (m: string | undefined, r) => methodCell(m, r.pickupAddress),
     },
     {
       title: '출고 방식',
       dataIndex: 'releaseMethod',
-      ...autoWidth(),
+      width: COL.status,
       render: (m: string | undefined, r) => methodCell(m, r.deliveryAddress),
     },
   ];
@@ -332,25 +360,28 @@ export function RepairsPage() {
                 }}
               />
               <Select
-                allowClear
-                placeholder="상태 전체"
                 style={{ width: LAYOUT.filterWidth }}
-                value={statusFilter}
-                onChange={(v: string | undefined) => {
-                  setStatusFilter(v);
+                value={phaseFilter ?? FILTER_ALL}
+                onChange={(v: string) => {
+                  const next = v === FILTER_ALL ? undefined : (v as RepairPhase);
+                  setPhaseFilter(next);
+                  // 묶음을 바꾸면 그 안에 없는 세부 상태는 남겨 둘 수 없다.
+                  if (next && statusFilter && !REPAIR_PHASE_STATUSES[next].includes(statusFilter)) {
+                    setStatusFilter(undefined);
+                  }
                   setPage(1);
                 }}
-                options={STATUS_FILTER_OPTIONS}
+                options={PHASE_FILTER_OPTIONS}
               />
-              <Checkbox
-                checked={excludeReleased}
-                onChange={(e) => {
-                  setExcludeReleased(e.target.checked);
+              <Select
+                style={{ width: LAYOUT.filterWidth }}
+                value={statusFilter ?? FILTER_ALL}
+                onChange={(v: string) => {
+                  setStatusFilter(v === FILTER_ALL ? undefined : (v as RepairStatus));
                   setPage(1);
                 }}
-              >
-                출고완료 제외
-              </Checkbox>
+                options={statusOptions}
+              />
             </>
           }
           actions={
@@ -515,15 +546,6 @@ export function RepairsPage() {
         />
       </Space>
       </PageCard>
-
-      {/* 고객별 업무 처리 — 상태 관리 목록 아래에 붙는다(설계 PDF 2페이지 수선 업무 흐름). */}
-      <RepairWorkCard
-        customerOptions={customerOptions}
-        customerLoading={customerQuery.isLoading}
-        onCustomerSearch={setCustomerKeyword}
-        onWork={openStatusChange}
-        pendingRepairId={statusMutation.isPending ? statusMutation.variables?.repair.id : undefined}
-      />
 
       {/* 수선 접수 모달 — 고객·대상 품목·수선 내용을 받는다. */}
       <Modal

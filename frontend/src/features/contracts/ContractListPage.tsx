@@ -42,7 +42,7 @@ import { DataTable } from '../../shared/DataTable';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { LAYOUT } from '../../app/theme';
 import { StatusBadge } from '../../shared/StatusBadge';
-import { autoWidth } from '../../shared/table-width';
+import { COL } from '../../shared/table-width';
 import {
   CONTRACT_STATUS_META,
   PRODUCT_CATEGORY_LABEL,
@@ -246,7 +246,7 @@ export function ContractListPage({
    * - 왼쪽이 기본. 금액만 오른쪽. 가운데는 폭이 좁게 고정된 숫자 열에만 쓴다
    *   (넓은 열을 가운데 두면 값이 빈 칸 한가운데 떠서 시작 기준선이 어긋난다).
    *
-   * 폭은 고정하지 않는다 — autoWidth() 참고.
+   * 폭은 뜻이 같은 열끼리 같게 고정한다 — COL 참고.
    */
   const columns: ColumnsType<ContractListItem> = [
     // 열 순서는 현업이 읽는 순서다 (현업 확정 2026-07-31):
@@ -256,7 +256,7 @@ export function ContractListPage({
     {
       title: '고객',
       dataIndex: 'customerName',
-      ...autoWidth(140),
+      width: COL.name,
       render: (name: string, row) => (
         <Space direction="vertical" size={0}>
           <Typography.Text>{name}</Typography.Text>
@@ -269,7 +269,7 @@ export function ContractListPage({
     {
       title: '계약 구분',
       dataIndex: 'contractTypeName',
-      ...autoWidth(110),
+      width: COL.code,
       // 계약번호는 참고용이라 자기 열을 주지 않고 계약 구분 아래에 붙인다(고객 열의 전화번호와 같은 방식).
       render: (name: string, row) => (
         <Space direction="vertical" size={0}>
@@ -308,7 +308,7 @@ export function ContractListPage({
     {
       title: '계약일',
       dataIndex: 'contractedAt',
-      ...autoWidth(),
+      width: COL.name,
       // 계약일은 계약완료 시점에 정해진다. 그 전에는 빈 칸 대신 작성일을 보여 준다(기간 필터 기준과 동일).
       // 작성일임을 "(작성)"으로 덧붙이거나 흐리게 쓰지 않는다 — 작성중인지는 상태 열이 이미 말한다.
       render: (v: string | undefined, row) => v ?? row.createdAt ?? '-',
@@ -316,20 +316,20 @@ export function ContractListPage({
     {
       title: '완료 예정일',
       dataIndex: 'completionDueDate',
-      ...autoWidth(),
+      width: COL.name,
       render: (v?: string) => v ?? '-',
     },
     {
       title: '계약금액',
       dataIndex: 'totalAmount',
-      ...autoWidth(),
+      width: COL.name,
       align: 'right',
       render: formatKrw,
     },
     {
       title: '상태',
       dataIndex: 'status',
-      ...autoWidth(),
+      width: COL.status,
       // 수정하기(버전업)를 거친 계약은 상태만 보면 신규 작성건과 구분되지 않는다 → 버전을 함께 보여준다.
       render: (v: string, row) => {
         const meta = metaOf(CONTRACT_STATUS_META, v);
@@ -352,7 +352,7 @@ export function ContractListPage({
       // 대부분의 계약은 맞춤뿐이라, 그때는 태그 없이 한 줄로 둬 목록이 시끄러워지지 않게 한다.
       title: '품목 구성',
       key: 'composition',
-      width: 200,
+      width: COL.wide,
       ellipsis: true,
       render: (_, row) => {
         const custom = itemComposition(row.customCounts);
