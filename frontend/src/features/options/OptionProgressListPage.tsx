@@ -131,11 +131,8 @@ export function OptionProgressListPage({
   const [defFrom, defTo] = defaultRange();
   const dateFrom = searchParams.get('dateFrom') ?? defFrom.format('YYYY-MM-DD');
   const dateTo = searchParams.get('dateTo') ?? defTo.format('YYYY-MM-DD');
-  // 목록은 아직 확정되지 않은 계약을 먼저 보는 화면이라 미완료가 기본.
-  // 임베드(고객모드)는 필터 UI가 없어 전환할 수 없으니 전체를 유지한다.
-  const [status, setStatus] = useState<'ALL' | 'INCOMPLETE' | 'COMPLETE'>(
-    embedded ? 'ALL' : 'INCOMPLETE',
-  );
+  // 기본은 전체 — 조회 기간 안의 계약을 상태로 가리지 않고 다 보여 준다(현업 확정 2026-08-04).
+  const [status, setStatus] = useState<'ALL' | 'INCOMPLETE' | 'COMPLETE'>('ALL');
   const size = Number(searchParams.get('size') ?? DEFAULT_PAGE_SIZE);
   // 검색어는 입력 중 URL을 바꾸지 않도록 로컬 상태로 둔다(계약 목록과 동일).
   const [keywordInput, setKeywordInput] = useState(keyword);
@@ -186,10 +183,10 @@ export function OptionProgressListPage({
     setSearchParams(next, { replace: true });
   };
 
-  /** 검색 조건을 기본값(최근 1개월·미완료)으로 되돌린다 */
+  /** 검색 조건을 기본값(최근 1개월·전체)으로 되돌린다 */
   const resetFilters = () => {
     setKeywordInput('');
-    setStatus('INCOMPLETE');
+    setStatus('ALL');
     setSearchParams(new URLSearchParams(), { replace: true });
   };
 

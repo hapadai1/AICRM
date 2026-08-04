@@ -46,6 +46,7 @@ import {
   PREP_STAGE_CODE,
   needsDate,
   prepDone,
+  stageReached,
   stagesForTrack,
   type ProductionStage,
 } from './production-stages';
@@ -153,8 +154,12 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
           ? '옵션이 확정되어야 시작할 수 있습니다.'
           : '옵션 확정과 채촌이 끝나야 시작할 수 있습니다.';
     }
+    // 앞 단계는 진행 기록이든 제작 상태든 지나갔으면 끝난 것으로 본다.
+    const prevStage = stages[index - 1];
     const prev = rowsOf(index - 1).find((r) => r.key === row.key);
-    return prev?.target.completed ? null : `‘${stages[index - 1].label}’를 먼저 끝내야 합니다.`;
+    const prevDone =
+      prev?.target.completed || stageReached(prevStage, row.item?.itemStatus ?? prev?.item?.itemStatus);
+    return prevDone ? null : `‘${prevStage.label}’를 먼저 끝내야 합니다.`;
   };
 
   /** 그 단계에서 아직 손대지 않은 구성품 */
@@ -356,21 +361,35 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
 
   // 진행에는 이 카드에 없는 단계(상담 예약·계약 확정·준비)가 앞에 있다 — 이 화면의 단계만 센다.
   const viewOf = (code: string) => detail?.stages.find((s) => s.code === code);
-  const doneStages = stages.filter((s) => viewOf(s.code)?.completed).length;
+  /** 그 단계를 끝낸 품목 — 진행의 완료 기록이거나, 제작 상태가 이미 지나갔거나. */
+  const rowDone = (stage: ProductionStage) => (row: StageRow) =>
+    row.target.completed || stageReached(stage, row.item?.itemStatus);
+  const stageDone = (stage: ProductionStage, index: number) => {
+    const rows = rowsOf(index);
+    return rows.length > 0 ? rows.every(rowDone(stage)) : !!viewOf(stage.code)?.completed;
+  };
+  const doneStages = stages.filter((s, i) => stageDone(s, i)).length;
   const totalStages = stages.length;
   const currentIndex = stages.findIndex((s) => s.code === detail?.currentStageCode);
 
   const stepItems = stages.map((stage, i) => {
     const view = viewOf(stage.code);
     const rows = rowsOf(i);
-    const pending = rows.filter((r) => !r.target.completed);
+    const done = rowDone(stage);
+    const pending = rows.filter((r) => !done(r));
     const isCurrent = detail?.currentStageCode === stage.code;
 
     /*
       요약은 `n/m 완료` 한 형식으로만 적는다 — 단계가 세로로 나란히 서 있어
       같은 자리에서 같은 모양을 비교하는 편이 빠르다(2026-08-04 현업 확정).
+      진행 기록이 없어도 제작 상태로 지나간 품목은 끝난 것으로 센다.
     */
-    const summary = view ? `${view.completedCount}/${view.targetCount} 완료` : '';
+    const summary =
+      rows.length > 0
+        ? `${rows.length - pending.length}/${rows.length} 완료`
+        : view
+          ? `${view.completedCount}/${view.targetCount} 완료`
+          : '';
 
     // 앞 단계가 안 끝난 품목은 [전체 …] 대상에서도 빠진다 — 순서를 건너뛰지 않는다.
     const blocked = blockedReasonAt(i);
@@ -462,7 +481,10 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
         <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ display: 'inline-block', minWidth: STAGE_LABEL_WIDTH }}>{stage.label}</span>
           <span style={{ display: 'inline-block', minWidth: STAGE_SUMMARY_WIDTH, fontWeight: 400 }}>
-            <Typography.Text type={view?.completed ? 'success' : undefined} strong>
+            <Typography.Text
+              type={rows.length > 0 ? (pending.length === 0 ? 'success' : undefined) : view?.completed ? 'success' : undefined}
+              strong
+            >
               {summary}
             </Typography.Text>
           </span>
@@ -477,7 +499,7 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
           </Space>
         </div>
       ),
-      status: view?.completed
+      status: (rows.length > 0 ? pending.length === 0 : view?.completed)
         ? ('finish' as const)
         : isCurrent
           ? ('process' as const)

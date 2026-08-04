@@ -10,6 +10,8 @@
  * 그 결과로 함께 남는 실물 기록이다. 담당자는 품목 버튼 하나만 누르고, 화면이 둘 다 처리한다.
  */
 
+import { ITEM_STATUS_RANK } from '../../api/production';
+
 /** 품목 버튼을 누를 때 제작 도메인에 함께 반영할 것 */
 export type StageEffect =
   /** 품목 상태 → 제작 요청 */
@@ -33,6 +35,13 @@ export type StageExtras =
 export interface ProductionStage {
   /** journey_stages.code */
   code: string;
+  /**
+   * 이 단계를 이미 지나간 것으로 보는 품목 상태.
+   * 진행의 완료 기록과 제작 상태는 다른 기록이라, 단계만 건너뛴 채 실물이 앞서 간 품목이 있다.
+   * 그런 품목에 완료 버튼을 계속 내면 이미 제작에 들어간 옷을 또 발주하라는 말로 읽힌다
+   * (2026-08-04 현업 지적) — 상태가 이 값에 닿았으면 완료로 표시한다.
+   */
+  reachedAt?: string;
   /** 화면에 쓰는 이름 (마스터 이름이 길면 여기서 줄여 부른다) */
   label: string;
   /** 품목 행의 완료 버튼 이름. 없으면 완료 버튼을 내지 않는다 */
@@ -57,17 +66,37 @@ const CUSTOM_STAGES: ProductionStage[] = [
     action: '발주',
     effect: 'ITEM_REQUEST',
     extras: 'WORK_ORDER',
+    reachedAt: 'PRODUCTION_REQUESTED',
   },
-  { code: 'BASTING_RECEIVED', label: '가봉 입고', action: '입고', effect: 'COMPONENT_BASTING' },
+  {
+    code: 'BASTING_RECEIVED',
+    label: '가봉 입고',
+    action: '입고',
+    effect: 'COMPONENT_BASTING',
+    reachedAt: 'BASTING_RECEIVED',
+  },
   {
     code: 'FITTING_DONE',
     label: '가봉 피팅',
     action: '완성복발주',
     effect: 'ITEM_FITTING',
     extras: 'FITTING',
+    reachedAt: 'FITTING_COMPLETED',
   },
-  { code: 'PRODUCT_RECEIVED', label: '완성복 입고', action: '입고', effect: 'COMPONENT_RECEIVE' },
-  { code: 'RELEASED', label: '완성복 출고', action: '출고', effect: 'COMPONENT_RELEASE' },
+  {
+    code: 'PRODUCT_RECEIVED',
+    label: '완성복 입고',
+    action: '입고',
+    effect: 'COMPONENT_RECEIVE',
+    reachedAt: 'RECEIVED',
+  },
+  {
+    code: 'RELEASED',
+    label: '완성복 출고',
+    action: '출고',
+    effect: 'COMPONENT_RELEASE',
+    reachedAt: 'RELEASED',
+  },
 ];
 
 /**
@@ -75,24 +104,43 @@ const CUSTOM_STAGES: ProductionStage[] = [
  * 렌탈 옷은 우리 재고를 고객 몸에 맞춰 고쳐 내주므로, 제작이 아니라 수선 요청·입고를 거친다.
  */
 const RENTAL_STAGES: ProductionStage[] = [
-  { code: 'RENTAL_REPAIR_REQUESTED', label: '렌탈 수선 요청', action: '수선요청' },
+  {
+    code: 'RENTAL_REPAIR_REQUESTED',
+    label: '렌탈 수선 요청',
+    action: '수선요청',
+    reachedAt: 'PRODUCTION_REQUESTED',
+  },
   {
     code: 'RENTAL_REPAIR_RECEIVED',
     label: '렌탈 수선 입고',
     action: '입고',
     effect: 'COMPONENT_RECEIVE',
+    reachedAt: 'RECEIVED',
   },
   {
     code: 'RENTAL_REPAIR_CHECKED_OUT',
     label: '렌탈 출고',
     action: '출고',
     effect: 'COMPONENT_RELEASE',
+    reachedAt: 'RELEASED',
   },
+  // 반납은 실물 상태로 남지 않는다(출고가 마지막 품목 상태다) — 진행 기록으로만 판정한다.
   { code: 'RENTAL_RETURNED', label: '렌탈 반납', action: '반납' },
 ];
 
 export function stagesForTrack(trackType: string): ProductionStage[] {
   return trackType === 'RENTAL' ? RENTAL_STAGES : CUSTOM_STAGES;
+}
+
+/**
+ * 그 품목이 제작 상태로 이미 이 단계를 지나갔는가.
+ * 진행에 완료 기록이 없어도(단계를 건너뛰고 실물만 앞서 간 경우) 완료로 본다.
+ */
+export function stageReached(stage: ProductionStage, itemStatus?: string): boolean {
+  if (!stage.reachedAt || !itemStatus) return false;
+  const at = ITEM_STATUS_RANK[itemStatus];
+  const need = ITEM_STATUS_RANK[stage.reachedAt];
+  return at !== undefined && need !== undefined && at >= need;
 }
 
 /** 일자를 받아야 하는 단계 — 입고·출고는 언제 들어오고 나갔는지가 기록의 전부다. */

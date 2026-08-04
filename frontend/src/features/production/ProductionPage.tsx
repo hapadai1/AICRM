@@ -1,6 +1,6 @@
 /** PROD-001 계약별 제작 관리 목록 — 고객명·전화로 식별, 행 클릭 시 계약 제작 관리 화면으로 진입 */
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Input, Progress, Space, Typography } from 'antd';
+import { Alert, Input, Progress, Segmented, Space, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -20,6 +20,18 @@ interface ContractRow extends ContractSummary {
   contractTypeName: string | null;
   customerName: string;
   customerPhone: string;
+}
+
+type StateFilter = 'ALL' | 'ONGOING' | 'DONE';
+
+/**
+ * 계약 하나가 제작을 끝냈는가 — 취소분을 뺀 품목이 전부 출고까지 갔을 때만 완료다
+ * (컨설팅·채촌 목록의 완료/미완료와 같은 규격, 현업 확정 2026-08-04).
+ * 남은 품목이 없는(전부 취소된) 계약은 끝낸 것이 아니라 할 일이 없는 것이라 완료로 세지 않는다.
+ */
+function productionDone(r: ContractSummary): boolean {
+  const active = r.itemCount - r.cancelledCount;
+  return active > 0 && r.releasedCount === active;
 }
 
 function groupByContract(items: ProductionItem[]): ContractRow[] {
@@ -45,17 +57,33 @@ export function ProductionPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const keyword = searchParams.get('q') ?? '';
+  // 기본은 전체 — 상태로 가리지 않고 다 보여 준다. 전체는 URL에 남기지 않는다(없는 것과 같은 뜻).
+  const state = (searchParams.get('state') as StateFilter | null) ?? 'ALL';
 
   const itemsQuery = useQuery({ queryKey: ['production', 'items'], queryFn: () => fetchProductionItems() });
 
   const rows = useMemo(() => {
-    const grouped = groupByContract(itemsQuery.data ?? []);
+    let grouped = groupByContract(itemsQuery.data ?? []);
     const q = keyword.trim().toLowerCase();
-    if (!q) return grouped;
-    return grouped.filter((r) =>
-      [r.customerName, r.customerPhone, r.contractNo].some((v) => v?.toLowerCase().includes(q)),
-    );
-  }, [itemsQuery.data, keyword]);
+    if (q) {
+      grouped = grouped.filter((r) =>
+        [r.customerName, r.customerPhone, r.contractNo].some((v) => v?.toLowerCase().includes(q)),
+      );
+    }
+    if (state === 'DONE') grouped = grouped.filter(productionDone);
+    if (state === 'ONGOING') grouped = grouped.filter((r) => !productionDone(r));
+    return grouped;
+  }, [itemsQuery.data, keyword, state]);
+
+  /** URL 쿼리 갱신 — 값이 비면 키를 지운다 */
+  const setParams = (patch: Record<string, string | undefined>) => {
+    const next = new URLSearchParams(searchParams);
+    for (const [k, v] of Object.entries(patch)) {
+      if (v) next.set(k, v);
+      else next.delete(k);
+    }
+    setSearchParams(next, { replace: true });
+  };
 
   const columns: ColumnsType<ContractRow> = [
     {
@@ -144,18 +172,25 @@ export function ProductionPage() {
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           <ListToolbar
             filters={
-              <Input.Search
-                allowClear
-                style={{ width: LAYOUT.searchWidth }}
-                placeholder="고객명 · 전화번호 검색"
-                defaultValue={keyword}
-                onSearch={(v) => {
-                  const next = new URLSearchParams(searchParams);
-                  if (v.trim()) next.set('q', v.trim());
-                  else next.delete('q');
-                  setSearchParams(next, { replace: true });
-                }}
-              />
+              <>
+                <Input.Search
+                  allowClear
+                  style={{ width: LAYOUT.searchWidth }}
+                  placeholder="고객명 · 전화번호 검색"
+                  defaultValue={keyword}
+                  onSearch={(v) => setParams({ q: v.trim() || undefined })}
+                />
+                {/* 상태 — 컨설팅·채촌 목록과 같은 3칸 구성. 기본 전체. */}
+                <Segmented
+                  value={state}
+                  onChange={(v) => setParams({ state: v === 'ALL' ? undefined : (v as string) })}
+                  options={[
+                    { label: '전체', value: 'ALL' },
+                    { label: '진행중', value: 'ONGOING' },
+                    { label: '완료', value: 'DONE' },
+                  ]}
+                />
+              </>
             }
           />
           <DataTable<ContractRow>

@@ -20,6 +20,7 @@
  */
 import { Prisma, PrismaClient } from '@prisma/client';
 import { randomUUID } from 'crypto';
+import { confirmConsultingForContracts } from './consulting-seed';
 
 const prisma = new PrismaClient();
 
@@ -434,7 +435,19 @@ async function main(): Promise<void> {
         startedAt: at(-1, 15), lastSavedAt: at(-1, 15, 10),
       });
 
-      console.log('맞춤 구두 데모: 고객 2 / 계약 2 / 주문 2 / 품목 4(구두 3) / 옵션 세션 3');
+      /*
+        계약완료 계약은 전 품목 컨설팅이 확정돼 있어야 한다 — 앱이 서명 단계에서 그걸 막는다
+        (assertSignable → CONSULTING_NOT_CONFIRMED). 구두 #2·구두 #1의 미확정 세션도 여기서 확정된다.
+      */
+      const completed = await tx.contract.findMany({ where: { status: 'COMPLETED' }, select: { id: true } });
+      const consulting = await confirmConsultingForContracts(tx, {
+        contractIds: completed.map((c) => c.id),
+        adminId,
+        confirmedAt: at(-3, 15),
+      });
+      console.log(
+        `맞춤 구두 데모: 고객 2 / 계약 2 / 주문 2 / 품목 4(구두 3) / 컨설팅 확정 보정 맞춤 ${consulting.customConfirmed} · 렌탈 ${consulting.rentalConfirmed}`,
+      );
     },
     { timeout: 60_000 },
   );

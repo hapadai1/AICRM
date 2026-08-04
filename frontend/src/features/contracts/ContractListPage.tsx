@@ -48,9 +48,8 @@ import { ItemCompositionCell } from './ItemCompositionCell';
 const { RangePicker } = DatePicker;
 
 /**
- * 상태를 "전체"로 되돌린 상태를 URL에 남기는 값.
- * 파라미터가 아예 없으면 기본값(작성중)으로 읽으므로, 사용자가 일부러 전체로
- * 지운 것과 처음 들어온 것을 구분해야 한다. 없으면 전체를 골라도 작성중으로 튕긴다.
+ * 셀렉트에서 "전체"를 고른 값. 기본값이 전체라 URL에는 남기지 않는다
+ * — status 가 없는 것과 전체가 같은 뜻이다.
  */
 const STATUS_ALL = 'ALL';
 
@@ -82,12 +81,6 @@ const FIXED_DATE_FIELD = 'contractedAt' as const;
 /** 기본 조회 기간: 최근 1개월 (현업 확정 2026-07-31) */
 const defaultRange = (): [Dayjs, Dayjs] => [dayjs().subtract(1, 'month'), dayjs()];
 
-/**
- * 기본 상태: 작성중 (현업 확정 2026-07-31).
- * 화면을 열면 손볼 계약부터 보인다 — 이미 끝난 계약은 찾아서 본다.
- */
-const DEFAULT_STATUS: ContractStatus = 'DRAFT';
-
 /** URL 쿼리 ↔ 필터 상태 */
 interface Filters {
   q: string;
@@ -106,12 +99,8 @@ function readFilters(params: URLSearchParams): Filters {
     q: params.get('q') ?? '',
     dateFrom: params.get('dateFrom') ?? from.format('YYYY-MM-DD'),
     dateTo: params.get('dateTo') ?? to.format('YYYY-MM-DD'),
-    status:
-      rawStatus === null
-        ? DEFAULT_STATUS
-        : rawStatus === STATUS_ALL
-          ? undefined
-          : (rawStatus as ContractStatus),
+    // 기본은 전체 — 파라미터가 없거나 ALL이면 상태로 좁히지 않는다.
+    status: rawStatus && rawStatus !== STATUS_ALL ? (rawStatus as ContractStatus) : undefined,
     contractTypeId: params.get('contractTypeId') ?? undefined,
     page: Number(params.get('page') ?? 1),
     size: Number(params.get('size') ?? 30),
@@ -123,8 +112,8 @@ function writeFilters(filters: Filters): Record<string, string> {
     ['q', filters.q || undefined],
     ['dateFrom', filters.dateFrom],
     ['dateTo', filters.dateTo],
-    // 전체(undefined)도 URL에 남긴다 — 안 남기면 다음 읽기에서 기본값(작성중)으로 되돌아간다.
-    ['status', filters.status ?? STATUS_ALL],
+    // 전체(undefined)는 URL에서 뺀다 — 기본값이 전체라 없는 것과 같은 뜻이다.
+    ['status', filters.status],
     ['contractTypeId', filters.contractTypeId],
     ['page', filters.page > 1 ? filters.page : undefined],
     ['size', filters.size !== 30 ? filters.size : undefined],
@@ -192,8 +181,7 @@ export function ContractListPage({
         q: '',
         dateFrom: from.format('YYYY-MM-DD'),
         dateTo: to.format('YYYY-MM-DD'),
-        // 초기화는 처음 들어온 상태로 되돌리는 것이다 — 전체가 아니라 기본값(작성중)이다.
-        status: DEFAULT_STATUS,
+        status: undefined,
         page: 1,
         size: 30,
       }),
@@ -436,9 +424,8 @@ export function ContractListPage({
               />
               {/*
                 상태는 셀렉트 한 칸으로 고른다 — 검색 조건 줄을 계약 구분과 같은
-                모양으로 맞춘다 (현업 확정 2026-07-31). 기본값은 작성중이라
-                allowClear 대신 "전체" 항목을 넣는다: 지우면 URL 에서 status 가
-                빠져 다음 읽기에서 다시 작성중으로 되돌아간다.
+                모양으로 맞춘다 (현업 확정 2026-07-31). 기본값은 전체이고,
+                allowClear 대신 "전체" 항목을 둔다(지우기와 전체가 같은 뜻이라 항목이 낫다).
               */}
               <Select
                 style={{ width: LAYOUT.filterWidth }}

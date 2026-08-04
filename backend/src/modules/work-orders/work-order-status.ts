@@ -17,6 +17,17 @@ export const workOrderStatusSelect = Prisma.validator<Prisma.OrderItemSelect>()(
         take: 1,
         select: { confirmedAt: true },
       },
+      /*
+        렌탈 품목의 스타일 컨설팅은 옵션 세션이 아니라 렌탈 선택 세션이다.
+        이것을 안 읽던 동안 렌탈 품목은 컨설팅을 확정해도 준비 미완료로 남아
+        제작 화면의 렌탈 흐름 첫 단계가 영영 잠겨 있었다(2026-08-04).
+      */
+      rentalSelectionSessions: {
+        where: { isCurrent: true, status: 'CONFIRMED' },
+        orderBy: { selectionVersionNo: Prisma.SortOrder.desc },
+        take: 1,
+        select: { confirmedAt: true },
+      },
     },
   },
   measurementLinks: {
@@ -98,7 +109,11 @@ export interface WorkOrderView {
 
 /** 위 workOrderStatusSelect를 포함한 OrderItem에서 작업지시서 뷰를 만든다 */
 export function buildWorkOrderView(item: OrderItemWithWorkOrderStatus): WorkOrderView {
-  const session = item.sourceContractItem.optionSelectionSessions[0] ?? null;
+  // 컨설팅 확정 시각 — 맞춤은 옵션 세션, 렌탈은 렌탈 선택 세션에서 온다(둘 다 '스타일 컨설팅'이다).
+  const session =
+    item.sourceContractItem.optionSelectionSessions[0] ??
+    item.sourceContractItem.rentalSelectionSessions[0] ??
+    null;
   const link = item.measurementLinks[0] ?? null;
   const currentVersion = item.workOrder?.currentVersion ?? null;
   const status = resolveWorkOrderStatus(session, link, currentVersion);

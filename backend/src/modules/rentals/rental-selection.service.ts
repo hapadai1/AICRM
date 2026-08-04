@@ -5,6 +5,7 @@ import { BusinessException } from '../../common/business.exception';
 import { AuthUser } from '../../common/decorators';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { syncPrepStatuses } from '../production/prep-status';
 import { ASSIGNABLE_ITEM_STATUSES } from './rentals.constants';
 import {
   ConfirmRentalSelectionDto,
@@ -530,6 +531,12 @@ export class RentalSelectionService {
         },
         tx,
       );
+      // 렌탈도 컨설팅 확정이 곧 준비 한 칸이다 — 맞춤 옵션 확정과 같게 품목 상태에 반영한다.
+      const orderItems = await tx.orderItem.findMany({
+        where: { sourceContractItemId: session.contractItemId },
+        select: { id: true },
+      });
+      await syncPrepStatuses(tx, orderItems.map((o) => o.id), actor.id);
       return confirmed;
     });
 

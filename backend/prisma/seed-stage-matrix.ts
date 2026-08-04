@@ -21,6 +21,7 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import { createHash, randomUUID } from 'crypto';
 import { mkdirSync, writeFileSync } from 'fs';
 import { dirname, join, resolve } from 'path';
+import { confirmConsultingForContracts } from './consulting-seed';
 
 const prisma = new PrismaClient();
 
@@ -955,11 +956,11 @@ async function main(): Promise<void> {
           seq: 301,
           name: '제작01 발주대기',
           /*
-            준비 단계 상태는 이제 옵션 확정·채촌 연결에서 자동으로 나온다(2026-08-04 현업 확정).
-            그래서 상태를 그냥 심지 않고 아래에서 준비 데이터를 그 상태에 맞게 갈라 심는다.
-            계약완료된 품목은 최소 옵션대기부터 시작하므로 CREATED는 더 이상 나오지 않는다.
+            준비 단계 상태는 옵션 확정·채촌 연결에서 자동으로 나온다(2026-08-04 현업 확정).
+            계약완료 계약은 전 품목 컨설팅이 확정돼 있어야 하므로(서명 게이트) `옵션대기`는
+            여기서 나올 수 없다 — 남는 갈림길은 채촌뿐이라 채촌대기·발주가능 둘로 나눈다.
           */
-          statuses: ['OPTION_PENDING', 'MEASUREMENT_PENDING', 'READY_TO_ORDER', 'READY_TO_ORDER'],
+          statuses: ['MEASUREMENT_PENDING', 'MEASUREMENT_PENDING', 'READY_TO_ORDER', 'READY_TO_ORDER'],
         },
         {
           seq: 302,
@@ -995,31 +996,23 @@ async function main(): Promise<void> {
         });
 
         /*
-          준비(옵션 확정·채촌 연결)가 곧 품목 상태다 — 목표 상태에 맞춰 준비 데이터를 갈라 심는다.
-          옵션대기 = 옵션 미확정, 채촌대기 = 옵션만 확정, 그 뒤 = 옵션 확정 + 채촌 연결.
+          계약완료 계약이므로 컨설팅은 전 품목 확정이다(서명 게이트). 준비의 갈림길은 채촌뿐 —
+          채촌대기 품목에는 채촌을 붙이지 않고, 그 뒤 상태의 품목에만 붙인다.
         */
-        const optionConfirmedOf = (status: string) => status !== 'OPTION_PENDING' && status !== 'CREATED';
         const measureLinkedOf = (status: string) =>
-          optionConfirmedOf(status) && status !== 'MEASUREMENT_PENDING';
+          status !== 'CREATED' && status !== 'OPTION_PENDING' && status !== 'MEASUREMENT_PENDING';
 
         let surchargeSum = 0;
         const sessionByItem = new Map<string, string>();
-        for (let i = 0; i < contract.items.length; i += 1) {
-          const item = contract.items[i];
-          const confirmed = optionConfirmedOf(group.statuses[i]);
+        for (const item of contract.items) {
           const opt = await createOptionSession(tx, {
-            contractItemId: item.id, stages: suit.twoPiece,
-            // 미확정 세션은 앞 두 단계까지만 골라 둔 '진행중'으로 남긴다.
-            pickCount: confirmed ? suit.twoPiece.length : 2,
-            status: confirmed ? 'CONFIRMED' : 'IN_PROGRESS',
-            versionId: suit.versionId, fabricName: '네이비 울 100%', adminId,
+            contractItemId: item.id, stages: suit.twoPiece, pickCount: suit.twoPiece.length,
+            status: 'CONFIRMED', versionId: suit.versionId, fabricName: '네이비 울 100%', adminId,
             times: {
-              started: at(-32, 10), saved: at(-31, 14),
-              ...(confirmed ? { reviewed: at(-31, 14), confirmed: at(-30, 11) } : {}),
+              started: at(-32, 10), saved: at(-31, 14), reviewed: at(-31, 14), confirmed: at(-30, 11),
             },
           });
-          // 미확정 세션의 추가금액은 아직 계약에 반영되지 않는다.
-          if (confirmed) surchargeSum += opt.surchargeTotal;
+          surchargeSum += opt.surchargeTotal;
           sessionByItem.set(item.id, opt.sessionId);
         }
         await tx.contractVersion.update({
@@ -1080,6 +1073,21 @@ async function main(): Promise<void> {
         }
 
       }
+
+      /*
+        계약완료 계약은 전 품목 컨설팅이 확정돼 있어야 한다 — 앱이 서명 단계에서 그걸 막는다
+        (assertSignable → CONSULTING_NOT_CONFIRMED). 이 시드 밖에서 만들어진 계약까지 함께 맞춘다.
+      */
+      const completed = await tx.contract.findMany({ where: { status: 'COMPLETED' }, select: { id: true } });
+      const consulting = await confirmConsultingForContracts(tx, {
+        contractIds: completed.map((c) => c.id),
+        adminId,
+        confirmedAt: at(-30, 11),
+      });
+      if (consulting.customConfirmed + consulting.rentalConfirmed > 0)
+        console.log(
+          `컨설팅 확정 보정: 맞춤 ${consulting.customConfirmed} / 렌탈 ${consulting.rentalConfirmed}`,
+        );
     },
     { timeout: 120_000 },
   );

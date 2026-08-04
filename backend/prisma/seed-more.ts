@@ -15,6 +15,7 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import { createHash, randomUUID } from 'crypto';
 import { mkdirSync, writeFileSync } from 'fs';
 import { dirname, join, resolve } from 'path';
+import { confirmConsultingForContracts } from './consulting-seed';
 import { repairItemRow } from './repair-item-seed';
 
 const prisma = new PrismaClient();
@@ -1225,6 +1226,21 @@ async function main(): Promise<void> {
         });
       }
       console.log('notification_history: 6건 / shared_notes: +3건');
+
+      /*
+        계약완료 계약은 전 품목 컨설팅이 확정돼 있어야 한다 — 앱이 서명 단계에서 그걸 막는다
+        (assertSignable → CONSULTING_NOT_CONFIRMED). 시드는 서비스를 안 거치므로 여기서 맞춘다.
+      */
+      const completed = await tx.contract.findMany({ where: { status: 'COMPLETED' }, select: { id: true } });
+      const consulting = await confirmConsultingForContracts(tx, {
+        contractIds: completed.map((c) => c.id),
+        adminId,
+        confirmedAt: at(-30, 15),
+      });
+      console.log(
+        `컨설팅 확정 보정: 맞춤 ${consulting.customConfirmed} / 렌탈 ${consulting.rentalConfirmed}` +
+          (consulting.skipped.length > 0 ? ` (건너뜀 ${consulting.skipped.join(', ')})` : ''),
+      );
     },
     { maxWait: 15000, timeout: 300000 },
   );

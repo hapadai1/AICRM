@@ -12,13 +12,14 @@ import type { ReactNode } from 'react';
 import {
   COMPONENT_STATUS_RANK,
   COMPONENT_TYPE_LABELS,
+  PRODUCTION_STATUS_META,
   type ProductionComponent,
   type ProductionItem,
 } from '../../api/production';
 import type { StageItem } from '../../api/journeys';
 import { Can } from '../../shared/Can';
-import { labelOf } from '../../shared/status-meta';
-import type { ProductionStage } from './production-stages';
+import { labelOf, metaOf } from '../../shared/status-meta';
+import { stageReached, type ProductionStage } from './production-stages';
 
 export interface StageRow {
   key: string;
@@ -102,6 +103,20 @@ export function StageProgress({
 
   const actionCell = (row: StageRow) => {
     const { target } = row;
+    /*
+      진행에 완료 기록은 없지만 제작 상태가 이미 이 단계를 지난 품목이 있다.
+      그 품목에 완료 버튼을 내면 이미 제작에 들어간 옷을 또 발주하라는 말이 된다 —
+      사실대로 지나간 단계로 적고 버튼을 내리지 않는다(2026-08-04 현업 지적).
+    */
+    if (!target.completed && stageReached(stage, row.item?.itemStatus)) {
+      return (
+        <Tooltip title="제작 상태로 이미 지나간 단계입니다(진행 완료 기록은 없습니다).">
+          <Typography.Text type="secondary">
+            지남 · {metaOf(PRODUCTION_STATUS_META, row.item?.itemStatus ?? '').label}
+          </Typography.Text>
+        </Tooltip>
+      );
+    }
     if (target.completed) {
       return (
         <Space size={4}>

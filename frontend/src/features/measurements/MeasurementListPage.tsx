@@ -52,8 +52,8 @@ function readFilters(params: URLSearchParams): Filters {
     q: params.get('q') ?? '',
     dateFrom: params.get('dateFrom') ?? from.format('YYYY-MM-DD'),
     dateTo: params.get('dateTo') ?? to.format('YYYY-MM-DD'),
-    // 목록은 아직 채촌하지 않은 계약을 먼저 보는 화면이라 미완료가 기본.
-    state: (params.get('state') as StateFilter | null) ?? 'NONE',
+    // 기본은 전체 — 조회 기간 안의 계약을 상태로 가리지 않고 다 보여 준다(현업 확정 2026-08-04).
+    state: (params.get('state') as StateFilter | null) ?? 'ALL',
     customerId: params.get('customerId') ?? undefined,
     page: Number(params.get('page') ?? 1),
     size: Number(params.get('size') ?? 30),
@@ -65,7 +65,7 @@ function writeFilters(filters: Filters): Record<string, string> {
     ['q', filters.q || undefined],
     ['dateFrom', filters.dateFrom || undefined],
     ['dateTo', filters.dateTo || undefined],
-    ['state', filters.state !== 'NONE' ? filters.state : undefined],
+    ['state', filters.state !== 'ALL' ? filters.state : undefined],
     ['customerId', filters.customerId],
     ['page', filters.page > 1 ? filters.page : undefined],
     ['size', filters.size !== 30 ? filters.size : undefined],
@@ -128,7 +128,7 @@ export function MeasurementListPage({
         q: '',
         dateFrom: from.format('YYYY-MM-DD'),
         dateTo: to.format('YYYY-MM-DD'),
-        state: 'NONE',
+        state: 'ALL',
         customerId: filters.customerId,
         page: 1,
         size: 30,

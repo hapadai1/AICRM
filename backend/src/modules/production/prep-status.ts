@@ -32,6 +32,12 @@ const PREP_SELECT = Prisma.validator<Prisma.OrderItemSelect>()({
         take: 1,
         select: { id: true },
       },
+      // 렌탈의 스타일 컨설팅은 렌탈 선택 세션이다 — 옵션 세션만 보면 렌탈은 영영 옵션대기다.
+      rentalSelectionSessions: {
+        where: { isCurrent: true, status: 'CONFIRMED' },
+        take: 1,
+        select: { id: true },
+      },
     },
   },
   measurementLinks: { where: { isCurrent: true }, take: 1, select: { id: true } },
@@ -41,9 +47,12 @@ type PrepItem = Prisma.OrderItemGetPayload<{ select: typeof PREP_SELECT }>;
 
 /** 그 품목이 서 있어야 할 준비 상태 */
 function prepStatusOf(item: PrepItem): string {
-  const optionConfirmed = item.sourceContractItem.optionSelectionSessions.length > 0;
-  if (!optionConfirmed) return 'OPTION_PENDING';
-  if (item.order.transactionType === 'RENTAL' || item.measurementLinks.length > 0) return READY;
+  const rental = item.order.transactionType === 'RENTAL';
+  const consultingConfirmed = rental
+    ? item.sourceContractItem.rentalSelectionSessions.length > 0
+    : item.sourceContractItem.optionSelectionSessions.length > 0;
+  if (!consultingConfirmed) return 'OPTION_PENDING';
+  if (rental || item.measurementLinks.length > 0) return READY;
   return 'MEASUREMENT_PENDING';
 }
 
