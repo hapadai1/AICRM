@@ -43,6 +43,13 @@ import { FittingModal } from './FittingModal';
 import { StageProgress, type StageRow } from './StageProgress';
 import { WorkOrderModal } from './WorkOrderModal';
 import {
+  STAGE_BODY_INDENT,
+  STAGE_LABEL_WIDTH,
+  STAGE_SUMMARY_WIDTH,
+  bulkButtonStyle,
+  docButtonStyle,
+} from './production-layout';
+import {
   PREP_STAGE_CODE,
   needsDate,
   prepDone,
@@ -50,19 +57,6 @@ import {
   stagesForTrack,
   type ProductionStage,
 } from './production-stages';
-
-/**
- * 단계 이름 칸 폭. 가장 긴 이름이 `렌탈 수선 요청`이라 그 폭에 칸 사이 간격을 더한 값이다 —
- * 단계마다 내용이 같은 자리에서 시작한다.
- */
-const STAGE_LABEL_WIDTH = 110;
-const STAGE_BODY_INDENT = STAGE_LABEL_WIDTH - 8;
-
-/**
- * 단계 줄의 요약 칸 폭 = 아래 표의 품목 열 폭.
- * 이 둘을 같게 두어야 [전체 …] 버튼과 품목 줄의 [발주]가 같은 x에서 시작한다.
- */
-const STAGE_SUMMARY_WIDTH = 150;
 
 interface ProductionFlowCardProps {
   title: string;
@@ -333,6 +327,7 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
         icon={<FileExcelOutlined />}
         disabled={!!blocked}
         onClick={() => setWorkOrderTarget(item)}
+        style={docButtonStyle}
       >
         작업지시서
       </Button>
@@ -348,6 +343,7 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
           icon={<ExperimentOutlined />}
           disabled={!!blocked}
           onClick={() => setFittingTarget(item)}
+          style={docButtonStyle}
         >
           가봉 작업지시서
         </Button>
@@ -405,7 +401,7 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
           ? (blocked(pending[0]) ?? '아직 처리할 수 없습니다.')
           : null;
     const bulkButton = (
-      <Button size="small" disabled={!!bulkReason}>
+      <Button size="small" disabled={!!bulkReason} style={bulkButtonStyle}>
         전체 {stage.action} ({ready.length})
       </Button>
     );

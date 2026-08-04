@@ -9,17 +9,19 @@
  * 서야 위아래 카드를 같은 눈으로 읽는다(2026-08-04 현업 지적).
  * 준비는 담당자가 완료를 누르는 단계가 아니므로 완료 버튼 자리에 이동 버튼이 선다.
  */
-import { Button, Card, Space, Table, Typography } from 'antd';
+import { Button, Card, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { ProductionItem } from '../../api/production';
-
-/** 단계 표와 같은 칸 폭 — 이름 150 · 상태 128 (StageProgress와 맞춘다) */
-const NAME_WIDTH = 150;
-const STATUS_WIDTH = 128;
-/** 단계 표의 품목 이름은 펼침 버튼(24) 뒤에서 시작한다 — 준비도 같은 x에 세운다. */
-const NAME_INDENT = 28;
+import {
+  ACTION_WIDTH,
+  DATE_WIDTH,
+  NAME_INDENT,
+  NAME_WIDTH,
+  STATUS_WIDTH,
+  actionButtonStyle,
+} from './production-layout';
 
 interface ProductionPrepCardProps {
   /** 이 계약의 살아있는 제작 품목 (맞춤·렌탈 모두, 취소 제외) */
@@ -71,7 +73,18 @@ export function ProductionPrepCard({
 
   const rows: PrepRow[] = [
     // 제작 화면에 떴다는 것이 곧 계약완료라 계약은 늘 끝나 있다.
-    { key: 'contract', label: '계약', done: true, status: '완료', date: contractedAt ?? undefined },
+    {
+      key: 'contract',
+      label: '계약',
+      done: true,
+      status: '완료',
+      date: contractedAt ?? undefined,
+      action: (
+        <Button size="small" style={actionButtonStyle} onClick={() => navigate(`/contracts/${contractId}`)}>
+          계약서
+        </Button>
+      ),
+    },
     {
       key: 'consulting',
       label: '스타일 컨설팅',
@@ -79,7 +92,11 @@ export function ProductionPrepCard({
       status: optionDone ? '완료' : `${optionDates.length}/${items.length} 완료`,
       date: optionDone ? optionDates[optionDates.length - 1] : undefined,
       action: (
-        <Button size="small" onClick={() => navigate(`/contracts/${contractId}/options`)}>
+        <Button
+          size="small"
+          style={actionButtonStyle}
+          onClick={() => navigate(`/contracts/${contractId}/options`)}
+        >
           스타일 컨설팅
         </Button>
       ),
@@ -97,7 +114,11 @@ export function ProductionPrepCard({
           : `${measureDates.length}/${customItems.length} 연결`,
       date: measureDates[0],
       action: (
-        <Button size="small" onClick={() => navigate(`/measurements?customerId=${customerId}`)}>
+        <Button
+          size="small"
+          style={actionButtonStyle}
+          onClick={() => navigate(`/measurements?customerId=${customerId}`)}
+        >
           채촌
         </Button>
       ),
@@ -126,19 +147,16 @@ export function ProductionPrepCard({
         <Typography.Text type={row.done ? 'success' : 'secondary'}>{row.status}</Typography.Text>
       ),
     },
+    { title: '', key: 'action', width: ACTION_WIDTH, render: (_, row) => row.action ?? null },
     {
-      title: '',
-      key: 'action',
-      // 단계 표의 서류 버튼과 같은 자리 — 버튼 뒤에 날짜가 붙는다(단계 줄과 같은 순서).
-      render: (_, row) => (
-        <Space size={8}>
-          {row.action}
-          {row.date && (
-            <Typography.Text type="secondary">{row.date.slice(0, 10)}</Typography.Text>
-          )}
-        </Space>
-      ),
+      title: '날짜',
+      key: 'date',
+      width: DATE_WIDTH,
+      render: (_, row) =>
+        row.date ? <Typography.Text type="secondary">{row.date.slice(0, 10)}</Typography.Text> : null,
     },
+    // 단계 표의 서류 버튼 칸과 같은 자리 — 준비에는 서류가 없어 비워 둔다.
+    { title: '', key: 'extras', render: () => null },
   ];
 
   return (

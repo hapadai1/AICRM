@@ -19,6 +19,13 @@ import {
 import type { StageItem } from '../../api/journeys';
 import { Can } from '../../shared/Can';
 import { labelOf, metaOf } from '../../shared/status-meta';
+import {
+  ACTION_WIDTH,
+  DATE_WIDTH,
+  NAME_WIDTH,
+  STATUS_WIDTH,
+  actionButtonStyle,
+} from './production-layout';
 import { stageReached, type ProductionStage } from './production-stages';
 
 export interface StageRow {
@@ -101,67 +108,115 @@ export function StageProgress({
   /** 이 단계에서 구성품을 하나씩 처리할 수 있는가 (아니면 상태만 보여 준다) */
   const perComponent = !!stage.effect?.startsWith('COMPONENT');
 
-  const actionCell = (row: StageRow) => {
-    const { target } = row;
-    /*
-      진행에 완료 기록은 없지만 제작 상태가 이미 이 단계를 지난 품목이 있다.
-      그 품목에 완료 버튼을 내면 이미 제작에 들어간 옷을 또 발주하라는 말이 된다 —
-      사실대로 지나간 단계로 적고 버튼을 내리지 않는다(2026-08-04 현업 지적).
-    */
-    if (!target.completed && stageReached(stage, row.item?.itemStatus)) {
+  /*
+    한 줄은 `품목 · 상태 · 처리 버튼 · 날짜 · 서류 버튼` 다섯 칸이다 —
+    폭은 준비 카드와 공유한다(production-layout). 상태와 버튼을 한 칸에 몰아 놓았더니
+    줄마다 버튼이 다른 x에서 시작해 계단처럼 보였다(2026-08-04 현업 지적).
+  */
+
+  /** 진행에 완료 기록은 없지만 제작 상태가 이미 이 단계를 지난 품목 */
+  const reachedOnly = (row: StageRow) =>
+    !row.target.completed && stageReached(stage, row.item?.itemStatus);
+
+  const statusCell = (row: StageRow) => {
+    if (reachedOnly(row)) {
+      /*
+        날짜와는 상관없다 — 실물(제작 상태)이 이 단계를 이미 지났는데 진행 완료 기록만 없는 줄이다.
+        `지남`이라고 적었더니 납기가 지난 것으로 읽혔다(2026-08-05 현업 지적) — 없는 것이 기록이므로
+        그대로 `미기록`이라 적고, [완료 기록] 버튼으로 기록을 남길 수 있게 둔다.
+      */
       return (
-        <Tooltip title="제작 상태로 이미 지나간 단계입니다(진행 완료 기록은 없습니다).">
-          <Typography.Text type="secondary">
-            지남 · {metaOf(PRODUCTION_STATUS_META, row.item?.itemStatus ?? '').label}
-          </Typography.Text>
+        <Tooltip
+          title={`제작은 이미 이 단계를 지났는데(현재 ${
+            metaOf(PRODUCTION_STATUS_META, row.item?.itemStatus ?? '').label
+          }) 진행 완료 기록이 없습니다. [완료 기록]을 누르면 기록만 남깁니다.`}
+        >
+          <Typography.Text type="warning">미기록</Typography.Text>
         </Tooltip>
       );
     }
-    if (target.completed) {
+    /*
+      제작 상태(발주 가능·제작 중…)를 함께 적었더니 단계마다 다른 낱말이 늘어서서
+      "이 단계를 끝냈는가"가 되레 흐려졌다(2026-08-04 현업 지적). 완료/미완료만 적는다.
+    */
+    return row.target.completed ? (
+      <Typography.Text type="success">완료</Typography.Text>
+    ) : (
+      <Typography.Text type="secondary">미완료</Typography.Text>
+    );
+  };
+
+  const actionCell = (row: StageRow) => {
+    /*
+      기록이 없다고 일을 못 하게 두지 않는다 — 실물이 지나간 줄에도 버튼을 낸다.
+      [발주]가 아니라 [완료 기록]인 이유: 실물은 이미 처리됐으므로 여기서 하는 일은
+      진행에 완료(와 그 시각)를 남기는 것뿐이다(2026-08-05 현업 확정).
+    */
+    if (reachedOnly(row)) {
       return (
-        <Space size={4}>
-          <Typography.Text>
-            {target.completedAt?.slice(0, 10)}
-            {target.completedByName ? ` · ${target.completedByName}` : ''}
-          </Typography.Text>
-          <Can permission="JOURNEY_EDIT">
-            <Tooltip title="완료 취소 — 진행 기록만 되돌립니다(입출고 일자는 그대로).">
-              <Button
-                type="text"
-                size="small"
-                icon={<RollbackOutlined />}
-                loading={pendingKey === row.key}
-                onClick={() => onUncomplete(row)}
-              />
-            </Tooltip>
-          </Can>
-        </Space>
-      );
-    }
-    if (!stage.action) return <Typography.Text type="secondary">미완료</Typography.Text>;
-    const blocked = blockedReason?.(row) ?? null;
-    return (
-      <Space size={6}>
-        {/*
-          제작 상태(발주 가능·제작 중…)를 함께 적었더니 단계마다 다른 낱말이 늘어서서
-          "이 단계를 끝냈는가"가 되레 흐려졌다(2026-08-04 현업 지적). 완료/미완료만 적는다.
-        */}
-        <Typography.Text type="secondary">미완료</Typography.Text>
         <Can permission="JOURNEY_EDIT">
-          <Tooltip title={blocked ?? ''}>
+          <Tooltip title="진행에 이 단계 완료를 남깁니다(제작 상태는 이미 지나 있어 그대로 둡니다).">
             <Button
               size="small"
-              type={blocked ? 'default' : 'primary'}
-              ghost={!blocked}
-              disabled={!!blocked}
               loading={pendingKey === row.key}
               onClick={() => onComplete(row)}
+              style={actionButtonStyle}
             >
-              {stage.action}
+              완료 기록
             </Button>
           </Tooltip>
         </Can>
-      </Space>
+      );
+    }
+    if (row.target.completed) {
+      return (
+        <Can permission="JOURNEY_EDIT">
+          <Tooltip title="완료 취소 — 진행 기록만 되돌립니다(입출고 일자는 그대로).">
+            <Button
+              size="small"
+              icon={<RollbackOutlined />}
+              loading={pendingKey === row.key}
+              onClick={() => onUncomplete(row)}
+              style={actionButtonStyle}
+            >
+              완료 취소
+            </Button>
+          </Tooltip>
+        </Can>
+      );
+    }
+    if (!stage.action) return null;
+    const blocked = blockedReason?.(row) ?? null;
+    return (
+      <Can permission="JOURNEY_EDIT">
+        <Tooltip title={blocked ?? ''}>
+          <Button
+            size="small"
+            type={blocked ? 'default' : 'primary'}
+            ghost={!blocked}
+            disabled={!!blocked}
+            loading={pendingKey === row.key}
+            onClick={() => onComplete(row)}
+            style={actionButtonStyle}
+          >
+            {stage.action}
+          </Button>
+        </Tooltip>
+      </Can>
+    );
+  };
+
+  /** 완료일 — 누가 끝냈는지는 툴팁으로 돌린다(칸 폭이 이름 길이에 흔들리지 않게). */
+  const dateCell = (row: StageRow) => {
+    const { target } = row;
+    if (!target.completed || !target.completedAt) return null;
+    const date = target.completedAt.slice(0, 10);
+    return target.completedByName ? (
+      <Tooltip title={`${target.completedByName} 처리`}>
+        <Typography.Text type="secondary">{date}</Typography.Text>
+      </Tooltip>
+    ) : (
+      <Typography.Text type="secondary">{date}</Typography.Text>
     );
   };
 
@@ -222,7 +277,7 @@ export function StageProgress({
     {
       title: '품목',
       key: 'item',
-      width: 150,
+      width: NAME_WIDTH,
       render: (_, row) => (
         <Space size={4}>
           {hasComponents(row) && (
@@ -237,12 +292,9 @@ export function StageProgress({
         </Space>
       ),
     },
-    /*
-      액션 칸은 가장 긴 버튼(완성복발주)에 맞춰 딱 그 폭만 잡는다 — 서류 버튼이 그 바로 뒤에서
-      시작하도록. 짧은 버튼(발주) 줄에서는 사이가 좀 벌어지지만, 단계마다 서류 버튼이
-      다른 자리에서 시작하는 것보다 낫다(2026-08-04 현업 확정).
-    */
-    { title: stage.label, key: 'action', width: 128, render: (_, row) => actionCell(row) },
+    { title: '상태', key: 'status', width: STATUS_WIDTH, render: (_, row) => statusCell(row) },
+    { title: stage.label, key: 'action', width: ACTION_WIDTH, render: (_, row) => actionCell(row) },
+    { title: '날짜', key: 'date', width: DATE_WIDTH, render: (_, row) => dateCell(row) },
     {
       title: '',
       key: 'extras',
