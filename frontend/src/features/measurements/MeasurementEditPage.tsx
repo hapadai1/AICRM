@@ -4,6 +4,7 @@
  * 태블릿 가상 숫자 키패드로 치수를 입력하며, 현재 필드를 강조한다.
  */
 import {
+  CopyOutlined,
   DeleteOutlined,
   DiffOutlined,
   PlusOutlined,
@@ -38,7 +39,7 @@ import type { CSSProperties } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ApiError, fetchFileObjectUrl } from '../../api/client';
-import { fetchCustomers } from '../../api/customers';
+import { fetchCustomer, fetchCustomers } from '../../api/customers';
 import type {
   MeasurementFieldDef,
   MeasurementImage,
@@ -68,7 +69,6 @@ import { labelOf, metaOf } from '../../shared/status-meta';
 import { MEASUREMENT_STATUS_META } from './meas-meta';
 import { MeasurementRecordStrip } from './MeasurementRecordStrip';
 import { NumericKeypad } from './NumericKeypad';
-import { buildRecordTitles } from './record-label';
 
 interface FormState {
   measurementDate: string;
@@ -148,6 +148,8 @@ export function MeasurementEditPage() {
   const [dirty, setDirty] = useState(false);
   // 화면 표시 단위 — 저장은 항상 CM. 단위 상태는 세션에 저장하지 않는다 (설계서 v2 05 §3.1).
   const [unit, setUnit] = useState<Unit>('CM');
+  // [직전 채촌 값 불러오기]는 기록 한 건을 더 읽어 오므로 누르는 동안 버튼을 돌린다.
+  const [loadingPrevious, setLoadingPrevious] = useState(false);
   // 사진 인쇄 선택 (fileId 집합)
   const [selectedImages, setSelectedImages] = useState<Set<string>>(() => new Set());
   /**
@@ -170,8 +172,20 @@ export function MeasurementEditPage() {
   const customerQuery = useQuery({
     queryKey: ['customers', 'search', customerKeyword],
     queryFn: () => fetchCustomers({ q: customerKeyword || undefined, scope: 'ALL', size: 20 }),
-    enabled: isNew,
+    enabled: isNew && !customerId,
   });
+
+  /**
+   * 신규 채촌은 대부분 고객을 이미 고른 뒤 들어온다 (?customerId=).
+   * 그때는 고객을 다시 검색해 갈아탈 일이 없으므로 이름·전화만 머리말에 박아 둔다
+   * (현업 확정 2026-08-05). 고객 없이 [새 채촌]으로 들어온 경우에만 검색 셀렉트를 낸다.
+   */
+  const pickedCustomerQuery = useQuery({
+    queryKey: ['customers', customerId],
+    queryFn: () => fetchCustomer(customerId),
+    enabled: isNew && !!customerId,
+  });
+  const pickedCustomer = pickedCustomerQuery.data?.customer;
 
   // 이 고객이 저장한 채촌 목록 — 화면 맨 위 리스트와 회차 계산에 함께 쓴다.
   // 신규 작성 중에도 고객만 고르면 기존 기록을 바로 열 수 있어야 한다 (현업 확정 2026-08-01).
@@ -547,31 +561,17 @@ export function MeasurementEditPage() {
   const statusMeta = metaOf(MEASUREMENT_STATUS_META, session?.status);
   // 저장한 채촌 목록은 최신 순으로 온다 — 현재 기록 바로 다음 항목이 직전 채촌이다.
   const records = recordsQuery.data ?? [];
-  const recordTitles = buildRecordTitles(records);
   const currentIndex = records.findIndex((r) => r.id === session?.id);
-  const currentTitle = currentIndex >= 0 ? (recordTitles[currentIndex] ?? '') : '';
   const previousRecord = currentIndex >= 0 ? records[currentIndex + 1] : undefined;
 
   // 하단 고정 키패드가 떠 있는 동안에는 본문 아래에 그만큼 여백을 둬야 마지막 항목이 가려지지 않는다.
   const keypadSheetOpen = isNarrow && !!activeKey && !readOnly && unit === 'CM';
 
-  /**
-   * 고객 검색 목록. 고객 화면에서 ?customerId=로 들어오면 그 고객이 검색 결과에 없어
-   * 셀렉트에 id가 그대로 보이므로, 읽어 둔 채촌 목록의 고객 이름을 후보에 얹어 준다.
-   */
-  const customerOptions = (() => {
-    const found = (customerQuery.data?.data ?? []).map((c) => ({
-      value: c.id,
-      label: `${c.name} (${c.phone})`,
-    }));
-    const preselected = records[0];
-    if (!customerId || !preselected?.customerName || found.some((o) => o.value === customerId))
-      return found;
-    return [
-      { value: customerId, label: `${preselected.customerName} (${preselected.customerPhone})` },
-      ...found,
-    ];
-  })();
+  /** 고객 검색 목록 — 고객 없이 [새 채촌]으로 들어왔을 때만 쓴다. */
+  const customerOptions = (customerQuery.data?.data ?? []).map((c) => ({
+    value: c.id,
+    label: `${c.name} (${c.phone})`,
+  }));
 
   const startNewRecord = () =>
     navigate(
@@ -624,23 +624,12 @@ export function MeasurementEditPage() {
   return (
     <Row gutter={16}>
       <Col xs={24} lg={15} xl={16} style={{ paddingBottom: keypadSheetOpen ? 340 : 0 }}>
-        {/* 지금까지 저장한 채촌 — 눌러서 기존 기록을 그대로 열어 본다 (현업 확정 2026-08-01).
-            저장한 기록이 0건이면 줄 자체가 나오지 않는다. */}
-        {listCustomerId && (
-          <MeasurementRecordStrip
-            records={records}
-            currentId={session?.id}
-            onSelect={openRecord}
-            onCreate={isNew ? undefined : startNewRecord}
-            onLoadPrevious={isNew && records.length > 0 ? loadPreviousValues : undefined}
-          />
-        )}
-
         <Card style={{ marginBottom: 16 }}>
           <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-            {/* 머리말 — 고객·계약·버전/상태 한 줄. 아래 입력 필드와 겹치는 정보는 배지로 반복하지 않는다. */}
+            {/* 머리말 — 이 채촌의 주인. 고객은 검색 목록에서 이미 고르고 들어오므로 여기서 갈아타지 않는다
+                (현업 확정 2026-08-05). 고객 없이 [새 채촌]으로 들어온 경우에만 검색 셀렉트를 낸다. */}
             <Space align="center" wrap style={{ width: '100%', justifyContent: 'space-between' }}>
-              {isNew ? (
+              {isNew && !customerId ? (
                 <Space wrap align="center" size="small">
                   <Typography.Title level={4} style={{ margin: 0 }}>
                     신규 채촌
@@ -660,26 +649,64 @@ export function MeasurementEditPage() {
               ) : (
                 <Space wrap align="center" size="small">
                   <Typography.Title level={4} style={{ margin: 0 }}>
-                    {session?.customerName}
+                    {isNew ? pickedCustomer?.name : session?.customerName}
                   </Typography.Title>
-                  <Typography.Text type="secondary">{session?.customerPhone}</Typography.Text>
-                  <Tag>{session?.contractNo ?? '계약 미연결'}</Tag>
-                  {session?.linkedOrderItems.map((it) => (
-                    <Tag key={it.id} color="geekblue">
-                      {it.displayName}
-                    </Tag>
-                  ))}
+                  <Typography.Text type="secondary">
+                    {isNew ? pickedCustomer?.phone : session?.customerPhone}
+                  </Typography.Text>
+                  {isNew ? (
+                    <Tag color="blue">신규 채촌</Tag>
+                  ) : (
+                    <>
+                      <Tag>{session?.contractNo ?? '계약 미연결'}</Tag>
+                      {session?.linkedOrderItems.map((it) => (
+                        <Tag key={it.id} color="geekblue">
+                          {it.displayName}
+                        </Tag>
+                      ))}
+                      <StatusBadge label={statusMeta.label} color={statusMeta.color} />
+                    </>
+                  )}
                 </Space>
               )}
-              {!isNew && (
-                <Space size={4}>
-                  {currentTitle && <Tag color="blue">{currentTitle}</Tag>}
-                  <StatusBadge label={statusMeta.label} color={statusMeta.color} />
-                </Space>
-              )}
+              {/* 기능 버튼은 머리말 우상단에 둔다. */}
+              <Space>
+                {isNew && records.length > 0 && (
+                  <Button
+                    icon={<CopyOutlined />}
+                    loading={loadingPrevious}
+                    onClick={async () => {
+                      setLoadingPrevious(true);
+                      try {
+                        await loadPreviousValues();
+                      } finally {
+                        setLoadingPrevious(false);
+                      }
+                    }}
+                  >
+                    직전 채촌 값 불러오기
+                  </Button>
+                )}
+                {!isNew && (
+                  <Button type="primary" icon={<PlusOutlined />} onClick={startNewRecord}>
+                    새 채촌
+                  </Button>
+                )}
+              </Space>
             </Space>
 
-            {/* 입력 필드 한 줄 — 채촌일·구분. 다른 기록으로 갈아타기는 위 [저장한 채촌] 줄에서 한다. */}
+            {/* 이 고객의 채촌 이력 — 눌러서 기존 기록을 그대로 열어 본다 (현업 확정 2026-08-01).
+                저장한 기록이 0건이면 줄 자체가 나오지 않는다. */}
+            {listCustomerId && (
+              <MeasurementRecordStrip
+                records={records}
+                currentId={session?.id}
+                onSelect={openRecord}
+              />
+            )}
+
+            {/* 입력 필드 한 줄 — 채촌일·구분·표시 단위·사진을 한 줄에 붙인다 (현업 확정 2026-08-05).
+                다른 기록으로 갈아타기는 위 [채촌 이력] 줄에서 한다. */}
             <Space wrap size="middle" align="end">
               <Space direction="vertical" size={4}>
                 <Typography.Text type="secondary">채촌일 *</Typography.Text>
@@ -701,10 +728,6 @@ export function MeasurementEditPage() {
                   onChange={(v) => patch({ measurementType: v as MeasurementType })}
                 />
               </Space>
-            </Space>
-
-            {/* 기능 버튼 줄 — 단위 전환·사진 업로드 (설계서 v2 05 §3.2·§4.3) */}
-            <Space wrap size="middle" align="center">
               <Space direction="vertical" size={4}>
                 <Typography.Text type="secondary">표시 단위</Typography.Text>
                 <Segmented
@@ -777,11 +800,12 @@ export function MeasurementEditPage() {
               />
             )}
 
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {unit === 'INCH'
-                ? '인치 보기입니다 — 1/8인치 단위 분수로 환산해 보여 주며, 값 수정은 cm 보기에서 합니다.'
-                : '입력 단위: cm (소수 허용) · 값이 없는 항목은 비워 둡니다.'}
-            </Typography.Text>
+            {/* cm 입력 안내는 늘 같은 말이라 지웠다 — 인치 보기에서 값이 안 바뀌는 이유만 남긴다. */}
+            {unit === 'INCH' && (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                인치 보기입니다 — 1/8인치 단위 분수로 환산해 보여 주며, 값 수정은 cm 보기에서 합니다.
+              </Typography.Text>
+            )}
           </Space>
         </Card>
 
