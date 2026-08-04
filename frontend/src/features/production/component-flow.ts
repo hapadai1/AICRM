@@ -151,7 +151,9 @@ export function stageSummary(item: ProductionItem, stage: ProductionStage): Stag
     };
   }
   const targets = activeComponents(item);
-  if (targets.length === 0) return { text: '구성품 없음', done: false };
+  // 구성품이 없으면 단계마다 '구성품 없음'이 여덟 번 반복된다 — 요약은 비우고
+  // 화면이 첫 구성품 단계에서 한 번만 알린다.
+  if (targets.length === 0) return { text: '', done: false };
   const name = stage.action ?? stage.label;
   const passed = targets.filter((c) => hasPassed(c.status, stage)).length;
   if (passed === targets.length) return { text: `전체 ${name} 완료`, done: true };

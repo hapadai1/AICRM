@@ -61,6 +61,17 @@ export function ComponentStageProgress({
   const rows = item.components.filter((c) => c.active);
   if (rows.length === 0) return null;
 
+  /** 이 단계에서 손댈 수 있는 구성품인가 — 버튼이 하나도 없는 표는 그리지 않는다. */
+  const interactive = (c: ProductionComponent) => {
+    if (c.status === 'CANCELLED') return false;
+    if (!hasPassed(c.status, stage)) return !!stage.action;
+    return (
+      c.status === stage.status &&
+      !!revertTargetOf(stages, stageIndex, (s) => !!eventOf(c.id, s), item.transactionType)
+    );
+  };
+  if (!rows.some(interactive)) return null;
+
   const actionCell = (c: ProductionComponent) => {
     if (c.status === 'CANCELLED') return <Typography.Text type="secondary">취소됨</Typography.Text>;
 

@@ -332,19 +332,17 @@ export function ContractProductionPage() {
     stage: ProductionStage,
     stages: ProductionStage[],
     i: number,
-    current: number,
   ) => {
     if (stage.kind === 'PREP') return prepBody(item);
     if (stage.kind === 'WORK_ORDER') return workOrderBody(item);
     const itemAction = itemActionOf(item, stage);
     /*
-      표를 까는 단계는 셋뿐이다 — 끝난 단계와 아직 차례가 아닌 단계까지 깔면 여덟 단계가
-      전부 표를 달고 화면이 몇 배로 길어지는데, 정작 지금 누를 칸은 하나다.
-        · 그 단계에 서 있는 구성품이 있는 단계 (되돌릴 수 있어야 한다)
-        · 지금 서 있는 단계 (오늘 누를 칸)
-        · 입고·출고 (사입 구성품은 제작 단계를 건너뛰고 바로 입고된다 — 건너뛸 곳이 여기다)
+      아직 끝나지 않은 단계는 순서와 무관하게 전부 버튼을 낸다 (2026-08-04 현업 확정).
+      "지금 차례인 단계만" 열면 작업지시서를 출력하기 전에는 제작요청 버튼이 아예 없어서,
+      출력과 무관하게 제작요청을 먼저 넣는 실제 순서를 화면이 막는다.
+      끝난 단계만 접는다 — 거기 남는 건 이미 지나온 일이다.
     */
-    const table = stageHasWork(item, stage) && (i <= current || !!stage.mode) ? (
+    const table = stageHasWork(item, stage) ? (
       <ComponentStageProgress
         item={item}
         stage={stage}
@@ -356,9 +354,18 @@ export function ContractProductionPage() {
         pendingId={pendingId}
       />
     ) : null;
-    if (!itemAction && !table) return null;
+    // 구성품이 없는 품목은 단계마다 빈칸이 된다 — 첫 구성품 단계에서 한 번만 이유를 적는다.
+    const notice =
+      activeComponents(item).length === 0 &&
+      stages.find((s) => s.kind === 'COMPONENT')?.key === stage.key ? (
+        <Typography.Text type="secondary">
+          계약에 등록된 구성품이 없습니다 — 계약 수정에서 부위를 추가하면 생성됩니다.
+        </Typography.Text>
+      ) : null;
+    if (!itemAction && !table && !notice) return null;
     return (
       <Space direction="vertical" size={6} style={{ width: '100%' }}>
+        {notice}
         {itemAction}
         {table}
       </Space>
@@ -390,10 +397,12 @@ export function ContractProductionPage() {
         <span style={{ display: 'inline-block', minWidth: STAGE_LABEL_WIDTH }}>{stage.label}</span>
         <span style={{ fontWeight: 400 }}>
           {stamp ?? ''}
-          <Typography.Text type={summary.done ? 'success' : undefined} strong>
-            {stamp ? ' · ' : ''}
-            {summary.text}
-          </Typography.Text>
+          {summary.text && (
+            <Typography.Text type={summary.done ? 'success' : undefined} strong>
+              {stamp ? ' · ' : ''}
+              {summary.text}
+            </Typography.Text>
+          )}
         </span>
       </>
     );
@@ -405,7 +414,7 @@ export function ContractProductionPage() {
     const current = currentStageIndex(item, stages);
     const stepItems = stages.map((stage, i) => {
       // 취소된 품목에는 할 일이 없다 — 버튼·표를 내지 않고 어디까지 갔었는지만 남긴다.
-      const body = cancelled ? null : stageBody(item, stage, stages, i, current);
+      const body = cancelled ? null : stageBody(item, stage, stages, i);
       return {
         title: stageTitle(item, stage),
         /*
@@ -484,6 +493,8 @@ export function ContractProductionPage() {
       key: 'workOrder',
       width: COL.status,
       render: (_, item) => {
+        // 렌탈은 작업지시서를 내지 않는 흐름이다 — 준비 미완처럼 보이면 할 일로 읽힌다.
+        if (item.transactionType === 'RENTAL') return <Typography.Text type="secondary">-</Typography.Text>;
         const wo = item.workOrder;
         const meta = metaOf(WORK_ORDER_STATUS_META, wo.status);
         return (
