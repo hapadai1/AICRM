@@ -4,6 +4,7 @@ import {
   DiffOutlined,
   FileExcelOutlined,
   SkinOutlined,
+  StopOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -28,6 +29,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ApiError } from '../../api/client';
 import { useModeStore } from '../../app/mode-store';
 import {
+  cancelContract,
   createContractRevision,
   deleteContract,
   downloadContractExcel,
@@ -35,6 +37,7 @@ import {
   completeContract,
   fetchContractFlow,
   fetchContractVersions,
+  removeSignature,
   type ContractVersion,
   type ProductCategory,
   type TransactionType,
@@ -156,6 +159,8 @@ export function ContractDetailPage() {
   // 변경 사유·취소 사유 입력 모달
   const [revisionModalOpen, setRevisionModalOpen] = useState(false);
   const [revisionReason, setRevisionReason] = useState('');
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
 
   const onApiError = (e: unknown) => {
     message.error(e instanceof ApiError ? e.message : '처리 중 오류가 발생했습니다.');
@@ -210,6 +215,45 @@ export function ContractDetailPage() {
       setRevisionReason('');
       invalidateAll();
       navigate(`/contracts/new?contractId=${id}`);
+    },
+    onError: onApiError,
+  });
+
+  /**
+   * 수정하기(서명 해제) — 서명완료를 버전업 없이 작성중으로 되돌린다 (현업 확정 2026-07-31).
+   * 계약완료의 수정하기(버전업)와 같은 라벨·위치로, 사용자는 두 기능을 구분하지 않는다.
+   */
+  const reopenMutation = useMutation({
+    mutationFn: () => removeSignature(id, flowQuery.data!.currentVersionId!),
+    onSuccess: () => {
+      message.success('서명을 해제했습니다. 수정 후 다시 서명해 주세요.');
+      invalidateFlow();
+      invalidateAll();
+      navigate(`/contracts/new?contractId=${id}`);
+    },
+    onError: onApiError,
+  });
+
+  const handleReopen = () => {
+    modal.confirm({
+      title: '계약서 수정하기',
+      content: '서명을 해제하고 작성중으로 되돌립니다. 수정 후 다시 서명해야 합니다.',
+      okText: '수정 시작',
+      cancelText: '취소',
+      onOk: () => reopenMutation.mutateAsync(),
+    });
+  };
+
+  // 계약 취소 — 주문이 생기기 전(작성중·서명완료)에만. 취소는 종결 상태다.
+  const cancelMutation = useMutation({
+    mutationFn: () =>
+      cancelContract(id, { reason: cancelReason.trim(), version: detail?.version ?? 1 }),
+    onSuccess: () => {
+      setCancelOpen(false);
+      setCancelReason('');
+      message.success('계약을 취소했습니다.');
+      invalidateFlow();
+      invalidateAll();
     },
     onError: onApiError,
   });
@@ -392,8 +436,10 @@ export function ContractDetailPage() {
               계약서 출력
             </Button>
             {/*
-              헤더 우상단은 기능 버튼만 (현업 확정 2026-07-30).
-              서명완료 → [계약완료], 계약완료 → [수정하기]. 스타일 컨설팅·제작·입출고 이동은 화면 하단.
+              헤더 우상단은 기능 버튼만 (현업 확정 2026-07-31).
+              서명완료 → [계약완료]·[수정하기(서명 해제)]·[계약 취소(주문 없을 때)],
+              계약완료 → [수정하기(버전업)]. 두 수정하기는 같은 라벨·위치 — 버전업 여부는 시스템만 안다.
+              스타일 컨설팅·제작·입출고 이동은 화면 하단.
             */}
             {flow?.canComplete && (
               <Can permission="CONTRACT_CONFIRM">
@@ -404,6 +450,27 @@ export function ContractDetailPage() {
                   onClick={handleComplete}
                 >
                   계약완료
+                </Button>
+              </Can>
+            )}
+            {flow?.canReopen && (
+              <Can permission="CONTRACT_SIGN">
+                <Tooltip title="서명을 해제하고 작성중으로 되돌립니다. 수정 후 다시 서명해야 합니다.">
+                  <Button
+                    type="primary"
+                    icon={<DiffOutlined />}
+                    loading={reopenMutation.isPending}
+                    onClick={handleReopen}
+                  >
+                    수정하기
+                  </Button>
+                </Tooltip>
+              </Can>
+            )}
+            {flow?.canCancel && (
+              <Can permission="CONTRACT_CANCEL">
+                <Button danger icon={<StopOutlined />} onClick={() => setCancelOpen(true)}>
+                  계약 취소
                 </Button>
               </Can>
             )}
@@ -563,6 +630,30 @@ export function ContractDetailPage() {
             maxLength={200}
             placeholder="예: 셔츠 1벌 추가 요청"
             onChange={(e) => setRevisionReason(e.target.value)}
+          />
+        </Flex>
+      </Modal>
+
+      {/* 계약 취소 — 주문이 생기기 전(작성중·서명완료)에만, 사유 필수. 취소는 종결 상태. */}
+      <Modal
+        open={cancelOpen}
+        title="계약 취소"
+        okText="계약 취소"
+        okButtonProps={{ danger: true, disabled: !cancelReason.trim() }}
+        cancelText="닫기"
+        confirmLoading={cancelMutation.isPending}
+        onOk={() => cancelMutation.mutate()}
+        onCancel={() => setCancelOpen(false)}
+      >
+        <Flex vertical gap={12}>
+          <Typography.Text>
+            계약을 취소합니다. 취소한 계약은 되돌릴 수 없습니다. 취소 사유를 남겨 주세요.
+          </Typography.Text>
+          <Input.TextArea
+            rows={3}
+            value={cancelReason}
+            onChange={(e) => setCancelReason(e.target.value)}
+            placeholder="예: 고객 요청으로 계약 진행 중단"
           />
         </Flex>
       </Modal>

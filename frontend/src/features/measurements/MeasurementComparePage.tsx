@@ -1,4 +1,4 @@
-/** MEAS-003 채촌 버전 비교 — 항목/이전/현재/차이 표 (±값 색 강조, 문자 사이즈는 변경 여부만) */
+/** MEAS-003 채촌 기록 비교 — 항목/이전/현재/차이 표 (±값 색 강조, 문자 사이즈는 변경 여부만) */
 import { SwapOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import { Alert, Button, Card, Col, Row, Segmented, Select, Space, Spin, Table, Tag, Typography } from 'antd';
@@ -17,13 +17,15 @@ import {
 /** 화면 표시 단위 (백엔드 compare 응답은 항상 CM — 표시·diff만 파생 환산) */
 type Unit = 'CM' | 'INCH';
 import { MEASUREMENT_TYPE_META } from './meas-meta';
+import { buildRecordTitles, recordLabel } from './record-label';
 import { BackButton } from '../../shared/BackButton';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { labelOf, metaOf } from '../../shared/status-meta';
 import { SEMANTIC_COLOR } from '../../app/theme';
 
-function versionLabel(meta: MeasurementCompareVersionMeta): string {
-  return `V${meta.versionNo} · ${meta.measurementDate} · ${labelOf(MEASUREMENT_TYPE_LABELS, meta.measurementType)}`;
+/** 회차를 모를 때(고객 기록 목록이 아직 안 왔을 때)의 최소 표기 */
+function fallbackLabel(meta: MeasurementCompareVersionMeta): string {
+  return `${labelOf(MEASUREMENT_TYPE_LABELS, meta.measurementType)} · ${meta.measurementDate}`;
 }
 
 function renderValue(row: MeasurementCompareRow, value: number | string | null, unit: Unit) {
@@ -52,7 +54,7 @@ export function MeasurementComparePage() {
   });
   const data = compareQuery.data;
 
-  // 버전 교체용 동일 고객 버전 목록
+  // 비교 대상 교체용 동일 고객 채촌 목록
   const listQuery = useQuery({
     queryKey: ['measurements', 'list', data?.customerId],
     queryFn: () => fetchMeasurements(data?.customerId ?? ''),
@@ -64,7 +66,7 @@ export function MeasurementComparePage() {
       <Alert
         type="warning"
         showIcon
-        message="비교할 두 버전을 선택해 주세요."
+        message="비교할 두 채촌 기록을 선택해 주세요."
         action={
           <Button size="large" onClick={() => navigate('/measurements')}>
             채촌 목록으로
@@ -80,12 +82,24 @@ export function MeasurementComparePage() {
     );
   }
 
-  const versionOptions = (excludeId: string) =>
-    (listQuery.data ?? [])
+  // 채촌은 버전이 아니라 "구분 + 채촌일"로 고른다 — 같은 구분이 여럿이면 회차가 붙는다.
+  const customerRecords = listQuery.data ?? [];
+  const customerTitles = buildRecordTitles(customerRecords);
+  const titleById = new Map(customerRecords.map((m, i) => [m.id, customerTitles[i] ?? '']));
+  const recordLabelOf = (meta: MeasurementCompareVersionMeta) => {
+    const title = titleById.get(meta.id);
+    return title ? recordLabel(title, meta.measurementDate) : fallbackLabel(meta);
+  };
+
+  const recordOptions = (excludeId: string) =>
+    customerRecords
       .filter((m) => m.id !== excludeId)
       .map((m) => ({
         value: m.id,
-        label: `V${m.versionNo} · ${m.measurementDate} · ${labelOf(MEASUREMENT_TYPE_LABELS, m.measurementType)}`,
+        label: recordLabel(
+          titleById.get(m.id) ?? labelOf(MEASUREMENT_TYPE_LABELS, m.measurementType),
+          m.measurementDate,
+        ),
       }));
 
   const columns: ColumnsType<MeasurementCompareRow> = [
@@ -107,12 +121,12 @@ export function MeasurementComparePage() {
     },
     { title: '항목', dataIndex: 'label', key: 'label', render: (label: string) => <Typography.Text strong>{label}</Typography.Text> },
     {
-      title: `이전 (${versionLabel(data.left)})`,
+      title: `이전 (${recordLabelOf(data.left)})`,
       key: 'left',
       render: (_, row) => renderValue(row, row.leftValue, unit),
     },
     {
-      title: `현재 (${versionLabel(data.right)})`,
+      title: `현재 (${recordLabelOf(data.right)})`,
       key: 'right',
       render: (_, row) => renderValue(row, row.rightValue, unit),
     },
@@ -160,12 +174,12 @@ export function MeasurementComparePage() {
           </div>
           <Space wrap size="middle">
             <Space direction="vertical" size={4}>
-              <Typography.Text type="secondary">이전 버전</Typography.Text>
+              <Typography.Text type="secondary">이전 채촌</Typography.Text>
               <Select
                 size="large"
                 style={{ minWidth: 260, height: 48 }}
                 value={leftId}
-                options={versionOptions(rightId)}
+                options={recordOptions(rightId)}
                 onChange={(v: string) => setSearchParams({ left: v, right: rightId })}
               />
             </Space>
@@ -178,12 +192,12 @@ export function MeasurementComparePage() {
               좌우 교체
             </Button>
             <Space direction="vertical" size={4}>
-              <Typography.Text type="secondary">현재 버전</Typography.Text>
+              <Typography.Text type="secondary">현재 채촌</Typography.Text>
               <Select
                 size="large"
                 style={{ minWidth: 260, height: 48 }}
                 value={rightId}
-                options={versionOptions(leftId)}
+                options={recordOptions(leftId)}
                 onChange={(v: string) => setSearchParams({ left: leftId, right: v })}
               />
             </Space>
@@ -229,7 +243,7 @@ export function MeasurementComparePage() {
 
       <Row gutter={16}>
         <Col xs={24} md={12}>
-          <Card title={`체형 특이사항 — 이전 (V${data.left.versionNo})`} size="small">
+          <Card title={`체형 특이사항 — 이전 (${recordLabelOf(data.left)})`} size="small">
             <Space direction="vertical" size={4}>
               <Typography.Text>{data.left.bodyNotes ?? '기록 없음'}</Typography.Text>
               {data.left.fitPreference && <Typography.Text type="secondary">선호핏: {data.left.fitPreference}</Typography.Text>}
@@ -237,7 +251,7 @@ export function MeasurementComparePage() {
           </Card>
         </Col>
         <Col xs={24} md={12}>
-          <Card title={`체형 특이사항 — 현재 (V${data.right.versionNo})`} size="small">
+          <Card title={`체형 특이사항 — 현재 (${recordLabelOf(data.right)})`} size="small">
             <Space direction="vertical" size={4}>
               <Typography.Text>{data.right.bodyNotes ?? '기록 없음'}</Typography.Text>
               {data.right.fitPreference && <Typography.Text type="secondary">선호핏: {data.right.fitPreference}</Typography.Text>}

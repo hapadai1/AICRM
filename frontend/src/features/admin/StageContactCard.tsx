@@ -22,7 +22,7 @@ import {
 import { useAuthStore } from '../../app/auth-store';
 import { PageCard } from '../../shared/PageShell';
 import { metaOf } from '../../shared/status-meta';
-import { autoWidth } from '../../shared/table-width';
+import { COL } from '../../shared/table-width';
 
 /**
  * 연락 문구 — 연락 시점(진행 단계)마다 고객에게 보낼 문구 하나 (개발설계서 05 G-06).
@@ -88,11 +88,11 @@ export function StageContactCard({ onEdit }: Props) {
     }));
 
   const columns: ColumnsType<Row> = [
-    { title: '연락 시점', dataIndex: 'when', width: 200 },
+    { title: '연락 시점', dataIndex: 'when', width: COL.wide },
     {
       title: '채널',
       key: 'channel',
-      ...autoWidth(),
+      width: COL.status,
       render: (_, r) => {
         if (!r.message) return <Typography.Text type="secondary">-</Typography.Text>;
         const meta = metaOf(NOTIFICATION_CHANNEL_META, r.message.channel);
@@ -102,7 +102,7 @@ export function StageContactCard({ onEdit }: Props) {
     {
       title: '승인 상태',
       key: 'status',
-      ...autoWidth(),
+      width: COL.status,
       render: (_, r) => {
         if (!r.message) return <Typography.Text type="secondary">-</Typography.Text>;
         const meta = metaOf(TEMPLATE_STATUS_META, r.message.approvalStatus);
@@ -112,6 +112,7 @@ export function StageContactCard({ onEdit }: Props) {
     {
       title: '보낼 문구',
       key: 'body',
+      width: COL.text,
       render: (_, r) =>
         r.message ? (
           // 미리보기만 한 줄로 자른다. 전문은 행을 펼치면 라인 하단에 뜬다(아래 expandable).
@@ -126,7 +127,7 @@ export function StageContactCard({ onEdit }: Props) {
     {
       title: '변수',
       key: 'variables',
-      ...autoWidth(),
+      width: COL.wide,
       render: (_, r) => {
         const vars = r.message ? extractTemplateVariables(r.message.body) : [];
         if (vars.length === 0) return <Typography.Text type="secondary">-</Typography.Text>;
@@ -145,7 +146,7 @@ export function StageContactCard({ onEdit }: Props) {
     {
       title: '작업',
       key: 'action',
-      ...autoWidth(),
+      width: COL.action2,
       render: (_, r) => {
         if (!canEdit) return null;
         return (

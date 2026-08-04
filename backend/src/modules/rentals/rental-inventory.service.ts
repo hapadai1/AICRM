@@ -23,10 +23,47 @@ import {
   ImportInventoryDto,
   InventoryListQueryDto,
   RetireInventoryDto,
+  RetireQuantityDto,
+  StatusQuantityDto,
   UpdateInventoryDto,
 } from './rentals.dto';
 
 const ITEM_WITH_SKU = { rentalSku: true } as const;
+
+/** 실물이 살아 있지만 지금은 빌려줄 수 없는 상태 (세탁·수선 대기 등) */
+const HOLD_ITEM_STATUSES = ['RETURNED_HOLD', 'ALTERATION', 'UNAVAILABLE'];
+
+/**
+ * 대기 한 묶음 — "왜 못 쓰는지(상태) + 언제 풀리는지(예정일) + 몇 벌".
+ * 상태만으로는 언제 나오는지 모르고, 날짜만으로는 저절로 풀리는지 사람이 풀어야 하는지 모른다.
+ */
+interface SkuHold {
+  status: string;
+  /** 예정일이 없는 대기(기한 미정)는 null */
+  availableFrom: string | null;
+  count: number;
+}
+
+/** SKU 수량 집계 한 줄 — total = available + reserved + checkedOut + hold */
+interface SkuSummaryRow {
+  componentType: string;
+  color: string;
+  size: string;
+  /** 폐기·비활성을 뺀 보유 수 */
+  total: number;
+  /** 오늘 바로 빌려줄 수 있는 수 */
+  available: number;
+  reserved: number;
+  checkedOut: number;
+  /** 세탁·수선 등으로 오늘 못 쓰는 수 */
+  hold: number;
+  /**
+   * 그 대기 수량의 내역. 화면 '비고' 칸이 이걸 그대로 줄줄이 쓴다 —
+   * 수량만 보면 다른 색을 권하게 되는데 실은 모레면 나오는 경우가 있다.
+   * 이른 예정일부터, 기한 미정은 맨 뒤.
+   */
+  holds: SkuHold[];
+}
 
 /**
  * 감사로그용 실물 식별 정보.
@@ -125,6 +162,95 @@ export class RentalInventoryService {
         ...(query.skuSize ? { size: query.skuSize } : {}),
       },
     };
+  }
+
+  /**
+   * SKU(품목·컬러·사이즈)별 수량 집계 — 렌탈 재고 화면의 기본 뷰.
+   *
+   * 현장에서 실물과 시스템 개체를 1:1로 맞추는 게 불가능해, 사용자는 개체가 아니라
+   * "블랙 46호 몇 벌이 지금 빌려줄 수 있나"만 다룬다 (현업 확정 2026-07-31).
+   * 개체 행은 그대로 두되 화면에서는 세는 단위로만 쓴다 — 이중예약 방지는 계속
+   * rental_allocation_no_overlap EXCLUDE 제약(개체×기간)이 최종 보장한다.
+   *
+   * 한 개체는 아래 네 통 중 정확히 하나에만 들어간다(합 = 보유). 겹칠 수 있는
+   * 조건들은 "지금 못 쓰는 이유"의 우선순위로 가른다: 출고 > 예약 > 대기 > 가용.
+   */
+  async skuSummary(query: InventoryListQueryDto) {
+    const today = parseDateOnly(toDateOnlyString(new Date()));
+    const items = await this.prisma.rentalInventoryItem.findMany({
+      // 폐기·비활성은 보유 수량이 아니다. 그 외 상태는 통을 가르는 데만 쓴다
+      // (그래서 status·retired 필터는 무시한다 — 상태로 좁히면 합이 보유와 어긋난다).
+      where: {
+        ...this.buildListWhere({ ...query, status: undefined, retired: undefined }),
+        active: true,
+      },
+      select: {
+        status: true,
+        availableFrom: true,
+        rentalSku: { select: { componentType: true, color: true, size: true } },
+        allocations: {
+          where: {
+            status: { in: ACTIVE_ALLOCATION_STATUSES },
+            pickupDate: { lte: today },
+            availabilityEndDate: { gte: today },
+          },
+          select: { status: true },
+        },
+      },
+    });
+
+    const rows = new Map<string, SkuSummaryRow>();
+    for (const item of items) {
+      const { componentType, color, size } = item.rentalSku;
+      const key = `${componentType}|${color}|${size}`;
+      const row =
+        rows.get(key) ??
+        {
+          componentType,
+          color,
+          size,
+          total: 0,
+          available: 0,
+          reserved: 0,
+          checkedOut: 0,
+          hold: 0,
+          holds: [],
+        };
+      row.total += 1;
+      const occupying = item.allocations;
+      const waitingUntil = item.availableFrom && item.availableFrom > today ? item.availableFrom : null;
+      if (occupying.some((a) => a.status === 'CHECKED_OUT')) row.checkedOut += 1;
+      else if (occupying.length > 0) row.reserved += 1;
+      // 세탁·수선·사용중지, 그리고 "이 날짜부터 다시 가용"이 아직 안 온 것은 지금 못 쓴다.
+      else if (HOLD_ITEM_STATUSES.includes(item.status) || waitingUntil) {
+        row.hold += 1;
+        // 같은 사유·같은 날짜끼리 묶는다 — 세 벌이 같은 날 수선에서 나오면 세 줄이 아니라 한 줄이다.
+        const availableFrom = waitingUntil ? toDateOnlyString(waitingUntil) : null;
+        const same = row.holds.find((h) => h.status === item.status && h.availableFrom === availableFrom);
+        if (same) same.count += 1;
+        else row.holds.push({ status: item.status, availableFrom, count: 1 });
+      } else row.available += 1;
+      rows.set(key, row);
+    }
+
+    // 이른 예정일부터. 기한이 안 잡힌 대기(언제 풀릴지 모르는 것)는 맨 뒤로 민다.
+    for (const row of rows.values())
+      row.holds.sort((a, b) =>
+        a.availableFrom === b.availableFrom
+          ? a.status.localeCompare(b.status)
+          : !a.availableFrom
+            ? 1
+            : !b.availableFrom
+              ? -1
+              : a.availableFrom.localeCompare(b.availableFrom),
+      );
+
+    return [...rows.values()].sort(
+      (a, b) =>
+        RENTAL_COMPONENT_TYPES.indexOf(a.componentType) - RENTAL_COMPONENT_TYPES.indexOf(b.componentType) ||
+        a.color.localeCompare(b.color) ||
+        a.size.localeCompare(b.size),
+    );
   }
 
   /**
@@ -244,16 +370,49 @@ export class RentalInventoryService {
   // ---------------------------------------------------------------------------
 
   /**
+   * 관리코드 자동 채번 — `구분-컬러-사이즈-연번`. 그 SKU에 이미 붙어 있는 가장 큰 연번 뒤를 잇는다.
+   * 폐기된 코드는 재사용 가능하지만 여기서는 건너뛴다(같은 옷이 두 번 나온 것처럼 보이지 않게).
+   *
+   * 동시에 두 명이 같은 SKU를 등록하면 같은 번호를 계산할 수 있다 — 그때는 부분 UNIQUE
+   * 인덱스가 막고 toFriendlyDuplicateError가 안내한다. 재고 등록은 동시성이 낮아 재시도로 충분하다.
+   */
+  private async nextManagementCodes(
+    componentType: string,
+    color: string,
+    size: string,
+    quantity: number,
+  ): Promise<string[]> {
+    // 관리코드는 60자 제한이라 접두사를 넉넉히 잘라 연번 자리를 남긴다.
+    const prefix = `${componentType}-${color.trim()}-${size.trim()}`.slice(0, 50);
+    const existing = await this.prisma.rentalInventoryItem.findMany({
+      where: { managementCode: { startsWith: `${prefix}-` } },
+      select: { managementCode: true },
+    });
+    const maxNo = existing.reduce((max, { managementCode }) => {
+      const tail = managementCode.slice(prefix.length + 1);
+      const no = /^\d+$/.test(tail) ? Number(tail) : 0;
+      return no > max ? no : max;
+    }, 0);
+    return Array.from(
+      { length: quantity },
+      (_, i) => `${prefix}-${String(maxNo + 1 + i).padStart(3, '0')}`,
+    );
+  }
+
+  /**
    * 실물 등록. quantity > 1이면 관리코드 연번(`CODE-001` …)으로 일괄 생성한다.
+   * managementCode를 생략하면 서버가 채번한다.
    * SKU(구분·컬러·사이즈)는 find-or-create.
    */
   async create(dto: CreateInventoryDto, actor: AuthUser) {
     const quantity = dto.quantity ?? 1;
     const startNo = dto.startNo ?? 1;
-    const codes =
-      quantity === 1
-        ? [dto.managementCode.trim()]
-        : Array.from({ length: quantity }, (_, i) => `${dto.managementCode.trim()}-${String(startNo + i).padStart(3, '0')}`);
+    const given = dto.managementCode?.trim();
+    const codes = given
+      ? quantity === 1
+        ? [given]
+        : Array.from({ length: quantity }, (_, i) => `${given}-${String(startNo + i).padStart(3, '0')}`)
+      : await this.nextManagementCodes(dto.componentType, dto.color, dto.size, quantity);
 
     await this.assertManagementCodesFree(codes);
     await this.assertActiveColorSize(dto.componentType, dto.color, dto.size);
@@ -601,6 +760,97 @@ export class RentalInventoryService {
       reason: dto.reason,
     });
     return updated;
+  }
+
+  /**
+   * SKU 단위로 손댈 개체 N개를 고른다 — 재고 화면이 개체를 다루지 않으므로 서버가 고른다
+   * (현업 확정 2026-07-31).
+   *
+   * 예약·출고가 걸린 옷은 후보에서 뺀다 (단건 경로의 assertNoActiveAllocations와 같은 기준).
+   * `holdFirst`면 세탁·수선처럼 이미 못 쓰는 것부터 골라 가용 수량을 최대한 남기고,
+   * 아니면 그 반대로 멀쩡한 것부터 고른다(사용불가로 돌릴 때).
+   * 수량을 채울 수 없으면 아무것도 건드리지 않고 몇 벌이 가능한지 알려 준다.
+   */
+  private async pickItemsForQuantity(
+    sku: { componentType: string; color: string; size: string },
+    quantity: number,
+    holdFirst: boolean,
+    shortfallMessage: (available: number) => string,
+    /** 지금 못 쓰는 것만 대상으로 좁힐지 (사용 재개용) */
+    heldOnly = false,
+  ): Promise<string[]> {
+    const today = parseDateOnly(toDateOnlyString(new Date()));
+    const candidates = await this.prisma.rentalInventoryItem.findMany({
+      where: {
+        active: true,
+        status: { not: 'RETIRED' },
+        rentalSku: sku,
+        allocations: { none: { status: { in: ACTIVE_ALLOCATION_STATUSES } } },
+        // "지금 못 쓴다"의 정의는 skuSummary의 hold 통과 같아야 한다 — 상태가 대기이거나,
+        // 세탁 후 재가용일(availableFrom)이 아직 안 온 것. 한쪽만 보면 재개 대상이 어긋난다.
+        ...(heldOnly
+          ? { OR: [{ status: { in: HOLD_ITEM_STATUSES } }, { availableFrom: { gt: today } }] }
+          : {}),
+      },
+      select: { id: true, status: true },
+    });
+
+    if (candidates.length < quantity)
+      throw new BusinessException('VALIDATION_ERROR', shortfallMessage(candidates.length), [
+        { field: 'quantity', reason: 'NOT_ENOUGH_ITEMS' },
+      ]);
+
+    const weight = (status: string) => Number(HOLD_ITEM_STATUSES.includes(status));
+    const ordered = [...candidates].sort((a, b) =>
+      holdFirst ? weight(b.status) - weight(a.status) : weight(a.status) - weight(b.status),
+    );
+    return ordered.slice(0, quantity).map((i) => i.id);
+  }
+
+  /** SKU 단위 수량 폐기 — "블랙 46호 2벌 뺀다". */
+  async retireQuantity(dto: RetireQuantityDto, actor: AuthUser) {
+    const ids = await this.pickItemsForQuantity(
+      { componentType: dto.componentType, color: dto.color, size: dto.size },
+      dto.quantity,
+      true,
+      (n) =>
+        `폐기할 수 있는 실물이 ${n}벌뿐입니다. (요청 ${dto.quantity}벌 — 예약·출고 중인 실물은 뺄 수 없습니다)`,
+    );
+    // 단건 폐기를 그대로 돌린다 — 상태 이벤트·감사로그가 개체마다 남아야 이력이 이어진다.
+    for (const id of ids) await this.retire(id, { reason: dto.reason }, actor);
+    return { retired: ids.length };
+  }
+
+  /**
+   * SKU 단위 수량 상태 변경 — "블랙 46호 1벌 임시 사용불가", "1벌 사용 재개".
+   * 사용불가로 돌릴 때는 멀쩡한 것부터, 되돌릴 때는 못 쓰는 것부터 고른다.
+   */
+  async changeStatusQuantity(dto: StatusQuantityDto, actor: AuthUser) {
+    const toHold = HOLD_ITEM_STATUSES.includes(dto.newStatus);
+    const ids = await this.pickItemsForQuantity(
+      { componentType: dto.componentType, color: dto.color, size: dto.size },
+      dto.quantity,
+      !toHold,
+      (n) =>
+        `상태를 바꿀 수 있는 실물이 ${n}벌뿐입니다. (요청 ${dto.quantity}벌 — 예약·출고 중인 실물은 바꿀 수 없습니다)`,
+      // 되돌릴 때는 지금 못 쓰는 것만 대상이다 — 멀쩡한 옷까지 건드리면 수량이 안 맞는다.
+      !toHold,
+    );
+    // 되돌릴 때는 재가용일도 오늘로 당긴다. 세탁 반납 때 걸어 둔 availableFrom이 미래로
+    // 남아 있으면 상태만 AVAILABLE이 되고 가용 수량에는 안 잡힌다.
+    const availableFrom = toHold ? undefined : toDateOnlyString(new Date());
+    for (const id of ids) {
+      const item = await this.prisma.rentalInventoryItem.findUniqueOrThrow({
+        where: { id },
+        select: { rowVersion: true },
+      });
+      await this.createStatusEvent(
+        id,
+        { newStatus: dto.newStatus, reason: dto.reason, availableFrom, version: item.rowVersion },
+        actor,
+      );
+    }
+    return { changed: ids.length };
   }
 
   // ---------------------------------------------------------------------------

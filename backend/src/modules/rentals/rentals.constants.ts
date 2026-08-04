@@ -33,6 +33,36 @@ export const ACTIVE_ALLOCATION_STATUSES = ['RESERVED', 'CHECKED_OUT'];
 /** 반납 처리 시 실물이 가질 수 있는 다음 상태 (RENT-004) */
 export const RETURN_NEXT_ITEM_STATUSES = ['RETURNED_HOLD', 'ALTERATION', 'UNAVAILABLE', 'AVAILABLE'];
 
+/**
+ * 색 계열 — 반납 후 정비(세탁) 소요일을 가르는 축.
+ * LIGHT = 화이트·베이지 계열(오염이 보여 세탁 확인 필요), DARK = 그 외.
+ */
+export const RENTAL_COLOR_TONES = ['LIGHT', 'DARK'];
+
+/** 정비 기준은 항상 한 행이다 — 이 id로만 읽고 쓴다 (마이그레이션이 심는 값과 같아야 한다). */
+export const RENTAL_RETURN_POLICY_ID = '00000000-0000-4000-8000-00000000c1ea';
+
+/** 정책 행이 아직 없을 때 쓰는 기본값 (현업 확정 2026-08-01: 밝은색 2일, 블랙 타입 1일) */
+export const DEFAULT_RETURN_POLICY = {
+  lightCleaningDays: 2,
+  darkCleaningDays: 1,
+  autoRelease: true,
+} as const;
+
+/**
+ * 배정 비고 종류.
+ * CONTACT는 발송 결과를 봉합할 때만 생기고 사람이 직접 고를 수 없다 —
+ * 실제로 나가지 않은 연락이 횟수에 잡히면 "몇 번 연락했나"를 못 믿게 된다.
+ */
+export const ALLOCATION_NOTE_KINDS = ['CONTACT', 'REPLY', 'CHANGE', 'MEMO'];
+export const MANUAL_NOTE_KINDS = ['REPLY', 'CHANGE', 'MEMO'];
+
+/**
+ * 렌탈 고객 연락 문구. 픽업·반납, 안내·독촉으로 가르지 않고 하나만 둔다 —
+ * 담당자가 발송 확인창에서 그 자리에서 고쳐 보낸다 (현업 확정 2026-08-03).
+ */
+export const RENTAL_NOTICE_TEMPLATE_CODE = 'RENTAL_NOTICE';
+
 /** 배정 이벤트 타입 (데이터모델설계서 11.4) */
 export const ALLOCATION_EVENT_TYPES = {
   ASSIGNED: 'ASSIGNED',
@@ -52,6 +82,18 @@ export function parseDateOnly(value: string): Date {
 /** Date → 'YYYY-MM-DD' */
 export function toDateOnlyString(value: Date): string {
   return value.toISOString().slice(0, 10);
+}
+
+/** 'YYYY-MM-DD' + n일 → 'YYYY-MM-DD'. 날짜 컬럼이 UTC 자정이라 시간대 보정이 필요 없다. */
+export function addDaysToDateOnly(value: string, days: number): string {
+  const date = parseDateOnly(value);
+  date.setUTCDate(date.getUTCDate() + days);
+  return toDateOnlyString(date);
+}
+
+/** 오늘 'YYYY-MM-DD' */
+export function todayDateOnly(): string {
+  return toDateOnlyString(new Date());
 }
 
 /**

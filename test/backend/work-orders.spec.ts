@@ -279,6 +279,40 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
     return sessionId;
   }
 
+  /** 연결하지 않은 완료 채촌 (자동 선택 규칙 검증용) */
+  async function createCompletedMeasurement(
+    customerId: string,
+    versionNo: number,
+    measurementDate: string,
+    chestValue: number,
+  ): Promise<string> {
+    const sessionId = randomUUID();
+    await ctx.prisma.measurementSession.create({
+      data: {
+        id: sessionId,
+        customerId,
+        versionNo,
+        measurementDate: new Date(measurementDate),
+        measurementType: versionNo === 1 ? 'INITIAL' : 'FITTING',
+        completedAt: new Date(),
+        createdBy: adminId,
+        values: {
+          create: [
+            {
+              id: randomUUID(),
+              bodySection: 'UPPER',
+              measurementCode: 'CHEST',
+              numericValue: chestValue,
+              unit: 'CM',
+              sortOrder: 1,
+            },
+          ],
+        },
+      },
+    });
+    return sessionId;
+  }
+
   beforeAll(async () => {
     ctx = await createTestContext([WorkOrdersModule]);
     await truncateBusinessData(ctx.prisma);
@@ -421,6 +455,89 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
         )
         .set(auth(ctx))
         .expect(404);
+    });
+
+    it('연결이 없으면 최신 완료 채촌을 기본으로 잡고, 출력하면 그 채촌으로 확정된다', async () => {
+      const f = await createFixture({ linkMeasurement: false });
+      const older = await createCompletedMeasurement(f.customerId, 1, '2026-07-01', 96);
+      const latest = await createCompletedMeasurement(f.customerId, 2, '2026-07-20', 99);
+
+      const preview = await api(ctx)
+        .get(`/api/v1/order-items/${f.orderItemId}/work-order/preview`)
+        .set(auth(ctx))
+        .expect(200);
+      expect(preview.body.data.measurement.measurementSessionId).toBe(latest);
+      expect(preview.body.data.measurement.isLinked).toBe(false);
+      expect(preview.body.data.measurementAutoSelected).toBe(true);
+      expect(preview.body.data.canChangeMeasurement).toBe(true);
+      // 조회만으로 연결이 생기면 안 된다
+      expect(
+        await ctx.prisma.orderItemMeasurement.count({ where: { orderItemId: f.orderItemId } }),
+      ).toBe(0);
+
+      await api(ctx)
+        .post(`/api/v1/order-items/${f.orderItemId}/work-order-versions`)
+        .set(auth(ctx))
+        .send({})
+        .expect(201);
+
+      const links = await ctx.prisma.orderItemMeasurement.findMany({
+        where: { orderItemId: f.orderItemId },
+      });
+      expect(links).toHaveLength(1);
+      expect(links[0].measurementSessionId).toBe(latest);
+      expect(links[0].isCurrent).toBe(true);
+      expect(links[0].measurementSessionId).not.toBe(older);
+    });
+
+    it('연결이 확정된 뒤 더 최근 채촌이 생겨도 저절로 바뀌지 않는다', async () => {
+      const f = await createFixture({ linkMeasurement: false });
+      const first = await createCompletedMeasurement(f.customerId, 1, '2026-07-05', 97);
+      await api(ctx)
+        .post(`/api/v1/order-items/${f.orderItemId}/work-order-versions`)
+        .set(auth(ctx))
+        .send({})
+        .expect(201);
+
+      await createCompletedMeasurement(f.customerId, 2, '2026-08-02', 101);
+      const preview = await api(ctx)
+        .get(`/api/v1/order-items/${f.orderItemId}/work-order/preview`)
+        .set(auth(ctx))
+        .expect(200);
+      expect(preview.body.data.measurement.measurementSessionId).toBe(first);
+      expect(preview.body.data.measurementAutoSelected).toBe(false);
+    });
+
+    it('완료된 채촌이 하나도 없으면 미리보기가 422로 막힌다', async () => {
+      const f = await createFixture({ linkMeasurement: false });
+      await ctx.prisma.measurementSession.create({
+        data: {
+          id: randomUUID(),
+          customerId: f.customerId,
+          versionNo: 1,
+          measurementDate: new Date('2026-07-10'),
+          measurementType: 'FITTING',
+          createdBy: adminId,
+        },
+      });
+      const res = await api(ctx)
+        .get(`/api/v1/order-items/${f.orderItemId}/work-order/preview`)
+        .set(auth(ctx))
+        .expect(422);
+      expect(res.body.error.code).toBe('WORK_ORDER_PREREQUISITE_MISSING');
+    });
+
+    it('작업요청 뒤에는 채촌을 바꿀 수 없다', async () => {
+      const f = await createFixture();
+      await ctx.prisma.orderItem.update({
+        where: { id: f.orderItemId },
+        data: { status: 'PRODUCTION_REQUESTED' },
+      });
+      const res = await api(ctx)
+        .get(`/api/v1/order-items/${f.orderItemId}/work-order/preview`)
+        .set(auth(ctx))
+        .expect(200);
+      expect(res.body.data.canChangeMeasurement).toBe(false);
     });
 
     it('출력 전에는 미주문(UNORDERED) 목록에 포함된다', async () => {

@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { RentalReleaseScheduler } from '../../backend/src/modules/rentals/rental-release.scheduler';
 import { RentalsModule } from '../../backend/src/modules/rentals/rentals.module';
 import { api, auth, createTestContext, TestContext, truncateBusinessData } from './helpers';
 
@@ -6,6 +7,7 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
   let ctx: TestContext;
   let adminId: string;
   let orderId: string;
+  let orderItemId: string;
   let jacketComponentId: string;
 
   // 가용·배정 흐름에서 스위트 내 공유하는 상태
@@ -19,6 +21,11 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
 
     const admin = await ctx.prisma.user.findUniqueOrThrow({ where: { loginId: 'admin' } });
     adminId = admin.id;
+
+    // 정비 기준은 기준정보라 truncate 대상이 아니다 — 앞선 실행이 바꿔 뒀을 수 있어 기본값으로 되돌린다.
+    await ctx.prisma.rentalReturnPolicy.updateMany({
+      data: { lightCleaningDays: 2, darkCleaningDays: 1, autoRelease: true },
+    });
 
     // 렌탈 주문 픽스처: 고객 → 계약 → 계약버전/라인 → 렌탈 주문 → 품목 → 구성품
     const customer = await ctx.prisma.customer.create({
@@ -77,6 +84,7 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
         displayName: '렌탈 정장 #1',
       },
     });
+    orderItemId = orderItem.id;
     const jacket = await ctx.prisma.orderItemComponent.create({
       data: { id: randomUUID(), orderItemId: orderItem.id, componentType: 'JACKET' },
     });
@@ -467,6 +475,471 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
       })
       .expect(201);
     expect(ok.body.data.status).toBe('RESERVED');
+  });
+
+  // ---------------------------------------------------------------------------
+  // 4-b. 정비 기준 — 색 계열별 정비일·자동 가용 전환 (현업 확정 2026-08-01)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * 정비 기준 테스트 전용 렌탈 주문. 구성품을 여러 개 만들어야 해서 앞 테스트의 주문에
+   * 붙이면 "이 주문의 구성품은 1개" 같은 기대가 깨진다.
+   */
+  let policyOrderId = '';
+  let policyOrderItemId = '';
+
+  /** 렌탈 주문은 계약당 하나뿐이라(contract_id+transaction_type UNIQUE) 계약부터 새로 만든다. */
+  async function ensurePolicyOrder(): Promise<void> {
+    if (policyOrderItemId) return;
+    const base = await ctx.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      select: { contract: { select: { customerId: true } } },
+    });
+    const contract = await ctx.prisma.contract.create({
+      data: {
+        id: randomUUID(),
+        contractNo: 'CTR-260721-902',
+        customerId: base.contract.customerId,
+        status: 'CONFIRMED',
+      },
+    });
+    const anchor = await ctx.prisma.contractItem.create({
+      data: {
+        id: randomUUID(),
+        contractId: contract.id,
+        transactionType: 'RENTAL',
+        productCategory: 'SUIT',
+        sequenceNo: 1,
+        displayName: '렌탈 정장 #2',
+      },
+    });
+    const order = await ctx.prisma.order.create({
+      data: {
+        id: randomUUID(),
+        orderNo: 'ORD-260721-902',
+        contractId: contract.id,
+        transactionType: 'RENTAL',
+      },
+    });
+    const item = await ctx.prisma.orderItem.create({
+      data: {
+        id: randomUUID(),
+        orderId: order.id,
+        sourceContractItemId: anchor.id,
+        productCategory: 'SUIT',
+        sequenceNo: 1,
+        displayName: '렌탈 정장 #2',
+      },
+    });
+    policyOrderId = order.id;
+    policyOrderItemId = item.id;
+  }
+
+  /**
+   * 색 하나를 반납까지 끌고 가는 픽스처. 다른 테스트의 기간 배정과 겹치지 않게
+   * 구성품과 실물을 매번 새로 만든다.
+   */
+  async function returnOneItem(
+    color: string,
+    period: { pickupDate: string; returnDueDate: string },
+    body: Record<string, unknown>,
+  ): Promise<{ itemId: string; allocationId: string }> {
+    await ensurePolicyOrder();
+    const component = await ctx.prisma.orderItemComponent.create({
+      data: { id: randomUUID(), orderItemId: policyOrderItemId, componentType: 'JACKET' },
+    });
+    const created = await api(ctx)
+      .post('/api/v1/rental-inventory')
+      .set(auth(ctx))
+      .send({ componentType: 'JACKET', color, size: '54' })
+      .expect(201);
+    const itemId = created.body.data[0].id as string;
+
+    const allocation = await api(ctx)
+      .post(`/api/v1/rental-orders/${policyOrderId}/allocations`)
+      .set(auth(ctx))
+      .send({ componentId: component.id, inventoryItemId: itemId, ...period })
+      .expect(201);
+    const id = allocation.body.data.id as string;
+    await api(ctx)
+      .post(`/api/v1/rental-allocations/${id}/checkout`)
+      .set(auth(ctx))
+      .send({ checkoutDate: period.pickupDate, version: allocation.body.data.rowVersion })
+      .expect(201);
+    const checkedOut = await ctx.prisma.rentalAllocation.findUniqueOrThrow({ where: { id } });
+    await api(ctx)
+      .post(`/api/v1/rental-allocations/${id}/return`)
+      .set(auth(ctx))
+      .send({ ...body, version: checkedOut.rowVersion })
+      .expect(201);
+    return { itemId, allocationId: id };
+  }
+
+  it('대여 가능 예정일을 생략하면 색 계열별 정비일로 채운다 (밝은색 +2 / 블랙 타입 +1)', async () => {
+    const dark = await returnOneItem(
+      'NAVY',
+      { pickupDate: '2026-11-02', returnDueDate: '2026-11-03' },
+      { returnDate: '2026-11-03' },
+    );
+    const light = await returnOneItem(
+      'WHITE',
+      { pickupDate: '2026-11-02', returnDueDate: '2026-11-03' },
+      { returnDate: '2026-11-03' },
+    );
+
+    const darkItem = await ctx.prisma.rentalInventoryItem.findUniqueOrThrow({ where: { id: dark.itemId } });
+    const lightItem = await ctx.prisma.rentalInventoryItem.findUniqueOrThrow({ where: { id: light.itemId } });
+    expect(darkItem.availableFrom?.toISOString().slice(0, 10)).toBe('2026-11-04');
+    expect(lightItem.availableFrom?.toISOString().slice(0, 10)).toBe('2026-11-05');
+    expect(lightItem.status).toBe('RETURNED_HOLD');
+
+    // 왜 그 날짜인지가 상태 이력만 봐도 읽혀야 한다
+    const event = await ctx.prisma.rentalInventoryStatusEvent.findFirstOrThrow({
+      where: { rentalInventoryItemId: light.itemId },
+      orderBy: { occurredAt: 'desc' },
+    });
+    expect(event.reason).toContain('정비 2일');
+  });
+
+  it('대여 가능 예정일을 직접 주면 그 값이 정비 기준보다 우선한다', async () => {
+    const { itemId } = await returnOneItem(
+      'WHITE',
+      { pickupDate: '2026-11-06', returnDueDate: '2026-11-07' },
+      { returnDate: '2026-11-07', availableFrom: '2026-11-08' },
+    );
+    const item = await ctx.prisma.rentalInventoryItem.findUniqueOrThrow({ where: { id: itemId } });
+    expect(item.availableFrom?.toISOString().slice(0, 10)).toBe('2026-11-08');
+  });
+
+  it('반납 목록은 정비 소요일과 대여 가능 예정일을 함께 준다', async () => {
+    await ensurePolicyOrder();
+    const component = await ctx.prisma.orderItemComponent.create({
+      data: { id: randomUUID(), orderItemId: policyOrderItemId, componentType: 'JACKET' },
+    });
+    const created = await api(ctx)
+      .post('/api/v1/rental-inventory')
+      .set(auth(ctx))
+      .send({ componentType: 'JACKET', color: 'WHITE', size: '54' })
+      .expect(201);
+    const allocation = await api(ctx)
+      .post(`/api/v1/rental-orders/${policyOrderId}/allocations`)
+      .set(auth(ctx))
+      .send({
+        componentId: component.id,
+        inventoryItemId: created.body.data[0].id,
+        pickupDate: '2026-11-10',
+        returnDueDate: '2026-11-11',
+      })
+      .expect(201);
+    await api(ctx)
+      .post(`/api/v1/rental-allocations/${allocation.body.data.id}/checkout`)
+      .set(auth(ctx))
+      .send({ checkoutDate: '2026-11-10', version: allocation.body.data.rowVersion })
+      .expect(201);
+
+    const list = await api(ctx)
+      .get('/api/v1/rental-allocations')
+      .set(auth(ctx))
+      .query({ view: 'return', date: '2026-11-11' })
+      .expect(200);
+    const row = (list.body.data as { id: string; cleaningDays?: number; suggestedAvailableFrom?: string }[]).find(
+      (r) => r.id === allocation.body.data.id,
+    );
+    expect(row?.cleaningDays).toBe(2);
+    expect(row?.suggestedAvailableFrom).toBe('2026-11-13');
+  });
+
+  it('정비일이 지난 반납 대기 실물만 자동으로 대여 가능이 된다', async () => {
+    // 정비일이 이미 지난 반납 대기 — 전환 대상
+    const due = await returnOneItem(
+      'NAVY',
+      { pickupDate: '2026-11-14', returnDueDate: '2026-11-15' },
+      { returnDate: '2026-11-15', availableFrom: '2020-01-01' },
+    );
+    // 아직 정비 중 — 그대로 둬야 한다
+    const notYet = await returnOneItem(
+      'NAVY',
+      { pickupDate: '2026-11-14', returnDueDate: '2026-11-15' },
+      { returnDate: '2026-11-15', availableFrom: '2099-01-01' },
+    );
+    // 수선은 날짜가 아니라 사람이 끝났다고 판단해야 풀린다
+    const alteration = await returnOneItem(
+      'NAVY',
+      { pickupDate: '2026-11-14', returnDueDate: '2026-11-15' },
+      { returnDate: '2026-11-15', availableFrom: '2020-01-01', nextStatus: 'ALTERATION' },
+    );
+
+    const scheduler = ctx.app.get(RentalReleaseScheduler);
+    const released = await scheduler.releaseDueItems('테스트');
+    expect(released).toBeGreaterThanOrEqual(1);
+
+    const rows = await ctx.prisma.rentalInventoryItem.findMany({
+      where: { id: { in: [due.itemId, notYet.itemId, alteration.itemId] } },
+      select: { id: true, status: true },
+    });
+    const statusOf = (id: string) => rows.find((r) => r.id === id)?.status;
+    expect(statusOf(due.itemId)).toBe('AVAILABLE');
+    expect(statusOf(notYet.itemId)).toBe('RETURNED_HOLD');
+    expect(statusOf(alteration.itemId)).toBe('ALTERATION');
+
+    const event = await ctx.prisma.rentalInventoryStatusEvent.findFirstOrThrow({
+      where: { rentalInventoryItemId: due.itemId },
+      orderBy: { occurredAt: 'desc' },
+    });
+    expect(event.reason).toBe('정비 완료 자동 가용 전환');
+  });
+
+  it('정비 기준을 바꾸면 이후 반납부터 그 일수가 적용된다', async () => {
+    await api(ctx)
+      .patch('/api/v1/admin/rental-return-policy')
+      .set(auth(ctx))
+      .send({ darkCleaningDays: 3 })
+      .expect(200);
+
+    try {
+      const { itemId } = await returnOneItem(
+        'NAVY',
+        { pickupDate: '2026-11-20', returnDueDate: '2026-11-21' },
+        { returnDate: '2026-11-21' },
+      );
+      const item = await ctx.prisma.rentalInventoryItem.findUniqueOrThrow({ where: { id: itemId } });
+      expect(item.availableFrom?.toISOString().slice(0, 10)).toBe('2026-11-24');
+    } finally {
+      // 기준정보는 truncate로 지워지지 않는다 — 실패하더라도 되돌려야 다음 실행이 흔들리지 않는다.
+      await ctx.prisma.rentalReturnPolicy.updateMany({ data: { darkCleaningDays: 1 } });
+    }
+  });
+
+  it('기간을 주면 대여 기간이 걸치는 건을 전부 돌려준다 (시작·끝이 안에 들어올 필요는 없다)', async () => {
+    await ensurePolicyOrder();
+    const component = await ctx.prisma.orderItemComponent.create({
+      data: { id: randomUUID(), orderItemId: policyOrderItemId, componentType: 'JACKET' },
+    });
+    const created = await api(ctx)
+      .post('/api/v1/rental-inventory')
+      .set(auth(ctx))
+      .send({ componentType: 'JACKET', color: 'NAVY', size: '54' })
+      .expect(201);
+    // 12/28 나가 이듬해 1/3에 들어오는 건 — 12월로 찾아도 1월로 찾아도 걸려야 한다.
+    const allocation = await api(ctx)
+      .post(`/api/v1/rental-orders/${policyOrderId}/allocations`)
+      .set(auth(ctx))
+      .send({
+        componentId: component.id,
+        inventoryItemId: created.body.data[0].id,
+        pickupDate: '2026-12-28',
+        returnDueDate: '2027-01-03',
+      })
+      .expect(201);
+    const id = allocation.body.data.id as string;
+
+    const idsIn = async (from: string, to: string) => {
+      const res = await api(ctx)
+        .get('/api/v1/rental-allocations')
+        .set(auth(ctx))
+        .query({ view: 'pickup', from, to })
+        .expect(200);
+      return (res.body.data as { id: string }[]).map((r) => r.id);
+    };
+
+    expect(await idsIn('2026-12-01', '2026-12-31')).toContain(id); // 나가는 달
+    expect(await idsIn('2027-01-01', '2027-01-31')).toContain(id); // 들어오는 달
+    expect(await idsIn('2026-12-30', '2026-12-31')).toContain(id); // 기간 한가운데
+    expect(await idsIn('2026-11-01', '2026-11-30')).not.toContain(id); // 안 걸치는 달
+  });
+
+  it('지난 내역 뷰는 끝난 건만 기간으로 돌려준다 (처리 대상 목록에는 안 남는다)', async () => {
+    const { allocationId: doneId } = await returnOneItem(
+      'NAVY',
+      { pickupDate: '2026-12-01', returnDueDate: '2026-12-02' },
+      { returnDate: '2026-12-02' },
+    );
+
+    const inRange = await api(ctx)
+      .get('/api/v1/rental-allocations')
+      .set(auth(ctx))
+      .query({ view: 'history', from: '2026-12-01', to: '2026-12-31' })
+      .expect(200);
+    const found = (inRange.body.data as { id: string; status: string; actualReturnAt: string }[]).find(
+      (r) => r.id === doneId,
+    );
+    expect(found?.status).toBe('RETURNED');
+    expect(found?.actualReturnAt).toContain('2026-12-02');
+
+    // 기간 밖이면 안 나온다 — 기본값(최근 3개월)으로도 12월 건은 안 잡힌다.
+    const outOfRange = await api(ctx)
+      .get('/api/v1/rental-allocations')
+      .set(auth(ctx))
+      .query({ view: 'history', from: '2026-01-01', to: '2026-01-31' })
+      .expect(200);
+    expect((outOfRange.body.data as { id: string }[]).map((r) => r.id)).not.toContain(doneId);
+
+    // 반납이 끝난 건은 처리 대상 목록(출고·반납)에는 남지 않는다
+    for (const view of ['pickup', 'return']) {
+      const res = await api(ctx)
+        .get('/api/v1/rental-allocations')
+        .set(auth(ctx))
+        .query({ view, date: '2026-12-02' })
+        .expect(200);
+      expect((res.body.data as { id: string }[]).map((r) => r.id)).not.toContain(doneId);
+    }
+  });
+
+  it('연락·회신·변경을 비고로 쌓고, 연락 횟수와 최근 비고를 목록에 실어 준다', async () => {
+    await ensurePolicyOrder();
+    const component = await ctx.prisma.orderItemComponent.create({
+      data: { id: randomUUID(), orderItemId: policyOrderItemId, componentType: 'JACKET' },
+    });
+    const created = await api(ctx)
+      .post('/api/v1/rental-inventory')
+      .set(auth(ctx))
+      .send({ componentType: 'JACKET', color: 'NAVY', size: '54' })
+      .expect(201);
+    const allocation = await api(ctx)
+      .post(`/api/v1/rental-orders/${policyOrderId}/allocations`)
+      .set(auth(ctx))
+      .send({
+        componentId: component.id,
+        inventoryItemId: created.body.data[0].id,
+        pickupDate: '2027-02-01',
+        returnDueDate: '2027-02-03',
+      })
+      .expect(201);
+    const id = allocation.body.data.id as string;
+
+    // 회신 — 전화로 받은 답을 남긴다
+    await api(ctx)
+      .post(`/api/v1/rental-allocations/${id}/notes`)
+      .set(auth(ctx))
+      .send({ kind: 'REPLY', body: '3일 뒤 방문하겠다고 함' })
+      .expect(201);
+    // 반납일 변경은 기록만 — 배정 기간은 그대로 둔다
+    await api(ctx)
+      .post(`/api/v1/rental-allocations/${id}/notes`)
+      .set(auth(ctx))
+      .send({ kind: 'CHANGE', newReturnDueDate: '2027-02-06', body: '고객 요청' })
+      .expect(201);
+    // 연락은 실제 발송을 거쳐야 하므로 이 경로로 만들 수 없다
+    await api(ctx)
+      .post(`/api/v1/rental-allocations/${id}/notes`)
+      .set(auth(ctx))
+      .send({ kind: 'CONTACT', body: '보냄' })
+      .expect(400);
+    // 발송 결과 봉합 — 이것만 횟수에 잡힌다. 보낸 문구는 담지 않는다(문구가 하나뿐이라 다 같다).
+    const contact = await api(ctx)
+      .post(`/api/v1/rental-allocations/${id}/contacts`)
+      .set(auth(ctx))
+      .send({ channel: 'ALIMTALK' })
+      .expect(201);
+    expect(contact.body.data.body).toBe('연락 발송 · 알림톡');
+
+    const notes = await api(ctx).get(`/api/v1/rental-allocations/${id}/notes`).set(auth(ctx)).expect(200);
+    const kinds = (notes.body.data as { kind: string; body: string }[]).map((n) => n.kind);
+    expect(kinds).toEqual(['CONTACT', 'CHANGE', 'REPLY']); // 최근 것부터
+    const change = (notes.body.data as { kind: string; body: string }[]).find((n) => n.kind === 'CHANGE');
+    expect(change?.body).toBe('반납 예정일 2027-02-03 → 2027-02-06 · 고객 요청');
+
+    // 기록해도 배정의 반납 예정일은 그대로다 — 기간 잠금을 흔들지 않는다
+    const untouched = await ctx.prisma.rentalAllocation.findUniqueOrThrow({ where: { id } });
+    expect(untouched.returnDueDate.toISOString().slice(0, 10)).toBe('2027-02-03');
+
+    const list = await api(ctx)
+      .get('/api/v1/rental-allocations')
+      .set(auth(ctx))
+      .query({ view: 'pickup', from: '2027-02-01', to: '2027-02-28' })
+      .expect(200);
+    const row = (list.body.data as { id: string; contactCount: number; lastNote: { kind: string } }[]).find(
+      (r) => r.id === id,
+    );
+    expect(row?.contactCount).toBe(1);
+    // 비고에는 연락이 올라오지 않는다 — 횟수는 연락 칸이 말하고, 비고는 "그래서 뭐라던가"를 본다.
+    expect(row?.lastNote.kind).toBe('CHANGE');
+  });
+
+  it('지연일수를 계산하고 지연만 보기로 거른다', async () => {
+    await ensurePolicyOrder();
+    const component = await ctx.prisma.orderItemComponent.create({
+      data: { id: randomUUID(), orderItemId: policyOrderItemId, componentType: 'JACKET' },
+    });
+    const created = await api(ctx)
+      .post('/api/v1/rental-inventory')
+      .set(auth(ctx))
+      .send({ componentType: 'JACKET', color: 'NAVY', size: '54' })
+      .expect(201);
+    const allocation = await api(ctx)
+      .post(`/api/v1/rental-orders/${policyOrderId}/allocations`)
+      .set(auth(ctx))
+      .send({
+        componentId: component.id,
+        inventoryItemId: created.body.data[0].id,
+        pickupDate: '2027-03-01',
+        returnDueDate: '2027-03-05',
+      })
+      .expect(201);
+    const id = allocation.body.data.id as string;
+
+    const rowOn = async (date: string, extra: Record<string, unknown> = {}) => {
+      const res = await api(ctx)
+        .get('/api/v1/rental-allocations')
+        .set(auth(ctx))
+        .query({ view: 'pickup', from: '2027-03-01', to: '2027-03-31', date, ...extra })
+        .expect(200);
+      return (res.body.data as { id: string; overdueDays: number }[]).find((r) => r.id === id);
+    };
+
+    // 픽업일 당일은 아직 안 밀렸다
+    expect((await rowOn('2027-03-01'))?.overdueDays).toBe(0);
+    // 사흘 지나면 미픽업 3일
+    expect((await rowOn('2027-03-04'))?.overdueDays).toBe(3);
+    // 지연만 보기 — 안 밀린 날에는 목록에서 빠진다
+    expect(await rowOn('2027-03-01', { overdueOnly: true })).toBeUndefined();
+    expect((await rowOn('2027-03-04', { overdueOnly: true }))?.overdueDays).toBe(3);
+  });
+
+  it('컬러 추가는 이름과 색 계열만 받고 코드·순번은 서버가 채운다', async () => {
+    const created: string[] = [];
+    try {
+      const first = await api(ctx)
+        .post('/api/v1/admin/master/rental-colors')
+        .set(auth(ctx))
+        .send({ name: '세이지 그린', tone: 'LIGHT' })
+        .expect(201);
+      created.push(first.body.data.id);
+      // 코드는 사람이 정하지 않는다 — 시스템이 실물 관리코드에 쓰는 값이다
+      expect(first.body.data.code).toMatch(/^COLOR_\d+$/);
+      // 품목을 안 주면 전 품목 공통, 색 계열은 준 대로
+      expect(first.body.data).toMatchObject({ tone: 'LIGHT', componentTypes: [] });
+
+      const second = await api(ctx)
+        .post('/api/v1/admin/master/rental-colors')
+        .set(auth(ctx))
+        .send({ name: '더스티 블루' })
+        .expect(201);
+      created.push(second.body.data.id);
+      expect(second.body.data.code).not.toBe(first.body.data.code);
+      // 색 계열 기본값은 블랙 타입 — 밝은색으로 잘못 잡으면 재고가 하루 더 묶인다
+      expect(second.body.data.tone).toBe('DARK');
+      // 새 색은 목록 맨 뒤에 붙는다
+      expect(second.body.data.sortOrder).toBeGreaterThan(first.body.data.sortOrder);
+
+      // 삭제 대신 중지, 그리고 되살리기
+      const id = first.body.data.id as string;
+      const stopped = await api(ctx)
+        .patch(`/api/v1/admin/master/rental-colors/${id}`)
+        .set(auth(ctx))
+        .send({ active: false })
+        .expect(200);
+      expect(stopped.body.data.active).toBe(false);
+      const resumed = await api(ctx)
+        .patch(`/api/v1/admin/master/rental-colors/${id}`)
+        .set(auth(ctx))
+        .send({ active: true, tone: 'DARK' })
+        .expect(200);
+      expect(resumed.body.data).toMatchObject({ active: true, tone: 'DARK' });
+    } finally {
+      // 기준정보는 truncate 대상이 아니다 — 남겨 두면 다음 실행의 채번·순번이 어긋난다.
+      await ctx.prisma.rentalColor.deleteMany({ where: { id: { in: created } } });
+    }
   });
 
   // ---------------------------------------------------------------------------
@@ -864,8 +1337,9 @@ describe('렌탈 스타일 선택·기준정보 (v2 D3)', () => {
         customerStatus: 'CONTRACTED',
       },
     });
+    // 렌탈 선택(컨설팅)은 계약 작성중(DRAFT)에서 한다 (현업 확정 2026-07-31).
     const contract = await ctx.prisma.contract.create({
-      data: { id: randomUUID(), contractNo: 'CTR-260721-950', customerId: customer.id, status: 'CONFIRMED' },
+      data: { id: randomUUID(), contractNo: 'CTR-260721-950', customerId: customer.id, status: 'DRAFT' },
     });
     const version = await ctx.prisma.contractVersion.create({
       data: { id: randomUUID(), contractId: contract.id, versionNo: 1, versionStatus: 'CONFIRMED', createdBy: admin.id },
@@ -1166,7 +1640,7 @@ describe('렌탈 스타일 선택·기준정보 (v2 D3)', () => {
       data: { id: randomUUID(), name: '맞춤고객', phone: '010-9100-0002', phoneNormalized: '01091000002' },
     });
     const contract = await ctx.prisma.contract.create({
-      data: { id: randomUUID(), contractNo: 'CTR-260721-951', customerId: customer.id, status: 'CONFIRMED' },
+      data: { id: randomUUID(), contractNo: 'CTR-260721-951', customerId: customer.id, status: 'DRAFT' },
     });
     const cv = await ctx.prisma.contractVersion.create({
       data: { id: randomUUID(), contractId: contract.id, versionNo: 1, versionStatus: 'CONFIRMED', createdBy: admin.id },

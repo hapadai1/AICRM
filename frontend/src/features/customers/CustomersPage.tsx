@@ -7,10 +7,10 @@ import { useNavigate } from 'react-router-dom';
 import { LAYOUT } from '../../app/theme';
 import { fetchCustomers, type CustomerListItem } from '../../api/customers';
 import { Can } from '../../shared/Can';
-import { DataTable, PAGE_SIZE_OPTIONS } from '../../shared/DataTable';
+import { DataTable } from '../../shared/DataTable';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
-import { autoWidth } from '../../shared/table-width';
+import { COL } from '../../shared/table-width';
 import { CustomerRegisterModal } from './CustomerRegisterModal';
 import { TRANSACTION_TYPE_LABEL } from './customer-constants';
 
@@ -48,18 +48,18 @@ export function CustomersPage() {
   };
 
   const columns: ColumnsType<CustomerListItem> = [
-    { title: '고객명', dataIndex: 'name', ...autoWidth(100) },
-    { title: '전화번호', dataIndex: 'phone', ...autoWidth() },
+    { title: '고객명', dataIndex: 'name', width: COL.name },
+    { title: '전화번호', dataIndex: 'phone', width: COL.code },
     {
       title: '최근 방문일',
       dataIndex: 'lastVisitDate',
-      ...autoWidth(),
+      width: COL.name,
       render: (v?: string) => v ?? '-',
     },
     {
       title: '최근 거래 유형',
       dataIndex: 'lastTransactionType',
-      ...autoWidth(),
+      width: COL.status,
       // 필터 버튼을 제목 글자 바로 옆에 배치 (index.css의 tx-type-filter-col) — 서버(transactionType)로 필터링
       className: 'tx-type-filter-col',
       filteredValue: transactionType ? [transactionType] : null,
@@ -88,7 +88,7 @@ export function CustomersPage() {
     {
       title: '고객 상태',
       dataIndex: 'customerStatus',
-      ...autoWidth(120),
+      width: COL.wide,
       // 계약상태 배지는 제외하고 진행 journey의 세부 단계(진행상태)만 출력
       render: (_v: CustomerListItem['customerStatus'], row) =>
         row.currentStage ? (
@@ -103,7 +103,7 @@ export function CustomersPage() {
     {
       title: '계약 건수',
       dataIndex: 'contractCount',
-      ...autoWidth(),
+      width: COL.count,
       align: 'right',
       render: (v: number) => `${v}건`,
     },
@@ -168,17 +168,15 @@ export function CustomersPage() {
             loading={isLoading}
             columns={columns}
             dataSource={data?.data ?? []}
+            totalUnit="명"
             pagination={{
               current: page,
               pageSize: size,
               total: data?.page.totalElements ?? 0,
-              showSizeChanger: true,
-              pageSizeOptions: PAGE_SIZE_OPTIONS,
               onChange: (p, s) => {
                 setPage(p);
                 setSize(s);
               },
-              showTotal: (total) => `총 ${total}명`,
             }}
             onRow={(r) => ({ onClick: () => navigate(`/customers/${r.id}`), style: { cursor: 'pointer' } })}
             locale={{ emptyText: <Empty description="조건에 해당하는 고객이 없습니다." /> }}

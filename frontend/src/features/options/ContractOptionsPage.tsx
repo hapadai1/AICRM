@@ -3,8 +3,8 @@
  * (설계서 04 §2 맞춤 부위별 원단·컬러·패턴 / §4 렌탈 부위별 컬러·사이즈·비고)
  *
  * - 맞춤 부위 행: 원단·컬러·패턴 수기 입력 → 부위별 attr 저장(작업지시서 엑셀 부위 칸으로 연결)
- * - 렌탈 부위 행: 컬러·사이즈(기준정보 코드) 선택 + 비고 수기 → [실물 검색] 팝업에서 후보 선택
- * - 옵션 선택·실물 검색은 목록을 벗어나지 않도록 둘 다 팝업으로 띄운다.
+ * - 렌탈 부위 행: 비고만 수기, 조건(기간·컬러·사이즈)과 재고 선택은 [렌탈 검색] 팝업에서 한다
+ * - 옵션 선택·렌탈 검색은 목록을 벗어나지 않도록 둘 다 팝업으로 띄운다.
  */
 import {
   CopyOutlined,
@@ -21,12 +21,12 @@ import {
   App,
   Button,
   Card,
+  Checkbox,
   Dropdown,
   Input,
   Modal,
   Progress,
   Radio,
-  Select,
   Space,
   Spin,
   Table,
@@ -35,9 +35,8 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useState } from 'react';
-import { codesFor } from '../rentals/rental-constants';
 import { useNavigate, useParams } from 'react-router-dom';
-import { fetchContract } from '../../api/contracts';
+import { fetchContract, setVestIncluded } from '../../api/contracts';
 import type { OptionProgressItem } from '../../api/options';
 import {
   componentGroupLabel,
@@ -45,14 +44,14 @@ import {
   fetchOptionProgress,
   startOptionSession,
 } from '../../api/options';
+import type { RentalComponentType } from '../../api/rentals';
 import {
-  fetchRentalColors,
   fetchRentalSelectionProgress,
-  fetchRentalSizes,
   saveRentalLine,
   startRentalSelection,
 } from '../../api/rentals';
 import { RentalCandidateModal } from '../rentals/RentalCandidateModal';
+import { useRentalCodeNames } from '../rentals/rental-codes';
 import { BackButton } from '../../shared/BackButton';
 import { PdfViewerModal } from '../../shared/PdfViewerModal';
 import { StatusBadge } from '../../shared/StatusBadge';
@@ -91,6 +90,10 @@ interface ComponentRow {
   itemRowSpan: number;
   /** 부위 코드 (맞춤 componentGroup / 렌탈 componentType) */
   group: string;
+  /** 베스트 부위가 이 벌에서 빠졌는가 — [베스트 제외] 체크 상태 (현업 확정 2026-08-01) */
+  vestExcluded?: boolean;
+  /** 제작 진행 중 품목 — 계약이 작성중이어도 편집 잠금 (맞춤 행만 내려온다) */
+  inProduction?: boolean;
   // 맞춤
   sessionId?: string | null;
   completedStages?: number;
@@ -145,10 +148,9 @@ export function ContractOptionsPage() {
     enabled: !!id,
   });
 
-  // 부위별로 쓰는 컬러·사이즈가 달라(정장 12색 / 셔츠 흰색 / 구두 검정·브라운),
-  // 전체를 한 번 받아 행의 부위(row.group)로 걸러 쓴다.
-  const colorsQuery = useQuery({ queryKey: ['rental-colors'], queryFn: () => fetchRentalColors() });
-  const sizesQuery = useQuery({ queryKey: ['rental-sizes'], queryFn: () => fetchRentalSizes() });
+  // 렌탈 행에 저장된 코드(BLACK/46)를 표시명으로 바꾼다. 조건 선택은 [렌탈 검색] 팝업이 맡고,
+  // 목록은 이미 정해진 조건을 읽기만 한다.
+  const rentalCodes = useRentalCodeNames();
 
   // 부위별 입력 초안 — 키는 `${contractItemId}:${부위}`
   const [attrDrafts, setAttrDrafts] = useState<Record<string, AttrDraft>>({});
@@ -182,18 +184,19 @@ export function ContractOptionsPage() {
     });
   }, [customItems]);
 
+  // 렌탈은 컬러·사이즈가 읽기 전용이라(팝업에서만 바뀐다) 서버 값으로 항상 맞춘다 —
+  // 비고만 이 화면에서 치므로 입력 중 덮어쓰지 않게 처음 한 번만 채운다.
   useEffect(() => {
     setRentalDrafts((prev) => {
       const next = { ...prev };
       for (const item of rentalItems)
         for (const c of item.components) {
           const key = `${item.contractItemId}:${c.contractItemComponentId}`;
-          if (!(key in next))
-            next[key] = {
-              colorCode: c.colorCode,
-              sizeCode: c.sizeCode,
-              notes: c.notes ?? '',
-            };
+          next[key] = {
+            colorCode: c.colorCode,
+            sizeCode: c.sizeCode,
+            notes: key in next ? next[key].notes : (c.notes ?? ''),
+          };
         }
       return next;
     });
@@ -260,6 +263,27 @@ export function ContractOptionsPage() {
     onError: (e: Error) => message.error(e.message),
   });
 
+  /**
+   * [베스트 제외] 체크박스 (현업 확정 2026-08-01) — 계약서가 아니라 여기서 벌마다 정한다.
+   * 체크하면 그 벌의 베스트 부위가 빠지고(고른 베스트 옵션도 정리) 옵션·렌탈 버튼이 잠긴다.
+   * 금액은 건드리지 않는다 — 베스트 값이 그때그때 달라 계약서에서 수기로 조정한다.
+   */
+  const vestMutation = useMutation({
+    mutationFn: ({ contractItemId, included }: { contractItemId: string; included: boolean }) =>
+      setVestIncluded(contractItemId, included),
+    onSuccess: (res) => {
+      message.success(
+        res.vestIncluded
+          ? `${res.displayName} 베스트를 다시 포함했습니다.`
+          : `${res.displayName} 베스트를 제외했습니다. 계약 금액은 계약서에서 조정해 주세요.`,
+      );
+      void queryClient.invalidateQueries({ queryKey: ['options'] });
+      void queryClient.invalidateQueries({ queryKey: ['rental-selection'] });
+      void queryClient.invalidateQueries({ queryKey: ['contracts'] });
+    },
+    onError: (e: Error) => message.error(e.message),
+  });
+
   const copyMutation = useMutation({
     mutationFn: ({ sessionId, targetId }: { sessionId: string; targetId: string }) =>
       copyOptionSession(sessionId, targetId),
@@ -278,7 +302,8 @@ export function ContractOptionsPage() {
         source &&
         row.contractItemId !== source.contractItemId &&
         row.productCategory === source.productCategory &&
-        row.status !== 'CONFIRMED',
+        row.status !== 'CONFIRMED' &&
+        !row.inProduction,
     );
 
   // 맞춤 → 렌탈 순서로 품목을 이어 붙이고, 품목마다 부위 행으로 펼친다.
@@ -309,6 +334,8 @@ export function ContractOptionsPage() {
           status: item.status,
           itemRowSpan: i === 0 ? groups.length : 0,
           group: c.componentGroup,
+          vestExcluded: c.excluded,
+          inProduction: item.inProduction,
           sessionId: item.sessionId,
           completedStages: c.completedStages,
           totalStages: c.totalStages,
@@ -340,6 +367,7 @@ export function ContractOptionsPage() {
           status: item.status,
           itemRowSpan: i === 0 ? item.components.length : 0,
           group: c.componentType,
+          vestExcluded: c.excluded,
           sessionId: item.sessionId,
           contractItemComponentId: c.contractItemComponentId,
           colorName: c.colorName,
@@ -383,8 +411,15 @@ export function ContractOptionsPage() {
       label: `${row.displayName} ${componentGroupLabel(row.group)}`,
     });
 
-  /** 확정 세션은 열람 전용 — 여기서 값을 고치면 새 선택 버전이 조용히 열려버린다. */
-  const isLocked = (row: ComponentRow) => row.status === 'CONFIRMED';
+  /**
+   * 컨설팅 편집 가능 = 계약 작성중(DRAFT) (현업 확정 2026-07-31).
+   * 서명완료·계약완료면 전체 보기 전용 — 수정하려면 계약 상세의 [수정하기]로 되돌린다.
+   */
+  const contractEditable = !contract || contract.status === 'DRAFT';
+
+  /** 확정 세션·잠긴 계약·제작 진행 중 품목은 열람 전용. */
+  const isLocked = (row: ComponentRow) =>
+    row.status === 'CONFIRMED' || !contractEditable || row.inProduction === true;
 
   const spanCell = (row: ComponentRow) => ({ rowSpan: row.itemRowSpan });
 
@@ -423,28 +458,19 @@ export function ContractOptionsPage() {
       ),
     },
     {
-      // 맞춤은 원단(수기), 렌탈은 컬러(12색 코드 선택) — 부위 행의 첫 지정 항목이다.
-      title: '원단 · 컬러(렌탈)',
+      // 맞춤은 원단(수기), 렌탈은 선택한 물품의 사이즈 — 부위 행의 첫 지정 항목이다.
+      title: '원단 · 사이즈 (렌탈)',
       key: 'first',
       width: 240,
       render: (_, row) => {
+        // 렌탈은 사이즈를 여기서 고르지 않는다 — [렌탈 검색] 팝업에서 고른 물품의 규격을 읽기만 한다.
+        // 셀에서 고르면 고를 때마다 저장돼 토스트가 연달아 떴다 (현업 확정 2026-07-31).
         if (row.kind === 'RENTAL') {
           const draft = rentalDrafts[row.key] ?? EMPTY_RENTAL;
-          return (
-            <Select
-              style={{ width: '100%' }}
-              placeholder="컬러 선택"
-              allowClear
-              disabled={isLocked(row)}
-              loading={colorsQuery.isLoading}
-              value={draft.colorCode}
-              options={codesFor(colorsQuery.data, row.group).map((c) => ({ value: c.code, label: c.name }))}
-              onChange={(value: string | undefined) => {
-                const next = { ...draft, colorCode: value ?? null };
-                setRentalDrafts((prev) => ({ ...prev, [row.key]: next }));
-                saveRental(row, next);
-              }}
-            />
+          return draft.sizeCode ? (
+            <Typography.Text>{rentalCodes.sizeName(draft.sizeCode)}</Typography.Text>
+          ) : (
+            <Typography.Text type="secondary">미지정</Typography.Text>
           );
         }
         const draft = attrDrafts[row.key] ?? EMPTY_ATTR;
@@ -461,27 +487,17 @@ export function ContractOptionsPage() {
       },
     },
     {
-      title: '컬러 · 사이즈(렌탈)',
+      title: '컬러 (렌탈)',
       key: 'second',
       width: 200,
       render: (_, row) => {
+        // 렌탈은 고른 물품의 컬러를 읽기만 한다 — 변경은 [렌탈 검색] 팝업에서만 한다.
         if (row.kind === 'RENTAL') {
           const draft = rentalDrafts[row.key] ?? EMPTY_RENTAL;
-          return (
-            <Select
-              style={{ width: '100%' }}
-              placeholder="사이즈 선택"
-              allowClear
-              disabled={isLocked(row)}
-              loading={sizesQuery.isLoading}
-              value={draft.sizeCode}
-              options={codesFor(sizesQuery.data, row.group).map((s) => ({ value: s.code, label: s.name }))}
-              onChange={(value: string | undefined) => {
-                const next = { ...draft, sizeCode: value ?? null };
-                setRentalDrafts((prev) => ({ ...prev, [row.key]: next }));
-                saveRental(row, next);
-              }}
-            />
+          return draft.colorCode ? (
+            <Typography.Text>{rentalCodes.colorName(draft.colorCode)}</Typography.Text>
+          ) : (
+            <Typography.Text type="secondary">미지정</Typography.Text>
           );
         }
         const draft = attrDrafts[row.key] ?? EMPTY_ATTR;
@@ -569,27 +585,66 @@ export function ContractOptionsPage() {
       },
     },
     {
+      /*
+        베스트 행에만 붙는 [베스트 제외] 체크박스 (현업 확정 2026-08-01).
+        계약 시점에는 3피스로 갈지 모르니 계약서는 베스트를 다루지 않고, 옷을 고르면서
+        벌마다 여기서 정한다. 체크하면 옆의 옵션·렌탈 버튼이 잠긴다.
+      */
+      title: '베스트 제외',
+      key: 'vest',
+      width: 96,
+      align: 'center',
+      render: (_, row) =>
+        row.group !== 'VEST' ? null : (
+          <Tooltip title={contractEditable ? '' : '작성중인 계약에서만 바꿀 수 있습니다.'}>
+            <span>
+              <Checkbox
+                checked={!!row.vestExcluded}
+                disabled={!contractEditable || row.inProduction === true || vestMutation.isPending}
+                aria-label={`${row.displayName} 베스트 제외`}
+                onChange={(e) =>
+                  vestMutation.mutate({
+                    contractItemId: row.contractItemId,
+                    included: !e.target.checked,
+                  })
+                }
+              />
+            </span>
+          </Tooltip>
+        ),
+    },
+    {
       title: '옵션',
       key: 'action',
       width: 150,
       render: (_, row) =>
-        row.kind === 'RENTAL' ? (
-          <Button
-            type={row.selectedItemCode ? 'default' : 'primary'}
-            icon={<SearchOutlined />}
-            disabled={!row.contractItemComponentId}
-            onClick={() => setRentalTarget(row)}
-          >
-            실물 검색
-          </Button>
+        // 제외한 베스트는 고를 것이 없다 — 버튼 자리를 비우고 제외 상태만 남긴다.
+        row.vestExcluded ? (
+          <Typography.Text type="secondary">제외됨</Typography.Text>
+        ) : row.kind === 'RENTAL' ? (
+          <Tooltip title={contractEditable ? '' : '작성중인 계약에서만 실물을 변경할 수 있습니다.'}>
+            <span>
+              <Button
+                type={row.selectedItemCode ? 'default' : 'primary'}
+                icon={<SearchOutlined />}
+                disabled={!row.contractItemComponentId || !contractEditable}
+                onClick={() => setRentalTarget(row)}
+              >
+                렌탈 검색
+              </Button>
+            </span>
+          </Tooltip>
         ) : (row.totalStages ?? 0) === 0 ? null : (
-          <Button
-            type={row.status === 'CONFIRMED' ? 'default' : 'primary'}
-            icon={row.status === 'CONFIRMED' ? <EyeOutlined /> : undefined}
-            onClick={() => setOptionTarget(row)}
-          >
-            {row.status === 'CONFIRMED' ? '옵션 보기' : '옵션 선택'}
-          </Button>
+          // 잠긴 계약·제작 진행 중·확정 세션은 보기 모드로 연다 (편집은 서버도 막는다).
+          <Tooltip title={row.inProduction ? '제작 진행 중인 품목은 옵션을 변경할 수 없습니다.' : ''}>
+            <Button
+              type={isLocked(row) ? 'default' : 'primary'}
+              icon={isLocked(row) ? <EyeOutlined /> : undefined}
+              onClick={() => setOptionTarget(row)}
+            >
+              {isLocked(row) ? '옵션 보기' : '옵션 선택'}
+            </Button>
+          </Tooltip>
         ),
     },
     {
@@ -627,7 +682,7 @@ export function ContractOptionsPage() {
       onCell: spanCell,
       render: (_, row) => {
         const item = itemOf(row);
-        const canCopy = !!item?.sessionId && copyTargets(item).length > 0;
+        const canCopy = contractEditable && !!item?.sessionId && copyTargets(item).length > 0;
         return (
           <Dropdown
             trigger={['click']}
@@ -649,6 +704,9 @@ export function ContractOptionsPage() {
       },
     },
   ];
+
+  /** 고정 레이아웃의 표 전체 너비 — 열 정의의 width 합이라 열을 늘리면 같이 늘어난다. */
+  const TABLE_WIDTH = columns.reduce((sum, c) => sum + (typeof c.width === 'number' ? c.width : 0), 0);
 
   const error = customQuery.error ?? rentalQuery.error;
   if (error) {
@@ -682,12 +740,23 @@ export function ContractOptionsPage() {
               원단 가격표
             </Button>
           </div>
+          {contract && !contractEditable && (
+            <Alert
+              type="info"
+              showIcon
+              message="서명완료·계약완료 상태라 스타일 컨설팅은 보기 전용입니다."
+              description="수정하려면 계약 상세의 [수정하기]로 계약을 작성중으로 되돌린 뒤 진행해 주세요."
+            />
+          )}
           {isLoading ? (
             <Spin style={{ display: 'block', margin: '48px auto' }} />
           ) : (
             <Table<ComponentRow>
               rowKey="key"
-              scroll={{ x: 'max-content' }}
+              // 열 너비를 칸 내용에 맡기면(x: 'max-content') 원단·비고를 칠 때마다 표가 흔들린다.
+              // 지정한 width 합(=TABLE_WIDTH)으로 고정해 입력 중에도 열이 움직이지 않게 한다.
+              tableLayout="fixed"
+              scroll={{ x: TABLE_WIDTH }}
               dataSource={rows}
               columns={columns}
               pagination={false}
@@ -733,9 +802,10 @@ export function ContractOptionsPage() {
           open
           contractItemId={rentalTarget.contractItemId}
           contractItemComponentId={rentalTarget.contractItemComponentId!}
-          title={`${rentalTarget.displayName} · ${componentGroupLabel(rentalTarget.group)} 실물 검색`}
-          colorName={rentalTarget.colorName ?? null}
-          sizeName={rentalTarget.sizeName ?? null}
+          title={`${rentalTarget.displayName} · ${componentGroupLabel(rentalTarget.group)} 렌탈 검색`}
+          componentType={rentalTarget.group as RentalComponentType}
+          colorCode={rentalDrafts[rentalTarget.key]?.colorCode ?? null}
+          sizeCode={rentalDrafts[rentalTarget.key]?.sizeCode ?? null}
           selectedInventoryItemId={
             rentalItems
               .find((i) => i.contractItemId === rentalTarget.contractItemId)

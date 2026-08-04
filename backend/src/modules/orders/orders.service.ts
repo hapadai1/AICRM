@@ -17,12 +17,16 @@ const ITEMS_PROGRESS_INCLUDE = {
   // 옵션 세션은 ContractItem에 붙는다 → sourceContractItem 경유(REACH-BACK).
   sourceContractItem: {
     select: {
+      // 베스트 없는(2피스) 품목은 VEST 단계를 진행률에서 뺀다 (2026-07-30).
+      components: { select: { componentType: true, status: true } },
       optionSelectionSessions: {
         where: { isCurrent: true },
         include: {
           values: { select: { optionStageId: true } },
           optionSetVersion: {
-            select: { stages: { where: { active: true }, select: { id: true } } },
+            select: {
+              stages: { where: { active: true }, select: { id: true, componentGroup: true } },
+            },
           },
         },
       },
@@ -82,8 +86,15 @@ export class OrdersService {
     return items.map((item) => {
       const { sourceContractItem, measurementLinks, workOrder, ...rest } = item;
       const session = sourceContractItem.optionSelectionSessions[0];
-      const totalStages = session?.optionSetVersion.stages.length ?? 0;
-      const stageIds = new Set(session?.optionSetVersion.stages.map((s) => s.id) ?? []);
+      // 베스트 없는(2피스) 품목은 VEST 단계를 진행률 분모에서 뺀다 (2026-07-30).
+      const vestActive = sourceContractItem.components.some(
+        (c) => c.componentType === 'VEST' && c.status !== 'CANCELLED',
+      );
+      const usableStages = (session?.optionSetVersion.stages ?? []).filter(
+        (s) => vestActive || s.componentGroup !== 'VEST',
+      );
+      const totalStages = usableStages.length;
+      const stageIds = new Set(usableStages.map((s) => s.id));
       const completedStages = session
         ? session.values.filter((v) => stageIds.has(v.optionStageId)).length
         : 0;

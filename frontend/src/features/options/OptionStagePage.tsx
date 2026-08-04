@@ -188,6 +188,9 @@ export function OptionStagePage() {
   const isLast = currentOrder >= session.totalStages;
   // 확정 세션은 열람 전용 — 저장·중단이 서버에서 거부되므로 편집 UI를 막고 이동만 허용한다.
   const isConfirmed = session.status === 'CONFIRMED';
+  /** 컨설팅 편집 가능 = 계약 작성중 + 품목 미진행 (현업 확정 2026-07-31). 아니면 순수 보기 모드. */
+  const canReedit =
+    (session.contractStatus == null || session.contractStatus === 'DRAFT') && !session.inProduction;
   const dirty = choiceId !== null && choiceId !== stage.selectedChoiceId;
 
   const saveIfNeeded = async (): Promise<void> => {
@@ -285,16 +288,18 @@ export function OptionStagePage() {
                 >
                   확인서로
                 </Button>
-                <Button
-                  type="primary"
-                  size="large"
-                  style={{ height: 48 }}
-                  icon={<EditOutlined />}
-                  loading={reopenMutation.isPending}
-                  onClick={() => handleConfirmedPick(stage.selectedChoiceId)}
-                >
-                  옵션 변경
-                </Button>
+                {canReedit && (
+                  <Button
+                    type="primary"
+                    size="large"
+                    style={{ height: 48 }}
+                    icon={<EditOutlined />}
+                    loading={reopenMutation.isPending}
+                    onClick={() => handleConfirmedPick(stage.selectedChoiceId)}
+                  >
+                    옵션 변경
+                  </Button>
+                )}
               </Space>
             ) : (
               <Button size="large" style={{ height: 48 }} icon={<PauseOutlined />} onClick={handlePause}>
@@ -313,7 +318,9 @@ export function OptionStagePage() {
           </Typography.Title>
           <Typography.Text type="secondary">
             {isConfirmed
-              ? `확정된 옵션입니다. 선택지를 누르면 새 선택 버전으로 변경을 시작합니다. (${stage.choices.length}개 선택지)`
+              ? canReedit
+                ? `확정된 옵션입니다. 선택지를 누르면 새 선택 버전으로 변경을 시작합니다. (${stage.choices.length}개 선택지)`
+                : '확정된 옵션입니다. 계약이 작성중일 때만 변경할 수 있습니다.'
               : `${stage.choices.length}개 선택지 중 하나를 눌러 선택하세요.`}
           </Typography.Text>
         </Space>
@@ -330,7 +337,9 @@ export function OptionStagePage() {
                 hoverable
                 onClick={
                   isConfirmed
-                    ? () => handleConfirmedPick(choice.choiceId)
+                    ? canReedit
+                      ? () => handleConfirmedPick(choice.choiceId)
+                      : undefined
                     : () => setChoiceId(choice.choiceId)
                 }
                 style={{

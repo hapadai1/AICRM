@@ -129,7 +129,97 @@ export interface RentalAllocation {
   returnDate?: string;
   /** 기준일 대비 픽업/반납 지연 여부 (목록 뷰) */
   overdue?: boolean;
+  /**
+   * 반납 뷰 전용 — 이 색의 정비(세탁) 소요일과 기준일에 반납했을 때의 대여 가능 예정일.
+   * 화면이 날짜를 직접 계산하지 않는다. 기준은 관리자 화면(렌탈 정비 기준)에서 바꾼다.
+   */
+  cleaningDays?: number;
+  suggestedAvailableFrom?: string;
+  /**
+   * 며칠 밀렸는가 (0이면 정상). 예약은 픽업일, 대여 중은 반납예정일 기준이고
+   * 끝난 건은 예정일보다 늦게 들어온 일수다. 화면이 날짜를 다시 재지 않는다.
+   */
+  overdueDays?: number;
+  /** 이 건에 실제로 나간 연락 횟수 */
+  contactCount?: number;
+  /** 가장 최근 비고 한 줄 (전체는 연락·비고 창에서 본다) */
+  lastNote?: RentalAllocationNote | null;
   version: number;
+}
+
+/** 대여 건 비고 — 연락·회신·변경·메모가 한 줄에 시간순으로 쌓인다. */
+export type AllocationNoteKind = 'CONTACT' | 'REPLY' | 'CHANGE' | 'MEMO';
+
+export const ALLOCATION_NOTE_KIND_META: Record<AllocationNoteKind, { label: string; color: string }> = {
+  CONTACT: { label: '연락', color: 'blue' },
+  REPLY: { label: '회신', color: 'green' },
+  CHANGE: { label: '변경', color: 'orange' },
+  MEMO: { label: '메모', color: 'default' },
+};
+
+export interface RentalAllocationNote {
+  id?: string;
+  kind: AllocationNoteKind;
+  body: string;
+  createdAt: string;
+  actorName?: string;
+  actor?: { id: string; displayName: string };
+  notificationHistoryId?: string | null;
+}
+
+/** 한 건의 비고 전체 — GET /rental-allocations/{id}/notes */
+export function fetchAllocationNotes(allocationId: string): Promise<RentalAllocationNote[]> {
+  return request<RentalAllocationNote[]>({ url: `/rental-allocations/${allocationId}/notes` });
+}
+
+/**
+ * 회신·변경·메모 추가. CHANGE는 배정의 반납 예정일을 고치지 않고 기록만 남긴다 —
+ * 원래 기간으로 걸어 둔 기간 잠금을 흔들면 그 기간에 잡힌 다음 예약이 깨진다.
+ */
+export function createAllocationNote(
+  allocationId: string,
+  body: { kind: Exclude<AllocationNoteKind, 'CONTACT'>; body?: string; newReturnDueDate?: string },
+): Promise<RentalAllocationNote> {
+  return request<RentalAllocationNote>({
+    url: `/rental-allocations/${allocationId}/notes`,
+    method: 'POST',
+    data: body,
+  });
+}
+
+/** 발송 확인창에 채울 문구 — GET /rental-allocations/{id}/contact-suggestion */
+export function fetchAllocationContactSuggestion(allocationId: string): Promise<RentalContactSuggestion | null> {
+  return request<RentalContactSuggestion | null>({
+    url: `/rental-allocations/${allocationId}/contact-suggestion`,
+  });
+}
+
+export interface RentalContactSuggestion {
+  templateId: string;
+  templateName: string;
+  channel: string;
+  recipientPhone: string;
+  customerId: string;
+  orderId?: string | null;
+  variables: Record<string, string>;
+  renderedBody: string;
+  triggerKey: string;
+}
+
+/**
+ * 발송 결과 봉합 — 실제로 보낸 뒤에만 부른다. 이 기록만 연락 횟수에 잡힌다.
+ * 보낸 문구는 넘기지 않는다 — 렌탈 연락은 문구가 하나뿐이라 건마다 같은 글이 쌓일 뿐이고,
+ * 실제 본문은 알림 이력에 남는다.
+ */
+export function createAllocationContact(
+  allocationId: string,
+  body: { channel?: string; notificationHistoryId?: string },
+): Promise<RentalAllocationNote> {
+  return request<RentalAllocationNote>({
+    url: `/rental-allocations/${allocationId}/contacts`,
+    method: 'POST',
+    data: body,
+  });
 }
 
 export interface RentalItemDetail {
@@ -258,6 +348,74 @@ export function fetchRentalInventorySummary(
   return request<RentalInventorySummary>({ url: '/rental-inventory/summary', params });
 }
 
+/**
+ * SKU(품목·컬러·사이즈) 한 줄의 수량. total = available + reserved + checkedOut + hold.
+ * 재고 화면은 개체가 아니라 이 수량을 다룬다 (현업 확정 2026-07-31).
+ */
+export interface RentalSkuSummaryRow {
+  componentType: RentalComponentType;
+  color: string;
+  size: string;
+  /** 폐기·비활성을 뺀 보유 수 */
+  total: number;
+  /** 오늘 바로 빌려줄 수 있는 수 */
+  available: number;
+  reserved: number;
+  checkedOut: number;
+  /** 세탁·수선 등으로 오늘 못 쓰는 수 */
+  hold: number;
+  /** 대기 수량의 내역 — 비고 칸이 이걸 줄줄이 쓴다. 이른 예정일부터, 기한 미정은 맨 뒤. */
+  holds?: RentalSkuHold[];
+}
+
+/**
+ * 대기 한 묶음 — "왜 못 쓰는지 · 언제 풀리는지 · 몇 벌".
+ * 날짜의 뜻은 상태마다 다르다: 반납 대기(세탁 정비)는 그날 자동으로 대여 가능이 되지만,
+ * 수선·사용 불가는 담당자가 [사용 재개]로 풀어야 하는 예정일일 뿐이다.
+ */
+export interface RentalSkuHold {
+  status: RentalItemStatus;
+  availableFrom: string | null;
+  count: number;
+}
+
+/** SKU별 수량 집계 — GET /rental-inventory/sku-summary */
+export function fetchRentalSkuSummary(
+  filters: Pick<RentalItemFilters, 'componentType' | 'color' | 'skuSize'>,
+): Promise<RentalSkuSummaryRow[]> {
+  const params: Record<string, string> = {};
+  if (filters.componentType) params.componentType = filters.componentType;
+  if (filters.color) params.color = filters.color;
+  if (filters.skuSize) params.skuSize = filters.skuSize;
+  return request<RentalSkuSummaryRow[]>({ url: '/rental-inventory/sku-summary', params });
+}
+
+/**
+ * SKU 단위 수량 폐기 — POST /rental-inventory/retire-quantity.
+ * 어느 개체를 뺄지는 서버가 고른다(예약·출고 중인 실물은 제외).
+ */
+export function retireRentalQuantity(body: {
+  componentType: RentalComponentType;
+  color: string;
+  size: string;
+  quantity: number;
+  reason: string;
+}): Promise<{ retired: number }> {
+  return request({ url: '/rental-inventory/retire-quantity', method: 'POST', data: body });
+}
+
+/** SKU 단위 수량 상태 변경 (임시 사용불가 ↔ 대여 가능) — POST /rental-inventory/status-quantity */
+export function changeRentalStatusQuantity(body: {
+  componentType: RentalComponentType;
+  color: string;
+  size: string;
+  quantity: number;
+  newStatus: RentalItemStatus;
+  reason: string;
+}): Promise<{ changed: number }> {
+  return request({ url: '/rental-inventory/status-quantity', method: 'POST', data: body });
+}
+
 /** RENT-001 실물 목록 — GET /rental-inventory (§13.6, 계약 §5) */
 export function fetchRentalItems(filters: RentalItemFilters): Promise<ListResult<RentalItem>> {
   const params: Record<string, string | number> = {};
@@ -276,11 +434,12 @@ export function fetchRentalItems(filters: RentalItemFilters): Promise<ListResult
 }
 
 /**
- * 실물 등록 — POST /rental-inventory (계약 §5: managementCode 필수).
- * quantity가 2 이상이면 `${managementCode}-001` 형식 연번으로 일괄 생성된다.
+ * 실물 등록 — POST /rental-inventory.
+ * managementCode를 생략하면 서버가 `구분-컬러-사이즈-연번`으로 채번한다.
+ * 넘기는 경우 quantity가 2 이상이면 `${managementCode}-001` 형식 연번으로 일괄 생성된다.
  */
 export function createRentalItem(body: {
-  managementCode: string;
+  managementCode?: string;
   componentType: RentalComponentType;
   color: string;
   size: string;
@@ -399,13 +558,20 @@ export function fetchAvailability(params: {
   );
 }
 
-/** 실물 ID 배정 — POST /rental-orders/{id}/allocations (itemCode 대체 허용 — 계약 §5) */
+/**
+ * 렌탈 배정 — POST /rental-orders/{id}/allocations.
+ * 대상 실물은 inventoryItemId · itemCode · color+size 중 하나로 지정한다.
+ * color+size만 주면 서버가 그 기간에 비어 있는 실물 하나를 고른다 (현업 확정 2026-07-31).
+ */
 export function allocateRentalItem(
   orderId: string,
   body: {
     componentId?: string;
     inventoryItemId?: string;
     itemCode?: string;
+    /** 개체 대신 넘기는 SKU 조건 — 구분은 구성품에서 가져오므로 컬러·사이즈만 준다. */
+    color?: string;
+    size?: string;
     pickupDate: string;
     returnDueDate: string;
     /** 생략하면 반납 예정일과 같다 — 반납 다음 날부터 다른 예약을 받는다. */
@@ -418,7 +584,8 @@ export function allocateRentalItem(
 /** 배정 ID 변경 — POST /rental-allocations/{id}/change-item (§13.6, §14.7) */
 export function changeAllocationItem(
   allocationId: string,
-  body: { newInventoryItemId: string; reason: string; version: number },
+  /** newInventoryItemId를 생략하면 같은 규격의 비어 있는 다른 실물을 서버가 고른다. */
+  body: { newInventoryItemId?: string; reason: string; version: number },
 ): Promise<RentalAllocation> {
   return request<RentalAllocation>({
     url: `/rental-allocations/${allocationId}/change-item`,
@@ -442,10 +609,13 @@ export function checkoutAllocation(
   });
 }
 
-/** 렌탈 반납 — POST /rental-allocations/{id}/return (계약 §5: returnDate) */
+/**
+ * 렌탈 반납 — POST /rental-allocations/{id}/return (계약 §5: returnDate)
+ * availableFrom을 빼면 서버가 정비 기준(반납일 + 색 계열별 정비일)으로 채운다.
+ */
 export function returnAllocation(
   allocationId: string,
-  body: { returnDate: string; availableFrom: string; nextStatus: RentalItemStatus; version: number },
+  body: { returnDate: string; availableFrom?: string; nextStatus: RentalItemStatus; version: number },
 ): Promise<RentalAllocation> {
   return request<RentalAllocation>({
     url: `/rental-allocations/${allocationId}/return`,
@@ -459,12 +629,16 @@ export function returnAllocation(
  * q(주문번호·고객명·실물코드)를 넘기면 pickup 뷰의 날짜 제한이 풀려 미래 픽업 예약도 함께 조회된다.
  */
 export function fetchAllocations(
-  view: 'pickup' | 'return',
-  opts?: { date?: string; q?: string },
+  view: 'pickup' | 'return' | 'history',
+  opts?: { date?: string; q?: string; from?: string; to?: string; overdueOnly?: boolean },
 ): Promise<RentalAllocation[]> {
   const params: Record<string, string> = { view };
   if (opts?.date) params.date = opts.date;
   if (opts?.q?.trim()) params.q = opts.q.trim();
+  if (opts?.overdueOnly) params.overdueOnly = 'true';
+  // history 전용 기간. 안 주면 서버가 최근 3개월로 잡는다.
+  if (opts?.from) params.from = opts.from;
+  if (opts?.to) params.to = opts.to;
   return request<RentalAllocation[]>({ url: '/rental-allocations', params });
 }
 
@@ -643,6 +817,8 @@ export interface RentalProgressComponent {
   notes: string | null;
   selectedInventoryItemId: string | null;
   selectedItemCode: string | null;
+  /** 컨설팅에서 [베스트 제외]한 부위 — 행은 남되 실물 선택이 잠긴다 (현업 확정 2026-08-01) */
+  excluded?: boolean;
 }
 
 /**

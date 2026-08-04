@@ -14,9 +14,13 @@ import type { ListResult } from './client';
  */
 export type MasterType =
   | 'appointment-purposes'
+  | 'rental-colors'
   | 'product-category'
   | 'component-type'
   | 'repair-type';
+
+/** 렌탈 컬러의 색 계열 — 반납 후 정비 소요일을 가른다. LIGHT=화이트·베이지 계열. */
+export type RentalColorTone = 'LIGHT' | 'DARK';
 
 export interface MasterItem {
   id: string;
@@ -25,6 +29,9 @@ export interface MasterItem {
   sortOrder: number;
   active: boolean;
   system: boolean;
+  /** 렌탈 컬러 전용 */
+  tone?: RentalColorTone;
+  componentTypes?: string[];
 }
 
 export function fetchMaster(type: MasterType): Promise<MasterItem[]> {
@@ -33,7 +40,15 @@ export function fetchMaster(type: MasterType): Promise<MasterItem[]> {
 
 export function createMaster(
   type: MasterType,
-  payload: { code: string; name: string; sortOrder?: number },
+  payload: {
+    /** 렌탈 컬러는 생략한다 — 코드는 시스템이 실물 관리코드에 쓰는 값이라 서버가 채번한다. */
+    code?: string;
+    name: string;
+    sortOrder?: number;
+    /** 렌탈 컬러·사이즈 전용. 비우면 전 품목 공통 */
+    componentTypes?: string[];
+    tone?: RentalColorTone;
+  },
 ): Promise<MasterItem> {
   return request<MasterItem>({ url: `/admin/master/${type}`, method: 'POST', data: payload });
 }
@@ -41,13 +56,38 @@ export function createMaster(
 export function updateMaster(
   type: MasterType,
   id: string,
-  payload: { name?: string; sortOrder?: number; active?: boolean },
+  payload: { name?: string; sortOrder?: number; active?: boolean; tone?: RentalColorTone },
 ): Promise<MasterItem> {
   return request<MasterItem>({ url: `/admin/master/${type}/${id}`, method: 'PATCH', data: payload });
 }
 
 export function retireMaster(type: MasterType, id: string): Promise<MasterItem> {
   return request<MasterItem>({ url: `/admin/master/${type}/${id}/retire`, method: 'POST' });
+}
+
+// ---------------------------------------------------------------------------
+// 렌탈 정비 기준 (ADMIN-001 탭)
+// ---------------------------------------------------------------------------
+
+/**
+ * 반납한 옷은 세탁 여부를 확인해야 해서 바로 다시 빌려줄 수 없다.
+ * 며칠을 잡을지는 색 계열로 갈리고, 그 날짜가 오면 자동으로 대여 가능이 된다.
+ */
+export interface RentalReturnPolicy {
+  lightCleaningDays: number;
+  darkCleaningDays: number;
+  autoRelease: boolean;
+  updatedAt?: string | null;
+}
+
+export function fetchRentalReturnPolicy(): Promise<RentalReturnPolicy> {
+  return request<RentalReturnPolicy>({ url: '/admin/rental-return-policy' });
+}
+
+export function updateRentalReturnPolicy(
+  payload: Partial<Pick<RentalReturnPolicy, 'lightCleaningDays' | 'darkCleaningDays' | 'autoRelease'>>,
+): Promise<RentalReturnPolicy> {
+  return request<RentalReturnPolicy>({ url: '/admin/rental-return-policy', method: 'PATCH', data: payload });
 }
 
 // ---------------------------------------------------------------------------

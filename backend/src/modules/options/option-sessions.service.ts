@@ -22,11 +22,17 @@ const SESSION_INCLUDE = {
       id: true,
       displayName: true,
       productCategory: true,
+      // 부위(베스트 유무)가 이 품목의 단계 구성을 가른다 (현업 확정 2026-07-30).
+      components: { select: { componentType: true, status: true } },
+      // 제작 진행 중(제작요청 이후) 품목은 컨설팅을 잠근다 (현업 확정 2026-07-31).
+      orderItems: { select: { status: true } },
       // 품목은 계약 소유다 → 계약번호·고객·금액 반영 대상 계약을 바로 되짚는다.
       contract: {
         select: {
           id: true,
           contractNo: true,
+          // 컨설팅 수정은 계약 작성중(DRAFT)에서만 — 서명완료·계약완료는 잠근다 (현업 확정 2026-07-31).
+          status: true,
           currentVersionId: true,
           customer: { select: { id: true, name: true } },
         },
@@ -77,6 +83,31 @@ function bucketGroup(stageGroup: string | null, groups: string[]): string | null
   return groups[0] ?? null;
 }
 
+/** 품목에 베스트 부위가 살아 있는가 — 정장 3피스 여부 (현업 확정 2026-07-30). */
+function vestActiveOf(components: Array<{ componentType: string; status: string }>): boolean {
+  return components.some((c) => c.componentType === 'VEST' && c.status !== 'CANCELLED');
+}
+
+/** 베스트를 가질 수 있는 품목인가 — 정장뿐 (맞춤·렌탈 공통, 현업 확정 2026-08-01). */
+function isSuit(productCategory: string): boolean {
+  return productCategory === 'SUIT';
+}
+
+/**
+ * 품목의 부위 슬롯 — 카테고리 상수에서 시작하되, 베스트는 품목의 VEST 부위가
+ * 살아 있을 때만 낀다. 2피스 품목은 베스트 탭·단계가 아예 나오지 않는다.
+ *
+ * 컨설팅 목록만은 예외다(progressComponents) — 제외한 베스트도 행은 남겨야
+ * [베스트 제외] 체크를 다시 풀 자리가 생긴다 (현업 확정 2026-08-01).
+ */
+function groupsOfItem(
+  productCategory: string,
+  components: Array<{ componentType: string; status: string }>,
+): string[] {
+  const vest = vestActiveOf(components);
+  return componentGroupsFor(productCategory).filter((g) => g !== 'VEST' || vest);
+}
+
 /** 옵션 선택 세션: 시작·임시저장·재개·확인서·확정·복사 (설계서 §8.3~8.5, 데이터 규칙 §15.3) */
 @Injectable()
 export class OptionSessionsService {
@@ -92,8 +123,17 @@ export class OptionSessionsService {
    * - 세션이 없으면 품목 카테고리의 ACTIVE 버전으로 신규 생성
    */
   async start(contractItemId: string, dto: StartOptionSessionDto, actor: AuthUser) {
-    const item = await this.prisma.contractItem.findUnique({ where: { id: contractItemId } });
+    const item = await this.prisma.contractItem.findUnique({
+      where: { id: contractItemId },
+      include: {
+        components: { select: { componentType: true, status: true } },
+        contract: { select: { status: true } },
+        orderItems: { select: { status: true } },
+      },
+    });
     if (!item) throw new NotFoundException('계약 품목이 없습니다.');
+    this.ensureContractDraft(item.contract);
+    this.ensureItemNotInProduction(item.orderItems);
 
     const sessions = await this.prisma.optionSelectionSession.findMany({
       where: { contractItemId },
@@ -158,13 +198,19 @@ export class OptionSessionsService {
     const versionChanged = targetVersionId !== current.optionSetVersionId;
 
     const created = await this.prisma.$transaction(async (tx) => {
-      const values = versionChanged
-        ? []
-        : await tx.optionSelectionValue.findMany({ where: { selectionSessionId: current.id } });
-      const stages = await tx.optionStage.findMany({
+      const allStages = await tx.optionStage.findMany({
         where: { optionSetVersionId: targetVersionId, active: true },
         orderBy: { sequenceNo: 'asc' },
       });
+      // 이 품목의 단계 구성 — 베스트 없는(2피스) 품목은 VEST 단계를 뺀다 (2026-07-30).
+      const vestActive = vestActiveOf(item.components);
+      const stages = allStages.filter((s) => vestActive || s.componentGroup !== 'VEST');
+      const usableStageIds = new Set(stages.map((s) => s.id));
+      const values = versionChanged
+        ? []
+        : (
+            await tx.optionSelectionValue.findMany({ where: { selectionSessionId: current.id } })
+          ).filter((v) => usableStageIds.has(v.optionStageId));
       const selectedStageIds = new Set(values.map((v) => v.optionStageId));
       const complete = stages.length > 0 && stages.every((s) => selectedStageIds.has(s.id));
       const now = new Date();
@@ -204,10 +250,12 @@ export class OptionSessionsService {
           })),
         });
       }
-      // 부위별 원단·컬러·패턴도 새 선택 라운드로 이어받는다.
-      const attrs = await tx.optionSelectionComponentAttr.findMany({
-        where: { selectionSessionId: current.id },
-      });
+      // 부위별 원단·컬러·패턴도 새 선택 라운드로 이어받는다 (베스트가 빠졌으면 그 부위는 제외).
+      const attrs = (
+        await tx.optionSelectionComponentAttr.findMany({
+          where: { selectionSessionId: current.id },
+        })
+      ).filter((a) => vestActive || a.componentGroup !== 'VEST');
       if (attrs.length > 0) {
         await tx.optionSelectionComponentAttr.createMany({
           data: attrs.map((a) => ({
@@ -248,10 +296,19 @@ export class OptionSessionsService {
             select: {
               id: true,
               contractNo: true,
+              // 계약 작성중이 아니면 컨설팅은 보기 전용 — 화면 잠금 판단용 (현업 확정 2026-07-31).
+              status: true,
+              // 목록의 계약일 기준 기간 검색용. 계약일은 계약완료 시점에 정해지므로
+              // 그 전(작성중)에는 작성일로 대신 건다 — 계약 목록과 같은 규칙.
+              contractedAt: true,
+              createdAt: true,
               customer: { select: { id: true, name: true, phone: true } },
               currentVersion: { select: { completionDueDate: true } },
             },
           },
+          orderItems: { select: { status: true } },
+          // 베스트 유무(부위)가 이 품목의 부위 행·단계 수를 가른다 (현업 확정 2026-07-30).
+          components: { select: { componentType: true, status: true } },
           optionSelectionSessions: {
             where: { isCurrent: true },
             include: {
@@ -284,13 +341,16 @@ export class OptionSessionsService {
     const activeStages = new Map(
       optionSets.map((s) => [s.productCategory, s.activeVersion?.stages ?? []]),
     );
-    const activeStageCount = new Map(
-      optionSets.map((s) => [s.productCategory, s.activeVersion?.stages.length ?? 0]),
-    );
 
     return items.map((item) => {
       const session = item.optionSelectionSessions[0];
-      const activeStageIds = new Set(session?.optionSetVersion.stages.map((s) => s.id) ?? []);
+      // 2피스(베스트 없는) 품목은 VEST 단계를 진행률 분모에서 뺀다.
+      const vestActive = vestActiveOf(item.components);
+      const activeStageIds = new Set(
+        (session?.optionSetVersion.stages ?? [])
+          .filter((s) => vestActive || s.componentGroup !== 'VEST')
+          .map((s) => s.id),
+      );
       const contract = item.contract;
       return {
         // 부위(상의/하의/베스트) 슬롯 — 목록을 부위 단위 행으로 펼치기 위한 축.
@@ -301,6 +361,14 @@ export class OptionSessionsService {
         productCategory: item.productCategory,
         contractId: contract.id,
         contractNo: contract.contractNo,
+        contractStatus: contract.status,
+        // 계약일(미확정이면 null) + 작성일 — 목록의 기간 필터·표시가 둘을 함께 쓴다.
+        contractedAt: contract.contractedAt?.toISOString() ?? null,
+        contractCreatedAt: contract.createdAt.toISOString(),
+        // 제작 진행 중(제작요청 이후) 품목은 계약이 작성중이어도 컨설팅을 잠근다.
+        inProduction: item.orderItems.some(
+          (o) => o.status !== 'CREATED' && o.status !== 'CANCELLED',
+        ),
         customerId: contract.customer.id,
         customerName: contract.customer.name,
         customerPhone: contract.customer.phone,
@@ -312,7 +380,9 @@ export class OptionSessionsService {
           : 0,
         totalStages: session
           ? activeStageIds.size
-          : (activeStageCount.get(item.productCategory) ?? 0),
+          : (activeStages.get(item.productCategory) ?? []).filter(
+              (s) => vestActive || s.componentGroup !== 'VEST',
+            ).length,
         sessionId: session?.id ?? null,
       };
     });
@@ -320,11 +390,11 @@ export class OptionSessionsService {
 
   /**
    * progress() 행의 부위별 슬롯 — 부위당 원단·컬러·패턴·비고 + 그 부위 단계의 진행 수.
-   * 부위 슬롯 자체는 카테고리 상수(OPTION_COMPONENT_GROUPS)로 고정이라 저장값이
-   * 없어도(=세션 이전) 항상 상의/하의/베스트 세 줄이 나온다.
+   * 부위 슬롯은 카테고리 상수에서 출발하되, 베스트는 품목의 VEST 부위가 살아 있을 때만
+   * 낀다(2026-07-30) — 2피스 품목은 목록에 상의/하의 두 줄만 나온다.
    */
   private progressComponents(
-    item: { productCategory: string },
+    item: { productCategory: string; components: { componentType: string; status: string }[] },
     session:
       | {
           values: { optionStageId: string }[];
@@ -340,11 +410,14 @@ export class OptionSessionsService {
       | undefined,
     activeStages: Map<string, { id: string; componentGroup: string | null }[]>,
   ) {
+    // 컨설팅 목록은 제외한 베스트도 행으로 남긴다 — 체크를 다시 풀 자리가 있어야 한다
+    // (현업 확정 2026-08-01). 단계 수는 아래 vestActive 로 0이 되어 진행률은 그대로다.
     const groups = componentGroupsFor(item.productCategory);
     if (groups.length === 0) return [];
-    const stages = session
-      ? session.optionSetVersion.stages
-      : (activeStages.get(item.productCategory) ?? []);
+    const vestActive = vestActiveOf(item.components);
+    const stages = (
+      session ? session.optionSetVersion.stages : (activeStages.get(item.productCategory) ?? [])
+    ).filter((s) => vestActive || s.componentGroup !== 'VEST');
     const selected = new Set(session?.values.map((v) => v.optionStageId) ?? []);
     const attrByGroup = new Map((session?.componentAttrs ?? []).map((a) => [a.componentGroup, a]));
 
@@ -359,6 +432,8 @@ export class OptionSessionsService {
         notes: attr?.notes ?? null,
         totalStages: groupStages.length,
         completedStages: groupStages.filter((s) => selected.has(s.id)).length,
+        // 이 부위가 계약 품목에서 빠졌는가 — 베스트만 해당([베스트 제외] 체크 상태).
+        excluded: group === 'VEST' && !vestActive,
       };
     });
   }
@@ -404,6 +479,11 @@ export class OptionSessionsService {
       },
       selectionVersionNo: session.selectionVersionNo,
       status: session.status,
+      // 컨설팅 편집 가능 = 계약 작성중 + 품목 미진행 (현업 확정 2026-07-31). 화면 잠금 판단용.
+      contractStatus: contract?.status ?? null,
+      inProduction: session.contractItem.orderItems.some(
+        (o) => o.status !== 'CREATED' && o.status !== 'CANCELLED',
+      ),
       currentStageId: session.currentStageId,
       fabricName: session.fabricName,
       startedAt: session.startedAt,
@@ -423,7 +503,7 @@ export class OptionSessionsService {
         // 부위(상의/하의/베스트) 축 — 화면이 부위별로 단계를 나눠 띄운다.
         componentGroup: bucketGroup(
           s.componentGroup,
-          componentGroupsFor(session.contractItem.productCategory),
+          groupsOfItem(session.contractItem.productCategory, session.contractItem.components),
         ),
         choices: s.choices
           .filter((c) => c.active)
@@ -462,6 +542,8 @@ export class OptionSessionsService {
   /** PUT /option-sessions/:id/stages/:stageId — A/B 선택 UPSERT (화면·API 정의서 §14.2) */
   async saveStage(sessionId: string, stageId: string, dto: SaveStageSelectionDto, actor: AuthUser) {
     const session = await this.load(sessionId);
+    this.ensureContractDraft(this.contractOf(session));
+    this.ensureItemNotInProduction(session.contractItem.orderItems);
     this.ensureEditable(session);
     this.ensureVersion(session, dto.version);
 
@@ -536,6 +618,8 @@ export class OptionSessionsService {
   /** POST /option-sessions/:id/pause — 중단 저장 (current_stage_id·last_saved_at 갱신) */
   async pause(sessionId: string, dto: PauseSessionDto) {
     const session = await this.load(sessionId);
+    this.ensureContractDraft(this.contractOf(session));
+    this.ensureItemNotInProduction(session.contractItem.orderItems);
     this.ensureEditable(session);
     if (dto.version !== undefined) this.ensureVersion(session, dto.version);
     if (dto.currentStageId) {
@@ -599,7 +683,17 @@ export class OptionSessionsService {
       optionSetName: session.optionSetVersion.optionSet.name,
       optionSetVersionNo: session.optionSetVersion.versionNo,
       status: session.status,
+      // 컨설팅 편집 가능 = 계약 작성중 + 품목 미진행 (현업 확정 2026-07-31). 확인서의 확정·변경 버튼 판단용.
+      contractStatus: this.contractOf(session)?.status ?? null,
+      inProduction: session.contractItem.orderItems.some(
+        (o) => o.status !== 'CREATED' && o.status !== 'CANCELLED',
+      ),
       fabricName: session.fabricName,
+      // 이 벌에서 베스트를 뺐는가 — 확정 팝업의 "계약서 변경내용"에 함께 알린다.
+      // 베스트 금액은 자동 차감하지 않으므로(값이 그때그때 다르다) 수기 조정을 안내한다.
+      vestExcluded:
+        isSuit(session.contractItem.productCategory) &&
+        !vestActiveOf(session.contractItem.components),
       totalStages: activeStages.length,
       completedStages: activeStages.length - missing.length,
       missingStages: missing.map((m) => ({
@@ -630,6 +724,8 @@ export class OptionSessionsService {
    */
   async applySurcharge(sessionId: string, actor: AuthUser) {
     const session = await this.load(sessionId);
+    this.ensureContractDraft(this.contractOf(session));
+    this.ensureItemNotInProduction(session.contractItem.orderItems);
     if (session.status !== 'CONFIRMED')
       throw new BusinessException(
         'INVALID_STATUS_TRANSITION',
@@ -647,44 +743,56 @@ export class OptionSessionsService {
         surchargeApplied: state.applied,
       });
 
-    const versionId = this.contractOf(session)!.currentVersionId!;
-    const { pending } = state;
-    const before = state.contract;
-
     await this.prisma.$transaction(async (tx) => {
-      await tx.contractVersion.update({
-        where: { id: versionId },
-        data: { totalAmount: { increment: pending } },
-      });
-      await tx.optionSelectionSession.update({
-        where: { id: sessionId },
-        data: { surchargeApplied: state.total, surchargeAppliedAt: new Date() },
-      });
-      await this.audit.log(
-        {
-          userId: actor.id,
-          action: 'UPDATE',
-          entityType: 'CONTRACT_VERSION',
-          entityId: versionId,
-          before: { totalAmount: before.totalAmount },
-          after: {
-            totalAmount: before.totalAmount + pending,
-            optionSurcharge: pending,
-            optionSessionId: sessionId,
-            contractItemId: session.contractItemId,
-          },
-          reason: `옵션 추가금액 반영 (${session.contractItem.displayName})`,
-        },
-        tx,
-      );
+      await this.applyPendingTx(tx, session, state, actor);
     });
 
     return this.surcharge(sessionId);
   }
 
+  /** 미반영 차액을 계약 현재 버전 금액에 제자리 반영하고 감사로그를 남긴다 (확정·수동 반영 공용). */
+  private async applyPendingTx(
+    tx: Prisma.TransactionClient,
+    session: SessionWithDetail,
+    state: Awaited<ReturnType<OptionSessionsService['surchargeState']>>,
+    actor: AuthUser,
+  ) {
+    const versionId = this.contractOf(session)!.currentVersionId!;
+    const { pending } = state;
+    const before = state.contract!;
+
+    await tx.contractVersion.update({
+      where: { id: versionId },
+      data: { totalAmount: { increment: pending } },
+    });
+    await tx.optionSelectionSession.update({
+      where: { id: session.id },
+      data: { surchargeApplied: state.total, surchargeAppliedAt: new Date() },
+    });
+    await this.audit.log(
+      {
+        userId: actor.id,
+        action: 'UPDATE',
+        entityType: 'CONTRACT_VERSION',
+        entityId: versionId,
+        before: { totalAmount: before.totalAmount },
+        after: {
+          totalAmount: before.totalAmount + pending,
+          optionSurcharge: pending,
+          optionSessionId: session.id,
+          contractItemId: session.contractItemId,
+        },
+        reason: `옵션 추가금액 반영 (${session.contractItem.displayName})`,
+      },
+      tx,
+    );
+  }
+
   /** POST /option-sessions/:id/confirm — 서버 재검증 후 CONFIRMED (화면·API 정의서 §14.3) */
   async confirm(sessionId: string, dto: ConfirmSessionDto, actor: AuthUser) {
     const session = await this.load(sessionId);
+    this.ensureContractDraft(this.contractOf(session));
+    this.ensureItemNotInProduction(session.contractItem.orderItems);
     if (session.status === 'CONFIRMED')
       throw new BusinessException(
         'INVALID_STATUS_TRANSITION',
@@ -725,6 +833,9 @@ export class OptionSessionsService {
     }
 
     const now = new Date();
+    // 확정과 계약금액 반영은 한 트랜잭션이다 (현업 확정 2026-07-31).
+    // 확정된 세션에 미반영 차액이 남는 상태를 만들지 않는다.
+    const state = await this.surchargeState(session);
     const updated = await this.prisma.$transaction(async (tx) => {
       const confirmed = await tx.optionSelectionSession.update({
         where: { id: sessionId },
@@ -753,6 +864,8 @@ export class OptionSessionsService {
         },
         tx,
       );
+      if (state.pending !== 0 && state.contract)
+        await this.applyPendingTx(tx, session, state, actor);
       return confirmed;
     });
 
@@ -761,7 +874,7 @@ export class OptionSessionsService {
       status: updated.status,
       confirmedAt: updated.confirmedAt,
       optionSummary: summary.map((s) => ({ stageName: s.stageName, choiceName: s.choiceName })),
-      // 확정 직후 계약금액 차액을 안내하기 위한 값. 반영은 별도 확인(apply)을 거친다.
+      // 반영 결과 안내용 — 확정과 함께 반영되므로 정상 흐름에서 pending은 0이다.
       surcharge: await this.surcharge(sessionId),
       version: updated.rowVersion,
     };
@@ -772,8 +885,16 @@ export class OptionSessionsService {
     const source = await this.load(sessionId);
     const target = await this.prisma.contractItem.findUnique({
       where: { id: dto.targetContractItemId },
+      include: {
+        contract: { select: { status: true } },
+        orderItems: { select: { status: true } },
+        // 대상의 베스트 유무에 따라 VEST 선택값 복사 여부를 가른다 (2026-07-30).
+        components: { select: { componentType: true, status: true } },
+      },
     });
     if (!target) throw new NotFoundException('복사 대상 품목이 없습니다.');
+    this.ensureContractDraft(target.contract);
+    this.ensureItemNotInProduction(target.orderItems);
     if (target.id === source.contractItemId)
       throw new BusinessException('VALIDATION_ERROR', '같은 품목으로는 복사할 수 없습니다.', [
         { field: 'targetContractItemId', reason: 'SAME_CONTRACT_ITEM' },
@@ -789,10 +910,22 @@ export class OptionSessionsService {
         },
       );
 
-    const activeStages = this.activeStages(source);
-    const selectedStageIds = new Set(source.values.map((v) => v.optionStageId));
+    // 복사본의 단계 구성은 '대상 품목'의 베스트 유무를 따른다 — 3피스→2피스 복사면
+    // VEST 선택값을 버리고, 2피스→3피스 복사면 베스트 단계만 미완료로 남는다.
+    const targetVestActive = vestActiveOf(target.components);
+    const targetStages = source.optionSetVersion.stages
+      .filter((s) => s.active)
+      .filter((s) => targetVestActive || s.componentGroup !== 'VEST');
+    const stageGroup = new Map(source.optionSetVersion.stages.map((s) => [s.id, s.componentGroup]));
+    const copyValues = source.values.filter(
+      (v) => targetVestActive || stageGroup.get(v.optionStageId) !== 'VEST',
+    );
+    const copyAttrs = source.componentAttrs.filter(
+      (a) => targetVestActive || a.componentGroup !== 'VEST',
+    );
+    const selectedStageIds = new Set(copyValues.map((v) => v.optionStageId));
     const complete =
-      activeStages.length > 0 && activeStages.every((s) => selectedStageIds.has(s.id));
+      targetStages.length > 0 && targetStages.every((s) => selectedStageIds.has(s.id));
     const now = new Date();
 
     const created = await this.prisma.$transaction(async (tx) => {
@@ -811,18 +944,18 @@ export class OptionSessionsService {
           optionSetVersionId: source.optionSetVersionId,
           selectionVersionNo: (last._max.selectionVersionNo ?? 0) + 1,
           status:
-            source.values.length === 0 ? 'NOT_STARTED' : complete ? 'REVIEW' : 'IN_PROGRESS',
-          currentStageId: activeStages.find((s) => !selectedStageIds.has(s.id))?.id ?? null,
+            copyValues.length === 0 ? 'NOT_STARTED' : complete ? 'REVIEW' : 'IN_PROGRESS',
+          currentStageId: targetStages.find((s) => !selectedStageIds.has(s.id))?.id ?? null,
           fabricName: source.fabricName,
-          startedAt: source.values.length > 0 ? now : null,
-          lastSavedAt: source.values.length > 0 ? now : null,
+          startedAt: copyValues.length > 0 ? now : null,
+          lastSavedAt: copyValues.length > 0 ? now : null,
           reviewedAt: complete ? now : null,
           isCurrent: true,
         },
       });
-      if (source.values.length > 0) {
+      if (copyValues.length > 0) {
         await tx.optionSelectionValue.createMany({
-          data: source.values.map((v) => ({
+          data: copyValues.map((v) => ({
             id: randomUUID(),
             selectionSessionId: session.id,
             optionStageId: v.optionStageId,
@@ -833,9 +966,9 @@ export class OptionSessionsService {
         });
       }
       // 부위별 원단·컬러·패턴도 함께 복사한다.
-      if (source.componentAttrs.length > 0) {
+      if (copyAttrs.length > 0) {
         await tx.optionSelectionComponentAttr.createMany({
-          data: source.componentAttrs.map((a) => ({
+          data: copyAttrs.map((a) => ({
             id: randomUUID(),
             selectionSessionId: session.id,
             componentGroup: a.componentGroup,
@@ -862,10 +995,15 @@ export class OptionSessionsService {
     _actor: AuthUser,
   ) {
     const session = await this.load(sessionId);
+    this.ensureContractDraft(this.contractOf(session));
+    this.ensureItemNotInProduction(session.contractItem.orderItems);
     this.ensureEditable(session);
     this.ensureVersion(session, dto.version);
 
-    const validGroups = componentGroupsFor(session.contractItem.productCategory);
+    const validGroups = groupsOfItem(
+      session.contractItem.productCategory,
+      session.contractItem.components,
+    );
     if (!validGroups.includes(group))
       throw new BusinessException(
         'VALIDATION_ERROR',
@@ -916,9 +1054,9 @@ export class OptionSessionsService {
     return session.contractItem.contract ?? null;
   }
 
-  /** 부위 슬롯(카테고리별) + 저장값을 병합한 components[] (설계서 04 §2.3) */
+  /** 부위 슬롯(품목 기준 — 베스트는 살아 있을 때만) + 저장값을 병합한 components[] (설계서 04 §2.3) */
   private buildComponents(session: SessionWithDetail) {
-    const groups = componentGroupsFor(session.contractItem.productCategory);
+    const groups = groupsOfItem(session.contractItem.productCategory, session.contractItem.components);
     const byGroup = new Map(session.componentAttrs.map((a) => [a.componentGroup, a]));
     return groups.map((group) => {
       const attr = byGroup.get(group);
@@ -979,8 +1117,12 @@ export class OptionSessionsService {
   }
 
   private activeStages(session: SessionWithDetail) {
+    // 베스트가 빠진 품목(2피스)은 VEST 단계를 아예 대상에서 뺀다 — 진행률·확정 검증·
+    // 추가금액 합계가 전부 이 목록 기준이라, 여기 한 곳만 거르면 같이 맞는다.
+    const vestActive = vestActiveOf(session.contractItem.components);
     return session.optionSetVersion.stages
       .filter((s) => s.active)
+      .filter((s) => vestActive || s.componentGroup !== 'VEST')
       // DB의 사전순 정렬은 두 자리 코드에서 어긋난다(AA가 B보다 앞). 코드 순서로 되돌린다.
       .map((s) => ({
         ...s,
@@ -1042,6 +1184,35 @@ export class OptionSessionsService {
       throw new BusinessException(
         'INVALID_STATUS_TRANSITION',
         '확정된 세션은 수정할 수 없습니다. 재편집은 새 선택 버전으로 진행하세요.',
+      );
+  }
+
+  /**
+   * 컨설팅 수정은 계약 작성중(DRAFT)에서만 (현업 확정 2026-07-31).
+   * 서명완료·계약완료 계약은 계약서 [수정하기]로 작성중으로 되돌린 뒤에만 컨설팅을 고친다
+   * — 계약서·컨설팅·주문 전체 흐름을 계약 상태 하나로 잠그기 위해서다.
+   */
+  private ensureContractDraft(contract: { status: string } | null | undefined): void {
+    if (contract && contract.status !== 'DRAFT')
+      throw new BusinessException(
+        'CONTRACT_NOT_DRAFT',
+        '작성중인 계약에서만 스타일 컨설팅을 수정할 수 있습니다. 계약서 [수정하기]로 되돌린 뒤 진행해 주세요.',
+        undefined,
+        { contractStatus: contract.status },
+      );
+  }
+
+  /**
+   * 제작 진행 중(주문품목이 제작요청 이후) 품목의 컨설팅 편집을 막는다 (현업 확정 2026-07-31).
+   * 공장에 나간 옷의 옵션이 바뀌면 작업지시서와 실물이 어긋난다. 되돌리려면
+   * 제작·입출고 화면의 [되돌리기]로 품목 상태를 생성으로 되돌린 뒤 진행한다.
+   */
+  private ensureItemNotInProduction(orderItems: Array<{ status: string }>): void {
+    const inProduction = orderItems.some((o) => o.status !== 'CREATED' && o.status !== 'CANCELLED');
+    if (inProduction)
+      throw new BusinessException(
+        'INVALID_STATUS_TRANSITION',
+        '제작 진행 중인 품목은 옵션을 변경할 수 없습니다. 제작·입출고 화면에서 상태를 되돌린 뒤 진행해 주세요.',
       );
   }
 

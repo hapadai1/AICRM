@@ -58,7 +58,7 @@ import {
   THOUSANDS,
   type EditableLine,
 } from './ContractLineEditor';
-import { formatKrw } from './labels';
+import { formatKrw, sortByCatalogOrder } from './labels';
 import { useUnsavedWarning } from './use-unsaved-warning';
 
 /**
@@ -316,8 +316,10 @@ export function ContractFormPage() {
   const applyContractType = (typeId: string) => {
     const t = types?.find((x) => x.id === typeId);
     if (!t) return;
+    // 계약 구분의 기본 품목은 맞춤(정장>셔츠>구두) → 렌탈(정장>셔츠>구두) 순으로 채운다.
+    // 채운 뒤에는 다시 정렬하지 않는다 — 편집 중 행이 움직이지 않도록.
     setLines(
-      t.lines.map((l) =>
+      sortByCatalogOrder(t.lines).map((l) =>
         createLine({
           transactionType: l.transactionType,
           productCategory: l.productCategory,
@@ -430,11 +432,14 @@ export function ContractFormPage() {
                     </Button>
                   </Tooltip>
                 </Can>
-                <Can permission="CONTRACT_CANCEL">
-                  <Button danger icon={<StopOutlined />} onClick={() => setCancelOpen(true)}>
-                    계약 취소
-                  </Button>
-                </Can>
+                {/* 취소는 주문이 생기기 전에만 — 완료 후 수정하기로 되돌린 계약은 취소 버튼이 없다. */}
+                {flow?.canCancel && (
+                  <Can permission="CONTRACT_CANCEL">
+                    <Button danger icon={<StopOutlined />} onClick={() => setCancelOpen(true)}>
+                      계약 취소
+                    </Button>
+                  </Can>
+                )}
               </>
             )}
           </Space>

@@ -15,6 +15,7 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import { createHash, randomUUID } from 'crypto';
 import { mkdirSync, writeFileSync } from 'fs';
 import { dirname, join, resolve } from 'path';
+import { repairItemRow } from './repair-item-seed';
 
 const prisma = new PrismaClient();
 
@@ -579,6 +580,8 @@ async function main(): Promise<void> {
         customerId: string; repairType: string; requestDate: Date; dueDate?: Date; status: string;
         description: string; orderId?: string; orderItemId?: string; componentId?: string;
         targetProduct?: string; quantity?: number;
+        /** 벌마다 다른 진행을 만들 때 — 부분 입고·부분 출고 데모용 */
+        unitStatuses?: string[];
         notes?: string;
         events: Array<{ previousStatus?: string; newStatus: string; eventDate: Date }>;
       }): Promise<void> => {
@@ -591,7 +594,15 @@ async function main(): Promise<void> {
             orderItemId: args.orderItemId ?? null,
             componentId: args.componentId ?? null,
             items: args.targetProduct
-              ? { create: { id: uuid(), targetProduct: args.targetProduct, quantity: args.quantity ?? 1, sequenceNo: 1 } }
+              ? {
+                  create: repairItemRow(
+                    args.targetProduct,
+                    args.quantity ?? 1,
+                    args.status,
+                    args.requestDate,
+                    args.unitStatuses,
+                  ),
+                }
               : undefined,
             repairType: args.repairType,
             requestDate: args.requestDate,
@@ -1072,6 +1083,21 @@ async function main(): Promise<void> {
         status: 'RECEIVED', description: '셔츠 #1 소매 기장 1cm 줄임',
         targetProduct: 'SHIRT', orderId: oshOrder, orderItemId: oshShirt1,
         events: [{ newStatus: 'RECEIVED', eventDate: dateOnly(-1) }],
+      });
+      /*
+       * 부분 입고·부분 출고 데모 — 상의 3벌 중 1벌은 출고(고객이 먼저 찾아감), 1벌은 입고,
+       * 1벌은 아직 수선집에 있다. 건 상태는 전 벌이 들어오지 않았으므로 '수선 요청'에 머문다
+       * (repairs.service.rollupStatus). 품목별 진행 화면을 확인할 데이터다.
+       */
+      await repair({
+        customerId: 윤도현, repairType: 'GENERAL', requestDate: dateOnly(-9), dueDate: dateOnly(2),
+        status: 'REQUESTED', description: '정장 상의 3벌 소매 기장 조정 (벌마다 진행이 다름)',
+        targetProduct: 'JACKET', quantity: 3, unitStatuses: ['RELEASED', 'RETURNED', 'PENDING'],
+        notes: '한 벌은 고객이 먼저 찾아감',
+        events: [
+          { newStatus: 'RECEIVED', eventDate: dateOnly(-9) },
+          { previousStatus: 'RECEIVED', newStatus: 'REQUESTED', eventDate: dateOnly(-8) },
+        ],
       });
       await repair({
         customerId: 윤도현, repairType: 'GENERAL', requestDate: dateOnly(-2), dueDate: dateOnly(4),

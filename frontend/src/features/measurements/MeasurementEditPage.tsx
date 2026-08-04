@@ -6,6 +6,7 @@
 import {
   DeleteOutlined,
   DiffOutlined,
+  PlusOutlined,
   PrinterOutlined,
   SaveOutlined,
   UploadOutlined,
@@ -34,7 +35,7 @@ import {
 import type { RcFile } from 'antd/es/upload';
 import dayjs from 'dayjs';
 import type { CSSProperties } from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ApiError, fetchFileObjectUrl } from '../../api/client';
 import { fetchCustomers } from '../../api/customers';
@@ -66,7 +67,9 @@ import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { labelOf, metaOf } from '../../shared/status-meta';
 import { MEASUREMENT_STATUS_META } from './meas-meta';
+import { MeasurementRecordStrip } from './MeasurementRecordStrip';
 import { NumericKeypad } from './NumericKeypad';
+import { buildRecordTitles } from './record-label';
 
 interface FormState {
   measurementDate: string;
@@ -148,6 +151,15 @@ export function MeasurementEditPage() {
   const [unit, setUnit] = useState<Unit>('CM');
   // 사진 인쇄 선택 (fileId 집합)
   const [selectedImages, setSelectedImages] = useState<Set<string>>(() => new Set());
+  /**
+   * 폰 폭에서는 오른쪽 키패드가 화면 맨 아래로 밀려 쓸 수 없다.
+   * 이 폭에서는 키패드를 화면 하단에 고정해 띄운다 (현업 확정 2026-08-01).
+   */
+  const [isNarrow, setIsNarrow] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 991px)').matches,
+  );
+  // 하단 키패드가 가리지 않도록 활성 항목을 화면 가운데로 끌어온다.
+  const fieldRefs = useRef(new Map<string, HTMLDivElement>());
 
   const sessionQuery = useQuery({
     queryKey: ['measurements', 'detail', id],
@@ -162,11 +174,13 @@ export function MeasurementEditPage() {
     enabled: isNew,
   });
 
-  // 같은 고객의 다른 버전으로 바로 갈아탈 수 있게 버전 목록을 함께 읽는다 (별도 목록 화면 없이).
-  const versionsQuery = useQuery({
-    queryKey: ['measurements', 'versions', session?.customerId],
-    queryFn: () => fetchMeasurements(session?.customerId as string),
-    enabled: !isNew && !!session?.customerId,
+  // 이 고객이 저장한 채촌 목록 — 화면 맨 위 리스트와 회차 계산에 함께 쓴다.
+  // 신규 작성 중에도 고객만 고르면 기존 기록을 바로 열 수 있어야 한다 (현업 확정 2026-08-01).
+  const listCustomerId = isNew ? customerId : (session?.customerId ?? '');
+  const recordsQuery = useQuery({
+    queryKey: ['measurements', 'byCustomer', listCustomerId],
+    queryFn: () => fetchMeasurements(listCustomerId),
+    enabled: !!listCustomerId,
   });
 
   // 세션 로드 시 폼 초기화 (백엔드 값은 항목 코드 맵으로 변환되어 온다)
@@ -186,6 +200,21 @@ export function MeasurementEditPage() {
       notes: session.notes ?? '',
     });
   }, [session, form]);
+
+  // 화면 폭 감시 — lg(992px) 미만이면 하단 고정 키패드로 전환한다.
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 991px)');
+    const onChange = (e: MediaQueryListEvent) => setIsNarrow(e.matches);
+    mq.addEventListener('change', onChange);
+    setIsNarrow(mq.matches);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
+  // 하단 키패드에 가린 항목은 눌러도 값이 보이지 않으므로 화면 가운데로 올린다.
+  useEffect(() => {
+    if (!isNarrow || !activeKey) return;
+    fieldRefs.current.get(activeKey)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [isNarrow, activeKey]);
 
   // 미저장 변경 이탈 경고 (§3.2)
   useEffect(() => {
@@ -280,7 +309,7 @@ export function MeasurementEditPage() {
       });
     },
     onSuccess: (created) => {
-      message.success(`채촌을 등록했습니다. (V${created.versionNo})`);
+      message.success(`${labelOf(MEASUREMENT_TYPE_LABELS, created.measurementType)} 채촌을 저장했습니다.`);
       setDirty(false);
       void invalidate();
       navigate(`/measurements/${created.id}`, { replace: true });
@@ -456,7 +485,10 @@ export function MeasurementEditPage() {
       okText: '삭제',
       okButtonProps: { danger: true },
       cancelText: '취소',
-      content: `${session.customerName} · ${session.measurementDate} · V${session.versionNo}`,
+      content: `${session.customerName} · ${session.measurementDate} · ${labelOf(
+        MEASUREMENT_TYPE_LABELS,
+        session.measurementType,
+      )}`,
       onOk: () => deleteMutation.mutateAsync(),
     });
   };
@@ -484,7 +516,15 @@ export function MeasurementEditPage() {
     const display =
       def.kind === 'number' && unit === 'INCH' && Number.isFinite(numeric) ? formatInch(numeric) : value;
     return (
-      <div key={def.key} style={style} onClick={() => !viewOnly && !textInput && setActiveKey(def.key)}>
+      <div
+        key={def.key}
+        ref={(el) => {
+          if (el) fieldRefs.current.set(def.key, el);
+          else fieldRefs.current.delete(def.key);
+        }}
+        style={style}
+        onClick={() => !viewOnly && !textInput && setActiveKey(def.key)}
+      >
         <Typography.Text type="secondary" style={{ fontSize: 13 }}>
           {def.label}
         </Typography.Text>
@@ -520,14 +560,97 @@ export function MeasurementEditPage() {
   );
 
   const statusMeta = metaOf(MEASUREMENT_STATUS_META, session?.status);
-  // 버전 목록은 최신 순으로 온다 — 현재 버전 바로 다음 항목이 직전 버전이다.
-  const versions = versionsQuery.data ?? [];
-  const currentIndex = versions.findIndex((v) => v.id === session?.id);
-  const previousVersion = currentIndex >= 0 ? versions[currentIndex + 1] : undefined;
+  // 저장한 채촌 목록은 최신 순으로 온다 — 현재 기록 바로 다음 항목이 직전 채촌이다.
+  const records = recordsQuery.data ?? [];
+  const recordTitles = buildRecordTitles(records);
+  const currentIndex = records.findIndex((r) => r.id === session?.id);
+  const currentTitle = currentIndex >= 0 ? (recordTitles[currentIndex] ?? '') : '';
+  const previousRecord = currentIndex >= 0 ? records[currentIndex + 1] : undefined;
+
+  // 하단 고정 키패드가 떠 있는 동안에는 본문 아래에 그만큼 여백을 둬야 마지막 항목이 가려지지 않는다.
+  const keypadSheetOpen = isNarrow && !!activeKey && !readOnly && unit === 'CM';
+
+  /**
+   * 고객 검색 목록. 고객 화면에서 ?customerId=로 들어오면 그 고객이 검색 결과에 없어
+   * 셀렉트에 id가 그대로 보이므로, 읽어 둔 채촌 목록의 고객 이름을 후보에 얹어 준다.
+   */
+  const customerOptions = (() => {
+    const found = (customerQuery.data?.data ?? []).map((c) => ({
+      value: c.id,
+      label: `${c.name} (${c.phone})`,
+    }));
+    const preselected = records[0];
+    if (!customerId || !preselected?.customerName || found.some((o) => o.value === customerId))
+      return found;
+    return [
+      { value: customerId, label: `${preselected.customerName} (${preselected.customerPhone})` },
+      ...found,
+    ];
+  })();
+
+  const startNewRecord = () =>
+    navigate(
+      `/measurements/new?customerId=${listCustomerId}${relatedOrderId ? `&orderId=${relatedOrderId}` : ''}`,
+    );
+
+  /**
+   * 직전 채촌 값 불러오기 (현업 확정 2026-08-01).
+   * 가봉은 이전 치수 위에서 몇 군데만 고치는 일이라 매번 전부 다시 재지 않는다.
+   * 값만 복사하며 기록끼리 묶지는 않는다 — 채촌은 버전 관리를 하지 않는다.
+   */
+  const loadPreviousValues = async () => {
+    const latest = records[0];
+    if (!latest) return;
+    const source = await fetchMeasurement(latest.id);
+    const values: Record<string, string> = {};
+    MEASUREMENT_FIELDS.forEach((f) => {
+      const v = source.values[f.key];
+      values[f.key] = v === null || v === undefined ? '' : String(v);
+    });
+    patch({
+      values,
+      fitPreference: source.fitPreference ?? '',
+      bodyNotes: source.bodyNotes ?? '',
+    });
+    message.success(
+      `${labelOf(MEASUREMENT_TYPE_LABELS, latest.measurementType)}(${latest.measurementDate}) 값을 불러왔습니다.`,
+    );
+  };
+
+  /** 다른 기록으로 갈아타기 — 신규 작성 중 입력값이 있으면 먼저 확인한다. */
+  const openRecord = (recordId: string) => {
+    if (recordId === session?.id) return;
+    if (!dirty) {
+      navigate(`/measurements/${recordId}`);
+      return;
+    }
+    modal.confirm({
+      title: '저장하지 않은 입력이 있습니다.',
+      content: '지금 이동하면 입력한 값이 사라집니다. 이동할까요?',
+      okText: '이동',
+      cancelText: '취소',
+      onOk: () => {
+        setDirty(false);
+        navigate(`/measurements/${recordId}`);
+      },
+    });
+  };
 
   return (
     <Row gutter={16}>
-      <Col xs={24} lg={15} xl={16}>
+      <Col xs={24} lg={15} xl={16} style={{ paddingBottom: keypadSheetOpen ? 340 : 0 }}>
+        {/* 지금까지 저장한 채촌 — 눌러서 기존 기록을 그대로 열어 본다 (현업 확정 2026-08-01).
+            저장한 기록이 0건이면 줄 자체가 나오지 않는다. */}
+        {listCustomerId && (
+          <MeasurementRecordStrip
+            records={records}
+            currentId={session?.id}
+            onSelect={openRecord}
+            onCreate={isNew ? undefined : startNewRecord}
+            onLoadPrevious={isNew && records.length > 0 ? loadPreviousValues : undefined}
+          />
+        )}
+
         <Card style={{ marginBottom: 16 }}>
           <Space direction="vertical" size="middle" style={{ width: '100%' }}>
             {/* 머리말 — 고객·계약·버전/상태 한 줄. 아래 입력 필드와 겹치는 정보는 배지로 반복하지 않는다. */}
@@ -546,10 +669,7 @@ export function MeasurementEditPage() {
                     onSearch={setCustomerKeyword}
                     loading={customerQuery.isLoading}
                     onChange={setCustomerId}
-                    options={(customerQuery.data?.data ?? []).map((c) => ({
-                      value: c.id,
-                      label: `${c.name} (${c.phone})`,
-                    }))}
+                    options={customerOptions}
                   />
                 </Space>
               ) : (
@@ -568,13 +688,13 @@ export function MeasurementEditPage() {
               )}
               {!isNew && (
                 <Space size={4}>
-                  <Tag color="blue">V{session?.versionNo}</Tag>
+                  {currentTitle && <Tag color="blue">{currentTitle}</Tag>}
                   <StatusBadge label={statusMeta.label} color={statusMeta.color} />
                 </Space>
               )}
             </Space>
 
-            {/* 입력 필드 한 줄 — 채촌일·구분, 그리고 다른 버전으로 갈아타기 */}
+            {/* 입력 필드 한 줄 — 채촌일·구분. 다른 기록으로 갈아타기는 위 [저장한 채촌] 줄에서 한다. */}
             <Space wrap size="middle" align="end">
               <Space direction="vertical" size={4}>
                 <Typography.Text type="secondary">채촌일 *</Typography.Text>
@@ -596,24 +716,6 @@ export function MeasurementEditPage() {
                   onChange={(v) => patch({ measurementType: v as MeasurementType })}
                 />
               </Space>
-              {!isNew && versions.length > 1 && (
-                <Space direction="vertical" size={4}>
-                  <Typography.Text type="secondary">버전</Typography.Text>
-                  <Select
-                    size="large"
-                    style={{ minWidth: 300 }}
-                    value={session?.id}
-                    onChange={(v) => navigate(`/measurements/${v}`)}
-                    options={versions.map((v) => ({
-                      value: v.id,
-                      label: `V${v.versionNo} · ${v.measurementDate} · ${labelOf(
-                        MEASUREMENT_TYPE_LABELS,
-                        v.measurementType,
-                      )} · ${v.completed ? '완료' : '작성중'}`,
-                    }))}
-                  />
-                </Space>
-              )}
             </Space>
 
             {/* 기능 버튼 줄 — 단위 전환·사진 업로드 (설계서 v2 05 §3.2·§4.3) */}
@@ -660,14 +762,22 @@ export function MeasurementEditPage() {
                 type="warning"
                 showIcon
                 message="작업지시서 출력에 사용된 채촌입니다."
-                description="값을 바꾸면 이미 나간 지시서와 어긋나므로 수정·삭제가 잠겨 있습니다. 목록에서 복사해 새 버전을 만들어 주세요."
+                description="값을 바꾸면 이미 나간 지시서와 어긋나므로 수정·삭제가 잠겨 있습니다. 새로 재서 다른 기록으로 저장해 주세요."
+                action={
+                  <Can permission="MEASUREMENT_EDIT">
+                    <Button size="small" type="primary" icon={<PlusOutlined />} onClick={startNewRecord}>
+                      새 채촌
+                    </Button>
+                  </Can>
+                }
               />
             )}
             {!readOnly && session?.completed && (
               <Alert
                 type="info"
                 showIcon
-                message="완료된 채촌입니다. 값을 고치려면 완료를 해제한 뒤 저장하세요."
+                message="완료된 채촌입니다. 수정 후 [저장]하면 그대로 반영됩니다."
+                description="완료는 작업지시서에 쓸 수 있다는 표시로, 수정을 막지 않습니다. 완료 표시를 되돌리려면 [완료 해제]를 누르세요."
                 action={
                   <Can permission="MEASUREMENT_EDIT">
                     <Space size={8}>
@@ -824,22 +934,30 @@ export function MeasurementEditPage() {
         <div style={{ position: 'sticky', top: 16 }}>
           <Card
             title={
-              unit === 'INCH'
-                ? '인치 보기 — 입력은 cm 보기에서 합니다'
-                : activeKey
-                  ? `입력 중: ${labelOf(FIELD_LABELS, activeKey)}`
-                  : '항목을 터치해 입력을 시작하세요'
+              readOnly
+                ? '출력된 채촌 — 보기 전용'
+                : isNarrow
+                  ? '저장'
+                  : unit === 'INCH'
+                  ? '인치 보기 — 입력은 cm 보기에서 합니다'
+                  : activeKey
+                    ? `입력 중: ${labelOf(FIELD_LABELS, activeKey)}`
+                    : '항목을 터치해 입력을 시작하세요'
             }
           >
             <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-              <NumericKeypad
-                onPress={handleKeypadPress}
-                onDelete={handleKeypadDelete}
-                onPrev={() => moveActive(-1)}
-                onNext={() => moveActive(1)}
-                onDone={() => setActiveKey(null)}
-                disabled={!activeKey || readOnly || unit === 'INCH'}
-              />
+              {/* 좁은 화면에서는 이 자리가 화면 맨 아래로 밀리므로 하단 고정 키패드를 대신 쓴다.
+                  출력된 채촌은 입력 자체가 막혀 있어 키패드를 두지 않는다. */}
+              {!isNarrow && !readOnly && (
+                <NumericKeypad
+                  onPress={handleKeypadPress}
+                  onDelete={handleKeypadDelete}
+                  onPrev={() => moveActive(-1)}
+                  onNext={() => moveActive(1)}
+                  onDone={() => setActiveKey(null)}
+                  disabled={!activeKey || readOnly || unit === 'INCH'}
+                />
+              )}
 
               {isNew ? (
                 <Can permission="MEASUREMENT_EDIT">
@@ -856,16 +974,44 @@ export function MeasurementEditPage() {
                     등록
                   </Button>
                 </Can>
+              ) : readOnly ? (
+                /* 작업지시서에 출력된 채촌 — 수정·삭제가 막혀 있으므로 안 눌리는 버튼을 두지 않는다.
+                   새로 재는 것만 남긴다 (현업 확정 2026-08-01). */
+                <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                  <Can permission="MEASUREMENT_EDIT">
+                    <Button
+                      type="primary"
+                      size="large"
+                      block
+                      style={{ height: 56, fontSize: 18 }}
+                      icon={<PlusOutlined />}
+                      onClick={startNewRecord}
+                    >
+                      새 채촌
+                    </Button>
+                  </Can>
+                  {previousRecord && (
+                    <Button
+                      block
+                      icon={<DiffOutlined />}
+                      onClick={() =>
+                        navigate(`/measurements/compare?left=${previousRecord.id}&right=${session?.id}`)
+                      }
+                    >
+                      직전 채촌과 비교
+                    </Button>
+                  )}
+                </Space>
               ) : (
                 /* 주요 동작(저장·완료)은 위 한 줄, 보조 동작(비교·삭제)은 아래 한 줄로 묶는다. */
                 <Can permission="MEASUREMENT_EDIT">
                   <Space direction="vertical" size="small" style={{ width: '100%' }}>
                     <div style={{ display: 'flex', gap: 8 }}>
+                      {/* 채촌은 언제든 수정 — 완료 후에도 저장할 수 있다 (현업 확정 2026-07-31). */}
                       <Button
                         size="large"
                         style={{ flex: 1, height: 56, fontSize: 18 }}
                         icon={<SaveOutlined />}
-                        disabled={readOnly || session?.completed}
                         loading={saveMutation.isPending && !completeMutation.isPending}
                         onClick={() =>
                           saveMutation.mutate(undefined, {
@@ -879,7 +1025,7 @@ export function MeasurementEditPage() {
                         type="primary"
                         size="large"
                         style={{ flex: 1, height: 56, fontSize: 18 }}
-                        disabled={readOnly || session?.completed}
+                        disabled={session?.completed}
                         loading={completeMutation.isPending}
                         onClick={() => completeMutation.mutate()}
                       >
@@ -887,22 +1033,22 @@ export function MeasurementEditPage() {
                       </Button>
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
-                      {previousVersion && (
+                      {previousRecord && (
                         <Button
                           style={{ flex: 1 }}
                           icon={<DiffOutlined />}
                           onClick={() =>
-                            navigate(`/measurements/compare?left=${previousVersion.id}&right=${session?.id}`)
+                            navigate(`/measurements/compare?left=${previousRecord.id}&right=${session?.id}`)
                           }
                         >
-                          이전 버전과 비교
+                          직전 채촌과 비교
                         </Button>
                       )}
+                      {/* 고객을 잘못 골랐거나 빈 기록이 생겼을 때 정리하는 유일한 통로다. */}
                       <Button
                         danger
                         style={{ flex: 1 }}
                         icon={<DeleteOutlined />}
-                        disabled={readOnly}
                         loading={deleteMutation.isPending}
                         onClick={confirmDelete}
                       >
@@ -916,6 +1062,46 @@ export function MeasurementEditPage() {
           </Card>
         </div>
       </Col>
+
+      {/* 폰·세로 태블릿용 하단 고정 키패드 — 이 폭에서는 오른쪽 키패드가 화면 밖으로 밀린다. */}
+      {keypadSheetOpen && activeKey && (
+        <div
+          style={{
+            position: 'fixed',
+            left: 0,
+            right: 0,
+            bottom: 0,
+            zIndex: 1000,
+            background: '#fff',
+            borderTop: '1px solid #d9d9d9',
+            boxShadow: '0 -4px 16px rgba(0, 0, 0, 0.12)',
+            padding: '8px 12px calc(8px + env(safe-area-inset-bottom))',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: 6,
+            }}
+          >
+            <Typography.Text strong style={{ fontSize: 16 }}>
+              입력 중: {labelOf(FIELD_LABELS, activeKey)}
+            </Typography.Text>
+            <Button size="small" onClick={() => setActiveKey(null)}>
+              닫기
+            </Button>
+          </div>
+          <NumericKeypad
+            onPress={handleKeypadPress}
+            onDelete={handleKeypadDelete}
+            onPrev={() => moveActive(-1)}
+            onNext={() => moveActive(1)}
+            onDone={() => setActiveKey(null)}
+          />
+        </div>
+      )}
     </Row>
   );
 }

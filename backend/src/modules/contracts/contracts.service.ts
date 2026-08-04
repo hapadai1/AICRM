@@ -21,9 +21,16 @@ import {
   UpdateContractDto,
 } from './contracts.dto';
 
-/** 품목 대분류 → 기본 구성품 (설계서 7.2). 베스트는 주문 화면에서 선택 추가. */
+/**
+ * 품목 대분류 → 기본 구성품 (설계서 7.2).
+ *
+ * 정장은 맞춤·렌탈 가리지 않고 상의·하의·베스트 세 부위로 만든다 (현업 확정 2026-08-01).
+ * 계약 시점에는 베스트를 뺄지 알 수 없어 계약서는 베스트를 다루지 않고, 벌마다 뺄지 말지는
+ * 스타일 컨설팅에서 [베스트 제외] 체크로 정한다(setVestIncluded). 렌탈도 베스트 재고를
+ * 따로 갖고 있어 부위가 없으면 3피스를 빌려줄 수 없었다.
+ */
 const COMPONENT_MAP: Record<string, string[]> = {
-  SUIT: ['JACKET', 'TROUSERS'],
+  SUIT: ['JACKET', 'TROUSERS', 'VEST'],
   SHIRT: ['SHIRT'],
   SHOES: ['SHOES'],
 };
@@ -36,6 +43,23 @@ const CATEGORY_LABEL: Record<string, string> = {
   SHIRT: '셔츠',
   SHOES: '구두',
 };
+
+/**
+ * 계약서 출력 품목 순서: 맞춤(정장>셔츠>구두) → 렌탈(정장>셔츠>구두).
+ * 저장 순서(sortOrder)와 무관하게 출력물(웹 계약서·엑셀)에서는 항상 이 순서로 싣는다.
+ */
+const TRANSACTION_ORDER: Record<string, number> = { CUSTOM: 0, RENTAL: 1 };
+const CATEGORY_ORDER: Record<string, number> = { SUIT: 0, SHIRT: 1, SHOES: 2 };
+
+function sortDocumentLines<T extends { transactionType: string; productCategory: string }>(
+  lines: readonly T[],
+): T[] {
+  return [...lines].sort(
+    (a, b) =>
+      (TRANSACTION_ORDER[a.transactionType] ?? 99) - (TRANSACTION_ORDER[b.transactionType] ?? 99) ||
+      (CATEGORY_ORDER[a.productCategory] ?? 99) - (CATEGORY_ORDER[b.productCategory] ?? 99),
+  );
+}
 
 /** 구성품(부위) 한글 라벨 (설계서 03 §5.3) */
 const COMPONENT_LABEL: Record<string, string> = {
@@ -104,6 +128,8 @@ const LIST_INCLUDE = {
       versionStatus: true,
       totalAmount: true,
       completionDueDate: true,
+      // 목록의 "품목 구성" 열용 — 거래구분·품목별 수량만 있으면 되므로 라인 전체는 싣지 않는다.
+      lines: { select: { transactionType: true, productCategory: true, quantity: true } },
     },
   },
 } satisfies Prisma.ContractInclude;
@@ -405,6 +431,100 @@ export class ContractsService {
     return this.getDetail(id);
   }
 
+  /**
+   * 베스트 포함/제외 (현업 확정 2026-08-01) — 스타일 컨설팅 화면의 [베스트 제외] 체크박스.
+   *
+   * 계약서는 베스트를 다루지 않는다. 정장은 맞춤·렌탈 모두 상의·하의·베스트 세 부위로
+   * 만들어지고, 어느 벌에서 뺄지는 옷을 고르면서 여기서 정한다. 이 API가 유일한 경로라
+   * 체크(제외)와 해제(재포함)를 한 메서드로 왕복한다.
+   *
+   * **금액은 건드리지 않는다** — 베스트 값이 그때그때 달라 계약금액은 계약서에서 수기로
+   * 조정한다. 다만 이미 계약금액에 반영한 베스트 *옵션 추가금*은 되돌린다(고른 적 없는
+   * 옵션의 돈이 계약에 남으면 안 된다).
+   *
+   * 작성중(DRAFT)에서만 허용한다 — 서명·완료된 계약은 [수정하기]로 새 버전을 만든 뒤
+   * 같은 조작을 한다(재서명·재완료 흐름).
+   */
+  async setVestIncluded(contractItemId: string, included: boolean, actor: AuthUser) {
+    const item = await this.prisma.contractItem.findUnique({
+      where: { id: contractItemId },
+      include: {
+        components: true,
+        contract: { select: { id: true, contractNo: true, status: true, rowVersion: true, currentVersionId: true } },
+        sourceContractLine: true,
+        orderItems: { select: { status: true } },
+      },
+    });
+    if (!item) throw new NotFoundException('계약 품목이 없습니다.');
+    const contract = item.contract;
+    if (contract.status !== 'DRAFT')
+      throw new BusinessException(
+        'CONTRACT_NOT_DRAFT',
+        '작성중인 계약에서만 베스트를 바꿀 수 있습니다. 계약서 [수정하기]로 되돌린 뒤 진행해 주세요.',
+        undefined,
+        { status: contract.status },
+      );
+    // 컨설팅 잠금과 같은 규칙 — 제작 진행 중(제작요청 이후) 벌은 손대지 않는다 (0731).
+    const inProduction = item.orderItems.some((o) => o.status !== 'CREATED' && o.status !== 'CANCELLED');
+    if (inProduction)
+      throw new BusinessException(
+        'INVALID_STATUS_TRANSITION',
+        '제작 진행 중인 품목은 베스트를 바꿀 수 없습니다. 제작·입출고 화면에서 상태를 되돌린 뒤 진행해 주세요.',
+      );
+    if (!this.isVestCapable(item.transactionType, item.productCategory))
+      throw new BusinessException('VALIDATION_ERROR', '정장 품목에서만 베스트를 바꿀 수 있습니다.', [
+        { field: 'contractItemId', reason: 'NOT_SUIT' },
+      ]);
+    if (item.status === 'CANCELLED')
+      throw new BusinessException('VALIDATION_ERROR', '취소된 품목입니다.', [
+        { field: 'contractItemId', reason: 'ITEM_CANCELLED' },
+      ]);
+
+    const wasIncluded = item.components.some(
+      (c) => c.componentType === 'VEST' && c.status !== 'CANCELLED',
+    );
+    if (wasIncluded === included)
+      return {
+        contractItemId: item.id,
+        contractId: contract.id,
+        contractNo: contract.contractNo,
+        displayName: item.displayName,
+        vestIncluded: included,
+        changed: false,
+      };
+
+    await this.prisma.$transaction(async (tx) => {
+      // 부위를 켜고 끈다(물리 삭제 없음). 제외면 그 벌의 베스트 옵션 선택·반영 추가금도 정리한다.
+      // 계약서 라인·합계는 건드리지 않는다 — 베스트 금액은 계약서에서 수기로 조정한다.
+      await this.syncVestComponent(tx, item, included);
+      // 낙관적 잠금·감사 — 계약 품목 구성이 바뀌었다.
+      await tx.contract.update({ where: { id: contract.id }, data: { rowVersion: { increment: 1 } } });
+      await this.audit.log(
+        {
+          userId: actor.id,
+          action: 'UPDATE',
+          entityType: 'CONTRACT_ITEM',
+          entityId: item.id,
+          before: { displayName: item.displayName, vestIncluded: wasIncluded },
+          after: { displayName: item.displayName, vestIncluded: included },
+          reason: included
+            ? '베스트 포함 (스타일 컨설팅 — [베스트 제외] 해제)'
+            : '베스트 제외 (스타일 컨설팅 — [베스트 제외] 체크)',
+        },
+        asAuditClient(tx),
+      );
+    });
+
+    return {
+      contractItemId: item.id,
+      contractId: contract.id,
+      contractNo: contract.contractNo,
+      displayName: item.displayName,
+      vestIncluded: included,
+      changed: true,
+    };
+  }
+
   // ---------------------------------------------------------------------------
   // 물리화 (계약완료 시점 — 현업 확정 2026-07-30)
   // ---------------------------------------------------------------------------
@@ -507,6 +627,8 @@ export class ContractsService {
         quantity: l.quantity,
         unitPrice: l.unitPrice === null ? undefined : Number(l.unitPrice),
         lineAmount: Number(l.lineAmount),
+        vestIncluded: l.vestIncluded,
+        vestUnitPrice: l.vestUnitPrice === null ? undefined : Number(l.vestUnitPrice),
         notes: l.notes ?? undefined,
         sortOrder: l.sortOrder,
       }));
@@ -566,18 +688,29 @@ export class ContractsService {
   // ---------------------------------------------------------------------------
 
   /**
-   * 계약 취소: 사유 필수, 미진행(CREATED) 품목만 CANCELLED. 물리 삭제 금지.
-   * **작성중에서만 취소한다**(현업 확정 2026-07-30) — 서명·완료까지 간 계약은 취소가 아니라
-   * 수정하기(버전업)로 정리한다.
+   * 계약 취소: 사유 필수, 물리 삭제 금지. 취소는 종결 상태다(수정하기 없음).
+   * **작성중·서명완료 + 주문 없음일 때만 취소한다**(현업 확정 2026-07-31).
+   * 주문이 생긴 계약(완료 후 수정하기로 되돌린 경우 포함)은 취소하지 않는다 —
+   * 실물 정리는 렌탈 메뉴·오프라인에서 한다.
    */
   async cancel(id: string, dto: CancelContractDto, actor: AuthUser) {
     const contract = await this.getContractOrThrow(id);
-    if (contract.status !== 'DRAFT')
+    if (contract.status !== 'DRAFT' && contract.status !== 'SIGNED')
       throw new BusinessException(
         'INVALID_STATUS_TRANSITION',
-        contract.status === 'CANCELLED' ? '이미 취소된 계약입니다.' : '작성중인 계약만 취소할 수 있습니다.',
+        contract.status === 'CANCELLED'
+          ? '이미 취소된 계약입니다.'
+          : '작성중·서명완료 계약만 취소할 수 있습니다.',
         undefined,
         { status: contract.status },
+      );
+    const orderCount = await this.prisma.order.count({ where: { contractId: id } });
+    if (orderCount > 0)
+      throw new BusinessException(
+        'INVALID_STATUS_TRANSITION',
+        '주문이 생성된 계약은 취소할 수 없습니다. 품목 정리는 제작·입출고와 렌탈 화면에서 진행해 주세요.',
+        undefined,
+        { orderCount },
       );
     this.assertVersionMatch(contract.rowVersion, dto.version);
 
@@ -661,6 +794,15 @@ export class ContractsService {
       where: { contractId: id },
       select: { id: true },
     });
+    // 작성중이라도 주문이 생긴 계약(완료 후 수정하기로 되돌린 경우)은 삭제 금지 —
+    // 작성중이 "계약 전 초안"과 "완료 후 재작성"을 겸하므로 주문 존재로 가른다 (현업 확정 2026-07-31).
+    if (orders.length > 0)
+      throw new BusinessException(
+        'CONTRACT_NOT_DELETABLE',
+        '주문이 생성된 계약은 삭제할 수 없습니다.',
+        undefined,
+        { orderCount: orders.length },
+      );
     const orderIds = orders.map((o) => o.id);
     const items = orderIds.length
       ? await this.prisma.orderItem.findMany({
@@ -802,7 +944,10 @@ export class ContractsService {
             weddingDate: version.weddingDate,
           }
         : null,
-      lines: (version?.lines ?? []).map((l) => ({
+      // 품목표는 계약서 라인을 그대로 편다 — 베스트는 자기 행을 갖지 않는다 (현업 확정 2026-08-01).
+      // 정장은 상의·하의·베스트가 한 벌이고, 어느 벌에서 베스트를 뺄지는 스타일 컨설팅에서
+      // 정해 품목 계층(items)에 나타난다. 라인 금액은 저장된 값을 쪼개지 않고 그대로 싣는다.
+      lines: sortDocumentLines(version?.lines ?? []).map((l) => ({
         transactionType: l.transactionType,
         productCategory: l.productCategory,
         categoryLabel: CATEGORY_LABEL[l.productCategory] ?? l.productCategory,
@@ -811,10 +956,13 @@ export class ContractsService {
         components: componentLabels(l.productCategory),
         quantity: l.quantity,
         unitPrice: l.unitPrice,
-        lineAmount: l.lineAmount,
+        lineAmount: Number(l.lineAmount),
         notes: l.notes,
         // 주문품목 × 부위 × 유료옵션 계층 (주문 생성 전에는 빈 배열)
-        items: itemTree.get(`${l.transactionType}|${l.productCategory}`) ?? [],
+        items:
+          itemTree.get(`line:${l.id}`) ??
+          itemTree.get(`${l.transactionType}|${l.productCategory}`) ??
+          [],
       })),
       // 웹은 옵션명·추가금액을 노출한다 (D7). 추가금액 0원 옵션은 계약서에 싣지 않는다.
       options: options.map((o) => ({ optionName: o.optionName, extraPrice: o.extraPrice })),
@@ -849,7 +997,19 @@ export class ContractsService {
         id: true,
         displayName: true,
         transactionType: true,
-        optionSelectionSessions: { where: { isCurrent: true }, select: { status: true } },
+        components: { select: { componentType: true, status: true } },
+        optionSelectionSessions: {
+          where: { isCurrent: true },
+          select: {
+            status: true,
+            values: { select: { optionStageId: true } },
+            optionSetVersion: {
+              select: {
+                stages: { where: { active: true }, select: { id: true, componentGroup: true } },
+              },
+            },
+          },
+        },
         rentalSelectionSessions: { where: { isCurrent: true }, select: { status: true } },
       },
     });
@@ -858,9 +1018,26 @@ export class ContractsService {
     let targetCount = 0;
     for (const item of items) {
       targetCount += 1;
-      const sessions =
-        item.transactionType === 'RENTAL' ? item.rentalSelectionSessions : item.optionSelectionSessions;
-      if (!sessions.some((x) => x.status === 'CONFIRMED')) {
+      let done = false;
+      if (item.transactionType === 'RENTAL') {
+        done = item.rentalSelectionSessions.some((x) => x.status === 'CONFIRMED');
+      } else {
+        // 확정 상태만으로는 모자란 경우가 하나 있다 — 2피스로 확정한 뒤 베스트를 추가하면
+        // 베스트 단계가 미선택인 채 확정으로 남는다. 확정 시점 검증(confirm)이 보장하는
+        // 나머지 단계는 다시 세지 않고, **베스트 단계의 공백만** 미완료로 본다.
+        const session = item.optionSelectionSessions[0];
+        if (session?.status === 'CONFIRMED') {
+          const vestActive = item.components.some(
+            (c) => c.componentType === 'VEST' && c.status !== 'CANCELLED',
+          );
+          const vestStages = vestActive
+            ? session.optionSetVersion.stages.filter((s) => s.componentGroup === 'VEST')
+            : [];
+          const selected = new Set(session.values.map((v) => v.optionStageId));
+          done = vestStages.every((s) => selected.has(s.id));
+        }
+      }
+      if (!done) {
         pending.push({
           contractItemId: item.id,
           displayName: item.displayName,
@@ -877,6 +1054,8 @@ export class ContractsService {
    */
   async getFlow(id: string) {
     const contract = await this.getContractOrThrow(id);
+    // 주문 존재 여부가 취소·삭제 가능을 가른다 — 주문이 생긴 계약은 취소하지 않는다 (현업 확정 2026-07-31).
+    const orderCount = await this.prisma.order.count({ where: { contractId: id } });
     const version = contract.currentVersionId
       ? await this.prisma.contractVersion.findUnique({ where: { id: contract.currentVersionId } })
       : null;
@@ -904,6 +1083,14 @@ export class ContractsService {
       completed: contract.status === 'COMPLETED',
       /** 수정하기(버전업) 가능 = 완료된 계약 */
       canRevise: contract.status === 'COMPLETED',
+      /** 수정하기(서명 해제) 가능 = 서명완료 — 버전업 없이 작성중으로 되돌려 다시 서명받는다 */
+      canReopen: contract.status === 'SIGNED',
+      /**
+       * 취소 가능 = 작성중·서명완료 **이면서 주문이 없는** 계약 (현업 확정 2026-07-31).
+       * 주문이 생긴 계약(완료 후 수정하기로 되돌린 경우 포함)은 취소하지 않는다 —
+       * 실물 정리는 렌탈 메뉴·오프라인에서 한다. 취소는 종결 상태다(수정하기 없음).
+       */
+      canCancel: (contract.status === 'DRAFT' || contract.status === 'SIGNED') && orderCount === 0,
       excelStored: !!version?.excelFileId,
     };
   }
@@ -1150,12 +1337,15 @@ export class ContractsService {
       return { buffer: stored, fileName: `contract-${contract.contractNo}.xlsx` };
     }
 
-    const lines: ContractExcelLine[] = version.lines.map((l) => ({
+    // 베스트는 자기 행을 갖지 않는다 (현업 확정 2026-08-01) — 웹 계약서와 같은 규칙.
+    const lines: ContractExcelLine[] = sortDocumentLines(version.lines).map((l) => ({
       category: CATEGORY_LABEL[l.productCategory] ?? l.productCategory,
       components: componentLabels(l.productCategory),
       quantity: l.quantity,
     }));
-    const options = await this.loadContractOptions(id);
+    // 옵션 목록 뒤에 "베스트 제외 — 정장 #2"를 붙인다 (현업 확정 2026-08-01).
+    // 계약서가 베스트를 다루지 않으니, 3피스로 계약하고 2피스로 만든다는 사실이 종이에도 남아야 한다.
+    const options = [...(await this.loadContractOptions(id)), ...(await this.loadVestExclusions(id))];
 
     let signature: { pngBuffer: Buffer; signerName: string; signedAt: Date } | null = null;
     if (version.signatureFileId && version.signedAt) {
@@ -1215,72 +1405,66 @@ export class ContractsService {
     versionId: string,
     cancelReason: string | null,
   ): Promise<void> {
-    const lines = await tx.contractLine.findMany({ where: { contractVersionId: versionId } });
+    const lines = await tx.contractLine.findMany({
+      where: { contractVersionId: versionId },
+      orderBy: { sortOrder: 'asc' },
+    });
 
-    const targets = new Map<string, { transactionType: string; productCategory: string; quantity: number; lineId: string }>();
+    // 라인을 벌 단위 슬롯으로 편다 — 슬롯 순서(라인 sortOrder → 수량)가 품목 순번(#1…#n)과 짝이 된다.
+    // 베스트 포함 여부는 라인 값이라, 같은 키의 라인이 여럿이면 벌마다 다르게 가져갈 수 있다.
+    const slotsByKey = new Map<string, Array<{ lineId: string; vestIncluded: boolean }>>();
     for (const line of lines) {
       const key = `${line.transactionType}|${line.productCategory}`;
-      const existing = targets.get(key);
-      if (existing) existing.quantity += line.quantity;
-      else
-        targets.set(key, {
-          transactionType: line.transactionType,
-          productCategory: line.productCategory,
-          quantity: line.quantity,
-          lineId: line.id,
-        });
+      const slots = slotsByKey.get(key) ?? [];
+      for (let n = 0; n < line.quantity; n += 1)
+        slots.push({ lineId: line.id, vestIncluded: line.vestIncluded });
+      slotsByKey.set(key, slots);
     }
 
     const existingItems = await tx.contractItem.findMany({
       where: { contractId },
-      // 물리화(주문품목) 여부가 '지워도 되는 품목'을 가른다.
-      include: { orderItems: { select: { id: true } } },
+      // 물리화(주문품목) 여부가 '지워도 되는 품목'을, 상태가 '베스트를 꺼도 되는 품목'을 가른다.
+      include: { orderItems: { select: { id: true, status: true } }, components: true },
     });
     const keys = new Set<string>([
-      ...targets.keys(),
+      ...slotsByKey.keys(),
       ...existingItems.map((i) => `${i.transactionType}|${i.productCategory}`),
     ]);
 
     for (const key of keys) {
       const [transactionType, productCategory] = key.split('|');
-      const target = targets.get(key);
-      const targetQty = target?.quantity ?? 0;
+      const slots = slotsByKey.get(key) ?? [];
+      const targetQty = slots.length;
       let itemsOfKey = existingItems.filter(
         (i) => i.transactionType === transactionType && i.productCategory === productCategory,
       );
-      const activeItems = itemsOfKey
+      let activeItems = itemsOfKey
         .filter((i) => i.status !== 'CANCELLED')
         .sort((a, b) => a.sequenceNo - b.sequenceNo);
 
       if (targetQty < activeItems.length) {
-        const surplus = activeItems.slice(targetQty).reverse(); // 뒤 순번부터
-        // 아직 주문으로 물리화되지 않은 품목은 지운다 → 순번이 #1…#n 연속으로 유지된다.
-        const removable = surplus.filter((i) => i.orderItems.length === 0);
-        const cancellable = surplus.filter((i) => i.orderItems.length > 0);
-
-        if (removable.length > 0) {
-          await this.deleteContractItemsDeep(
-            tx,
-            removable.map((i) => i.id),
+        // 수량 감소는 **주문으로 물리화되지 않은 품목만** 뒤 순번부터 지운다 (현업 확정 2026-07-31).
+        // 수정하기(버전업)는 품목 추가 전용이라, 물리화된 품목이 감소 대상에 걸리면
+        // 저장 자체를 거부한다 — 제작 중인 옷이 계약 변경으로 조용히 취소되는 것을 막는다.
+        const deficit = activeItems.length - targetQty;
+        const removable = activeItems.filter((i) => i.orderItems.length === 0).slice(-deficit);
+        if (removable.length < deficit) {
+          const blocked = activeItems.filter((i) => i.orderItems.length > 0);
+          const sample = blocked[blocked.length - 1];
+          throw new BusinessException(
+            'INVALID_STATUS_TRANSITION',
+            `${sample.displayName}은(는) 주문이 진행 중이라 수량을 줄일 수 없습니다. 수정하기에서는 품목 추가만 가능합니다.`,
+            undefined,
+            { blockedItemIds: blocked.map((i) => i.id) },
           );
-          const removedIds = new Set(removable.map((i) => i.id));
-          itemsOfKey = itemsOfKey.filter((i) => !removedIds.has(i.id));
         }
-        for (const item of cancellable) {
-          await tx.contractItem.update({
-            where: { id: item.id },
-            data: {
-              status: 'CANCELLED',
-              cancelledReason: cancelReason ?? '계약 변경',
-              cancelledAt: new Date(),
-              rowVersion: { increment: 1 },
-            },
-          });
-          await tx.contractItemComponent.updateMany({
-            where: { contractItemId: item.id, status: 'CREATED' },
-            data: { status: 'CANCELLED' },
-          });
-        }
+        await this.deleteContractItemsDeep(
+          tx,
+          removable.map((i) => i.id),
+        );
+        const removedIds = new Set(removable.map((i) => i.id));
+        itemsOfKey = itemsOfKey.filter((i) => !removedIds.has(i.id));
+        activeItems = activeItems.filter((i) => !removedIds.has(i.id));
       } else if (targetQty > activeItems.length) {
         const label =
           transactionType === 'RENTAL'
@@ -1288,20 +1472,25 @@ export class ContractsService {
             : CATEGORY_LABEL[productCategory] ?? productCategory;
         // 취소된 품목이 차지한 순번은 비켜 간다(이력 보존). 남은 품목 기준으로 다음 번호를 뽑는다.
         const maxSeq = itemsOfKey.reduce((m, i) => Math.max(m, i.sequenceNo), 0);
-        for (let n = 1; n <= targetQty - activeItems.length; n += 1) {
+        // 루프 안에서 activeItems에 push하므로 생성 수·슬롯 기준 위치를 먼저 고정한다.
+        const baseLen = activeItems.length;
+        const createCount = targetQty - baseLen;
+        for (let n = 1; n <= createCount; n += 1) {
           const seq = maxSeq + n;
-          await tx.contractItem.create({
+          const slot = slots[baseLen + n - 1];
+          const componentTypes = [...(COMPONENT_MAP[productCategory] ?? [productCategory])];
+          const created = await tx.contractItem.create({
             data: {
               id: randomUUID(),
               contractId,
-              sourceContractLineId: target?.lineId ?? null,
+              sourceContractLineId: slot?.lineId ?? null,
               transactionType,
               productCategory,
               sequenceNo: seq,
               displayName: `${label} #${seq}`,
               status: 'CREATED',
               components: {
-                create: (COMPONENT_MAP[productCategory] ?? [productCategory]).map((componentType) => ({
+                create: componentTypes.map((componentType) => ({
                   id: randomUUID(),
                   componentType,
                   sequenceNo: 1,
@@ -1309,22 +1498,143 @@ export class ContractsService {
                 })),
               },
             },
+            include: { components: true },
           });
+          activeItems.push({ ...created, orderItems: [] });
         }
       }
 
-      // 계약 수정·버전업으로 라인이 새로 생겨 참조가 끊긴다 → 살아남은 품목을 현재 버전 라인으로 재지정.
-      if (target) {
-        await tx.contractItem.updateMany({
-          where: {
-            contractId,
-            transactionType,
-            productCategory,
-            status: { not: 'CANCELLED' },
-          },
-          data: { sourceContractLineId: target.lineId },
-        });
+      // 살아남은 벌을 슬롯과 짝지어 라인 참조를 다시 건다.
+      // (계약 수정·버전업으로 라인이 삭제·재생성돼 참조가 끊기는 문제도 여기서 함께 정합된다.)
+      //
+      // 베스트 부위는 여기서 건드리지 않는다 (현업 확정 2026-08-01) — 뺄지 말지는 컨설팅이
+      // 단독으로 갖는다. 예전처럼 라인 값에 맞추면, 컨설팅에서 뺀 뒤 계약서에서 금액을
+      // 수기로 고쳐 저장하는 순간(바로 그 흐름이다) 제외가 풀려 되살아난다.
+      for (let idx = 0; idx < activeItems.length; idx += 1) {
+        const item = activeItems[idx];
+        const slot = slots[idx];
+        if (!slot) continue;
+        if (item.sourceContractLineId !== slot.lineId)
+          await tx.contractItem.update({
+            where: { id: item.id },
+            data: { sourceContractLineId: slot.lineId },
+          });
       }
+    }
+  }
+
+  /**
+   * 베스트를 켜고 끌 수 있는 품목인가 — 정장이면 맞춤·렌탈 모두 (현업 확정 2026-08-01).
+   * 셔츠·구두는 베스트가 없다.
+   */
+  private isVestCapable(_transactionType: string, productCategory: string): boolean {
+    return productCategory === 'SUIT';
+  }
+
+  /**
+   * 품목의 VEST 부위를 켜고 끈다 (컨설팅 [베스트 제외] 체크박스 — setVestIncluded 전용).
+   * - 포함: 취소된 부위가 있으면 되살리고, 없으면 새로 만든다.
+   * - 제외: 부위를 CANCELLED로 두고(물리 삭제 금지) 그 품목의 베스트 옵션 선택도 정리한다.
+   *   제외는 '감소'라 **제작 진행 중(제작요청 이후) 벌은 거부**한다 (현업 확정 2026-07-31).
+   * 주문품목 구성품은 여기서 건드리지 않는다 — 계약완료 시 syncOrders 가 증분 반영한다.
+   */
+  private async syncVestComponent(
+    tx: Prisma.TransactionClient,
+    item: {
+      id: string;
+      displayName: string;
+      components: { id: string; componentType: string; status: string }[];
+      orderItems: { status: string }[];
+    },
+    vestIncluded: boolean,
+  ): Promise<void> {
+    const vest = item.components
+      .filter((c) => c.componentType === 'VEST')
+      .sort((a, b) => (a.status === 'CANCELLED' ? 1 : 0) - (b.status === 'CANCELLED' ? 1 : 0))[0];
+
+    if (vestIncluded) {
+      if (vest && vest.status !== 'CANCELLED') return; // 이미 켜져 있다
+      if (vest)
+        await tx.contractItemComponent.update({ where: { id: vest.id }, data: { status: 'CREATED' } });
+      else
+        await tx.contractItemComponent.create({
+          data: { id: randomUUID(), contractItemId: item.id, componentType: 'VEST', sequenceNo: 1, status: 'CREATED' },
+        });
+    } else if (vest && vest.status !== 'CANCELLED') {
+      const inProduction = item.orderItems.some(
+        (o) => o.status !== 'CREATED' && o.status !== 'CANCELLED',
+      );
+      if (inProduction)
+        throw new BusinessException(
+          'INVALID_STATUS_TRANSITION',
+          `${item.displayName}은(는) 제작 진행 중이라 베스트를 제외할 수 없습니다. 제작·입출고 화면에서 상태를 되돌린 뒤 진행해 주세요.`,
+        );
+      await tx.contractItemComponent.update({ where: { id: vest.id }, data: { status: 'CANCELLED' } });
+      await this.removeVestSelections(tx, item.id);
+    }
+  }
+
+  /**
+   * 품목의 현재 옵션 세션에서 베스트 부위 흔적을 지운다 — VEST 단계 선택값과
+   * 부위별 원단·컬러·패턴. 이미 계약금액에 반영한 베스트 옵션 추가금액이 있으면
+   * 차액을 계약 현재 버전 금액에서 되돌리고 반영 누계를 맞춘다.
+   * 남은 단계가 전부 선택된 미확정 세션은 REVIEW로 올려 완료 판정이 어긋나지 않게 한다.
+   */
+  private async removeVestSelections(tx: Prisma.TransactionClient, contractItemId: string): Promise<void> {
+    const session = await tx.optionSelectionSession.findFirst({
+      where: { contractItemId, isCurrent: true },
+      include: {
+        values: { include: { optionStage: { select: { componentGroup: true, active: true } } } },
+        contractItem: { select: { contract: { select: { currentVersionId: true } } } },
+      },
+    });
+    if (!session) return;
+
+    const vestValueIds = session.values
+      .filter((v) => v.optionStage.componentGroup === 'VEST')
+      .map((v) => v.id);
+    if (vestValueIds.length > 0)
+      await tx.optionSelectionValue.deleteMany({ where: { id: { in: vestValueIds } } });
+    await tx.optionSelectionComponentAttr.deleteMany({
+      where: { selectionSessionId: session.id, componentGroup: 'VEST' },
+    });
+
+    // 반영 누계 정산 — 남은 선택 합계보다 이미 반영한 금액이 크면 그 차액을 되돌린다.
+    const remainingTotal = session.values
+      .filter((v) => v.optionStage.componentGroup !== 'VEST' && v.optionStage.active)
+      .reduce((sum, v) => sum + Number(v.extraPriceSnapshot), 0);
+    const applied = Number(session.surchargeApplied);
+    if (applied > remainingTotal) {
+      const versionId = session.contractItem.contract?.currentVersionId;
+      if (versionId)
+        await tx.contractVersion.update({
+          where: { id: versionId },
+          data: { totalAmount: { decrement: applied - remainingTotal } },
+        });
+      await tx.optionSelectionSession.update({
+        where: { id: session.id },
+        data: { surchargeApplied: remainingTotal },
+      });
+    }
+
+    // 베스트 단계가 빠지면서 나머지가 이미 다 선택돼 있으면 검토 단계로 올린다.
+    if (session.status === 'IN_PROGRESS') {
+      const stages = await tx.optionStage.findMany({
+        where: {
+          optionSetVersionId: session.optionSetVersionId,
+          active: true,
+          NOT: { componentGroup: 'VEST' },
+        },
+        select: { id: true },
+      });
+      const selected = new Set(
+        session.values.filter((v) => v.optionStage.componentGroup !== 'VEST').map((v) => v.optionStageId),
+      );
+      if (stages.length > 0 && stages.every((s) => selected.has(s.id)))
+        await tx.optionSelectionSession.update({
+          where: { id: session.id },
+          data: { status: 'REVIEW', reviewedAt: new Date(), rowVersion: { increment: 1 } },
+        });
     }
   }
 
@@ -1386,8 +1696,17 @@ export class ContractsService {
     });
     const neededTypes = new Set(items.filter((i) => i.status !== 'CANCELLED').map((i) => i.transactionType));
 
-    const existingOrders = await tx.order.findMany({ where: { contractId }, include: { items: true } });
-    const ordersByType = new Map<string, { id: string; orderNo: string; transactionType: string; items: { id: string; status: string; sourceContractItemId: string }[] }>(
+    const existingOrders = await tx.order.findMany({
+      where: { contractId },
+      include: { items: { include: { components: true } } },
+    });
+    type ExistingOrderItem = {
+      id: string;
+      status: string;
+      sourceContractItemId: string;
+      components: { id: string; componentType: string; sequenceNo: number; status: string }[];
+    };
+    const ordersByType = new Map<string, { id: string; orderNo: string; transactionType: string; items: ExistingOrderItem[] }>(
       existingOrders.map((o) => [o.transactionType, o]),
     );
 
@@ -1422,7 +1741,7 @@ export class ContractsService {
     }
 
     // 이미 물리화된 주문품목을 계약 품목 기준으로 매핑
-    const orderItemByContractItem = new Map<string, { id: string; status: string }>();
+    const orderItemByContractItem = new Map<string, ExistingOrderItem>();
     for (const order of ordersByType.values()) {
       for (const it of order.items) orderItemByContractItem.set(it.sourceContractItemId, it);
     }
@@ -1432,7 +1751,9 @@ export class ContractsService {
       if (!order) continue;
       const existing = orderItemByContractItem.get(ci.id);
       if (ci.status === 'CANCELLED') {
-        if (existing && existing.status !== 'CANCELLED') {
+        // 안전핀: 계약 변경 경로로는 미진행(CREATED) 주문품목만 취소한다.
+        // 진행 중 품목이 취소되는 경로는 없다 — 실물 정리는 오프라인 (현업 확정 2026-07-31).
+        if (existing && existing.status === 'CREATED') {
           await tx.orderItem.update({
             where: { id: existing.id },
             data: {
@@ -1471,12 +1792,59 @@ export class ContractsService {
             },
           },
         });
+      } else if (existing.status !== 'CANCELLED') {
+        // 수정하기(버전업)로 부위가 바뀐 경우(베스트 추가·제외) 재완료 시 구성품을 증분 반영한다.
+        await this.syncOrderItemComponents(tx, existing, ci.components);
       }
     }
 
     return [...ordersByType.values()]
       .sort((a, b) => a.transactionType.localeCompare(b.transactionType))
       .map((o) => ({ id: o.id, orderNo: o.orderNo, tradeType: o.transactionType }));
+  }
+
+  /**
+   * 기존 주문품목의 구성품을 계약 품목 부위에 증분 정합한다 (재완료 시점, 2026-07-30).
+   * - 계약에 살아 있는 부위가 주문에 없으면 생성, 취소돼 있으면 되살린다 (베스트 추가)
+   * - 계약에서 취소된 부위의 주문 구성품은 **미진행(CREATED)일 때만** 취소한다 (베스트 제외)
+   *   — 입고·배정 등 진행이 시작된 구성품은 현장 판단 대상이라 자동으로 건드리지 않는다.
+   */
+  private async syncOrderItemComponents(
+    tx: Prisma.TransactionClient,
+    orderItem: {
+      id: string;
+      components: { id: string; componentType: string; sequenceNo: number; status: string }[];
+    },
+    contractComponents: { componentType: string; sequenceNo: number; status: string }[],
+  ): Promise<void> {
+    const activeContract = contractComponents.filter((c) => c.status !== 'CANCELLED');
+    const matchOf = (type: string, seq: number) =>
+      orderItem.components.find((oc) => oc.componentType === type && oc.sequenceNo === seq);
+
+    for (const cc of activeContract) {
+      const match = matchOf(cc.componentType, cc.sequenceNo);
+      if (!match) {
+        await tx.orderItemComponent.create({
+          data: {
+            id: randomUUID(),
+            orderItemId: orderItem.id,
+            componentType: cc.componentType,
+            sequenceNo: cc.sequenceNo,
+            status: 'CREATED',
+          },
+        });
+      } else if (match.status === 'CANCELLED') {
+        await tx.orderItemComponent.update({ where: { id: match.id }, data: { status: 'CREATED' } });
+      }
+    }
+
+    for (const oc of orderItem.components) {
+      const stillActive = activeContract.some(
+        (cc) => cc.componentType === oc.componentType && cc.sequenceNo === oc.sequenceNo,
+      );
+      if (!stillActive && oc.status === 'CREATED')
+        await tx.orderItemComponent.update({ where: { id: oc.id }, data: { status: 'CANCELLED' } });
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -1571,12 +1939,33 @@ export class ContractsService {
   }
 
   /**
+   * 컨설팅에서 베스트를 뺀 벌 — 계약서 옵션 목록에 "베스트 제외 — 정장 #2"로 싣는다
+   * (현업 확정 2026-08-01). 금액은 없다 — 베스트 값은 계약서에서 수기로 조정한다.
+   */
+  private async loadVestExclusions(
+    contractId: string,
+  ): Promise<Array<{ optionName: string; extraPrice: number }>> {
+    const items = await this.prisma.contractItem.findMany({
+      where: {
+        contractId,
+        status: { not: 'CANCELLED' },
+        components: { some: { componentType: 'VEST', status: 'CANCELLED' } },
+      },
+      select: { displayName: true },
+      orderBy: [{ productCategory: 'asc' }, { sequenceNo: 'asc' }],
+    });
+    return items.map((i) => ({ optionName: `베스트 제외 — ${i.displayName}`, extraPrice: 0 }));
+  }
+
+  /**
    * 계약서 웹 표시용 품목 계층 — `거래방식|품목` → 주문품목(정장 #1·#2) → 부위 → 유료 옵션.
    *
    * - 부위 축: 맞춤은 옵션 부위 그룹(상의·하의·베스트), 렌탈은 주문품목 구성품을 쓴다.
    *   (스타일 컨설팅 화면과 같은 축이라 두 화면의 부위 목록이 어긋나지 않는다.)
    * - 옵션은 현재 선택 세션의 값 중 **추가금액 > 0** 인 것만 담는다 (v2 계약관리 요구).
    * - 부위 행은 유료 옵션이 없어도 항상 남긴다 (구성품 자체가 계약서 정보).
+   * - 컨설팅에서 뺀 베스트도 "제외"로 남긴다 (현업 확정 2026-08-01) — 계약서가 베스트를
+   *   다루지 않게 되면서, 3피스로 계약하고 2피스로 만든다는 사실이 여기서만 보인다.
    */
   private async loadContractOptionTree(contractId: string) {
     // 컨설팅은 계약 품목(ContractItem)에서 하므로 계약완료 전에도 계약서 옵션을 보여줄 수 있다.
@@ -1585,8 +1974,9 @@ export class ContractsService {
       where: { contractId, status: { not: 'CANCELLED' } },
       include: {
         components: {
+          // 취소된 부위도 가져온다 — 베스트 제외를 계약서에 적어야 한다(아래 excluded).
           orderBy: [{ componentType: 'asc' }, { sequenceNo: 'asc' }],
-          select: { componentType: true },
+          select: { componentType: true, status: true },
         },
         orderItems: {
           where: { status: { not: 'CANCELLED' } },
@@ -1622,6 +2012,10 @@ export class ContractsService {
     }
 
     for (const item of items) {
+      // 취소된 부위(= 컨설팅에서 뺀 베스트)도 행으로 남겨 "제외"로 표시한다 (2026-08-01).
+      const excludedTypes = new Set(
+        item.components.filter((c) => c.status === 'CANCELLED').map((c) => c.componentType),
+      );
       const groupCodes =
         item.transactionType === 'RENTAL'
           ? item.components.map((c) => c.componentType)
@@ -1630,18 +2024,30 @@ export class ContractsService {
         (group) => ({
           group,
           groupLabel: COMPONENT_GROUP_LABELS[group] ?? COMPONENT_LABEL[group] ?? group,
+          excluded: excludedTypes.has(group),
           options: [] as Array<{ stageName: string; optionName: string; extraPrice: number }>,
         }),
       );
 
       for (const v of valuesByItem.get(item.id) ?? []) {
-        const matched = components.find((c) => c.group === v.optionStage.componentGroup);
-        // 부위 미지정 단계(단일 부위 세트·구버전)는 부위가 하나면 그 부위, 아니면 '공통'으로 모은다.
-        let target = matched ?? (components.length === 1 ? components[0] : undefined);
+        const group = v.optionStage.componentGroup;
+        let target = components.find((c) => c.group === group);
+        if (!target && group) {
+          // 부위가 지정된 단계인데 부위 행이 없다(부위 행 자체가 없는 구버전 품목 등).
+          // '공통'으로 뭉개지 말고 제 부위 라벨로 행을 만든다.
+          target = {
+            group,
+            groupLabel: COMPONENT_GROUP_LABELS[group] ?? COMPONENT_LABEL[group] ?? group,
+            excluded: false,
+            options: [],
+          };
+          components.push(target);
+        }
         if (!target) {
-          target = components.find((c) => c.group === 'COMMON');
+          // 부위 미지정 단계(단일 부위 세트·구버전)는 부위가 하나면 그 부위, 아니면 '공통'으로 모은다.
+          target = components.length === 1 ? components[0] : components.find((c) => c.group === 'COMMON');
           if (!target) {
-            target = { group: 'COMMON', groupLabel: '공통', options: [] };
+            target = { group: 'COMMON', groupLabel: '공통', excluded: false, options: [] };
             components.push(target);
           }
         }
@@ -1652,7 +2058,12 @@ export class ContractsService {
         });
       }
 
-      const key = `${item.transactionType}|${item.productCategory}`;
+      // 라인이 같은 카테고리로 둘 이상이면(정장 2줄) 카테고리 키로만 묶을 때 두 라인이
+      // 서로의 벌까지 그려 표가 겹쳐 보인다. 벌은 자기 라인을 알고 있으니 그 키로 묶고,
+      // 라인 참조가 끊긴 구버전 품목만 카테고리 키에 남긴다.
+      const key = item.sourceContractLineId
+        ? `line:${item.sourceContractLineId}`
+        : `${item.transactionType}|${item.productCategory}`;
       const list = tree.get(key) ?? [];
       list.push({
         contractItemId: item.id,
@@ -1873,6 +2284,14 @@ export class ContractsService {
   }
 
   private toLineData(line: ContractLineDto, index: number) {
+    // 베스트는 맞춤 정장 라인에서만 켤 수 있다 (현업 확정 2026-07-30).
+    // 값을 주지 않으면 맞춤 정장은 포함(3피스)이 기본이다 (현업 확정 2026-07-31).
+    const vestIncluded =
+      line.vestIncluded ?? this.isVestCapable(line.transactionType, line.productCategory);
+    if (vestIncluded && !this.isVestCapable(line.transactionType, line.productCategory))
+      throw new BusinessException('VALIDATION_ERROR', '베스트는 맞춤 정장 품목에만 추가할 수 있습니다.', [
+        { field: `lines[${index}].vestIncluded`, reason: 'NOT_CUSTOM_SUIT' },
+      ]);
     return {
       id: randomUUID(),
       transactionType: line.transactionType,
@@ -1881,6 +2300,9 @@ export class ContractsService {
       quantity: line.quantity,
       unitPrice: line.unitPrice ?? null,
       lineAmount: line.lineAmount ?? 0,
+      vestIncluded,
+      // 단가는 포함일 때만 의미가 있다 — 제외 라인은 null로 정규화해 문서·차감 계산이 안 흔들리게 한다.
+      vestUnitPrice: vestIncluded ? (line.vestUnitPrice ?? 0) : null,
       notes: line.notes ?? null,
       sortOrder: line.sortOrder ?? index + 1,
     };
@@ -1897,6 +2319,7 @@ interface ContractLineSummarySource {
   itemDescription?: string | null;
   quantity: number;
   lineAmount?: unknown;
+  vestIncluded?: boolean;
 }
 
 /**
@@ -1906,7 +2329,8 @@ interface ContractLineSummarySource {
 function lineSummary(line: ContractLineSummarySource): string {
   const name = line.itemDescription?.trim() || CATEGORY_LABEL[line.productCategory] || line.productCategory;
   const amount = Number(line.lineAmount ?? 0);
-  return `${name} ${line.quantity}개 ${amount.toLocaleString('ko-KR')}원`;
+  const vest = line.vestIncluded ? ' (베스트 포함)' : '';
+  return `${name}${vest} ${line.quantity}개 ${amount.toLocaleString('ko-KR')}원`;
 }
 
 /** 대분류의 기본 구성품을 한글 세부품목 라벨로 (설계서 03 §5.3). */

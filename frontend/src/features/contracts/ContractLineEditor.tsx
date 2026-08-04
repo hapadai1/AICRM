@@ -13,6 +13,7 @@ export interface EditableLine {
   productCategory: ProductCategory;
   quantity: number;
   unitPrice: number;
+  /** 라인 금액 — 수량 × 단가 (직접 수정도 허용) */
   amount: number;
   note?: string;
 }
@@ -49,6 +50,16 @@ const CATEGORY_OPTIONS = (Object.keys(PRODUCT_CATEGORY_LABEL) as ProductCategory
   label: PRODUCT_CATEGORY_LABEL[v],
 }));
 
+/**
+ * 계약서 품목표는 베스트를 다루지 않는다 (현업 확정 2026-08-01).
+ * 정장은 상의·하의·베스트 세 부위가 한 벌이고, 뺄지 말지는 스타일 컨설팅에서 벌마다 정한다
+ * — 계약 시점에는 아직 모르고, 베스트 값도 그때그때 달라 계약 금액은 수기로 조정한다.
+ * (품목표에 상의·하의 행이 없는데 베스트만 행을 갖던 것이 이 화면의 어색함이었다.)
+ */
+interface EditorRow extends EditableLine {
+  rowKey: string;
+}
+
 interface ContractLineEditorProps {
   value: EditableLine[];
   onChange: (next: EditableLine[]) => void;
@@ -62,15 +73,16 @@ export function ContractLineEditor({ value, onChange, disabled }: ContractLineEd
         if (l.key !== key) return l;
         const next = { ...l, ...patch };
         // 수량·단가 변경 시 금액 자동 계산 (금액 직접 수정도 허용)
-        if (patch.quantity !== undefined || patch.unitPrice !== undefined) {
+        if (patch.quantity !== undefined || patch.unitPrice !== undefined)
           next.amount = (next.quantity || 0) * (next.unitPrice || 0);
-        }
         return next;
       }),
     );
   };
 
-  const columns: ColumnsType<EditableLine> = [
+  const rows: EditorRow[] = value.map((l) => ({ ...l, rowKey: l.key }));
+
+  const columns: ColumnsType<EditorRow> = [
     {
       title: '거래 방식',
       dataIndex: 'transactionType',
@@ -89,7 +101,7 @@ export function ContractLineEditor({ value, onChange, disabled }: ContractLineEd
     {
       title: '품목',
       dataIndex: 'productCategory',
-      width: 108,
+      width: 118,
       render: (_, l) => (
         <Select
           style={{ width: '100%' }}
@@ -153,7 +165,7 @@ export function ContractLineEditor({ value, onChange, disabled }: ContractLineEd
           controls={false}
           min={0}
           step={10000}
-          value={l.amount}
+          value={l.amount || 0}
           formatter={THOUSANDS}
           disabled={disabled}
           onChange={(v) => update(l.key, { amount: v ?? 0 })}
@@ -194,12 +206,12 @@ export function ContractLineEditor({ value, onChange, disabled }: ContractLineEd
   return (
     <Flex vertical gap={12}>
       <Table
-        rowKey="key"
+        rowKey="rowKey"
         size="small"
         pagination={false}
         columns={columns}
-        dataSource={value}
-        scroll={{ x: 760 }}
+        dataSource={rows}
+        scroll={{ x: 860 }}
         locale={{ emptyText: '품목이 없습니다. 계약 구분을 선택하거나 행을 추가해 주세요.' }}
       />
       {/* 합계는 여기서 보여주지 않는다 — 화면 하단 [금액] 카드에서 자동 합산해 표시한다. */}

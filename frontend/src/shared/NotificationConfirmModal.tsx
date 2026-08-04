@@ -1,4 +1,4 @@
-import { App, Descriptions, Input, Modal, Space, Tag, Typography } from 'antd';
+import { App, Button, Descriptions, Input, Modal, Space, Tag, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { sendNotification } from '../api/notifications';
 
@@ -30,8 +30,11 @@ interface Props {
   /** 창 상단에 보여줄 변경 내용 (예: "완성복 입고으로 변경했습니다") */
   title: string;
   suggestion: NotificationSuggestion | null;
-  /** 처리 결과를 이력에 봉합하도록 부모에게 알린다. */
-  onDone: (outcome: SendOutcome, notificationHistoryId?: string) => void | Promise<void>;
+  /**
+   * 처리 결과를 이력에 봉합하도록 부모에게 알린다.
+   * sentBody는 실제로 나간 문구 — 담당자가 창에서 고쳤을 수 있어 원문과 다를 수 있다.
+   */
+  onDone: (outcome: SendOutcome, notificationHistoryId?: string, sentBody?: string) => void | Promise<void>;
   onCancel: () => void;
 }
 
@@ -53,7 +56,7 @@ export function NotificationConfirmModal({ open, title, suggestion, onDone, onCa
 
   const finish = async (outcome: SendOutcome, historyId?: string) => {
     try {
-      await onDone(outcome, historyId);
+      await onDone(outcome, historyId, body);
     } catch {
       // 봉합 실패는 발송 자체를 무르지 않는다. 이력에만 남지 않을 뿐이다.
       message.warning('발송은 되었지만 이력 기록에 실패했습니다.');
@@ -100,26 +103,24 @@ export function NotificationConfirmModal({ open, title, suggestion, onDone, onCa
       confirmLoading={sending}
       maskClosable={false}
       width={560}
-      footer={[
-        <a
-          key="skip"
-          style={{ marginRight: 16 }}
-          onClick={() => void finish('SKIPPED')}
-        >
-          안 보냄
-        </a>,
-        <a key="later" style={{ marginRight: 16 }} onClick={() => void finish('DEFERRED')}>
-          나중에
-        </a>,
-        <button
-          key="send"
-          className="ant-btn ant-btn-primary"
-          disabled={sending || !body.trim()}
-          onClick={() => void handleSend()}
-        >
-          발송
-        </button>,
-      ]}
+      /*
+       * 왼쪽은 "이번엔 안 보낸다"는 두 갈래, 오른쪽은 닫기와 발송.
+       * 예전에는 <a>와 맨 <button>을 섞어 써서 셋의 크기·정렬이 제각각이었다.
+       */
+      footer={
+        <Space style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <Space size={8}>
+            <Button onClick={() => void finish('SKIPPED')}>안 보냄</Button>
+            <Button onClick={() => void finish('DEFERRED')}>나중에</Button>
+          </Space>
+          <Space size={8}>
+            <Button onClick={onCancel}>닫기</Button>
+            <Button type="primary" loading={sending} disabled={!body.trim()} onClick={() => void handleSend()}>
+              발송
+            </Button>
+          </Space>
+        </Space>
+      }
     >
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
         <Typography.Text type="secondary">고객에게 알림을 보낼까요?</Typography.Text>
@@ -143,8 +144,10 @@ export function NotificationConfirmModal({ open, title, suggestion, onDone, onCa
             문구를 고쳤으므로 알림톡 대신 SMS로 발송됩니다.
           </Typography.Text>
         )}
+        {/* 셋의 차이가 안 보이면 아무 버튼이나 누르게 된다 — 무엇이 남는지 적어 둔다. */}
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          &quot;나중에&quot;를 고르면 대시보드 연락 대기 목록에 남습니다.
+          <b>안 보냄</b> 이번엔 연락하지 않기로 함 · <b>나중에</b> 아직 안 보냄(연락 대기로 남음) ·{' '}
+          <b>닫기</b> 아무것도 기록하지 않고 닫기
         </Typography.Text>
       </Space>
     </Modal>

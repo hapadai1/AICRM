@@ -22,7 +22,7 @@ import {
 import { ApiError } from '../../api/client';
 import { LAYOUT, SEMANTIC_COLOR } from '../../app/theme';
 import { Can } from '../../shared/Can';
-import { DataTable, DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS } from '../../shared/DataTable';
+import { DataTable } from '../../shared/DataTable';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
 import {
@@ -35,7 +35,7 @@ import {
 import { AppointmentFormModal } from './AppointmentFormModal';
 import { MonthCalendar } from './MonthCalendar';
 import { metaOf } from '../../shared/status-meta';
-import { autoWidth } from '../../shared/table-width';
+import { COL } from '../../shared/table-width';
 
 const { RangePicker } = DatePicker;
 
@@ -261,23 +261,23 @@ export function AppointmentsPage() {
     {
       title: '예약 일시',
       dataIndex: 'startAt',
-      ...autoWidth(),
+      width: COL.datetime,
       render: (v: string) => dayjs(v).format('YYYY-MM-DD (dd) HH:mm'),
     },
     // 미계약/계약 배지는 제거했다 — 가망/계약 고객 구분이 폐기되어 표시 의미가 없다(설계서 07 D8).
-    { title: '고객명', dataIndex: 'customerName', ...autoWidth(100) },
-    { title: '전화번호', dataIndex: 'phone', ...autoWidth() },
-    { title: '예약 목적', dataIndex: 'purposeName', ...autoWidth() },
+    { title: '고객명', dataIndex: 'customerName', width: COL.name },
+    { title: '전화번호', dataIndex: 'phone', width: COL.code },
+    { title: '예약 목적', dataIndex: 'purposeName', width: COL.name },
     {
       title: '출처',
       dataIndex: 'source',
-      ...autoWidth(),
+      width: COL.status,
       render: (v: AppointmentSource) => <Tag color={metaOf(SOURCE_META, v).color}>{metaOf(SOURCE_META, v).label}</Tag>,
     },
     {
       title: '상태',
       dataIndex: 'status',
-      ...autoWidth(),
+      width: COL.status,
       render: (v: AppointmentStatus) => (
         <StatusBadge label={metaOf(APPT_STATUS_META, v).label} color={metaOf(APPT_STATUS_META, v).color} />
       ),
@@ -285,7 +285,7 @@ export function AppointmentsPage() {
     {
       title: '동기화',
       dataIndex: 'syncStatus',
-      ...autoWidth(),
+      width: COL.status,
       render: (v: Appointment['syncStatus']) => (
         <StatusBadge label={metaOf(SYNC_STATUS_META, v).label} color={metaOf(SYNC_STATUS_META, v).color} />
       ),
@@ -293,7 +293,8 @@ export function AppointmentsPage() {
     {
       title: '메모',
       dataIndex: 'memo',
-      // 열 ellipsis 옵션은 표 전체를 고정 레이아웃으로 되돌린다. 셀 안에서 잘라 자동 폭을 유지한다.
+      width: COL.text,
+      // 열 ellipsis 옵션을 쓰지 않고 셀 안에서 자른다 — 툴팁으로 전문을 보여 주기 위해서다.
       render: (v?: string) =>
         v ? (
           <Typography.Text ellipsis={{ tooltip: v }} style={{ maxWidth: 320 }}>
@@ -381,7 +382,7 @@ export function AppointmentsPage() {
             loading={isLoading}
             columns={columns}
             dataSource={appointments}
-            pagination={{ pageSize: DEFAULT_PAGE_SIZE, showSizeChanger: true, pageSizeOptions: PAGE_SIZE_OPTIONS }}
+            pagination={{}}
             onRow={(r) => ({ onClick: () => openDetail(r.id), style: { cursor: 'pointer' } })}
             locale={{ emptyText: <Empty description="조건에 해당하는 예약이 없습니다." /> }}
           />

@@ -1,8 +1,7 @@
-import { Transform, Type } from 'class-transformer';
+import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
-  IsBoolean,
   IsDateString,
   IsIn,
   IsInt,
@@ -49,14 +48,31 @@ class RepairMethodDto {
   @IsOptional() @IsString() @MaxLength(300) deliveryAddress?: string;
 }
 
+/**
+ * 전체 상태 — 세부 6단계를 현업이 목록을 여는 기준(지금 처리할 게 뭐냐)으로 묶은 값.
+ * 저장하는 값이 아니라 검색조건 전용이다. 건마다 남는 건 여전히 세부 status 하나뿐이고,
+ * 여기서는 그 값을 묶어 where 절로 풀기만 한다(스키마·데이터 변경 없음).
+ *
+ * 취소는 완료에 넣지 않는다 — 넣으면 "완료 12건"에 취소가 섞여 숫자를 못 믿게 된다.
+ * 고객 연락은 아직 출고 전이라 진행중이다.
+ */
+export const REPAIR_PHASE_STATUSES = {
+  IN_PROGRESS: ['RECEIVED', 'REQUESTED', 'RETURNED_TO_SHOP', 'CUSTOMER_NOTIFIED'],
+  DONE: ['RELEASED'],
+  CANCELLED: ['CANCELLED'],
+} as const;
+
+export const REPAIR_PHASES = Object.keys(REPAIR_PHASE_STATUSES) as RepairPhase[];
+export type RepairPhase = keyof typeof REPAIR_PHASE_STATUSES;
+
 export class ListRepairsQueryDto extends PageQueryDto {
   @IsOptional() @IsString() status?: string;
   @IsOptional() @IsUUID() customerId?: string;
-  /** 출고완료(RELEASED) 제외 — 상태 필터를 지정하지 않았을 때만 적용된다(기본 목록에서 완료건 숨김). */
-  @IsOptional()
-  @Transform(({ value }) => (value === 'true' ? true : value === 'false' ? false : value))
-  @IsBoolean()
-  excludeReleased?: boolean;
+  /**
+   * 전체 상태(진행중·완료·취소). 세부 status를 함께 지정하면 그쪽이 이긴다 —
+   * 세부 상태는 이미 한 묶음 안의 값이라 둘을 교집합할 이유가 없다.
+   */
+  @IsOptional() @IsIn(REPAIR_PHASES) phase?: RepairPhase;
 }
 
 /** 대상 품목 한 줄 (품목·개수) */
@@ -72,7 +88,7 @@ export class CreateRepairDto extends RepairMethodDto {
   @IsOptional() @IsDateString() dueDate?: string;
   @IsString() @IsNotEmpty() description: string;
   @IsOptional() @IsString() notes?: string;
-  /** 대상 품목·개수. CUSTOM_DURING / AFTER_SALE 은 1줄 이상 필수 (service.assertItems) */
+  /** 대상 품목·개수. 유형과 무관하게 1줄 이상 필수 (service.assertItems) */
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(20)
@@ -98,4 +114,10 @@ export class CreateRepairStatusEventDto {
   @IsString() @IsNotEmpty() newStatus: string;
   @IsOptional() @IsDateString() eventDate?: string;
   @IsOptional() @IsString() notes?: string;
+}
+
+/** 품목 줄·벌 진행(수선요청·입고·출고) 공통 입력 — 날짜를 안 주면 오늘로 찍는다. */
+export class RepairProgressDto {
+  @IsOptional() @IsDateString() eventDate?: string;
+  @IsOptional() @IsString() @MaxLength(300) notes?: string;
 }

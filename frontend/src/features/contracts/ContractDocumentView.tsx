@@ -31,6 +31,8 @@ import {
 /** 부위 하나 — 유료 옵션이 붙은 것만 표시 대상 */
 interface RowComponent {
   label: string;
+  /** 컨설팅에서 뺀 부위(베스트) — 옵션명 대신 "제외"로 적는다 */
+  excluded: boolean;
   optionNames: string[];
 }
 
@@ -70,9 +72,16 @@ function buildRows(data?: ContractDocument): DocRow[] {
           quantity: 1,
           amount: line.unitPrice || (line.quantity ? line.lineAmount / line.quantity : 0),
           notes: line.notes,
+          // 유료 옵션이 붙은 부위 + 컨설팅에서 뺀 베스트("제외"로 남긴다 — 현업 확정 2026-08-01).
+          // 계약서가 베스트를 다루지 않게 되면서, 3피스로 계약하고 2피스로 만든다는 사실이
+          // 계약서에서 보이는 자리는 여기뿐이다.
           components: it.components
-            .filter((c) => c.options.length > 0)
-            .map((c) => ({ label: c.groupLabel, optionNames: c.options.map((o) => o.optionName) })),
+            .filter((c) => c.options.length > 0 || c.excluded)
+            .map((c) => ({
+              label: c.groupLabel,
+              excluded: c.excluded,
+              optionNames: c.options.map((o) => o.optionName),
+            })),
           optionTotal: it.components.reduce((s, c) => s + sumExtra(c.options), 0),
         });
       }
@@ -94,15 +103,23 @@ function buildRows(data?: ContractDocument): DocRow[] {
   return rows;
 }
 
-/** 옵션 칸 — 유료 옵션이 붙은 부위만 한 줄씩 */
+/** 옵션 칸 — 유료 옵션이 붙은 부위만 한 줄씩. 부위 칩은 폭을 맞춰 세로 정렬이 맞게 한다. */
 function OptionCell({ row }: { row: DocRow }) {
   if (row.components.length === 0) return <Typography.Text type="secondary">—</Typography.Text>;
   return (
     <Flex vertical gap={2}>
       {row.components.map((c) => (
-        <Space key={c.label} size={6} align="start" wrap>
-          <Tag style={{ margin: 0 }}>{c.label}</Tag>
-          <Typography.Text style={{ fontSize: 13 }}>{c.optionNames.join(', ')}</Typography.Text>
+        <Space key={c.label} size={8} align="start" wrap>
+          <Tag color={c.excluded ? 'red' : undefined} style={{ margin: 0, minWidth: 76, textAlign: 'center' }}>
+            {c.label}
+          </Tag>
+          {c.excluded ? (
+            <Typography.Text strong style={{ fontSize: 13, color: '#cf1322' }}>
+              제외
+            </Typography.Text>
+          ) : (
+            <Typography.Text style={{ fontSize: 13 }}>{c.optionNames.join(', ')}</Typography.Text>
+          )}
         </Space>
       ))}
     </Flex>
@@ -124,9 +141,11 @@ export function ContractDocumentView({ contractId }: { contractId: string }) {
 
   const columns: ColumnsType<DocRow> = [
     {
+      // 열 폭은 전부 지정한다 — 한 열만 비워 두면 그 열이 남는 폭을 혼자 먹는다.
+      // 남는 폭은 지정 폭 비율대로 나뉘므로, 선택 옵션이 가장 크게 늘어난다.
       title: '품목',
       key: 'item',
-      width: 240,
+      width: hasOptions ? 260 : undefined,
       render: (_, r) => (
         <Space direction="vertical" size={2}>
           <Space size={6}>
@@ -149,11 +168,11 @@ export function ContractDocumentView({ contractId }: { contractId: string }) {
         </Space>
       ),
     },
-    { title: '개수', dataIndex: 'quantity', width: 80, align: 'right' },
+    { title: '개수', dataIndex: 'quantity', width: 70, align: 'right' },
     {
       title: '금액',
       dataIndex: 'amount',
-      width: 140,
+      width: 130,
       align: 'right',
       render: (v: number) => <Typography.Text strong>{formatKrw(v)}</Typography.Text>,
     },
@@ -169,7 +188,16 @@ export function ContractDocumentView({ contractId }: { contractId: string }) {
       : []),
     ...(hasOptions
       ? ([
-          { title: '선택 옵션', key: 'options', render: (_, r) => <OptionCell row={r} /> },
+          {
+            // 표에서 가장 넓은 열 — 옵션 이름이 길어 줄바꿈이 잦은 쪽이 폭을 가져간다.
+            title: '선택 옵션',
+            key: 'options',
+            width: 560,
+            // 오른쪽 정렬 숫자(금액)와 왼쪽 정렬 텍스트가 바로 붙으면 답답하다 — 사이를 띄운다.
+            onHeaderCell: () => ({ style: { paddingLeft: 24 } }),
+            onCell: () => ({ style: { paddingLeft: 24 } }),
+            render: (_, r) => <OptionCell row={r} />,
+          },
           {
             // 옵션별 가격은 싣지 않는다. 품목별 합계만 보여주고 총합은 표 아래 요약에서 본다.
             title: '옵션 합계',
@@ -214,7 +242,7 @@ export function ContractDocumentView({ contractId }: { contractId: string }) {
           pagination={false}
           columns={columns}
           dataSource={rows}
-          scroll={{ x: 760 }}
+          scroll={{ x: hasOptions ? 1140 : 760 }}
           locale={{ emptyText: '품목이 없습니다.' }}
         />
 

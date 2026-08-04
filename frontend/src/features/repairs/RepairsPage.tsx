@@ -1,14 +1,8 @@
-import {
-  MinusCircleOutlined,
-  PlusOutlined,
-  RollbackOutlined,
-  SwapOutlined,
-} from '@ant-design/icons';
+import { MinusCircleOutlined, NotificationOutlined, PlusOutlined, RollbackOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   App,
   Button,
-  Checkbox,
   DatePicker,
   Form,
   Input,
@@ -25,7 +19,8 @@ import dayjs, { type Dayjs } from 'dayjs';
 import { useState } from 'react';
 import { ApiError } from '../../api/client';
 import { LAYOUT } from '../../app/theme';
-import { DataTable, PAGE_SIZE_OPTIONS } from '../../shared/DataTable';
+import { DataTable } from '../../shared/DataTable';
+import { COL } from '../../shared/table-width';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { fetchCustomers } from '../../api/customers';
 import {
@@ -36,27 +31,32 @@ import {
   createRepair,
   fetchRepair,
   fetchRepairs,
-  isTargetProductRequired,
-  nextRepairStatus,
-  prevRepairStatus,
   postRepairStatusEvent,
+  repairProgress,
   repairStatusMeta,
   repairTypeLabel,
   REPAIR_METHOD_LABELS,
+  REPAIR_PHASES,
+  REPAIR_PHASE_LABELS,
+  REPAIR_PHASE_STATUSES,
   REPAIR_RECEIPT_METHODS,
   REPAIR_RELEASE_METHODS,
   type Repair,
   type RepairEvent,
   type RepairNotificationSuggestion,
+  type RepairPhase,
   type RepairReceiptMethod,
   type RepairReleaseMethod,
   type RepairStatus,
 } from '../../api/repairs';
 import { Can } from '../../shared/Can';
-import { RepairWorkCard } from './RepairWorkCard';
+import {
+  RepairItemProgress,
+  repairStageSummary,
+  type RepairProgressStage,
+} from './RepairItemProgress';
 import { NotificationConfirmModal } from '../../shared/NotificationConfirmModal';
 import { StatusBadge } from '../../shared/StatusBadge';
-import { autoWidth } from '../../shared/table-width';
 
 interface ReceiptValues {
   customerId: string;
@@ -79,19 +79,71 @@ interface StatusChangeState {
   toStatus: RepairStatus;
 }
 
-const STATUS_FILTER_OPTIONS = [...REPAIR_STATUS_FLOW, 'CANCELLED' as const].map((s) => ({
-  value: s,
-  label: repairStatusMeta(s).label,
-}));
+/** 두 상태 셀렉트 모두 맨 앞이 '전체'다 — 지우기(X) 대신 고를 수 있는 항목으로 둔다. */
+const FILTER_ALL = 'ALL';
+
+const PHASE_FILTER_OPTIONS = [
+  { value: FILTER_ALL, label: '전체' },
+  ...REPAIR_PHASES.map((p) => ({ value: p, label: REPAIR_PHASE_LABELS[p] })),
+];
+
+const statusOptionsOf = (statuses: RepairStatus[]) => [
+  { value: FILTER_ALL, label: '전체' },
+  ...statuses.map((s) => ({ value: s, label: repairStatusMeta(s).label })),
+];
+
+/** 세부 상태 선택지 — 전체 상태를 고르면 그 묶음 안으로 좁힌다. */
+const ALL_STATUS_OPTIONS = statusOptionsOf([...REPAIR_STATUS_FLOW, 'CANCELLED']);
+
+/** 단계(건 상태)와 품목 진행 단계의 대응 — 접수·고객 연락은 품목 단위가 아니라 비어 있다. */
+const STAGE_BY_STATUS: Partial<Record<RepairStatus, RepairProgressStage>> = {
+  REQUESTED: 'REQUEST',
+  RETURNED_TO_SHOP: 'RETURN',
+  RELEASED: 'RELEASE',
+};
+
+/**
+ * 대상 열 폭. 품목은 다섯 가지(상의·하의·베스트·셔츠·구두)가 전부라 최대 길이가 정해져 있고,
+ * `상의(자켓) 1 · 하의(바지) 1 · 베스트 1 · 셔츠 1 · 구두 1`이 한 줄에 들어가야 한다.
+ * COL.wide(품목 구성)로는 모자라 이 화면에서만 넓게 잡는다.
+ */
+const TARGET_WIDTH = 350;
+
+/**
+ * 행 펼침 단계 줄의 이름 칸 폭. 가장 긴 이름이 네 자(수선 요청·수선 입고·고객 연락·출고 완료)라
+ * 그 폭에 칸 사이 간격을 더한 값이다 — 다섯 단계의 내용이 같은 자리에서 시작한다.
+ */
+const STEP_LABEL_WIDTH = 88;
+
+/**
+ * 단계 밑 품목 표를 들여쓰는 폭. 표를 이름 칸 폭만큼 밀면 표 테두리는 맞지만 글자는
+ * 셀 여백(8px)만큼 오른쪽으로 밀린다 — 눈이 맞추는 건 테두리가 아니라 글자라 그만큼 뺀다.
+ */
+const STEP_BODY_INDENT = STEP_LABEL_WIDTH - 8;
+
+/** 접수·출고 방식 칸 — 방문 수거·배송이면 주소까지 같이 보여 준다(우리가 갈 곳이다). */
+function methodCell(method: string | undefined, address: string | undefined) {
+  if (!method) return '-';
+  return (
+    <Space direction="vertical" size={0}>
+      <Typography.Text>{REPAIR_METHOD_LABELS[method] ?? method}</Typography.Text>
+      {address && (
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {address}
+        </Typography.Text>
+      )}
+    </Space>
+  );
+}
 
 /** REPAIR-001 수선 접수·진행 */
 export function RepairsPage() {
   const { message } = App.useApp();
   const queryClient = useQueryClient();
 
-  const [statusFilter, setStatusFilter] = useState<string | undefined>();
-  // 완료된 건은 기본적으로 숨긴다 (상태를 직접 고르면 그 선택이 우선한다).
-  const [excludeReleased, setExcludeReleased] = useState(true);
+  const [statusFilter, setStatusFilter] = useState<RepairStatus | undefined>();
+  // 목록을 여는 이유는 대개 "지금 처리할 게 뭐냐"라 진행중으로 시작한다(비우면 전체).
+  const [phaseFilter, setPhaseFilter] = useState<RepairPhase | undefined>('IN_PROGRESS');
   const [customerFilter, setCustomerFilter] = useState<string | undefined>();
   const [customerKeyword, setCustomerKeyword] = useState('');
   const [page, setPage] = useState(1);
@@ -107,12 +159,12 @@ export function RepairsPage() {
   const [noteForm] = Form.useForm<{ notes?: string }>();
 
   const listQuery = useQuery({
-    queryKey: ['repairs', 'list', { statusFilter, customerFilter, excludeReleased, page, size }],
+    queryKey: ['repairs', 'list', { statusFilter, customerFilter, phaseFilter, page, size }],
     queryFn: () =>
       fetchRepairs({
         status: statusFilter,
         customerId: customerFilter,
-        excludeReleased,
+        phase: phaseFilter,
         page,
         size,
       }),
@@ -126,9 +178,6 @@ export function RepairsPage() {
     queryFn: () =>
       fetchCustomers({ q: customerKeyword || undefined, scope: 'CONTRACT', size: 20 }),
   });
-
-  const receiptType = Form.useWatch('repairType', receiptForm);
-  const targetRequired = isTargetProductRequired(receiptType ?? 'AFTER_SALE');
 
   const detailQuery = useQuery({
     queryKey: ['repairs', 'detail', expandedId],
@@ -154,7 +203,7 @@ export function RepairsPage() {
         releaseMethod: v.releaseMethod,
         pickupAddress: v.pickupAddress,
         deliveryAddress: v.deliveryAddress,
-        // 빈 줄(품목 미선택)은 보내지 않는다 — 일반 수선은 품목 없이도 접수된다.
+        // 빈 줄(품목 미선택)은 보내지 않는다 — 첫 줄은 화면에서 필수로 받는다.
         items: (v.items ?? [])
           .filter((i) => i?.targetProduct)
           .map((i) => ({ targetProduct: i.targetProduct as string, quantity: i.quantity ?? 1 })),
@@ -186,6 +235,12 @@ export function RepairsPage() {
     onError: (e) => message.error(e instanceof ApiError ? e.message : '상태 변경에 실패했습니다.'),
   });
 
+  // 전체 상태를 고르면 세부 상태 선택지도 그 묶음 안으로 좁힌다 —
+  // '진행중'을 보면서 '출고 완료'를 고를 수 있으면 결과가 항상 0건이라 고를 이유가 없다.
+  const statusOptions = phaseFilter
+    ? statusOptionsOf(REPAIR_PHASE_STATUSES[phaseFilter])
+    : ALL_STATUS_OPTIONS;
+
   const customerOptions = (customerQuery.data?.data ?? []).map((c) => ({
     value: c.id,
     label: `${c.name} (${c.phone})`,
@@ -206,7 +261,7 @@ export function RepairsPage() {
     {
       title: '고객',
       dataIndex: 'customerName',
-      ...autoWidth(140),
+      width: COL.name,
       render: (name: string, r) => (
         <Space direction="vertical" size={0}>
           <Typography.Text strong>{name}</Typography.Text>
@@ -219,29 +274,38 @@ export function RepairsPage() {
     {
       title: '유형',
       dataIndex: 'repairType',
-      ...autoWidth(),
-      render: (t: string) => <Tag>{repairTypeLabel(t)}</Tag>,
+      width: COL.status,
+      render: (t: string) => repairTypeLabel(t),
     },
     {
       title: '대상',
       dataIndex: 'targetLabel',
-      ...autoWidth(140),
-      render: (label: string, r) => (
-        <Space direction="vertical" size={0}>
-          <Typography.Text>{label}</Typography.Text>
-          {r.orderNo && (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {r.orderNo}
-            </Typography.Text>
-          )}
-        </Space>
-      ),
+      width: TARGET_WIDTH,
+      render: (label: string, r) => {
+        // 건 상태만으로는 "몇 벌이 들어왔는지"를 알 수 없다 — 진척을 한 줄 붙인다.
+        const p = repairProgress(r.items);
+        return (
+          <Space direction="vertical" size={0}>
+            <Typography.Text>{label}</Typography.Text>
+            {p.totalUnits > 0 && (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                입고 {p.returned}/{p.totalUnits} · 출고 {p.released}/{p.totalUnits}
+              </Typography.Text>
+            )}
+            {r.orderNo && (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {r.orderNo}
+              </Typography.Text>
+            )}
+          </Space>
+        );
+      },
     },
-    { title: '접수일', dataIndex: 'requestDate', ...autoWidth() },
+    { title: '접수일', dataIndex: 'requestDate', width: COL.name },
     {
       title: '완료 예정일',
       dataIndex: 'dueDate',
-      ...autoWidth(),
+      width: COL.name,
       render: (d: string | undefined, r) => (
         <Space size={4}>
           {d ?? '-'}
@@ -254,12 +318,28 @@ export function RepairsPage() {
     {
       title: '상태',
       dataIndex: 'status',
-      ...autoWidth(),
-      align: 'center',
+      width: COL.status,
+      // 이 표에서 가운데 정렬은 상태 하나뿐이었다. 자기 몫 여백이 좌우로 갈려
+      // 배지가 옆 열에 붙어 보이므로 나머지 열과 같은 왼쪽 정렬로 맞춘다.
       render: (s: string) => {
         const meta = repairStatusMeta(s);
         return <StatusBadge label={meta.label} color={meta.color} />;
       },
+    },
+    {
+      // 방문 수거·배송이면 우리가 움직여야 하는 건이지만, 매번 보는 값은 아니라 맨 뒤에 둔다.
+      title: '접수 방식',
+      dataIndex: 'receiptMethod',
+      // 값은 '고객 방문' 같은 짧은 분류값이다. 주소는 방문 수거·배송일 때만 붙는 예외라
+      // 그 한 줄에 맞춰 열을 넓히지 않고 셀 안에서 접는다.
+      width: COL.status,
+      render: (m: string | undefined, r) => methodCell(m, r.pickupAddress),
+    },
+    {
+      title: '출고 방식',
+      dataIndex: 'releaseMethod',
+      width: COL.status,
+      render: (m: string | undefined, r) => methodCell(m, r.deliveryAddress),
     },
   ];
 
@@ -292,25 +372,28 @@ export function RepairsPage() {
                 }}
               />
               <Select
-                allowClear
-                placeholder="상태 전체"
                 style={{ width: LAYOUT.filterWidth }}
-                value={statusFilter}
-                onChange={(v: string | undefined) => {
-                  setStatusFilter(v);
+                value={phaseFilter ?? FILTER_ALL}
+                onChange={(v: string) => {
+                  const next = v === FILTER_ALL ? undefined : (v as RepairPhase);
+                  setPhaseFilter(next);
+                  // 묶음을 바꾸면 그 안에 없는 세부 상태는 남겨 둘 수 없다.
+                  if (next && statusFilter && !REPAIR_PHASE_STATUSES[next].includes(statusFilter)) {
+                    setStatusFilter(undefined);
+                  }
                   setPage(1);
                 }}
-                options={STATUS_FILTER_OPTIONS}
+                options={PHASE_FILTER_OPTIONS}
               />
-              <Checkbox
-                checked={excludeReleased}
-                onChange={(e) => {
-                  setExcludeReleased(e.target.checked);
+              <Select
+                style={{ width: LAYOUT.filterWidth }}
+                value={statusFilter ?? FILTER_ALL}
+                onChange={(v: string) => {
+                  setStatusFilter(v === FILTER_ALL ? undefined : (v as RepairStatus));
                   setPage(1);
                 }}
-              >
-                출고완료 제외
-              </Checkbox>
+                options={statusOptions}
+              />
             </>
           }
           actions={
@@ -335,9 +418,6 @@ export function RepairsPage() {
             current: page,
             pageSize: size,
             total: listQuery.data?.page.totalElements ?? 0,
-            showSizeChanger: true,
-            pageSizeOptions: PAGE_SIZE_OPTIONS,
-            showTotal: (total) => `총 ${total}건`,
             onChange: (nextPage, nextSize) => {
               setPage(nextSize !== size ? 1 : nextPage);
               setSize(nextSize);
@@ -347,14 +427,15 @@ export function RepairsPage() {
             showExpandColumn: false,
             expandedRowKeys: expandedId ? [expandedId] : [],
             expandedRowRender: (r) => {
-              const detail = detailQuery.data?.id === r.id ? detailQuery.data : undefined;
-              const events = detail?.events ?? r.events;
+              const detail = detailQuery.data?.id === r.id ? detailQuery.data : r;
+              const events = detail.events;
               // 단계별 이벤트를 상태 코드로 매핑 — 되돌리기로 같은 단계를 여러 번 거치면
               // 가장 최근 전이를 남긴다(그 단계의 최신 날짜·담당자·사유가 보이도록).
               // events는 백엔드에서 시간순(오름차순)으로 오므로 그냥 덮어쓰면 최신이 남는다.
+              // 품목·벌 이벤트는 아래 품목 표가 보여주므로 건 단위 전이만 추린다.
               const eventByStatus = new Map<string, RepairEvent>();
               for (const ev of events) {
-                eventByStatus.set(ev.newStatus, ev);
+                if (!ev.itemId && !ev.unitId) eventByStatus.set(ev.newStatus, ev);
               }
               const cancelled = r.status === 'CANCELLED';
               const cancelEvent = eventByStatus.get('CANCELLED');
@@ -362,83 +443,134 @@ export function RepairsPage() {
               // 다음 단계로 한 칸 민다 — 출고 완료면 flow 길이가 되어 전 단계가 완료로 찍힌다.
               const currentIndex = REPAIR_STATUS_FLOW.indexOf(r.status as RepairStatus) + 1;
 
-              const stepItems = REPAIR_STATUS_FLOW.map((status) => {
+              // 건 상태는 품목 진행에서 계산된다 — 손으로 누르는 건 고객 연락뿐이다.
+              // 연락은 전 벌이 들어온 뒤(수선 입고)에 열리고, 되돌리기는 연락 직후에만 가능하다.
+              const notifiable = !cancelled && r.status === 'RETURNED_TO_SHOP';
+              const revertNotify = !cancelled && r.status === 'CUSTOMER_NOTIFIED';
+              const pending =
+                statusMutation.isPending && statusMutation.variables?.repair.id === r.id;
+
+              /**
+               * 단계 한 줄 — 단계명 옆에 날짜·담당자·그 단계 전체 상태를 이어 붙인다.
+               * (`접수    2026-08-01 · 관리자 · 수선내용 : 기장 전체 적을  +5cm`)
+               * 밑으로 내리면 단계마다 두 줄이 되어 5단계가 화면을 한참 넘긴다.
+               *
+               * 접수는 밑에 붙일 게 수선 내용 글자뿐이라 이 줄에 같이 태운다.
+               * 나머지 단계의 품목 표·버튼은 글자가 아니라서 밑에 남는다.
+               * 담당자가 적은 그대로 보여 준다 — 줄바꿈·띄어쓰기를 접어 버리면
+               * "기장 전체  적을 +5cm"처럼 칸을 맞춰 적은 메모가 뭉개진다.
+               */
+              const stepTitle = (status: RepairStatus) => {
+                const label = repairStatusMeta(status).label;
                 const ev = eventByStatus.get(status);
+                const stage = STAGE_BY_STATUS[status];
+                const summary = stage ? repairStageSummary(detail.items, stage) : undefined;
+                // 꼬리 공백·개행만 턴다 — 그대로 두면 단계 밑에 빈 줄이 하나 생긴다.
+                // 가운데 띄어쓰기는 칸을 맞춰 적은 것이라 건드리지 않는다.
+                const notes = r.notes?.trimEnd();
+                const memo =
+                  status === 'RECEIVED'
+                    ? `수선내용 : ${r.description.trimEnd()}${notes ? ` · 비고 : ${notes}` : ''}`
+                    : '';
+                if (!ev && !summary && !memo) return label;
+                const dot = (before: boolean) => (before ? ' · ' : '');
+                return (
+                  <>
+                    {/*
+                      단계 이름과 내용은 쌍점이 아니라 빈칸으로 가른다 — 한 줄이지만 읽을 때는
+                      왼쪽(어느 단계)과 오른쪽(무슨 일이 있었나)이 다른 칸이다.
+                      이름 칸에 폭을 줘 다섯 단계의 내용 시작 위치를 맞춘다 — 이름 길이가
+                      2~4자로 제각각이라 그냥 띄우면 시작 위치가 단계마다 어긋난다.
+                    */}
+                    <span style={{ display: 'inline-block', minWidth: STEP_LABEL_WIDTH }}>
+                      {label}
+                    </span>
+                    {/*
+                      글자는 본문 크기·본문 색이다. 줄여 흐리게 두면 정작 읽어야 할
+                      수선 내용이 안 보인다.
+                    */}
+                    <span style={{ whiteSpace: 'pre-wrap', fontWeight: 400 }}>
+                      {ev ? `${ev.eventDate} · ${ev.actorName}` : ''}
+                      {summary && (
+                        <Typography.Text type={summary.done ? 'success' : undefined} strong>
+                          {dot(!!ev)}
+                          {summary.text}
+                        </Typography.Text>
+                      )}
+                      {memo && `${dot(!!ev || !!summary)}${memo}`}
+                    </span>
+                  </>
+                );
+              };
+
+              // 단계마다 그 단계에서 할 일을 붙인다 — 수선요청·입고·출고는 품목별 버튼,
+              // 고객 연락은 발송 버튼. 표를 따로 두지 않으니 지금 눌러야 할 칸이
+              // 어느 단계인지 한눈에 보인다(2026-08-01 현업 요청).
+              // 접수는 글자뿐이라 단계 줄에 실었다 — stepTitle 참고.
+              const stepBody: Partial<Record<RepairStatus, React.ReactNode>> = {
+                REQUESTED: <RepairItemProgress repair={detail} stage="REQUEST" showSummary={false} />,
+                RETURNED_TO_SHOP: (
+                  <RepairItemProgress repair={detail} stage="RETURN" showSummary={false} />
+                ),
+                CUSTOMER_NOTIFIED: (notifiable || revertNotify) && (
+                  <Can permission="REPAIR_EDIT">
+                    {notifiable ? (
+                      <Button
+                        size="small"
+                        type="primary"
+                        ghost
+                        icon={<NotificationOutlined />}
+                        loading={pending}
+                        onClick={() => openStatusChange(r, 'CUSTOMER_NOTIFIED')}
+                      >
+                        고객 연락
+                      </Button>
+                    ) : (
+                      <Button
+                        size="small"
+                        icon={<RollbackOutlined />}
+                        loading={pending}
+                        onClick={() => openStatusChange(r, 'RETURNED_TO_SHOP')}
+                      >
+                        고객 연락 되돌리기
+                      </Button>
+                    )}
+                  </Can>
+                ),
+                RELEASED: <RepairItemProgress repair={detail} stage="RELEASE" showSummary={false} />,
+              };
+
+              const stepItems = REPAIR_STATUS_FLOW.map((status) => {
+                const body = stepBody[status];
                 return {
-                  title: repairStatusMeta(status).label,
-                  description: ev ? (
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {ev.eventDate} · {ev.actorName}
-                      {ev.notes ? ` · 비고: ${ev.notes}` : ''}
-                    </Typography.Text>
+                  title: stepTitle(status),
+                  // 붙일 게 없는 단계는 설명 칸을 아예 비운다 — 빈 칸도 높이를 차지한다.
+                  description: body ? (
+                    <div
+                      className="repair-step-body"
+                      style={{ paddingLeft: STEP_BODY_INDENT, paddingBottom: 4 }}
+                    >
+                      {body}
+                    </div>
                   ) : undefined,
                 };
               });
 
-              const next = nextRepairStatus(r.status);
-              // 취소된 건은 되돌릴 수 없고, 접수(첫 단계)는 이전 단계가 없다.
-              const prev = cancelled ? undefined : prevRepairStatus(r.status);
-              const pending =
-                statusMutation.isPending && statusMutation.variables?.repair.id === r.id;
-
               return (
                 <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-                  {detailQuery.isLoading && !detail ? (
-                    <Typography.Text type="secondary">단계 정보를 불러오는 중…</Typography.Text>
-                  ) : (
-                    <Steps
-                      size="small"
-                      direction="vertical"
-                      current={cancelled ? -1 : currentIndex}
-                      status={cancelled ? 'error' : r.status === 'RELEASED' ? 'finish' : 'process'}
-                      items={stepItems}
-                    />
-                  )}
+                  <Steps
+                    size="small"
+                    direction="vertical"
+                    current={cancelled ? -1 : currentIndex}
+                    status={cancelled ? 'error' : r.status === 'RELEASED' ? 'finish' : 'process'}
+                    items={stepItems}
+                  />
                   {cancelled && (
                     <Typography.Text type="danger">
                       취소됨{cancelEvent ? ` · ${cancelEvent.eventDate}` : ''}
                       {cancelEvent?.notes ? ` · 사유: ${cancelEvent.notes}` : ''}
                     </Typography.Text>
                   )}
-                  <Typography.Text>내용: {r.description}</Typography.Text>
-                  {(r.receiptMethod || r.releaseMethod) && (
-                    <Typography.Text type="secondary">
-                      접수·출고:{' '}
-                      {[
-                        r.receiptMethod && `접수 ${REPAIR_METHOD_LABELS[r.receiptMethod]}`,
-                        r.releaseMethod && `출고 ${REPAIR_METHOD_LABELS[r.releaseMethod]}`,
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')}
-                      {r.pickupAddress ? ` / 수거 주소: ${r.pickupAddress}` : ''}
-                      {r.deliveryAddress ? ` / 배송 주소: ${r.deliveryAddress}` : ''}
-                    </Typography.Text>
-                  )}
-                  {r.notes && <Typography.Text type="secondary">비고: {r.notes}</Typography.Text>}
-                  <Can permission="REPAIR_EDIT">
-                    <Space wrap>
-                      {next && (
-                        <Button
-                          type="primary"
-                          ghost
-                          icon={<SwapOutlined />}
-                          loading={pending}
-                          onClick={() => openStatusChange(r, next)}
-                        >
-                          {repairStatusMeta(r.status).label} → {repairStatusMeta(next).label} 처리
-                        </Button>
-                      )}
-                      {prev && (
-                        <Button
-                          icon={<RollbackOutlined />}
-                          loading={pending}
-                          onClick={() => openStatusChange(r, prev)}
-                        >
-                          이전 단계로 ({repairStatusMeta(prev).label})
-                        </Button>
-                      )}
-                    </Space>
-                  </Can>
                 </Space>
               );
             },
@@ -446,15 +578,6 @@ export function RepairsPage() {
         />
       </Space>
       </PageCard>
-
-      {/* 고객별 업무 처리 — 상태 관리 목록 아래에 붙는다(설계 PDF 2페이지 수선 업무 흐름). */}
-      <RepairWorkCard
-        customerOptions={customerOptions}
-        customerLoading={customerQuery.isLoading}
-        onCustomerSearch={setCustomerKeyword}
-        onWork={openStatusChange}
-        pendingRepairId={statusMutation.isPending ? statusMutation.variables?.repair.id : undefined}
-      />
 
       {/* 수선 접수 모달 — 고객·대상 품목·수선 내용을 받는다. */}
       <Modal
@@ -499,13 +622,16 @@ export function RepairsPage() {
             <Select options={REPAIR_TYPES.map((t) => ({ value: t, label: repairTypeLabel(t) }))} />
           </Form.Item>
 
-          {/* 계약에 등록된 물품을 찾아 연결하지 않는다 — 품목과 개수를 줄 단위로 적는다. */}
+          {/*
+            계약에 등록된 물품을 찾아 연결하지 않는다 — 품목과 개수를 줄 단위로 적는다.
+            진행(수선요청·입고·출고)이 품목 위에서 돌아가므로 유형과 무관하게 필수다.
+          */}
           <Form.List name="items" initialValue={[{ quantity: 1 }]}>
             {(fields, { add, remove }) => (
               <Form.Item
                 label="대상 품목"
-                required={targetRequired}
-                extra={targetRequired ? undefined : '일반 수선은 품목 없이도 접수할 수 있습니다.'}
+                required
+                extra="입고·출고는 벌 단위로 처리합니다 — 개수를 정확히 적어 주세요."
               >
                 <Space direction="vertical" size={8} style={{ width: '100%' }}>
                   {fields.map((field, index) => (
@@ -515,7 +641,7 @@ export function RepairsPage() {
                         noStyle
                         rules={
                           // 첫 줄만 필수 — 나머지는 비워 두면 접수 시 버린다.
-                          targetRequired && index === 0
+                          index === 0
                             ? [{ required: true, message: '대상 품목을 선택해 주세요.' }]
                             : []
                         }
@@ -570,7 +696,6 @@ export function RepairsPage() {
             name="description"
             label="수선 내용"
             rules={[{ required: true, message: '수선 내용을 입력해 주세요.' }]}
-            extra={!targetRequired ? '일반 수선은 대상 설명을 내용에 함께 적어 주세요.' : undefined}
           >
             <Input.TextArea rows={3} placeholder="예: 하의 기장 1.5cm 줄임" />
           </Form.Item>

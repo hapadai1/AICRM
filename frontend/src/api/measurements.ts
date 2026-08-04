@@ -405,6 +405,12 @@ export async function searchCustomers(q: string): Promise<CustomerOption[]> {
 export interface MeasurementTargetRow {
   contractId: string;
   contractNo: string;
+  /** 계약 구분명. 구분을 지정하지 않은 계약은 null */
+  contractTypeName: string | null;
+  /** 계약 상태 (CONTRACT_STATUS_META 코드). 취소 계약은 주문이 없어 목록에 오지 않는다. */
+  contractStatus: string;
+  /** 계약일 (YYYY-MM-DD) — 기간 필터 기준. 계약일 없는 초안은 등록일로 갈음된 값 */
+  contractDate: string;
   /** 신규 채촌을 이 계약에 연결할 때 쓰는 대표 주문 */
   orderId: string;
   customerId: string;
@@ -414,6 +420,7 @@ export interface MeasurementTargetRow {
   itemCount: number;
   consultingConfirmedCount: number;
   consultingComplete: boolean;
+  /** 계약서 현재 버전의 완료 예정일 (계약 목록과 같은 값) */
   dueDate: string | null;
   measurementCount: number;
   measurementCompletedCount: number;

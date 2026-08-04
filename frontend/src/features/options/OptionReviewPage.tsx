@@ -155,7 +155,8 @@ function ComponentAttrsSummary({ components }: { components: OptionComponentAttr
  * 금액은 자동으로 바뀌지 않는다 — 그 버튼을 눌러야 반영된다.
  */
 function SurchargePanel({ surcharge }: { surcharge: OptionSurcharge }) {
-  const { total, applied, pending, contract } = surcharge;
+  const { total, applied, pending, contract, status } = surcharge;
+  const confirmed = status === 'CONFIRMED';
   if (total === 0 && applied === 0) return null;
 
   return (
@@ -179,7 +180,8 @@ function SurchargePanel({ surcharge }: { surcharge: OptionSurcharge }) {
             showIcon
             message={
               <span>
-                계약금액 반영을 하면 현재 계약금액 {won(contract.totalAmount)} 에{' '}
+                {confirmed ? '계약금액 반영을 하면' : '옵션을 확정하면'} 현재 계약금액{' '}
+                {won(contract.totalAmount)} 에{' '}
                 <Typography.Text strong style={{ color: '#cf1322' }}>
                   {pending > 0 ? '+' : '-'}
                   {won(Math.abs(pending))}
@@ -228,14 +230,19 @@ export function OptionReviewPage() {
   const confirmMutation = useMutation({
     mutationFn: () => confirmOptionSession(sessionId ?? '', review?.version ?? 0),
     onSuccess: (result) => {
-      message.success('옵션이 확정되었습니다. 작업지시서 출력이 가능합니다.');
+      // 확정과 동시에 계약금액 반영까지 끝난다 (현업 확정 2026-07-31) — 미반영 안내가 필요 없다.
+      const c = result.surcharge?.contract;
+      message.success(
+        c && (result.surcharge?.total ?? 0) > 0
+          ? `옵션이 확정되어 계약금액에 반영되었습니다. 계약금액 ${won(c.totalAmount)}`
+          : '옵션이 확정되었습니다. 작업지시서 출력이 가능합니다.',
+      );
       void queryClient.invalidateQueries({ queryKey: ['options'] });
       void queryClient.invalidateQueries({ queryKey: ['workorders'] });
-      // 반영할 추가금액이 남아 있으면 목록으로 나가지 않고 이 화면에서 안내한다.
-      if (result.surcharge?.pending) return;
+      void queryClient.invalidateQueries({ queryKey: ['contracts'] });
+      void queryClient.invalidateQueries({ queryKey: ['customers'] });
       // 확정 후에는 전체 목록이 아니라 방금 온 계약(고객)의 품목 리스트로 돌아간다.
-      const contractId = result.surcharge?.contract?.contractId;
-      navigate(contractId ? `/contracts/${contractId}/options` : '/options');
+      navigate(c?.contractId ? `/contracts/${c.contractId}/options` : '/options');
     },
     onError: (e: Error) => message.error(e.message),
   });
@@ -330,16 +337,76 @@ export function OptionReviewPage() {
   }
 
   const isConfirmed = review.status === 'CONFIRMED';
+  /** 컨설팅 편집 가능 = 계약 작성중 + 품목 미진행 (현업 확정 2026-07-31). 아니면 확인서는 열람 전용. */
+  const canEdit =
+    (review.contractStatus == null || review.contractStatus === 'DRAFT') && !review.inProduction;
   /** 확정 조건 — 필수/선택 구분 없이 모든 단계를 골라야 최종 저장(확정)할 수 있다. */
   const missingTotal = review.missingCount + review.missingOptionalCount;
 
   const openConfirmDialog = () => {
+    // 확정은 계약금액 반영을 함께 실행한다 — 계약서가 어떻게 바뀌는지 먼저 다 보여준다.
+    const s = review.surcharge;
+    const c = s.contract;
+    const changesAmount = s.pending !== 0 && !!c;
+    // 베스트 제외는 금액을 자동으로 깎지 않는다(값이 그때그때 다르다) — 수기 조정을 알린다.
+    const vestExcluded = review.vestExcluded;
+    const wide = changesAmount || vestExcluded;
     modal.confirm({
       title: '옵션 최종 저장(확정)',
       icon: <ExclamationCircleOutlined />,
-      content:
-        '선택한 옵션을 확정합니다. 확정 후 옵션을 변경하면 작업지시서 재출력 필요 대상이 됩니다. 확정하시겠습니까?',
-      okText: '확정',
+      width: wide ? 520 : undefined,
+      content: (
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          {wide && (
+            <Alert
+              type="warning"
+              showIcon
+              message="계약서 변경내용"
+              description={
+                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  {changesAmount && (
+                    <span>
+                      <Typography.Text strong>▸ 선택 옵션 추가금</Typography.Text>{' '}
+                      <Typography.Text strong style={{ color: '#cf1322' }}>
+                        {s.pending > 0 ? '+' : '-'}
+                        {won(Math.abs(s.pending))}
+                      </Typography.Text>
+                    </span>
+                  )}
+                  {vestExcluded && (
+                    <span>
+                      <Typography.Text strong>▸ 베스트 제외</Typography.Text>{' '}
+                      <Typography.Text>{review.displayName}</Typography.Text>
+                      <br />
+                      <Typography.Text type="secondary">
+                        베스트 금액은 자동 차감되지 않습니다. 계약서에서 수기로 조정해 주세요.
+                      </Typography.Text>
+                    </span>
+                  )}
+                  {changesAmount && (
+                    <span>
+                      계약금액 <Typography.Text delete>{won(c.totalAmount)}</Typography.Text> →{' '}
+                      <Typography.Text strong style={{ color: '#cf1322' }}>
+                        {won(c.afterTotalAmount)}
+                      </Typography.Text>
+                      <br />
+                      <Typography.Text type="secondary">
+                        계약 {c.contractNo} — 변경계약(새 버전)은 만들지 않고 현재 버전 금액을
+                        수정합니다.
+                      </Typography.Text>
+                    </span>
+                  )}
+                </Space>
+              }
+            />
+          )}
+          <Typography.Text>
+            선택한 옵션을 확정합니다. 확정 후 옵션을 변경하면 작업지시서 재출력 필요 대상이 됩니다.
+            확정하시겠습니까?
+          </Typography.Text>
+        </Space>
+      ),
+      okText: changesAmount ? '확정하고 계약금액 반영' : '확정',
       cancelText: '취소',
       okButtonProps: { size: 'large' },
       cancelButtonProps: { size: 'large' },
@@ -449,42 +516,43 @@ export function OptionReviewPage() {
             />
             {isConfirmed && <CheckCircleFilled style={{ color: '#52c41a', fontSize: 24 }} />}
             {isConfirmed ? (
-              <Button
-                type="primary"
-                icon={<EditOutlined />}
-                loading={reopenMutation.isPending}
-                onClick={openReopenDialog}
-              >
-                옵션 변경
-              </Button>
-            ) : (
-              <Tooltip title={missingTotal > 0 ? '모든 단계를 선택해야 확정할 수 있습니다.' : ''}>
+              canEdit && (
                 <Button
                   type="primary"
-                  icon={<CheckOutlined />}
-                  disabled={missingTotal > 0}
-                  loading={confirmMutation.isPending}
-                  onClick={openConfirmDialog}
+                  icon={<EditOutlined />}
+                  loading={reopenMutation.isPending}
+                  onClick={openReopenDialog}
                 >
-                  최종 저장(확정)
+                  옵션 변경
                 </Button>
-              </Tooltip>
+              )
+            ) : (
+              canEdit && (
+                <Tooltip title={missingTotal > 0 ? '모든 단계를 선택해야 확정할 수 있습니다.' : ''}>
+                  <Button
+                    type="primary"
+                    icon={<CheckOutlined />}
+                    disabled={missingTotal > 0}
+                    loading={confirmMutation.isPending}
+                    onClick={openConfirmDialog}
+                  >
+                    최종 저장(확정)
+                  </Button>
+                </Tooltip>
+              )
             )}
-            {review.surcharge.pending !== 0 && (
-              <Tooltip
-                title={
-                  review.surcharge.appliable ? '' : '옵션을 확정한 뒤 계약금액에 반영할 수 있습니다.'
-                }
+            {/*
+              계약금액 반영은 확정과 한 동작이다 (현업 확정 2026-07-31).
+              평시에는 차액이 남지 않지만, 과거 데이터 등으로 남은 경우에만 수동 반영을 노출한다.
+            */}
+            {canEdit && review.surcharge.appliable && (
+              <Button
+                icon={<CalculatorOutlined />}
+                loading={applyMutation.isPending}
+                onClick={() => openApplyDialog(review.surcharge)}
               >
-                <Button
-                  icon={<CalculatorOutlined />}
-                  disabled={!review.surcharge.appliable}
-                  loading={applyMutation.isPending}
-                  onClick={() => openApplyDialog(review.surcharge)}
-                >
-                  계약금액 반영
-                </Button>
-              </Tooltip>
+                계약금액 반영
+              </Button>
             )}
           </Space>
         </Space>
@@ -501,7 +569,11 @@ export function OptionReviewPage() {
         <Alert
           type="success"
           showIcon
-          message="확정된 옵션입니다. 카드를 눌러 열람하고, 바꾸려면 위 '옵션 변경'을 눌러 새 선택 버전을 시작하세요."
+          message={
+            canEdit
+              ? "확정된 옵션입니다. 카드를 눌러 열람하고, 바꾸려면 위 '옵션 변경'을 눌러 새 선택 버전을 시작하세요."
+              : '확정된 옵션입니다. 계약이 작성중일 때만 변경할 수 있습니다.'
+          }
         />
       )}
 

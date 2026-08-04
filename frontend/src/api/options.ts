@@ -70,6 +70,11 @@ export interface ComponentAttrInput {
 export interface OptionProgressComponent extends OptionComponentAttr {
   totalStages: number;
   completedStages: number;
+  /**
+   * 이 부위가 계약 품목에서 빠졌는가 — 베스트만 해당 ([베스트 제외] 체크 상태).
+   * 제외해도 행은 남는다: 체크를 다시 풀 자리가 있어야 하기 때문이다 (현업 확정 2026-08-01).
+   */
+  excluded?: boolean;
 }
 
 /** OPT-001 목록 행 — 백엔드 progress()가 이미 평면 형태로 내려준다. */
@@ -86,6 +91,14 @@ export interface OptionProgressItem {
   completionDueDate: string | null;
   fabric: string | null;
   status: OptionStatus;
+  /** 계약 상태 — 작성중(DRAFT)이 아니면 컨설팅은 보기 전용 (현업 확정 2026-07-31) */
+  contractStatus: string;
+  /** 계약일 ISO. 계약완료 전에는 null → 목록은 작성일(contractCreatedAt)로 대신 건다. */
+  contractedAt: string | null;
+  /** 계약서 작성일 ISO */
+  contractCreatedAt: string;
+  /** 제작 진행 중(제작요청 이후) 품목 — 계약이 작성중이어도 컨설팅 잠금 */
+  inProduction: boolean;
   completedStages: number;
   totalStages: number;
   sessionId: string | null;
@@ -159,6 +172,10 @@ export interface OptionSessionDetail {
   /** 백엔드 fabricName */
   fabric: string | null;
   status: OptionSessionStatus;
+  /** 계약 상태 — 작성중(DRAFT)이 아니면 편집·옵션 변경 버튼을 숨긴다 */
+  contractStatus: string | null;
+  /** 제작 진행 중 품목 — 계약이 작성중이어도 편집 잠금 */
+  inProduction: boolean;
   currentStageId: string | null;
   /** 중단 지점 (currentSession 응답에만 포함) */
   resumeStageId: string | null;
@@ -212,6 +229,8 @@ interface OptionSessionApiRow {
   confirmedAt: string | null;
   isCurrent: boolean;
   version: number;
+  contractStatus?: string | null;
+  inProduction?: boolean;
   totalStages: number;
   completedStages: number;
   stages: OptionStageApiRow[];
@@ -252,6 +271,8 @@ function toOptionSession(row: OptionSessionApiRow): OptionSessionDetail {
     selectionVersionNo: row.selectionVersionNo,
     fabric: row.fabricName ?? null,
     status: row.status,
+    contractStatus: row.contractStatus ?? null,
+    inProduction: row.inProduction ?? false,
     currentStageId: row.currentStageId ?? null,
     resumeStageId: row.resumeStageId ?? null,
     lastSavedAt: toDateTime(row.lastSavedAt),
@@ -295,6 +316,10 @@ export interface OptionReviewData {
   contractItemId: string;
   fabric: string | null;
   status: OptionSessionStatus;
+  /** 계약 상태 — 작성중(DRAFT)이 아니면 확정·변경·금액반영 버튼을 숨긴다 */
+  contractStatus: string | null;
+  /** 제작 진행 중 품목 — 계약이 작성중이어도 편집 잠금 */
+  inProduction: boolean;
   totalStages: number;
   completedStages: number;
   /**
@@ -310,12 +335,23 @@ export interface OptionReviewData {
   /** 부위별 원단·컬러·패턴·비고 (설계서 04 §2). 확인서에 부위 선택·입력 출력용. */
   components: OptionComponentAttr[];
   surcharge: OptionSurcharge;
+  /**
+   * 이 벌에서 베스트를 뺐는가 — 확정 팝업의 "계약서 변경내용"에 알린다.
+   * 베스트 금액은 자동 차감하지 않는다(값이 그때그때 달라 계약서에서 수기 조정).
+   */
+  vestExcluded: boolean;
+  /** 품목 표시명 (정장 #2) — 확정 팝업에서 어느 벌인지 가리킨다 */
+  displayName: string;
 }
 
 interface OptionReviewApiRow {
   sessionId: string;
   contractItemId: string;
+  displayName?: string | null;
+  vestExcluded?: boolean;
   status: OptionSessionStatus;
+  contractStatus?: string | null;
+  inProduction?: boolean;
   fabricName: string | null;
   totalStages: number;
   completedStages: number;
@@ -344,8 +380,12 @@ function toOptionReview(row: OptionReviewApiRow): OptionReviewData {
   return {
     sessionId: row.sessionId,
     contractItemId: row.contractItemId,
+    displayName: row.displayName ?? '',
+    vestExcluded: row.vestExcluded ?? false,
     fabric: row.fabricName ?? null,
     status: row.status,
+    contractStatus: row.contractStatus ?? null,
+    inProduction: row.inProduction ?? false,
     totalStages: row.totalStages,
     completedStages: row.completedStages,
     missingCount: missing.filter((m) => m.required).length,

@@ -53,6 +53,10 @@ export const ERROR_CODES = {
   RENTAL_ITEM_NOT_AVAILABLE: HttpStatus.CONFLICT,
   RENTAL_ID_MISMATCH: HttpStatus.CONFLICT,
 
+  // 수선
+  /** 수선요청·입고·출고가 시작된 대상 품목의 수정·삭제 시도 (현업 확정 2026-08-01) */
+  REPAIR_ITEM_IN_PROGRESS: HttpStatus.CONFLICT,
+
   // 파일
   FILE_TYPE_NOT_ALLOWED: HttpStatus.BAD_REQUEST,
 } as const;

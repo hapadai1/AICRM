@@ -67,7 +67,10 @@ export function ListToolbar({ filters, actions, info }: ListToolbarProps) {
           {filters}
         </Space>
         {actions ? (
-          <Space wrap size={8}>
+          // marginInlineStart:auto 가 있어야 화면이 좁아 버튼이 다음 줄로 밀렸을 때도
+          // 오른쪽에 남는다. justify="space-between" 은 한 줄에 항목이 하나뿐이면
+          // 그 항목을 줄 시작(왼쪽)에 붙이므로, 버튼만 왼쪽으로 튀어 나간다.
+          <Space wrap size={8} style={{ marginInlineStart: 'auto' }}>
             {actions}
           </Space>
         ) : null}

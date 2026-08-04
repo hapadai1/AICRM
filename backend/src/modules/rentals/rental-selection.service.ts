@@ -30,9 +30,12 @@ const SESSION_INCLUDE = {
         select: {
           id: true,
           contractNo: true,
+          // 컨설팅(렌탈 선택 포함) 수정은 계약 작성중에서만 (현업 확정 2026-07-31).
+          status: true,
           customer: { select: { id: true, name: true } },
         },
       },
+      orderItems: { select: { status: true } },
       components: {
         orderBy: [{ componentType: 'asc' as const }, { sequenceNo: 'asc' as const }],
       },
@@ -65,9 +68,15 @@ export class RentalSelectionService {
   async startSession(contractItemId: string) {
     const item = await this.prisma.contractItem.findUnique({
       where: { id: contractItemId },
-      select: { transactionType: true },
+      select: {
+        transactionType: true,
+        contract: { select: { status: true } },
+        orderItems: { select: { status: true } },
+      },
     });
     if (!item) throw new NotFoundException('계약 품목이 없습니다.');
+    this.ensureContractDraft(item.contract);
+    this.ensureItemNotInProduction(item.orderItems);
     if (item.transactionType !== 'RENTAL')
       throw new BusinessException(
         'VALIDATION_ERROR',
@@ -168,6 +177,8 @@ export class RentalSelectionService {
             notes: line?.notes ?? null,
             selectedInventoryItemId: line?.selectedInventoryItemId ?? null,
             selectedItemCode: line?.selectedInventoryItem?.managementCode ?? null,
+            // 컨설팅에서 [베스트 제외]한 부위 — 행은 남기되 실물 선택을 잠근다 (2026-08-01).
+            excluded: c.status === 'CANCELLED',
           };
         }),
       };
@@ -266,6 +277,8 @@ export class RentalSelectionService {
    */
   async savePeriod(sessionId: string, dto: SaveRentalPeriodDto, actor: AuthUser) {
     const session = await this.load(sessionId);
+    this.ensureContractDraft(session.contractItem.contract);
+    this.ensureItemNotInProduction(session.contractItem.orderItems);
     this.ensureEditable(session);
     if (dto.version !== undefined) this.ensureVersion(session, dto.version);
 
@@ -322,6 +335,8 @@ export class RentalSelectionService {
   /** PUT /rental-selections/:id/lines/:componentId — 부위별 컬러·사이즈·비고 upsert */
   async saveLine(sessionId: string, componentId: string, dto: SaveRentalLineDto) {
     const session = await this.load(sessionId);
+    this.ensureContractDraft(session.contractItem.contract);
+    this.ensureItemNotInProduction(session.contractItem.orderItems);
     this.ensureEditable(session);
     if (dto.version !== undefined) this.ensureVersion(session, dto.version);
     const component = this.requireComponent(session, componentId);
@@ -415,6 +430,8 @@ export class RentalSelectionService {
   /** PUT /rental-selections/:id/lines/:componentId/item — 후보 실물 선택(또는 해제) */
   async selectItem(sessionId: string, componentId: string, dto: SelectRentalItemDto) {
     const session = await this.load(sessionId);
+    this.ensureContractDraft(session.contractItem.contract);
+    this.ensureItemNotInProduction(session.contractItem.orderItems);
     this.ensureEditable(session);
     if (dto.version !== undefined) this.ensureVersion(session, dto.version);
     const component = this.requireComponent(session, componentId);
@@ -472,6 +489,8 @@ export class RentalSelectionService {
   /** POST /rental-selections/:id/confirm — 확정(status=CONFIRMED, 감사로그) */
   async confirm(sessionId: string, dto: ConfirmRentalSelectionDto, actor: AuthUser) {
     const session = await this.load(sessionId);
+    this.ensureContractDraft(session.contractItem.contract);
+    this.ensureItemNotInProduction(session.contractItem.orderItems);
     if (session.status === 'CONFIRMED')
       throw new BusinessException('INVALID_STATUS_TRANSITION', '이미 확정된 렌탈 선택입니다.');
     // 대여 기간 없이 확정하면 어느 기간의 실물을 잡은 것인지 알 수 없다(현업 확정 2026-07-28).
@@ -601,6 +620,27 @@ export class RentalSelectionService {
       throw new BusinessException(
         'INVALID_STATUS_TRANSITION',
         '확정된 렌탈 선택은 수정할 수 없습니다.',
+      );
+  }
+
+  /** 컨설팅(렌탈 선택 포함) 수정은 계약 작성중(DRAFT)에서만 (현업 확정 2026-07-31). */
+  private ensureContractDraft(contract: { status: string } | null | undefined): void {
+    if (contract && contract.status !== 'DRAFT')
+      throw new BusinessException(
+        'CONTRACT_NOT_DRAFT',
+        '작성중인 계약에서만 렌탈 선택을 수정할 수 있습니다. 계약서 [수정하기]로 되돌린 뒤 진행해 주세요.',
+        undefined,
+        { contractStatus: contract.status },
+      );
+  }
+
+  /** 진행 중(제작요청·수선요청 이후) 품목의 렌탈 선택 편집을 막는다 (현업 확정 2026-07-31). */
+  private ensureItemNotInProduction(orderItems: Array<{ status: string }>): void {
+    const inProduction = orderItems.some((o) => o.status !== 'CREATED' && o.status !== 'CANCELLED');
+    if (inProduction)
+      throw new BusinessException(
+        'INVALID_STATUS_TRANSITION',
+        '진행 중인 품목은 렌탈 선택을 변경할 수 없습니다. 제작·입출고 화면에서 상태를 되돌린 뒤 진행해 주세요.',
       );
   }
 
