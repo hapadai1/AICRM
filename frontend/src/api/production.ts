@@ -284,6 +284,63 @@ export interface ProductionEvent {
   actor: { id: string; displayName: string } | null;
 }
 
+/**
+ * 제작 이력 한 줄 — 단계 줄에 붙일 날짜·담당자만 남긴 화면용 뷰.
+ * 품목 단위 이벤트(제작요청 완료 등)는 componentId가 비어 있다.
+ */
+export interface ProductionHistoryEvent {
+  id: string;
+  orderItemId: string;
+  componentId: string | null;
+  newStatus: string;
+  /** YYYY-MM-DD */
+  eventDate: string;
+  actorName: string;
+  notes?: string;
+}
+
+/**
+ * 주문 단위 제작 이력 — GET /orders/{id}/production-history (§13.5).
+ * 백엔드가 시간 오름차순으로 내려주므로 순서를 그대로 쓴다(뒤로 갈수록 최신).
+ */
+export function fetchOrderProductionHistory(orderId: string): Promise<ProductionHistoryEvent[]> {
+  return request<{ events: ProductionEvent[] }>({
+    url: `/orders/${orderId}/production-history`,
+  }).then((res) =>
+    (res.events ?? []).map((e) => ({
+      id: e.id,
+      orderItemId: e.orderItemId,
+      componentId: e.componentId,
+      newStatus: e.newStatus,
+      eventDate: toDateOnly(e.eventDate) ?? '',
+      actorName: e.actor?.displayName ?? '시스템',
+      notes: e.notes ?? undefined,
+    })),
+  );
+}
+
+/** 이력 색인 키 — 품목/구성품 어느 쪽 이벤트든 그 주체 id와 상태로 찾는다. */
+export function historyKey(ownerId: string, status: string): string {
+  return `${ownerId}:${status}`;
+}
+
+/**
+ * `주체 → 상태 → 마지막 이벤트` 색인.
+ * 이벤트가 시간순으로 오므로 그냥 덮어쓰면 최신이 남는다 — 되돌렸다 다시 진행해도
+ * 그 단계의 최신 날짜·담당자가 보인다(수선 목록의 lastEvent와 같은 규칙).
+ *
+ * 한 이벤트를 두 키로 넣는다: 구성품 키(그 구성품 칸)와 품목 키(단계 줄 요약).
+ * 품목 키에는 구성품 이벤트도 섞여 들어가므로 "그 품목에서 이 단계가 마지막으로 일어난 때"가 된다.
+ */
+export function indexHistory(events: ProductionHistoryEvent[]): Map<string, ProductionHistoryEvent> {
+  const map = new Map<string, ProductionHistoryEvent>();
+  for (const e of events) {
+    if (e.componentId) map.set(historyKey(e.componentId, e.newStatus), e);
+    map.set(historyKey(e.orderItemId, e.newStatus), e);
+  }
+  return map;
+}
+
 /** 백엔드 고객 연락 제안 (NotificationSuggestionService.build 결과) */
 export interface ProductionNotificationSuggestion {
   templateId: string;

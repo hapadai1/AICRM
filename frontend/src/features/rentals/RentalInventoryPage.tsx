@@ -265,11 +265,10 @@ export function RentalInventoryPage() {
             const reasons = [...new Set((row.holds ?? []).map((h) => metaOf(RENTAL_ITEM_STATUS_META, h.status).label))];
             if (v === 0 || reasons.length === 0) return qtyCell(v);
             return (
+              // 사유는 흐리게 두지 않는다 — 대기 수량이 왜 묶여 있는지가 이 칸의 본 내용이다.
               <Space size={6}>
                 {qtyCell(v)}
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  {reasons.join(' · ')}
-                </Typography.Text>
+                <Typography.Text>{reasons.join(' · ')}</Typography.Text>
               </Space>
             );
           },
@@ -291,7 +290,7 @@ export function RentalInventoryPage() {
         return (
           <Space direction="vertical" size={0}>
             {holds.map((h) => (
-              <Typography.Text key={`${h.status}-${h.availableFrom}`} style={{ fontSize: 12 }}>
+              <Typography.Text key={`${h.status}-${h.availableFrom}`}>
                 {dayjs(h.availableFrom).format('M/D')}{' '}
                 {h.status === 'RETURNED_HOLD' ? '자동 가용' : '가용 예정'} ({h.count}벌)
               </Typography.Text>

@@ -1,9 +1,10 @@
-import { ExportOutlined, ImportOutlined, SwapOutlined } from '@ant-design/icons';
+import { SwapOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
   App,
   Button,
+  Checkbox,
   DatePicker,
   Descriptions,
   Form,
@@ -21,6 +22,8 @@ import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { ApiError } from '../../api/client';
 import {
+  ALLOCATION_NOTE_KIND_META,
+  ALLOCATION_STATUS_META,
   RENTAL_ITEM_STATUS_META,
   RENTAL_COMPONENT_TYPE_LABELS,
   RETURN_NEXT_STATUSES,
@@ -37,7 +40,12 @@ import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { metaOf } from '../../shared/status-meta';
 import { COL } from '../../shared/table-width';
+import { Can } from '../../shared/Can';
+import { RentalAllocationNotesModal } from './RentalAllocationNotesModal';
 import { useRentalCodeNames } from './rental-codes';
+
+/** 지난 내역 기본 조회 기간 — 최근 3개월 (현업 확정 2026-08-03) */
+const defaultHistoryRange = (): [Dayjs, Dayjs] => [dayjs().subtract(3, 'month'), dayjs()];
 
 /** RENT-004 렌탈 출고·반납 */
 export function RentalHandoverPage() {
@@ -47,6 +55,10 @@ export function RentalHandoverPage() {
   const [checkoutTarget, setCheckoutTarget] = useState<RentalAllocation | null>(null);
   const [returnTarget, setReturnTarget] = useState<RentalAllocation | null>(null);
   const [changeOpen, setChangeOpen] = useState(false);
+  /** 연락·비고 창 대상 */
+  const [notesTarget, setNotesTarget] = useState<RentalAllocation | null>(null);
+  /** 아침에 "밀린 것부터" 볼 때 쓰는 조회. 기간·검색어와 함께 걸린다. */
+  const [overdueOnly, setOverdueOnly] = useState(false);
 
   const [checkoutForm] = Form.useForm<{ checkoutDate: Dayjs; notes?: string }>();
   const [returnForm] = Form.useForm<{ returnDate: Dayjs; availableFrom: Dayjs; nextStatus: RentalItemStatus }>();
@@ -58,17 +70,40 @@ export function RentalHandoverPage() {
   const keyword = searchParams.get('q') ?? '';
   const q = keyword.trim();
 
+  /*
+   * 처리 탭(출고·반납)의 조회 기간. 비우면 지금까지처럼 오늘 기준 일일운영 목록이고,
+   * 기간을 잡으면 대여 기간이 거기 걸치는 건을 전부 본다("8월에 나가는 옷" 식 조회).
+   */
+  const [period, setPeriod] = useState<[Dayjs, Dayjs] | null>(null);
+  const periodParams = period
+    ? { from: period[0].format('YYYY-MM-DD'), to: period[1].format('YYYY-MM-DD') }
+    : {};
+  const periodKey = period ? `${periodParams.from}~${periodParams.to}` : '';
+
   const pickupsQuery = useQuery({
-    queryKey: ['rentals', 'allocations', 'pickup', q],
-    queryFn: () => fetchAllocations('pickup', { q }),
+    queryKey: ['rentals', 'allocations', 'pickup', q, periodKey, overdueOnly],
+    queryFn: () => fetchAllocations('pickup', { q, ...periodParams, overdueOnly }),
   });
   const returnsQuery = useQuery({
-    queryKey: ['rentals', 'allocations', 'return', q],
-    queryFn: () => fetchAllocations('return', { q }),
+    queryKey: ['rentals', 'allocations', 'return', q, periodKey, overdueOnly],
+    queryFn: () => fetchAllocations('return', { q, ...periodParams, overdueOnly }),
+  });
+
+  // 지난 내역은 기간으로 찾는다 — 기본 최근 3개월, 버튼·달력으로 더 이전까지 늘릴 수 있다.
+  const [historyRange, setHistoryRange] = useState<[Dayjs, Dayjs]>(defaultHistoryRange);
+  const historyQuery = useQuery({
+    queryKey: ['rentals', 'allocations', 'history', q, historyRange[0].format('YYYY-MM-DD'), historyRange[1].format('YYYY-MM-DD')],
+    queryFn: () =>
+      fetchAllocations('history', {
+        q,
+        from: historyRange[0].format('YYYY-MM-DD'),
+        to: historyRange[1].format('YYYY-MM-DD'),
+      }),
   });
 
   const pickups = pickupsQuery.data ?? [];
   const returns = returnsQuery.data ?? [];
+  const history = historyQuery.data ?? [];
 
   // q로 진입했을 때는 실제 매칭 행이 있는 탭을 자동 선택한다.
   // (이미 출고된 건은 '반납 대상'에만 있고, 픽업 탭만 열려 "데이터 없음"으로 보이던 문제 해결)
@@ -202,38 +237,127 @@ export function RentalHandoverPage() {
     return `${color ? `${color} — ` : ''}세탁 확인에 ${days}일이 걸립니다. 그날이 되면 자동으로 대여 가능으로 바뀝니다.`;
   };
 
-  const pickupColumns: ColumnsType<RentalAllocation> = [
-    ...commonColumns,
+  /**
+   * 진행 상태 — 날짜에서 계산되는 값이라 저장하지 않는다(배정 상태는 예약·출고·반납·취소 넷).
+   * 며칠 밀렸는지까지 쓴다. 하루 늦은 건과 열흘 늦은 건은 대응이 다르다.
+   */
+  const progressCell = (r: RentalAllocation) => {
+    const days = r.overdueDays ?? 0;
+    // 점(배지)은 지연에만 붙인다 — 정상 진행까지 색을 달면 눈이 어디에도 안 멈춘다.
+    const overdue = (label: string) => <StatusBadge label={label} color="red" />;
+    const plain = (label: string) => <Typography.Text>{label}</Typography.Text>;
+    if (r.status === 'RESERVED')
+      return days > 0
+        ? overdue(`미픽업 ${days}일`)
+        : plain(r.pickupDate === todayStr ? '오늘 픽업' : `픽업 예정 D-${dayjs(r.pickupDate).diff(todayStr, 'day')}`);
+    if (r.status === 'CHECKED_OUT')
+      return days > 0
+        ? overdue(`반납 지연 ${days}일`)
+        : plain(r.returnDueDate === todayStr ? '오늘 반납' : '대여 중');
+    if (r.status === 'RETURNED') return days > 0 ? overdue(`지연 반납 ${days}일`) : plain('반납 완료');
+    return plain(metaOf(ALLOCATION_STATUS_META, r.status).label);
+  };
+
+  /** 연락 횟수·비고 — 누르면 연락·비고 창이 열린다. 세 탭이 같은 두 열을 쓴다. */
+  const noteColumns: ColumnsType<RentalAllocation> = [
     {
-      title: '픽업일',
-      dataIndex: 'pickupDate',
-      width: COL.name,
-      render: (d: string) => (
-        <Space size={4}>
-          {d}
-          {d < todayStr && <Tag color="red">지연</Tag>}
-        </Space>
-      ),
-    },
-    { title: '반납 예정일', dataIndex: 'returnDueDate', width: COL.name },
-    {
-      title: '액션',
-      key: 'actions',
-      width: COL.action1,
+      title: '연락',
+      key: 'contact',
+      width: COL.count,
+      align: 'center',
+      // 몇 번 연락했는지가 이 칸의 답이다 — 0회도 숫자로 쓴다(빈 칸이면 안 세어 본 것과 구분이 안 된다).
       render: (_, r) => (
-        <Button
-          size="small"
-          type="primary"
-          icon={<ExportOutlined />}
-          onClick={() => {
-            setCheckoutTarget(r);
-            checkoutForm.setFieldsValue({ checkoutDate: dayjs(), notes: undefined });
-          }}
-        >
-          출고
+        <Button size="small" type="link" onClick={() => setNotesTarget(r)}>
+          {r.contactCount ?? 0}회
         </Button>
       ),
     },
+    {
+      title: '비고',
+      key: 'note',
+      width: COL.text,
+      // 가장 최근 한 줄만. 전체는 연락·비고 창에서 본다.
+      render: (_, r) =>
+        r.lastNote ? (
+          <Space direction="vertical" size={0} style={{ cursor: 'pointer' }} onClick={() => setNotesTarget(r)}>
+            <Space size={4}>
+              <Tag color={metaOf(ALLOCATION_NOTE_KIND_META, r.lastNote.kind).color}>
+                {metaOf(ALLOCATION_NOTE_KIND_META, r.lastNote.kind).label}
+              </Tag>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {dayjs(r.lastNote.createdAt).format('M/D')} {r.lastNote.actorName}
+              </Typography.Text>
+            </Space>
+            <Typography.Text ellipsis={{ tooltip: r.lastNote.body }}>{r.lastNote.body}</Typography.Text>
+          </Space>
+        ) : (
+          <Typography.Text type="secondary">-</Typography.Text>
+        ),
+    },
+  ];
+
+  /**
+   * 연락 버튼은 지연 건에만 둔다 — 제때 가는 건까지 버튼을 달면 액션 칸이 두 개로 늘어
+   * 정작 눌러야 할 [출고]·[반납]이 묻힌다. 지연이 아닌 건도 연락 칸의 횟수를 누르면
+   * 같은 창이 열리므로 길이 막히지는 않는다.
+   */
+  const contactButton = (r: RentalAllocation) =>
+    (r.overdueDays ?? 0) > 0 ? (
+      <Can permission="NOTIFICATION_SEND">
+        <Button size="small" danger onClick={() => setNotesTarget(r)}>
+          연락
+        </Button>
+      </Can>
+    ) : null;
+
+  const pickupColumns: ColumnsType<RentalAllocation> = [
+    ...commonColumns,
+    { title: '픽업일', dataIndex: 'pickupDate', width: COL.name },
+    { title: '반납 예정일', dataIndex: 'returnDueDate', width: COL.name },
+    { title: '진행 상태', key: 'progress', width: COL.name, render: (_, r) => progressCell(r) },
+    ...noteColumns,
+    {
+      title: '액션',
+      key: 'actions',
+      width: COL.action2,
+      render: (_, r) => (
+        <Space size={4}>
+          <Button
+            size="small"
+            type="primary"
+            onClick={() => {
+              setCheckoutTarget(r);
+              checkoutForm.setFieldsValue({ checkoutDate: dayjs(), notes: undefined });
+            }}
+          >
+            출고
+          </Button>
+          {contactButton(r)}
+        </Space>
+      ),
+    },
+  ];
+
+  /** 지난 내역 — 끝난 건이라 처리 버튼이 없다. "언제 나갔다 언제 들어왔나"가 전부다. */
+  const historyColumns: ColumnsType<RentalAllocation> = [
+    ...commonColumns,
+    {
+      title: '출고일',
+      dataIndex: 'actualPickupAt',
+      width: COL.name,
+      render: (v: string | null | undefined, r) => v?.slice(0, 10) ?? r.pickupDate ?? '-',
+    },
+    {
+      title: '반납일',
+      dataIndex: 'actualReturnAt',
+      width: COL.name,
+      // 취소 건은 나간 적이 없어 반납일도 없다.
+      render: (v: string | null | undefined) => v?.slice(0, 10) ?? '-',
+    },
+    { title: '반납 예정일', dataIndex: 'returnDueDate', width: COL.name },
+    // 예정일보다 늦게 들어온 건은 끝난 뒤에도 표가 나야 한다 — 진행 상태가 일수까지 말해 준다.
+    { title: '진행 상태', key: 'progress', width: COL.name, render: (_, r) => progressCell(r) },
+    ...noteColumns,
   ];
 
   const returnColumns: ColumnsType<RentalAllocation> = [
@@ -245,26 +369,17 @@ export function RentalHandoverPage() {
       // 예정일이 아니라 실제로 나간 날. 백엔드 뷰는 actualPickupAt으로 내려 준다.
       render: (d: string | undefined, r) => d ?? r.actualPickupAt?.slice(0, 10) ?? '-',
     },
-    {
-      title: '반납 예정일',
-      dataIndex: 'returnDueDate',
-      width: COL.wide,
-      render: (d: string) => (
-        <Space size={4}>
-          {d}
-          {d < todayStr && <Tag color="red">반납 지연</Tag>}
-          {d === todayStr && <Tag color="orange">오늘</Tag>}
-        </Space>
-      ),
-    },
+    { title: '반납 예정일', dataIndex: 'returnDueDate', width: COL.name },
+    { title: '진행 상태', key: 'progress', width: COL.name, render: (_, r) => progressCell(r) },
+    ...noteColumns,
     {
       title: '액션',
       key: 'actions',
-      width: COL.action1,
+      width: COL.action2,
       render: (_, r) => (
+        <Space size={4}>
         <Button
           size="small"
-          icon={<ImportOutlined />}
           onClick={() => {
             setReturnTarget(r);
             returnForm.setFieldsValue({
@@ -279,6 +394,8 @@ export function RentalHandoverPage() {
         >
           반납
         </Button>
+          {contactButton(r)}
+        </Space>
       ),
     },
   ];
@@ -289,20 +406,55 @@ export function RentalHandoverPage() {
         {/* 화면끼리 잇던 [재고 목록]·[가용 검색·배정으로] 버튼은 뺐다 —
             좌측 메뉴 "렌탈 관리" 아래 같은 이동이 있고, 렌탈 세 화면이 그 버튼을
             저마다 다른 자리에 두는 바람에 배치가 어긋나 있었다. */}
+        {/*
+          검색과 기간은 탭 밖에 둔다 — 같은 조건으로 세 탭을 오가며 보게 된다.
+          기간의 뜻만 탭마다 다르다: 처리 탭은 대여 기간(걸치면 나온다), 지난 내역은 처리일.
+        */}
         <ListToolbar
           filters={
-            <Input.Search
-              allowClear
-              style={{ width: LAYOUT.searchWidth }}
-              placeholder="고객명 · 주문번호 · 실물 ID 검색"
-              defaultValue={keyword}
-              onSearch={(v) => {
-                const next = new URLSearchParams(searchParams);
-                if (v.trim()) next.set('q', v.trim());
-                else next.delete('q');
-                setSearchParams(next, { replace: true });
-              }}
-            />
+            <Space size={8} wrap>
+              <Input.Search
+                allowClear
+                style={{ width: LAYOUT.searchWidth }}
+                placeholder="고객명 · 주문번호 · 실물 ID 검색"
+                defaultValue={keyword}
+                onSearch={(v) => {
+                  const next = new URLSearchParams(searchParams);
+                  if (v.trim()) next.set('q', v.trim());
+                  else next.delete('q');
+                  setSearchParams(next, { replace: true });
+                }}
+              />
+              {activeTab === 'history' ? (
+                <>
+                  <Typography.Text type="secondary">반납·취소일</Typography.Text>
+                  <DatePicker.RangePicker
+                    allowClear={false}
+                    value={historyRange}
+                    onChange={(v) => v && setHistoryRange([v[0]!, v[1]!])}
+                  />
+                  {/* 기본은 최근 3개월. 더 이전 건은 기간을 늘려 찾는다. */}
+                  <Button onClick={() => setHistoryRange(defaultHistoryRange())}>최근 3개월</Button>
+                  <Button onClick={() => setHistoryRange([dayjs().subtract(1, 'year'), dayjs()])}>최근 1년</Button>
+                  <Button onClick={() => setHistoryRange([dayjs('2020-01-01'), dayjs()])}>전체 기간</Button>
+                </>
+              ) : (
+                <>
+                  <Typography.Text type="secondary">대여 기간</Typography.Text>
+                  <DatePicker.RangePicker
+                    value={period}
+                    onChange={(v) => setPeriod(v && v[0] && v[1] ? [v[0], v[1]] : null)}
+                  />
+                  <Typography.Text type="secondary">
+                    {period ? '기간에 걸치는 건 모두' : '비우면 오늘 기준'}
+                  </Typography.Text>
+                  {/* 밀린 것부터 훑을 때 쓴다 — 지연일수는 서버가 계산한다. */}
+                  <Checkbox checked={overdueOnly} onChange={(e) => setOverdueOnly(e.target.checked)}>
+                    지연만 보기
+                  </Checkbox>
+                </>
+              )}
+            </Space>
           }
         />
 
@@ -333,6 +485,23 @@ export function RentalHandoverPage() {
                   loading={returnsQuery.isLoading}
                   dataSource={returns}
                   columns={returnColumns}
+                  pagination={false}
+                />
+              ),
+            },
+            {
+              /*
+               * 끝난 건(반납 완료·취소). 앞의 두 탭은 처리하러 오는 화면이라 지금 상태인 것만
+               * 떠야 하고, 지난 기록은 여기서 기간으로 찾는다. 처리 버튼은 두지 않는다.
+               */
+              key: 'history',
+              label: `지난 내역 (${history.length})`,
+              children: (
+                <DataTable<RentalAllocation>
+                  rowKey="id"
+                  loading={historyQuery.isLoading}
+                  dataSource={history}
+                  columns={historyColumns}
                   pagination={false}
                 />
               ),
@@ -506,6 +675,8 @@ export function RentalHandoverPage() {
           </Form.Item>
         </Form>
       </Modal>
+
+      <RentalAllocationNotesModal allocation={notesTarget} onClose={() => setNotesTarget(null)} />
 
       <PageCard>
         <Space size="large" wrap>

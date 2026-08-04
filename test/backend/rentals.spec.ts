@@ -710,6 +710,192 @@ describe('렌탈 실물 재고·기간 배정·출고·반납 (Phase 5)', () => 
     }
   });
 
+  it('기간을 주면 대여 기간이 걸치는 건을 전부 돌려준다 (시작·끝이 안에 들어올 필요는 없다)', async () => {
+    await ensurePolicyOrder();
+    const component = await ctx.prisma.orderItemComponent.create({
+      data: { id: randomUUID(), orderItemId: policyOrderItemId, componentType: 'JACKET' },
+    });
+    const created = await api(ctx)
+      .post('/api/v1/rental-inventory')
+      .set(auth(ctx))
+      .send({ componentType: 'JACKET', color: 'NAVY', size: '54' })
+      .expect(201);
+    // 12/28 나가 이듬해 1/3에 들어오는 건 — 12월로 찾아도 1월로 찾아도 걸려야 한다.
+    const allocation = await api(ctx)
+      .post(`/api/v1/rental-orders/${policyOrderId}/allocations`)
+      .set(auth(ctx))
+      .send({
+        componentId: component.id,
+        inventoryItemId: created.body.data[0].id,
+        pickupDate: '2026-12-28',
+        returnDueDate: '2027-01-03',
+      })
+      .expect(201);
+    const id = allocation.body.data.id as string;
+
+    const idsIn = async (from: string, to: string) => {
+      const res = await api(ctx)
+        .get('/api/v1/rental-allocations')
+        .set(auth(ctx))
+        .query({ view: 'pickup', from, to })
+        .expect(200);
+      return (res.body.data as { id: string }[]).map((r) => r.id);
+    };
+
+    expect(await idsIn('2026-12-01', '2026-12-31')).toContain(id); // 나가는 달
+    expect(await idsIn('2027-01-01', '2027-01-31')).toContain(id); // 들어오는 달
+    expect(await idsIn('2026-12-30', '2026-12-31')).toContain(id); // 기간 한가운데
+    expect(await idsIn('2026-11-01', '2026-11-30')).not.toContain(id); // 안 걸치는 달
+  });
+
+  it('지난 내역 뷰는 끝난 건만 기간으로 돌려준다 (처리 대상 목록에는 안 남는다)', async () => {
+    const { allocationId: doneId } = await returnOneItem(
+      'NAVY',
+      { pickupDate: '2026-12-01', returnDueDate: '2026-12-02' },
+      { returnDate: '2026-12-02' },
+    );
+
+    const inRange = await api(ctx)
+      .get('/api/v1/rental-allocations')
+      .set(auth(ctx))
+      .query({ view: 'history', from: '2026-12-01', to: '2026-12-31' })
+      .expect(200);
+    const found = (inRange.body.data as { id: string; status: string; actualReturnAt: string }[]).find(
+      (r) => r.id === doneId,
+    );
+    expect(found?.status).toBe('RETURNED');
+    expect(found?.actualReturnAt).toContain('2026-12-02');
+
+    // 기간 밖이면 안 나온다 — 기본값(최근 3개월)으로도 12월 건은 안 잡힌다.
+    const outOfRange = await api(ctx)
+      .get('/api/v1/rental-allocations')
+      .set(auth(ctx))
+      .query({ view: 'history', from: '2026-01-01', to: '2026-01-31' })
+      .expect(200);
+    expect((outOfRange.body.data as { id: string }[]).map((r) => r.id)).not.toContain(doneId);
+
+    // 반납이 끝난 건은 처리 대상 목록(출고·반납)에는 남지 않는다
+    for (const view of ['pickup', 'return']) {
+      const res = await api(ctx)
+        .get('/api/v1/rental-allocations')
+        .set(auth(ctx))
+        .query({ view, date: '2026-12-02' })
+        .expect(200);
+      expect((res.body.data as { id: string }[]).map((r) => r.id)).not.toContain(doneId);
+    }
+  });
+
+  it('연락·회신·변경을 비고로 쌓고, 연락 횟수와 최근 비고를 목록에 실어 준다', async () => {
+    await ensurePolicyOrder();
+    const component = await ctx.prisma.orderItemComponent.create({
+      data: { id: randomUUID(), orderItemId: policyOrderItemId, componentType: 'JACKET' },
+    });
+    const created = await api(ctx)
+      .post('/api/v1/rental-inventory')
+      .set(auth(ctx))
+      .send({ componentType: 'JACKET', color: 'NAVY', size: '54' })
+      .expect(201);
+    const allocation = await api(ctx)
+      .post(`/api/v1/rental-orders/${policyOrderId}/allocations`)
+      .set(auth(ctx))
+      .send({
+        componentId: component.id,
+        inventoryItemId: created.body.data[0].id,
+        pickupDate: '2027-02-01',
+        returnDueDate: '2027-02-03',
+      })
+      .expect(201);
+    const id = allocation.body.data.id as string;
+
+    // 회신 — 전화로 받은 답을 남긴다
+    await api(ctx)
+      .post(`/api/v1/rental-allocations/${id}/notes`)
+      .set(auth(ctx))
+      .send({ kind: 'REPLY', body: '3일 뒤 방문하겠다고 함' })
+      .expect(201);
+    // 반납일 변경은 기록만 — 배정 기간은 그대로 둔다
+    await api(ctx)
+      .post(`/api/v1/rental-allocations/${id}/notes`)
+      .set(auth(ctx))
+      .send({ kind: 'CHANGE', newReturnDueDate: '2027-02-06', body: '고객 요청' })
+      .expect(201);
+    // 연락은 실제 발송을 거쳐야 하므로 이 경로로 만들 수 없다
+    await api(ctx)
+      .post(`/api/v1/rental-allocations/${id}/notes`)
+      .set(auth(ctx))
+      .send({ kind: 'CONTACT', body: '보냄' })
+      .expect(400);
+    // 발송 결과 봉합 — 이것만 횟수에 잡힌다. 보낸 문구는 담지 않는다(문구가 하나뿐이라 다 같다).
+    const contact = await api(ctx)
+      .post(`/api/v1/rental-allocations/${id}/contacts`)
+      .set(auth(ctx))
+      .send({ channel: 'ALIMTALK' })
+      .expect(201);
+    expect(contact.body.data.body).toBe('연락 발송 · 알림톡');
+
+    const notes = await api(ctx).get(`/api/v1/rental-allocations/${id}/notes`).set(auth(ctx)).expect(200);
+    const kinds = (notes.body.data as { kind: string; body: string }[]).map((n) => n.kind);
+    expect(kinds).toEqual(['CONTACT', 'CHANGE', 'REPLY']); // 최근 것부터
+    const change = (notes.body.data as { kind: string; body: string }[]).find((n) => n.kind === 'CHANGE');
+    expect(change?.body).toBe('반납 예정일 2027-02-03 → 2027-02-06 · 고객 요청');
+
+    // 기록해도 배정의 반납 예정일은 그대로다 — 기간 잠금을 흔들지 않는다
+    const untouched = await ctx.prisma.rentalAllocation.findUniqueOrThrow({ where: { id } });
+    expect(untouched.returnDueDate.toISOString().slice(0, 10)).toBe('2027-02-03');
+
+    const list = await api(ctx)
+      .get('/api/v1/rental-allocations')
+      .set(auth(ctx))
+      .query({ view: 'pickup', from: '2027-02-01', to: '2027-02-28' })
+      .expect(200);
+    const row = (list.body.data as { id: string; contactCount: number; lastNote: { kind: string } }[]).find(
+      (r) => r.id === id,
+    );
+    expect(row?.contactCount).toBe(1);
+    // 비고에는 연락이 올라오지 않는다 — 횟수는 연락 칸이 말하고, 비고는 "그래서 뭐라던가"를 본다.
+    expect(row?.lastNote.kind).toBe('CHANGE');
+  });
+
+  it('지연일수를 계산하고 지연만 보기로 거른다', async () => {
+    await ensurePolicyOrder();
+    const component = await ctx.prisma.orderItemComponent.create({
+      data: { id: randomUUID(), orderItemId: policyOrderItemId, componentType: 'JACKET' },
+    });
+    const created = await api(ctx)
+      .post('/api/v1/rental-inventory')
+      .set(auth(ctx))
+      .send({ componentType: 'JACKET', color: 'NAVY', size: '54' })
+      .expect(201);
+    const allocation = await api(ctx)
+      .post(`/api/v1/rental-orders/${policyOrderId}/allocations`)
+      .set(auth(ctx))
+      .send({
+        componentId: component.id,
+        inventoryItemId: created.body.data[0].id,
+        pickupDate: '2027-03-01',
+        returnDueDate: '2027-03-05',
+      })
+      .expect(201);
+    const id = allocation.body.data.id as string;
+
+    const rowOn = async (date: string, extra: Record<string, unknown> = {}) => {
+      const res = await api(ctx)
+        .get('/api/v1/rental-allocations')
+        .set(auth(ctx))
+        .query({ view: 'pickup', from: '2027-03-01', to: '2027-03-31', date, ...extra })
+        .expect(200);
+      return (res.body.data as { id: string; overdueDays: number }[]).find((r) => r.id === id);
+    };
+
+    // 픽업일 당일은 아직 안 밀렸다
+    expect((await rowOn('2027-03-01'))?.overdueDays).toBe(0);
+    // 사흘 지나면 미픽업 3일
+    expect((await rowOn('2027-03-04'))?.overdueDays).toBe(3);
+    // 지연만 보기 — 안 밀린 날에는 목록에서 빠진다
+    expect(await rowOn('2027-03-01', { overdueOnly: true })).toBeUndefined();
+    expect((await rowOn('2027-03-04', { overdueOnly: true }))?.overdueDays).toBe(3);
+  });
+
   it('컬러 추가는 이름과 색 계열만 받고 코드·순번은 서버가 채운다', async () => {
     const created: string[] = [];
     try {

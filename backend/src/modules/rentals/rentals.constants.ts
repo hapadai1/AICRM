@@ -49,6 +49,20 @@ export const DEFAULT_RETURN_POLICY = {
   autoRelease: true,
 } as const;
 
+/**
+ * 배정 비고 종류.
+ * CONTACT는 발송 결과를 봉합할 때만 생기고 사람이 직접 고를 수 없다 —
+ * 실제로 나가지 않은 연락이 횟수에 잡히면 "몇 번 연락했나"를 못 믿게 된다.
+ */
+export const ALLOCATION_NOTE_KINDS = ['CONTACT', 'REPLY', 'CHANGE', 'MEMO'];
+export const MANUAL_NOTE_KINDS = ['REPLY', 'CHANGE', 'MEMO'];
+
+/**
+ * 렌탈 고객 연락 문구. 픽업·반납, 안내·독촉으로 가르지 않고 하나만 둔다 —
+ * 담당자가 발송 확인창에서 그 자리에서 고쳐 보낸다 (현업 확정 2026-08-03).
+ */
+export const RENTAL_NOTICE_TEMPLATE_CODE = 'RENTAL_NOTICE';
+
 /** 배정 이벤트 타입 (데이터모델설계서 11.4) */
 export const ALLOCATION_EVENT_TYPES = {
   ASSIGNED: 'ASSIGNED',

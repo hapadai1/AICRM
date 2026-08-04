@@ -392,6 +392,37 @@ async function seedRentalColors(): Promise<void> {
   console.log(`rental_colors: ${RENTAL_COLORS.length}건 (예전 색 ${deactivated.count}건 비활성)`);
 }
 
+/**
+ * 렌탈 고객 연락 문구 — 픽업 안내·반납 독촉을 가르지 않고 하나만 둔다.
+ * 상황에 따라 다르게 쓸 일은 담당자가 발송 확인창에서 그 자리에서 고친다
+ * (현업 확정 2026-08-03). 운영 중 수정분은 시드 재실행 때 덮지 않는다.
+ */
+async function seedRentalNoticeTemplate(): Promise<void> {
+  const body = `안녕하세요, #{고객명} 고객님🤗
+슈트에이전시입니다.
+
+대여 品 #{품목} (#{규격}) 관련 안내드립니다.
+· 픽업 예정일 : #{픽업일}
+· 반납 예정일 : #{반납예정일}
+
+문의는 카카오 채널로 주시면 신속하게 도와드리겠습니다.
+❖슈트에이전시 카카오 채널: http://pf.kakao.com/_VUxaAX
+❖슈트에이전시 쇼룸 : 02-6409-4799`;
+  await prisma.notificationTemplate.upsert({
+    where: { code: 'RENTAL_NOTICE' },
+    update: {},
+    create: {
+      id: randomUUID(),
+      code: 'RENTAL_NOTICE',
+      name: '렌탈 안내',
+      channel: 'ALIMTALK',
+      body,
+      approvalStatus: 'PENDING',
+    },
+  });
+  console.log('notification_templates(렌탈 안내): 1건');
+}
+
 /** 정비 기준은 관리자가 화면에서 바꾸는 값이라, 이미 있으면 덮지 않는다. */
 async function seedRentalReturnPolicy(): Promise<void> {
   const { id, ...defaults } = RENTAL_RETURN_POLICY;
@@ -562,6 +593,7 @@ async function main(): Promise<void> {
   await seedRentalColors();
   await seedRentalSizes();
   await seedRentalReturnPolicy();
+  await seedRentalNoticeTemplate();
   await seedRentalInventory();
   await seedOptionSets();
   await seedContractTypes();

@@ -17,6 +17,7 @@ import {
 import { PageQueryDto } from '../../common/pagination';
 import {
   DATE_ONLY_REGEX,
+  MANUAL_NOTE_KINDS,
   RENTAL_COMPONENT_TYPES,
   RENTAL_ITEM_STATUSES,
   RETURN_NEXT_ITEM_STATUSES,
@@ -214,15 +215,51 @@ export class CheckoutDto {
 
 /** 출고·반납 대상 목록 (RENT-004 화면 뷰) */
 export class AllocationListQueryDto {
-  @IsIn(['pickup', 'return']) view: string;
+  /** pickup=출고 대상, return=반납 대상, history=끝난 건(반납 완료·취소) */
+  @IsIn(['pickup', 'return', 'history']) view: string;
   /** 기준일 (기본: 오늘) */
   @IsOptional() @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) date?: string;
+  /**
+   * 조회 기간. 뷰마다 기준이 다르다:
+   * - pickup·return: 대여 기간(픽업일~반납예정일)이 이 구간에 **걸치는** 건 전부.
+   *   "8월에 나가는 옷"을 찾을 때 8/31에 나가 9/2에 들어오는 건도 걸려야 한다.
+   * - history: 반납·취소 처리일 기준. 기본은 최근 3개월이고 더 이전도 찾을 수 있다.
+   */
+  @IsOptional() @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) from?: string;
+  @IsOptional() @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) to?: string;
   /**
    * 특정 건 검색어(주문번호·고객명·실물 관리코드).
    * 진행단계 카드 등에서 한 건을 처리하러 들어올 때 사용한다.
    * 지정하면 pickup 뷰의 "오늘 이하" 날짜 제한을 풀어, 픽업일이 미래인 예약도 함께 반환한다.
    */
   @IsOptional() @IsString() @IsNotEmpty() @MaxLength(100) q?: string;
+  /** 지연 건만 — 아침에 "밀린 것부터" 볼 때 쓴다. */
+  @IsOptional()
+  @Transform(({ value }) => (value === 'true' ? true : value === 'false' ? false : value))
+  @IsBoolean()
+  overdueOnly?: boolean;
+}
+
+/**
+ * 배정 비고 추가. CONTACT는 여기로 만들지 않는다 — 실제 발송 결과를 봉합하는
+ * 전용 경로(POST .../contacts)로만 생긴다.
+ */
+export class CreateAllocationNoteDto {
+  @IsIn(MANUAL_NOTE_KINDS) kind: string;
+  /** CHANGE면 사유(선택), 그 외에는 내용 자체라 필수다. */
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(1000) body?: string;
+  /** CHANGE 전용 — 고객이 말한 새 반납 예정일. 배정 기간은 건드리지 않는다. */
+  @IsOptional() @Matches(DATE_ONLY_REGEX, { message: DATE_MSG }) newReturnDueDate?: string;
+}
+
+/**
+ * 연락 발송 결과 봉합 — 화면이 발송을 마친 뒤 그 결과를 배정에 붙인다.
+ * 보낸 문구는 받지 않는다. 렌탈 연락은 문구가 하나뿐이라 건마다 같은 글이 쌓일 뿐이고,
+ * 실제 본문은 알림 이력에 있다 (현업 확정 2026-08-04).
+ */
+export class CreateAllocationContactDto {
+  @IsOptional() @IsUUID() notificationHistoryId?: string;
+  @IsOptional() @IsString() @MaxLength(20) channel?: string;
 }
 
 /** 배정 대상 렌탈 구성품 목록 (RENT-003 화면 뷰) */

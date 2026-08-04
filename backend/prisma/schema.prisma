@@ -52,6 +52,7 @@ model User {
   productionEvents            ProductionEvent[]            @relation("ProductionEventActor")
   assignedRentalAllocations   RentalAllocation[]           @relation("RentalAllocationAssignedBy")
   rentalAllocationEvents      RentalAllocationEvent[]      @relation("RentalAllocationEventActor")
+  rentalAllocationNotes       RentalAllocationNote[]       @relation("RentalAllocationNoteActor")
   rentalInventoryStatusEvents RentalInventoryStatusEvent[] @relation("RentalInventoryStatusEventActor")
   repairStatusEvents          RepairStatusEvent[]          @relation("RepairStatusEventActor")
   targetedSharedNotes         SharedNote[]                 @relation("SharedNoteTarget")
@@ -518,8 +519,8 @@ model OrderItem {
   createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt            DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  order              Order                @relation(fields: [orderId], references: [id])
-  sourceContractItem ContractItem         @relation(fields: [sourceContractItemId], references: [id])
+  order              Order                  @relation(fields: [orderId], references: [id])
+  sourceContractItem ContractItem           @relation(fields: [sourceContractItemId], references: [id])
   components         OrderItemComponent[]
   measurementLinks   OrderItemMeasurement[]
   workOrder          WorkOrder?
@@ -963,10 +964,37 @@ model RentalAllocation {
   rentalInventoryItem RentalInventoryItem     @relation(fields: [rentalInventoryItemId], references: [id])
   assignedByUser      User                    @relation("RentalAllocationAssignedBy", fields: [assignedBy], references: [id])
   events              RentalAllocationEvent[]
+  notes               RentalAllocationNote[]
 
   @@index([rentalInventoryItemId, pickupDate, availabilityEndDate])
   @@index([returnDueDate, status])
   @@map("rental_allocations")
+}
+
+/// 배정 한 건에 붙는 비고 — 연락·회신·변경·메모가 한 줄에 시간순으로 쌓인다.
+///
+/// 발송 이력(notification_history)은 고객·주문까지만 엮여 있어 "이 대여 건에 몇 번 연락했나"를
+/// 셀 수 없고, 보낸 사람도 감사로그에만 남아 목록에서 쓸 수 없었다. 전화로 받은 답을 적을 곳도
+/// 없었다. 반납일이 밀리는 사정도 배정 기간을 고치지 않고 여기에만 남긴다 —
+/// 원래 기간으로 걸어 둔 기간 잠금을 흔들지 않으려는 것이다(현업 확정 2026-08-03).
+model RentalAllocationNote {
+  id                    String   @id @db.Uuid
+  rentalAllocationId    String   @map("rental_allocation_id") @db.Uuid
+  /// CONTACT(연락 발송) · REPLY(고객 회신) · CHANGE(반납일 등 변경) · MEMO
+  kind                  String   @map("kind") @db.VarChar(20)
+  body                  String   @map("body")
+  /// 쓴 사람 = 보낸 사람
+  actorId               String   @map("actor_id") @db.Uuid
+  /// CONTACT일 때 실제 발송 이력
+  notificationHistoryId String?  @map("notification_history_id") @db.Uuid
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  rentalAllocation    RentalAllocation     @relation(fields: [rentalAllocationId], references: [id])
+  actor               User                 @relation("RentalAllocationNoteActor", fields: [actorId], references: [id])
+  notificationHistory NotificationHistory? @relation(fields: [notificationHistoryId], references: [id])
+
+  @@index([rentalAllocationId, createdAt(sort: Desc)])
+  @@map("rental_allocation_notes")
 }
 
 model RentalAllocationEvent {
@@ -1013,9 +1041,9 @@ model RentalInventoryStatusEvent {
 /// 렌탈 컬러. componentTypes = 이 색이 존재하는 품목 목록(예: 3피스는 상의·하의·베스트).
 /// 비어 있으면 전 품목 공통으로 본다.
 model RentalColor {
-  id   String @id @db.Uuid
-  code String @unique @map("code") @db.VarChar(30)
-  name String @map("name") @db.VarChar(100)
+  id             String   @id @db.Uuid
+  code           String   @unique @map("code") @db.VarChar(30)
+  name           String   @map("name") @db.VarChar(100)
   /// 반납 후 정비(세탁) 소요일을 가르는 색 계열. LIGHT=화이트·베이지 계열, DARK=그 외.
   /// 소요일 자체는 rental_return_policies에 있다 — 여기서는 어느 쪽인지만 정한다.
   tone           String   @default("DARK") @map("tone") @db.VarChar(10)
@@ -1031,16 +1059,16 @@ model RentalColor {
 /// 렌탈 반납 후 정비 기준 (ADMIN-001 "렌탈 정비 기준"). 항상 한 행만 둔다 —
 /// 매장이 하나뿐이라 기준도 하나다. id는 SINGLETON_POLICY_ID 고정값.
 model RentalReturnPolicy {
-  id String @id @db.Uuid
+  id                String   @id @db.Uuid
   /// 밝은색(tone=LIGHT) 정비 소요일 — 세탁 확인이 필요해 기본 2일
-  lightCleaningDays Int @default(2) @map("light_cleaning_days")
+  lightCleaningDays Int      @default(2) @map("light_cleaning_days")
   /// 블랙 타입(tone=DARK) 정비 소요일 — 기본 1일
-  darkCleaningDays Int @default(1) @map("dark_cleaning_days")
+  darkCleaningDays  Int      @default(1) @map("dark_cleaning_days")
   /// 정비일이 도래한 반납 대기 실물을 자동으로 대여 가능으로 올릴지
-  autoRelease Boolean  @default(true) @map("auto_release")
-  updatedBy   String?  @map("updated_by") @db.Uuid
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  autoRelease       Boolean  @default(true) @map("auto_release")
+  updatedBy         String?  @map("updated_by") @db.Uuid
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@map("rental_return_policies")
 }
@@ -1106,9 +1134,9 @@ model RentalSelectionLine {
   createdAt               DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt               DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  session                RentalSelectionSession @relation(fields: [sessionId], references: [id])
-  contractItemComponent  ContractItemComponent  @relation(fields: [contractItemComponentId], references: [id])
-  selectedInventoryItem  RentalInventoryItem?   @relation(fields: [selectedInventoryItemId], references: [id])
+  session               RentalSelectionSession @relation(fields: [sessionId], references: [id])
+  contractItemComponent ContractItemComponent  @relation(fields: [contractItemComponentId], references: [id])
+  selectedInventoryItem RentalInventoryItem?   @relation(fields: [selectedInventoryItemId], references: [id])
 
   @@unique([sessionId, contractItemComponentId])
   @@map("rental_selection_lines")
@@ -1119,29 +1147,29 @@ model RentalSelectionLine {
 // -----------------------------------------------------------------------------
 
 model RepairRequest {
-  id                    String    @id @db.Uuid
-  customerId            String    @map("customer_id") @db.Uuid
-  orderId               String?   @map("order_id") @db.Uuid
-  orderItemId           String?   @map("order_item_id") @db.Uuid
-  componentId           String?   @map("component_id") @db.Uuid
-  repairType            String    @map("repair_type") @db.VarChar(30)
-  requestDate           DateTime  @map("request_date") @db.Date
-  dueDate               DateTime? @map("due_date") @db.Date
-  status                String    @default("RECEIVED") @map("status") @db.VarChar(25)
-  description           String    @map("description")
+  id              String    @id @db.Uuid
+  customerId      String    @map("customer_id") @db.Uuid
+  orderId         String?   @map("order_id") @db.Uuid
+  orderItemId     String?   @map("order_item_id") @db.Uuid
+  componentId     String?   @map("component_id") @db.Uuid
+  repairType      String    @map("repair_type") @db.VarChar(30)
+  requestDate     DateTime  @map("request_date") @db.Date
+  dueDate         DateTime? @map("due_date") @db.Date
+  status          String    @default("RECEIVED") @map("status") @db.VarChar(25)
+  description     String    @map("description")
   /**
    * 접수 방식 (VISIT 고객 방문 | PICKUP 방문 수거)
    */
-  receiptMethod         String?   @map("receipt_method") @db.VarChar(20)
+  receiptMethod   String?   @map("receipt_method") @db.VarChar(20)
   /**
    * 출고 방식 (VISIT 고객 방문 | DELIVERY 방문 배송)
    */
-  releaseMethod         String?   @map("release_method") @db.VarChar(20)
-  pickupAddress         String?   @map("pickup_address") @db.VarChar(300)
-  deliveryAddress       String?   @map("delivery_address") @db.VarChar(300)
-  notes                 String?   @map("notes")
-  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  releaseMethod   String?   @map("release_method") @db.VarChar(20)
+  pickupAddress   String?   @map("pickup_address") @db.VarChar(300)
+  deliveryAddress String?   @map("delivery_address") @db.VarChar(300)
+  notes           String?   @map("notes")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   // 렌탈 실물은 연결하지 않는다 — 렌탈 수선은 렌탈 진행(RENTAL 트랙)에서 관리한다.
   customer     Customer            @relation(fields: [customerId], references: [id])
@@ -1285,12 +1313,13 @@ model NotificationHistory {
   retryOfId      String?   @map("retry_of_id") @db.Uuid
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  template      NotificationTemplate? @relation(fields: [templateId], references: [id])
-  customer      Customer              @relation(fields: [customerId], references: [id])
-  order         Order?                @relation(fields: [orderId], references: [id])
-  retryOf       NotificationHistory?  @relation("NotificationRetry", fields: [retryOfId], references: [id])
-  retries       NotificationHistory[] @relation("NotificationRetry")
-  journeyEvents JourneyEvent[]
+  template              NotificationTemplate?  @relation(fields: [templateId], references: [id])
+  customer              Customer               @relation(fields: [customerId], references: [id])
+  order                 Order?                 @relation(fields: [orderId], references: [id])
+  retryOf               NotificationHistory?   @relation("NotificationRetry", fields: [retryOfId], references: [id])
+  retries               NotificationHistory[]  @relation("NotificationRetry")
+  journeyEvents         JourneyEvent[]
+  rentalAllocationNotes RentalAllocationNote[]
 
   @@index([customerId, createdAt(sort: Desc)])
   @@map("notification_history")

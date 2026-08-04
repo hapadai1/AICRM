@@ -135,7 +135,91 @@ export interface RentalAllocation {
    */
   cleaningDays?: number;
   suggestedAvailableFrom?: string;
+  /**
+   * 며칠 밀렸는가 (0이면 정상). 예약은 픽업일, 대여 중은 반납예정일 기준이고
+   * 끝난 건은 예정일보다 늦게 들어온 일수다. 화면이 날짜를 다시 재지 않는다.
+   */
+  overdueDays?: number;
+  /** 이 건에 실제로 나간 연락 횟수 */
+  contactCount?: number;
+  /** 가장 최근 비고 한 줄 (전체는 연락·비고 창에서 본다) */
+  lastNote?: RentalAllocationNote | null;
   version: number;
+}
+
+/** 대여 건 비고 — 연락·회신·변경·메모가 한 줄에 시간순으로 쌓인다. */
+export type AllocationNoteKind = 'CONTACT' | 'REPLY' | 'CHANGE' | 'MEMO';
+
+export const ALLOCATION_NOTE_KIND_META: Record<AllocationNoteKind, { label: string; color: string }> = {
+  CONTACT: { label: '연락', color: 'blue' },
+  REPLY: { label: '회신', color: 'green' },
+  CHANGE: { label: '변경', color: 'orange' },
+  MEMO: { label: '메모', color: 'default' },
+};
+
+export interface RentalAllocationNote {
+  id?: string;
+  kind: AllocationNoteKind;
+  body: string;
+  createdAt: string;
+  actorName?: string;
+  actor?: { id: string; displayName: string };
+  notificationHistoryId?: string | null;
+}
+
+/** 한 건의 비고 전체 — GET /rental-allocations/{id}/notes */
+export function fetchAllocationNotes(allocationId: string): Promise<RentalAllocationNote[]> {
+  return request<RentalAllocationNote[]>({ url: `/rental-allocations/${allocationId}/notes` });
+}
+
+/**
+ * 회신·변경·메모 추가. CHANGE는 배정의 반납 예정일을 고치지 않고 기록만 남긴다 —
+ * 원래 기간으로 걸어 둔 기간 잠금을 흔들면 그 기간에 잡힌 다음 예약이 깨진다.
+ */
+export function createAllocationNote(
+  allocationId: string,
+  body: { kind: Exclude<AllocationNoteKind, 'CONTACT'>; body?: string; newReturnDueDate?: string },
+): Promise<RentalAllocationNote> {
+  return request<RentalAllocationNote>({
+    url: `/rental-allocations/${allocationId}/notes`,
+    method: 'POST',
+    data: body,
+  });
+}
+
+/** 발송 확인창에 채울 문구 — GET /rental-allocations/{id}/contact-suggestion */
+export function fetchAllocationContactSuggestion(allocationId: string): Promise<RentalContactSuggestion | null> {
+  return request<RentalContactSuggestion | null>({
+    url: `/rental-allocations/${allocationId}/contact-suggestion`,
+  });
+}
+
+export interface RentalContactSuggestion {
+  templateId: string;
+  templateName: string;
+  channel: string;
+  recipientPhone: string;
+  customerId: string;
+  orderId?: string | null;
+  variables: Record<string, string>;
+  renderedBody: string;
+  triggerKey: string;
+}
+
+/**
+ * 발송 결과 봉합 — 실제로 보낸 뒤에만 부른다. 이 기록만 연락 횟수에 잡힌다.
+ * 보낸 문구는 넘기지 않는다 — 렌탈 연락은 문구가 하나뿐이라 건마다 같은 글이 쌓일 뿐이고,
+ * 실제 본문은 알림 이력에 남는다.
+ */
+export function createAllocationContact(
+  allocationId: string,
+  body: { channel?: string; notificationHistoryId?: string },
+): Promise<RentalAllocationNote> {
+  return request<RentalAllocationNote>({
+    url: `/rental-allocations/${allocationId}/contacts`,
+    method: 'POST',
+    data: body,
+  });
 }
 
 export interface RentalItemDetail {
@@ -545,12 +629,16 @@ export function returnAllocation(
  * q(주문번호·고객명·실물코드)를 넘기면 pickup 뷰의 날짜 제한이 풀려 미래 픽업 예약도 함께 조회된다.
  */
 export function fetchAllocations(
-  view: 'pickup' | 'return',
-  opts?: { date?: string; q?: string },
+  view: 'pickup' | 'return' | 'history',
+  opts?: { date?: string; q?: string; from?: string; to?: string; overdueOnly?: boolean },
 ): Promise<RentalAllocation[]> {
   const params: Record<string, string> = { view };
   if (opts?.date) params.date = opts.date;
   if (opts?.q?.trim()) params.q = opts.q.trim();
+  if (opts?.overdueOnly) params.overdueOnly = 'true';
+  // history 전용 기간. 안 주면 서버가 최근 3개월로 잡는다.
+  if (opts?.from) params.from = opts.from;
+  if (opts?.to) params.to = opts.to;
   return request<RentalAllocation[]>({ url: '/rental-allocations', params });
 }
 

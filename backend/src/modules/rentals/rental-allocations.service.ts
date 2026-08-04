@@ -5,6 +5,7 @@ import { BusinessException } from '../../common/business.exception';
 import { AuthUser } from '../../common/decorators';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { AllocationNoteSummary, RentalNotesService } from './rental-notes.service';
 import { RentalPolicyService } from './rental-policy.service';
 import {
   ACTIVE_ALLOCATION_STATUSES,
@@ -67,12 +68,15 @@ const ALLOCATION_VIEW_INCLUDE = {
 
 type AllocationViewRow = Prisma.RentalAllocationGetPayload<{ include: typeof ALLOCATION_VIEW_INCLUDE }>;
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 @Injectable()
 export class RentalAllocationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly policy: RentalPolicyService,
+    private readonly notes: RentalNotesService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -83,6 +87,8 @@ export class RentalAllocationsService {
    * 출고·반납 화면 목록 뷰 (연동정합화 계약 §5):
    * - pickup: RESERVED & pickupDate <= date (기본 오늘)
    * - return: CHECKED_OUT 전체 — 반납예정일 경과(지연) 건 포함, overdue 플래그 제공
+   * - history: RETURNED·CANCELLED — 끝난 건. 앞의 두 뷰는 처리하러 오는 화면이라
+   *   지금 상태인 것만 떠야 하고, 지난 기록은 기간으로 찾는 별도 뷰로 뺐다.
    */
   async list(query: AllocationListQueryDto) {
     const date = parseDateOnly(query.date ?? toDateOnlyString(new Date()));
@@ -104,14 +110,35 @@ export class RentalAllocationsService {
         }
       : undefined;
 
+    /*
+     * 기간을 주면 대여 기간이 그 구간에 걸치는 건을 전부 본다 — 시작·끝이 구간 안에
+     * 들어와야 하는 게 아니라 하루라도 겹치면 나와야 한다. 8/31에 나가 9/2에 들어오는 건은
+     * 8월로 찾아도 9월로 찾아도 걸린다.
+     */
+    const periodFilter: Prisma.RentalAllocationWhereInput =
+      query.from || query.to
+        ? {
+            ...(query.to ? { pickupDate: { lte: parseDateOnly(query.to) } } : {}),
+            ...(query.from ? { returnDueDate: { gte: parseDateOnly(query.from) } } : {}),
+          }
+        : {};
+
     const pickupWhere: Prisma.RentalAllocationWhereInput = {
       status: 'RESERVED',
-      // q가 있으면 미래 픽업일도 포함(제한 해제), 없으면 기존 "오늘 이하" 일일운영 뷰 유지.
-      ...(q ? {} : { pickupDate: { lte: date } }),
+      // 기간이나 검색어로 들어오면 "오늘 이하" 제한을 풀어 미래 픽업 예약도 함께 본다.
+      // 둘 다 없을 때만 오늘의 일일운영 뷰로 좁힌다.
+      ...(q || query.from || query.to ? periodFilter : { pickupDate: { lte: date } }),
     };
 
+    const viewWhere: Prisma.RentalAllocationWhereInput =
+      query.view === 'pickup'
+        ? pickupWhere
+        : query.view === 'history'
+          ? this.historyWhere(query)
+          : { status: 'CHECKED_OUT', ...periodFilter };
+
     const where: Prisma.RentalAllocationWhereInput = {
-      ...(query.view === 'pickup' ? pickupWhere : { status: 'CHECKED_OUT' }),
+      ...viewWhere,
       ...(keywordFilter ? { AND: [keywordFilter] } : {}),
     };
 
@@ -121,7 +148,10 @@ export class RentalAllocationsService {
       orderBy:
         query.view === 'pickup'
           ? [{ pickupDate: 'asc' }, { createdAt: 'asc' }]
-          : [{ returnDueDate: 'asc' }, { createdAt: 'asc' }],
+          : query.view === 'history'
+            ? // 최근에 끝난 것부터. 취소 건은 반납일이 없어 뒤로 밀리지 않게 처리 시각으로 잇는다.
+              [{ actualReturnAt: { sort: 'desc' as const, nulls: 'last' as const } }, { updatedAt: 'desc' as const }]
+            : [{ returnDueDate: 'asc' }, { createdAt: 'asc' }],
     });
 
     // 반납 뷰에만 정비 소요일을 실어 준다 — 화면이 대여 가능 예정일을 스스로 계산하지 않고
@@ -130,7 +160,43 @@ export class RentalAllocationsService {
       query.view === 'return'
         ? await this.policy.cleaningDaysByColor(rows.map((r) => r.rentalInventoryItem.rentalSku.color))
         : null;
-    return rows.map((row) => this.toAllocationView(row, date, cleaningDays));
+    const notes = await this.notes.summarize(rows.map((r) => r.id));
+    const views = rows.map((row) => this.toAllocationView(row, date, cleaningDays, notes));
+    // 지연만 보기는 서버가 계산한 지연일수로 거른다 — 화면이 날짜를 다시 재지 않게 한다.
+    return query.overdueOnly ? views.filter((v) => v.overdueDays > 0) : views;
+  }
+
+  /**
+   * 며칠 밀렸는가 (기준일 대비).
+   * - 예약: 픽업일이 지났는데 안 가져갔다 → 미픽업 일수
+   * - 대여 중: 반납예정일이 지났는데 안 들어왔다 → 반납 지연 일수
+   * - 끝난 건: 예정일보다 늦게 들어왔다면 그 일수(지난 내역에서 표가 나야 한다)
+   */
+  private overdueDays(row: AllocationViewRow, baseDate: Date): number {
+    const diff = (from: Date, to: Date) => Math.max(0, Math.round((to.getTime() - from.getTime()) / DAY_MS));
+    if (row.status === 'RESERVED') return diff(row.pickupDate, baseDate);
+    if (row.status === 'CHECKED_OUT') return diff(row.returnDueDate, baseDate);
+    if (row.status === 'RETURNED' && row.actualReturnAt) return diff(row.returnDueDate, row.actualReturnAt);
+    return 0;
+  }
+
+  /**
+   * 지난 내역 조건 — 끝난 건(반납 완료·취소)을 처리일 기준 기간으로 좁힌다.
+   * 기본은 최근 3개월. 그보다 이전 것은 from을 직접 넣어 찾는다(상한 없음).
+   * 취소 건은 반납일이 없으므로 갱신 시각(=취소 처리 시각)으로 기간을 판단한다.
+   */
+  private historyWhere(query: AllocationListQueryDto): Prisma.RentalAllocationWhereInput {
+    const today = toDateOnlyString(new Date());
+    const from = parseDateOnly(query.from ?? addDaysToDateOnly(today, -90));
+    // 끝나는 날은 그날 하루를 통째로 포함해야 한다 — 자정 경계로 당일 건이 빠지면 안 된다.
+    const to = new Date(parseDateOnly(query.to ?? today).getTime() + DAY_MS);
+    return {
+      status: { in: ['RETURNED', 'CANCELLED'] },
+      OR: [
+        { actualReturnAt: { gte: from, lt: to } },
+        { actualReturnAt: null, updatedAt: { gte: from, lt: to } },
+      ],
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -667,10 +733,16 @@ export class RentalAllocationsService {
   }
 
   /** 출고·반납 목록 평면 뷰 — 배정 필드 + 실물 관리코드/속성 + 고객명/주문번호/구성품 */
-  private toAllocationView(row: AllocationViewRow, baseDate: Date, cleaningDays: Map<string, number> | null) {
+  private toAllocationView(
+    row: AllocationViewRow,
+    baseDate: Date,
+    cleaningDays: Map<string, number> | null,
+    notes: Map<string, AllocationNoteSummary>,
+  ) {
     const sku = row.rentalInventoryItem.rentalSku;
     const orderItem = row.orderItemComponent.orderItem;
     const days = cleaningDays?.get(sku.color);
+    const note = notes.get(row.id);
     return {
       id: row.id,
       status: row.status,
@@ -696,6 +768,21 @@ export class RentalAllocationsService {
       customerPhone: orderItem.order.contract.customer.phone,
       /** 반납 뷰: 기준일 기준 반납예정일 경과(지연) 여부 */
       overdue: row.status === 'CHECKED_OUT' && row.returnDueDate < baseDate,
+      /**
+       * 며칠 밀렸는가. 출고 전(예약)은 픽업일, 대여 중이면 반납예정일 기준이고
+       * 안 밀렸으면 0이다. 하루 늦은 건과 열흘 늦은 건은 대응이 달라 일수까지 보낸다.
+       */
+      overdueDays: this.overdueDays(row, baseDate),
+      /** 이 건에 실제로 나간 연락 횟수와 가장 최근 비고 한 줄 */
+      contactCount: note?.contactCount ?? 0,
+      lastNote: note?.lastNote
+        ? {
+            kind: note.lastNote.kind,
+            body: note.lastNote.body,
+            createdAt: note.lastNote.createdAt,
+            actorName: note.lastNote.actorName,
+          }
+        : null,
       /** 반납 뷰: 이 색의 정비 소요일과, 기준일에 반납한다고 볼 때의 대여 가능 예정일 */
       ...(days === undefined
         ? {}
