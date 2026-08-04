@@ -8,6 +8,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FilesService } from '../files/files.service';
 import { COMPONENT_GROUP_LABELS, componentGroupsFor } from '../options/option-component-groups';
+import { orderItemIdsOfContract, syncPrepStatuses } from '../production/prep-status';
 import { buildContractExcel, ContractExcelLine } from './contract-excel';
 import {
   CancelContractDto,
@@ -577,6 +578,9 @@ export class ContractsService {
     // (2) 그 밖에 남은 ACTIVE 진행을 계약 단계로 전진시킨다.
     await this.ensureJourneysForOrders(tx, contract.customerId, orders, completedAt, actor.id);
     await this.advanceJourneysToContractConfirmed(tx, contract.customerId, completedAt, actor.id);
+
+    // 계약 전에 끝내 둔 준비(옵션 확정·채촌)를 물리화된 품목 상태에 반영한다.
+    await syncPrepStatuses(tx, await orderItemIdsOfContract(tx, contract.id), actor.id);
 
     return { orders, customerStatus: customer.customerStatus };
   }

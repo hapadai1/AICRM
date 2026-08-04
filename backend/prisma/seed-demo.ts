@@ -976,6 +976,8 @@ async function main(): Promise<void> {
       };
       await linkMeasurement(oi1, mjV1.id, false, at(-27, 10)); // 이전 연결 이력
       await linkMeasurement(oi1, mjV2.id, true, at(-7, 17));
+      // 채촌을 완료하면 그 계약의 맞춤 품목에 다 붙는다(2026-08-04 현업 확정) — 실제 동작과 같게 심는다.
+      await linkMeasurement(oi2, mjV2.id, true, at(-7, 17));
       await linkMeasurement(oi5, syV1.id, true, at(-2, 15)); // V1 출력 이후 재연결 → 재출력 필요 데모
       await linkMeasurement(oi6, syV1.id, true, at(-9, 11));
       await linkMeasurement(oi7, syV1.id, true, at(-9, 11));

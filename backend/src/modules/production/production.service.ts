@@ -323,9 +323,19 @@ export class ProductionService {
 
   /** 제작 현황 목록: 품목 + 구성품 + 집계 상태 */
   async listProductionItems(query: ProductionItemsQueryDto) {
+    /*
+      제작 관리는 계약완료된 건만 다룬다 (2026-08-04 현업 확정).
+      정상 경로에서는 계약완료(syncOrders)가 주문을, 그 직후 ensureJourneysForOrders가 진행을 만든다.
+      둘 중 하나라도 없는 주문은 진행 단계를 세울 수 없어 화면에서 빈 껍데기로 보였다 —
+      그런 주문은 목록에도 상세에도 내려보내지 않는다.
+    */
     const where: Prisma.OrderItemWhereInput = {
       ...(query.status ? { status: query.status } : {}),
-      ...(query.contractId ? { order: { contractId: query.contractId } } : {}),
+      order: {
+        ...(query.contractId ? { contractId: query.contractId } : {}),
+        contract: { status: 'COMPLETED' },
+        journeys: { some: { status: { not: 'CANCELLED' } } },
+      },
     };
     const [totalElements, items] = await this.prisma.$transaction([
       this.prisma.orderItem.count({ where }),
@@ -348,6 +358,8 @@ export class ProductionService {
               contract: {
                 select: {
                   contractNo: true,
+                  // 목록의 계약 구분 열 — 계약 목록과 같은 값을 보여준다.
+                  contractType: { select: { name: true } },
                   customer: { select: { id: true, name: true, phone: true } },
                 },
               },

@@ -52,3 +52,9 @@
 .step-body .ant-table {
   margin-inline-start: 0 !important;
 }
+
+/* 펼친 구성품 줄 — 기본 여백을 지워 품목 이름과 같은 자리에서 시작시킨다.
+ * 들여쓰기는 화면이 직접 준다(StageProgress paddingLeft). */
+.step-body .ant-table-expanded-row > td {
+  padding: 0 !important;
+}

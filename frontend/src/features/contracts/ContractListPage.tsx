@@ -19,7 +19,6 @@ import {
   Select,
   Space,
   Table,
-  Tag,
   Typography,
 } from 'antd';
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
@@ -34,7 +33,6 @@ import {
   type ContractListItem,
   type ContractSearchParams,
   type ContractStatus,
-  type ProductCategory,
 } from '../../api/contracts';
 import { useModeStore } from '../../app/mode-store';
 import { Can } from '../../shared/Can';
@@ -43,23 +41,11 @@ import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { LAYOUT } from '../../app/theme';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { COL } from '../../shared/table-width';
-import {
-  CONTRACT_STATUS_META,
-  PRODUCT_CATEGORY_LABEL,
-  TRANSACTION_TYPE_LABEL,
-  TRANSACTION_TYPE_TAG_COLOR,
-  formatKrw,
-  metaOf,
-} from './labels';
+import { CONTRACT_STATUS_META, formatKrw, metaOf } from './labels';
+
+import { ItemCompositionCell } from './ItemCompositionCell';
 
 const { RangePicker } = DatePicker;
-
-/** 품목 구성 요약 — "정장 2 · 셔츠 1". 빈 맵이면 빈 문자열 (스타일 컨설팅 목록과 동일) */
-function itemComposition(counts: Partial<Record<ProductCategory, number>>): string {
-  return (Object.keys(counts) as ProductCategory[])
-    .map((c) => `${PRODUCT_CATEGORY_LABEL[c] ?? c} ${counts[c]}`)
-    .join(' · ');
-}
 
 /**
  * 상태를 "전체"로 되돌린 상태를 URL에 남기는 값.
@@ -354,23 +340,9 @@ export function ContractListPage({
       key: 'composition',
       width: COL.wide,
       ellipsis: true,
-      render: (_, row) => {
-        const custom = itemComposition(row.customCounts);
-        const rental = itemComposition(row.rentalCounts);
-        if (!rental) return custom || '-';
-        return (
-          <Space direction="vertical" size={0}>
-            <Typography.Text ellipsis>
-              <Tag color={TRANSACTION_TYPE_TAG_COLOR.CUSTOM}>{TRANSACTION_TYPE_LABEL.CUSTOM}</Tag>
-              {custom}
-            </Typography.Text>
-            <Typography.Text ellipsis>
-              <Tag color={TRANSACTION_TYPE_TAG_COLOR.RENTAL}>{TRANSACTION_TYPE_LABEL.RENTAL}</Tag>
-              {rental}
-            </Typography.Text>
-          </Space>
-        );
-      },
+      render: (_, row) => (
+        <ItemCompositionCell customCounts={row.customCounts} rentalCounts={row.rentalCounts} />
+      ),
     },
   ];
 

@@ -5,6 +5,7 @@ import { BusinessException } from '../../common/business.exception';
 import { AuthUser } from '../../common/decorators';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { syncPrepStatuses } from '../production/prep-status';
 import { compareChoiceCodes } from './choice-codes';
 import { componentGroupsFor } from './option-component-groups';
 import {
@@ -302,6 +303,8 @@ export class OptionSessionsService {
               // 그 전(작성중)에는 작성일로 대신 건다 — 계약 목록과 같은 규칙.
               contractedAt: true,
               createdAt: true,
+              // 목록의 계약 구분 열 — 계약 목록과 같은 값을 보여준다.
+              contractType: { select: { name: true } },
               customer: { select: { id: true, name: true, phone: true } },
               currentVersion: { select: { completionDueDate: true } },
             },
@@ -361,6 +364,7 @@ export class OptionSessionsService {
         productCategory: item.productCategory,
         contractId: contract.id,
         contractNo: contract.contractNo,
+        contractTypeName: contract.contractType?.name ?? null,
         contractStatus: contract.status,
         // 계약일(미확정이면 null) + 작성일 — 목록의 기간 필터·표시가 둘을 함께 쓴다.
         contractedAt: contract.contractedAt?.toISOString() ?? null,
@@ -866,6 +870,12 @@ export class OptionSessionsService {
       );
       if (state.pending !== 0 && state.contract)
         await this.applyPendingTx(tx, session, state, actor);
+      // 옵션 확정은 준비가 한 칸 나아간 것이다 — 그 품목의 상태에 반영한다.
+      const orderItems = await tx.orderItem.findMany({
+        where: { sourceContractItemId: session.contractItemId },
+        select: { id: true },
+      });
+      await syncPrepStatuses(tx, orderItems.map((o) => o.id), actor.id);
       return confirmed;
     });
 

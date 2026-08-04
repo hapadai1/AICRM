@@ -7,6 +7,8 @@ import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FilesService, UploadedMulterFile } from '../files/files.service';
+import { syncPrepStatuses } from '../production/prep-status';
+import { canChangeWorkOrderMeasurement } from '../work-orders/work-order-status';
 import { MEASUREMENT_ITEM_MAP } from './measurement-catalog';
 import {
   CloneMeasurementSessionDto,
@@ -623,6 +625,7 @@ export class MeasurementsService {
       data: { completedAt: new Date() },
       include: SESSION_INCLUDE,
     });
+    await this.autoLinkOrderItems(completed.id, completed.customerId, completed.relatedOrderId, actor);
     await this.audit.log({
       userId: actor.id,
       action: 'COMPLETE',
@@ -698,6 +701,65 @@ export class MeasurementsService {
   // 품목-채촌 연결
   // ---------------------------------------------------------------------------
 
+  /**
+   * 채촌 완료 시 그 고객의 품목에 자동으로 붙인다 (2026-08-04 현업 확정).
+   *
+   * 한 계약에 채촌 한 번이면 그 계약 품목이 다 같은 치수를 쓴다. 전에는 담당자가 품목마다
+   * 채촌을 골라야 했고(작업지시서 화면), 고르기 전까지는 채촌을 다 재고도 작업지시서가
+   * 잠겨 제작 화면에 `미연결`로 남았다 — 실무에 없는 일이라 완료 시점에 여기서 붙인다.
+   *
+   * 건드리지 않는 품목:
+   *  - 이미 다른 채촌이 붙은 품목 — 출력했거나 담당자가 직접 고른 것이 기준이다.
+   *  - 발주(PRODUCTION_REQUESTED) 이후 품목 — 공장이 이미 그 치수로 일을 시작했다.
+   * 세션에 주문이 지정돼 있으면 그 주문 안에서만 붙인다.
+   */
+  private async autoLinkOrderItems(
+    sessionId: string,
+    customerId: string,
+    relatedOrderId: string | null,
+    actor: AuthUser,
+  ): Promise<void> {
+    const candidates = await this.prisma.orderItem.findMany({
+      where: {
+        order: {
+          ...(relatedOrderId ? { id: relatedOrderId } : {}),
+          // 렌탈은 우리 재고를 고쳐 내주는 것이라 치수를 새로 재지 않는다 — 채촌을 붙이지 않는다.
+          transactionType: { not: 'RENTAL' },
+          contract: { customerId, status: 'COMPLETED' },
+        },
+        // 이미 붙은 품목은 그대로 둔다.
+        measurementLinks: { none: { isCurrent: true } },
+      },
+      select: { id: true, status: true },
+    });
+    const targets = candidates.filter((i) => canChangeWorkOrderMeasurement(i.status));
+    if (targets.length === 0) return;
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const item of targets) {
+        await tx.orderItemMeasurement.create({
+          data: {
+            id: randomUUID(),
+            orderItemId: item.id,
+            measurementSessionId: sessionId,
+            isCurrent: true,
+            linkedBy: actor.id,
+          },
+        });
+      }
+      // 채촌이 붙으면 준비가 끝난다 — 품목 상태에 반영한다.
+      await syncPrepStatuses(tx, targets.map((t) => t.id), actor.id);
+    });
+    await this.audit.log({
+      userId: actor.id,
+      action: 'LINK',
+      entityType: 'MEASUREMENT_SESSION',
+      entityId: sessionId,
+      after: { orderItemIds: targets.map((t) => t.id) },
+      reason: '채촌 완료 시 미연결 품목 자동 연결',
+    });
+  }
+
   /** 품목 사용 채촌 버전 지정: 품목당 is_current=true 1개 보장 (단일 트랜잭션 upsert) */
   async linkOrderItem(orderItemId: string, dto: LinkOrderItemMeasurementDto, actor: AuthUser) {
     const orderItem = await this.prisma.orderItem.findUnique({
@@ -745,6 +807,8 @@ export class MeasurementsService {
           });
       if (dto.version !== undefined)
         await tx.orderItem.update({ where: { id: orderItemId }, data: { rowVersion: { increment: 1 } } });
+      // 담당자가 직접 고른 채촌도 준비가 끝난 것이다 — 자동 연결과 같게 반영한다.
+      await syncPrepStatuses(tx, [orderItemId], actor.id);
       return result;
     });
 

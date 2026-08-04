@@ -16,13 +16,8 @@ import { COL } from '../../shared/table-width';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { LAYOUT } from '../../app/theme';
-import {
-  CONTRACT_STATUS_META,
-  metaOf,
-  PRODUCT_CATEGORY_LABEL,
-  TRANSACTION_TYPE_LABEL,
-  TRANSACTION_TYPE_TAG_COLOR,
-} from '../contracts/labels';
+import { ItemCompositionCell } from '../contracts/ItemCompositionCell';
+import { CONTRACT_STATUS_META, metaOf } from '../contracts/labels';
 
 /** 납기 D-day 태그 */
 function DdayTag({ due }: { due: string }) {
@@ -48,6 +43,8 @@ interface ContractRow {
   contractDate: string;
   /** 계약 상태(DRAFT·SIGNED·COMPLETED) — 서명완료 이후는 컨설팅이 보기 전용이다 */
   contractStatus: string;
+  /** 계약 구분 이름 — 계약 목록의 같은 열. 계약에 구분이 없으면 null */
+  contractTypeName: string | null;
   customerName: string;
   customerPhone: string;
   /** 완성 예정일(납기) — 계약 내 가장 이른 납기 (YYYY-MM-DD). 없으면 null */
@@ -74,6 +71,7 @@ function groupByContract(items: OptionProgressItem[], rentals: RentalProgressIte
     const row = map.get(it.contractId) ?? {
       contractId: it.contractId,
       contractNo: it.contractNo,
+      contractTypeName: it.contractTypeName,
       contractStatus: it.contractStatus,
       contractDate: (it.contractedAt ?? it.contractCreatedAt).slice(0, 10),
       customerName: it.customerName,
@@ -113,13 +111,6 @@ function groupByContract(items: OptionProgressItem[], rentals: RentalProgressIte
     if (due && (!row.dueDate || due < row.dueDate)) row.dueDate = due;
   }
   return [...map.values()].sort((a, b) => b.contractNo.localeCompare(a.contractNo));
-}
-
-/** 품목 구성 요약 — "정장 2 · 셔츠 1". 빈 맵이면 빈 문자열 */
-function itemComposition(counts: Partial<Record<ProductCategory, number>>): string {
-  return (Object.keys(counts) as ProductCategory[])
-    .map((c) => `${PRODUCT_CATEGORY_LABEL[c]} ${counts[c]}`)
-    .join(' · ');
 }
 
 interface OptionProgressListProps {
@@ -239,6 +230,21 @@ export function OptionProgressListPage({
       ),
     },
     {
+      // 계약 목록과 같은 규격 — 계약번호는 자기 열을 주지 않고 계약 구분 아래에 붙인다
+      // (고객 열의 전화번호와 같은 방식).
+      title: '계약 구분',
+      key: 'contractType',
+      width: COL.code,
+      render: (_, row) => (
+        <Space direction="vertical" size={0}>
+          <Typography.Text ellipsis>{row.contractTypeName ?? '-'}</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {row.contractNo}
+          </Typography.Text>
+        </Space>
+      ),
+    },
+    {
       // 품목이 늘면 "정장 2 · 셔츠 1 · 조끼 1"처럼 길어지는 유일한 열이라 잘라 둔다.
       // 렌탈이 섞인 계약만 맞춤/렌탈 두 줄로 나눠 쓴다(거래구분 색은 계약 상세 품목표와 동일).
       // 대부분의 계약은 맞춤뿐이라, 그때는 태그 없이 한 줄로 둬 목록이 시끄러워지지 않게 한다.
@@ -246,23 +252,9 @@ export function OptionProgressListPage({
       key: 'composition',
       width: COL.wide,
       ellipsis: true,
-      render: (_, row) => {
-        const custom = itemComposition(row.customCounts);
-        const rental = itemComposition(row.rentalCounts);
-        if (!rental) return custom;
-        return (
-          <Space direction="vertical" size={0}>
-            <Typography.Text ellipsis>
-              <Tag color={TRANSACTION_TYPE_TAG_COLOR.CUSTOM}>{TRANSACTION_TYPE_LABEL.CUSTOM}</Tag>
-              {custom}
-            </Typography.Text>
-            <Typography.Text ellipsis>
-              <Tag color={TRANSACTION_TYPE_TAG_COLOR.RENTAL}>{TRANSACTION_TYPE_LABEL.RENTAL}</Tag>
-              {rental}
-            </Typography.Text>
-          </Space>
-        );
-      },
+      render: (_, row) => (
+        <ItemCompositionCell customCounts={row.customCounts} rentalCounts={row.rentalCounts} />
+      ),
     },
     // 계약의 전체 품목 수(맞춤+렌탈). 확정 열의 분모(맞춤만)와 다를 수 있다.
     { title: '건수', dataIndex: 'itemCount', key: 'itemCount', width: COL.count, align: 'center' },

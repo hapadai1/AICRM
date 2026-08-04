@@ -63,6 +63,15 @@ async function wipePrevious() {
     // 다른 시드(seed:journeys 등)가 이 고객·주문에 붙였을 수 있는 여정(+이벤트)을 먼저 지운다
     await tx.journeyEvent.deleteMany({ where: { journey: { customerId: customer.id } } });
     await tx.customerJourney.deleteMany({ where: { customerId: customer.id } });
+    // 채촌(품목 연결 → 값 → 세션)도 이 고객 것이므로 품목보다 먼저 지운다.
+    await tx.orderItemMeasurement.deleteMany({ where: { orderItemId: { in: orderItemIds } } });
+    await tx.measurementValue.deleteMany({
+      where: { measurementSession: { customerId: customer.id } },
+    });
+    await tx.measurementSession.deleteMany({ where: { customerId: customer.id } });
+    // 품목에 달린 것(구성품·제작 이벤트)을 먼저 지워야 품목을 지울 수 있다.
+    await tx.productionEvent.deleteMany({ where: { orderItemId: { in: orderItemIds } } });
+    await tx.orderItemComponent.deleteMany({ where: { orderItemId: { in: orderItemIds } } });
     await tx.orderItem.deleteMany({ where: { id: { in: orderItemIds } } });
     await tx.order.deleteMany({ where: { id: { in: orderIds } } });
     // 계약의 현재 버전 FK를 먼저 끊어야 버전을 지울 수 있다
@@ -90,6 +99,24 @@ async function main() {
     include: { choices: { orderBy: { choiceCode: 'asc' } } },
   });
   if (stages.length === 0) throw new Error('활성 옵션 단계가 없습니다.');
+
+  /*
+    제작 관리는 계약완료 + 진행(journey)이 선 주문만 다룬다. 이 시드가 진행을 안 만들던 때는
+    제작 화면에 빈 흐름 카드만 떴다 — 계약·주문과 함께 진행도 여기서 심는다.
+  */
+  const journeyStages = await prisma.journeyStage.findMany({
+    where: { trackType: 'CUSTOM', active: true },
+    orderBy: { sequenceNo: 'asc' },
+    select: { id: true, code: true },
+  });
+  const stageIdOf = (code: string) => {
+    const found = journeyStages.find((s) => s.code === code);
+    if (!found) throw new Error(`CUSTOM 진행 단계 ${code} 가 없습니다. 먼저 npm run prisma:seed 를 실행하세요.`);
+    return found.id;
+  };
+  // 밟아 온 순서: 계약 확정 → 스타일 컨설팅(옵션 확정) → 발주 요청(현재, 품목 READY_TO_ORDER)
+  const JOURNEY_PATH = ['CONTRACT_CONFIRMED', 'STYLE_CONSULTING', 'ORDER_REQUESTED'] as const;
+  JOURNEY_PATH.forEach(stageIdOf);
 
   await wipePrevious();
 
@@ -185,6 +212,7 @@ async function main() {
     ];
 
     let contractSurcharge = 0;
+    const orderItemIds: string[] = [];
 
     for (let idx = 0; idx < items.length; idx += 1) {
       const item = items[idx];
@@ -210,9 +238,35 @@ async function main() {
           productCategory: 'SUIT',
           sequenceNo: idx + 1,
           displayName: item.name,
+          // 옵션 확정 + 채촌 연결이 끝난 품목이라 발주 가능이다(준비 판정과 같은 상태).
           status: 'READY_TO_ORDER',
         },
       });
+      orderItemIds.push(orderItemId);
+
+      // 정장은 상의·하의·베스트 세 부위로 만든다 (마이그레이션 20260801010000).
+      // 계약 부위가 없으면 주문 구성품도 생기지 않아 제작 화면에서 벌 단위 처리를 할 수 없다.
+      const componentTypes = ['JACKET', 'TROUSERS', 'VEST'];
+      for (let c = 0; c < componentTypes.length; c += 1) {
+        await tx.contractItemComponent.create({
+          data: {
+            id: uuid(),
+            contractItemId,
+            componentType: componentTypes[c],
+            sequenceNo: c + 1,
+            status: 'CREATED',
+          },
+        });
+        await tx.orderItemComponent.create({
+          data: {
+            id: uuid(),
+            orderItemId,
+            componentType: componentTypes[c],
+            sequenceNo: c + 1,
+            status: 'CREATED',
+          },
+        });
+      }
 
       // 확정 옵션 세션 + 선택값(단계마다 하나씩)
       const sessionId = uuid();
@@ -255,6 +309,84 @@ async function main() {
       await tx.optionSelectionValue.createMany({ data: values });
 
       contractSurcharge += surcharge;
+    }
+
+    /*
+      3-1) 채촌 — 완료하면 그 계약의 맞춤 품목에 다 붙는다(2026-08-04 현업 확정).
+      품목이 `발주 가능`인데 채촌이 없으면 화면에서는 준비 미완료로 잠긴다. 실제 흐름대로 심는다.
+    */
+    const measureId = uuid();
+    await tx.measurementSession.create({
+      data: {
+        id: measureId,
+        customerId,
+        versionNo: 1,
+        measurementDate: daysAgo(8),
+        measurementType: 'INITIAL',
+        fitPreference: 'STANDARD',
+        completedAt: daysAgo(8),
+        createdBy: admin.id,
+      },
+    });
+    const measureRows: Array<[string, string, number, number]> = [
+      ['JACKET_LENGTH', 'UPPER', 74, 10],
+      ['SHOULDER', 'UPPER', 45.5, 20],
+      ['CHEST_MID', 'UPPER', 97, 30],
+      ['SLEEVE_LEFT', 'UPPER', 61.5, 40],
+      ['WAIST', 'LOWER', 84, 50],
+      ['HIP', 'LOWER', 98, 60],
+      ['PANTS_LENGTH', 'LOWER', 101, 70],
+    ];
+    await tx.measurementValue.createMany({
+      data: measureRows.map(([code, bodySection, numericValue, sortOrder]) => ({
+        id: uuid(),
+        measurementSessionId: measureId,
+        bodySection,
+        measurementCode: code,
+        numericValue,
+        unit: 'CM',
+        sortOrder,
+      })),
+    });
+    for (const orderItemId of orderItemIds) {
+      await tx.orderItemMeasurement.create({
+        data: {
+          id: uuid(),
+          orderItemId,
+          measurementSessionId: measureId,
+          isCurrent: true,
+          linkedBy: admin.id,
+          linkedAt: daysAgo(8),
+        },
+      });
+    }
+
+    // 3-2) 진행(journey) — 주문 1건당 1건. 계약완료 경로(ensureJourneysForOrders)와 같은 모양이다.
+    const journeyId = uuid();
+    await tx.customerJourney.create({
+      data: {
+        id: journeyId,
+        customerId,
+        orderId,
+        trackType: 'CUSTOM',
+        currentStageCode: JOURNEY_PATH[JOURNEY_PATH.length - 1],
+        status: 'ACTIVE',
+        startedAt: daysAgo(10),
+      },
+    });
+    for (let i = 0; i < JOURNEY_PATH.length; i += 1) {
+      await tx.journeyEvent.create({
+        data: {
+          id: uuid(),
+          journeyId,
+          stageId: stageIdOf(JOURNEY_PATH[i]),
+          fromStageCode: i === 0 ? null : JOURNEY_PATH[i - 1],
+          toStageCode: JOURNEY_PATH[i],
+          notificationOutcome: 'NONE',
+          actorId: admin.id,
+          changedAt: daysAgo(10 - i),
+        },
+      });
     }
 
     // 4) 옵션 추가금액을 계약 현재 버전 총액에 반영

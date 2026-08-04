@@ -788,7 +788,8 @@ async function main(): Promise<void> {
       const hjmSuit1 = await orderItem({ orderId: hjmCustomOrder, lineId: hjmLines[0], productCategory: 'SUIT', sequenceNo: 1, displayName: '예복 정장 #1', status: 'PRODUCTION_IN_PROGRESS' });
       const hjmSuit2 = await orderItem({ orderId: hjmCustomOrder, lineId: hjmLines[0], productCategory: 'SUIT', sequenceNo: 2, displayName: '예복 정장 #2', status: 'OPTION_PENDING' });
       const hjmShirt1 = await orderItem({ orderId: hjmCustomOrder, lineId: hjmLines[1], productCategory: 'SHIRT', sequenceNo: 1, displayName: '드레스 셔츠 #1', status: 'READY_TO_ORDER' });
-      const hjmShirt2 = await orderItem({ orderId: hjmCustomOrder, lineId: hjmLines[1], productCategory: 'SHIRT', sequenceNo: 2, displayName: '드레스 셔츠 #2', status: 'MEASUREMENT_PENDING' });
+      const hjmShirt2 = await orderItem({ orderId: hjmCustomOrder, lineId: hjmLines[1], productCategory: 'SHIRT', sequenceNo: 2, // 채촌은 붙었지만 옵션이 아직이라 옵션대기다(준비 판정 규칙 — 2026-08-04).
+      displayName: '드레스 셔츠 #2', status: 'OPTION_PENDING' });
 
       const hjmSuit1Jacket = await component({ orderItemId: hjmSuit1, componentType: 'JACKET', status: 'PRODUCTION_IN_PROGRESS', expectedInboundDate: dateOnly(6) });
       const hjmSuit1Trousers = await component({ orderItemId: hjmSuit1, componentType: 'TROUSERS', status: 'PRODUCTION_IN_PROGRESS', expectedInboundDate: dateOnly(6) });
@@ -807,7 +808,8 @@ async function main(): Promise<void> {
       const hjmMeasure = await measurement({
         customerId: 한지민, relatedOrderId: hjmCustomOrder, versionNo: 1, measurementDate: dateOnly(-20),
         measurementType: 'INITIAL', fitPreference: 'STANDARD', bodyNotes: '오른쪽 어깨가 약간 높음',
-        completedAt: at(-20, 12), linkOrderItemIds: [hjmSuit1, hjmShirt1],
+        // 채촌을 완료하면 그 계약의 맞춤 품목에 다 붙는다(2026-08-04 현업 확정) — 실제 동작과 같게 심는다.
+        completedAt: at(-20, 12), linkOrderItemIds: [hjmSuit1, hjmSuit2, hjmShirt1, hjmShirt2],
         rows: measurementRows({
           neck: 39.5, shoulder: 45.5, chest: 100, sleeve: 62, bodyLength: 74, wrist: 17.5, upperSize: '100',
           waist: 84, hip: 98, rise: 25.5, pantsLength: 102, thigh: 60, calf: 38, lowerSize: '33', shoeSize: 265,

@@ -12,6 +12,7 @@ import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { MEASUREMENT_ITEM_MAP } from '../measurements/measurement-catalog';
+import { syncPrepStatuses } from '../production/prep-status';
 import {
   buildShoesWorkOrderExcel,
   buildWorkOrderExcel,
@@ -494,6 +495,8 @@ export class WorkOrdersService {
             data: { rowVersion: { increment: 1 } },
           });
         }
+        // 출력으로 채촌이 확정되면 준비가 끝난 것이다 — 품목 상태에 반영한다.
+        await syncPrepStatuses(tx, [orderItemId], actor.id);
 
         const response = {
           workOrderId: workOrder.id,

@@ -183,6 +183,46 @@ async function main(): Promise<void> {
         return id;
       };
 
+      /*
+        주문 1건당 진행 1건 — 계약완료 경로(ensureJourneysForOrders)와 같은 모양이다.
+        제작 관리는 계약완료 + 진행이 선 주문만 다루므로, 진행을 안 세우면 이 데모 계약이
+        제작 화면에서 통째로 빠진다. 여기 두 건은 컨설팅 중이라 스타일 컨설팅 단계에 세운다.
+      */
+      const journey = async (args: {
+        customerId: string; orderId: string; path: string[]; startedAt: Date;
+      }): Promise<void> => {
+        const journeyId = uuid();
+        await tx.customerJourney.create({
+          data: {
+            id: journeyId,
+            customerId: args.customerId,
+            orderId: args.orderId,
+            trackType: 'CUSTOM',
+            currentStageCode: args.path[args.path.length - 1],
+            status: 'ACTIVE',
+            startedAt: args.startedAt,
+          },
+        });
+        for (let i = 0; i < args.path.length; i += 1) {
+          const stage = await tx.journeyStage.findFirstOrThrow({
+            where: { trackType: 'CUSTOM', code: args.path[i], active: true },
+            select: { id: true },
+          });
+          await tx.journeyEvent.create({
+            data: {
+              id: uuid(),
+              journeyId,
+              stageId: stage.id,
+              fromStageCode: i === 0 ? null : args.path[i - 1],
+              toStageCode: args.path[i],
+              notificationOutcome: 'NONE',
+              actorId: adminId,
+              changedAt: new Date(args.startedAt.getTime() + i * 3600_000),
+            },
+          });
+        }
+      };
+
       // 주문 품목 id → 앵커 ContractItem id. 옵션 세션이 이 맵으로 contractItem을 되짚는다.
       // 컨설팅(옵션 세션)이 이제 ContractItem에 붙으므로 주문 품목마다 앵커 품목을 물리화한다.
       const contractItemByOrderItem = new Map<string, string>();
@@ -324,6 +364,10 @@ async function main(): Promise<void> {
       });
       await component({ orderItemId: ktoShoes1, componentType: 'SHOES', status: 'CREATED', expectedInboundDate: dateOnly(20) });
       await component({ orderItemId: ktoShoes2, componentType: 'SHOES', status: 'CREATED' });
+      await journey({
+        customerId: 강태오, orderId: ktoOrder,
+        path: ['CONTRACT_CONFIRMED', 'STYLE_CONSULTING'], startedAt: at(-11, 15),
+      });
 
       // 구두는 단계가 하나 — 스타일 하나를 고르면 그대로 확정이다.
       const shoesStyle = shoesVersion.stages[0]?.choices ?? [];
@@ -372,6 +416,10 @@ async function main(): Promise<void> {
       await component({ orderItemId: ljhSuit, componentType: 'JACKET', status: 'CREATED' });
       await component({ orderItemId: ljhSuit, componentType: 'TROUSERS', status: 'CREATED' });
       await component({ orderItemId: ljhShoes, componentType: 'SHOES', status: 'CREATED' });
+      await journey({
+        customerId: 임재현, orderId: ljhOrder,
+        path: ['CONTRACT_CONFIRMED', 'STYLE_CONSULTING'], startedAt: at(-4, 16),
+      });
 
       await optionSession({
         orderItemId: ljhSuit, version: suitVersion,

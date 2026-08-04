@@ -88,6 +88,12 @@ export interface WorkOrderView {
   lastIssuedAt: string | null;
   /** 출력 가능 여부 (준비 미완이면 false) */
   canIssue: boolean;
+  /**
+   * 준비가 언제 끝났는지 — 제작 관리의 `준비` 단계가 이 두 날짜를 그대로 보여준다.
+   * 판정(canIssue)에 이미 쓰던 값이라 새로 계산하지 않는다.
+   */
+  optionConfirmedAt: string | null;
+  measurementLinkedAt: string | null;
 }
 
 /** 위 workOrderStatusSelect를 포함한 OrderItem에서 작업지시서 뷰를 만든다 */
@@ -104,5 +110,7 @@ export function buildWorkOrderView(item: OrderItemWithWorkOrderStatus): WorkOrde
     currentFileName: currentVersion?.outputFile?.originalName ?? null,
     lastIssuedAt: currentVersion?.issuedAt.toISOString() ?? null,
     canIssue: status !== 'WAITING',
+    optionConfirmedAt: session?.confirmedAt?.toISOString() ?? null,
+    measurementLinkedAt: link?.linkedAt.toISOString() ?? null,
   };
 }

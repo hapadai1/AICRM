@@ -17,15 +17,9 @@ import { DataTable } from '../../shared/DataTable';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { metaOf } from '../../shared/status-meta';
-import { COL, wrapAt } from '../../shared/table-width';
-import { CONTRACT_STATUS_META, PRODUCT_CATEGORY_LABEL } from '../contracts/labels';
-
-/** 품목 구성 요약 — "정장 2 · 셔츠 1" */
-function itemComposition(counts: MeasurementTargetRow['categoryCounts']): string {
-  return (Object.keys(counts) as (keyof MeasurementTargetRow['categoryCounts'])[])
-    .map((c) => `${PRODUCT_CATEGORY_LABEL[c] ?? c} ${counts[c]}`)
-    .join(' · ');
-}
+import { COL } from '../../shared/table-width';
+import { ItemCompositionCell } from '../contracts/ItemCompositionCell';
+import { CONTRACT_STATUS_META } from '../contracts/labels';
 
 /** 이 계약의 채촌 상태 — 고객의 과거 이력이 아니라 계약에 연결된 채촌만 본다. */
 function measurementStateOf(row: MeasurementTargetRow): { label: string; color: string } {
@@ -225,17 +219,13 @@ export function MeasurementListPage({
       },
     },
     {
-      /*
-       * 품목이 늘면 "정장 2 · 셔츠 1 · 구두 1"처럼 길어지는 유일한 열이다.
-       * 열 폭은 COL.wide 로 고정되므로, 값이 그보다 길면 셀 안에서 줄을 바꾼다.
-       * 채촌 대상은 맞춤 품목뿐이라 렌탈 줄은 없다.
-       */
+      // 목록 네 곳(계약·스타일 컨설팅·채촌·제작)이 같은 칸을 쓴다 — 제작 관리 열이 기준이다.
+      // 채촌 대상은 맞춤 품목뿐이라 렌탈 줄은 나오지 않는다.
       title: '품목 구성',
       key: 'composition',
       width: COL.wide,
-      render: (_, row) => (
-        <Typography.Text style={wrapAt(200)}>{itemComposition(row.categoryCounts) || '-'}</Typography.Text>
-      ),
+      ellipsis: true,
+      render: (_, row) => <ItemCompositionCell customCounts={row.categoryCounts} rentalCounts={{}} />,
     },
     {
       title: '스타일 컨설팅',

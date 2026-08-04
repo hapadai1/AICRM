@@ -563,6 +563,8 @@ async function createOrderForContract(
     /** items 순서대로의 목표 제작 상태 */
     itemStatuses: string[];
     adminId: string;
+    /** 이 주문의 진행이 서 있을 단계 (기본: 계약 확정 직후) */
+    journeyStageCode?: string;
   },
 ): Promise<void> {
   const orderId = uuid();
@@ -653,6 +655,50 @@ async function createOrderForContract(
         },
       });
     }
+  }
+
+  /*
+    계약완료 경로(ensureJourneysForOrders)와 같이 주문 1건당 진행 1건을 세운다.
+    진행이 없는 주문은 제작 관리에서 아예 빠지므로(계약완료 + 진행이 노출 조건),
+    이 데모 계약도 진행을 세워 둬야 제작 화면에 나온다.
+    거쳐 온 단계는 이벤트로 남겨 각 단계의 완료일이 화면에 찍히게 한다.
+  */
+  const target = args.journeyStageCode ?? 'CONTRACT_CONFIRMED';
+  const stages = await tx.journeyStage.findMany({
+    where: { trackType: 'CUSTOM', active: true },
+    orderBy: { sequenceNo: 'asc' },
+    select: { id: true, code: true },
+  });
+  const targetIndex = stages.findIndex((s) => s.code === target);
+  if (targetIndex < 0) throw new Error(`CUSTOM 진행 단계 ${target} 가 없습니다.`);
+  // 진행은 계약 확정부터 목표 단계까지 밟아 온 것으로 둔다(상담 예약은 계약 전 단계라 건너뛴다).
+  const path = stages.slice(stages.findIndex((s) => s.code === 'CONTRACT_CONFIRMED'), targetIndex + 1);
+
+  const journeyId = uuid();
+  await tx.customerJourney.create({
+    data: {
+      id: journeyId,
+      customerId: args.contract.customerId,
+      orderId,
+      trackType: 'CUSTOM',
+      currentStageCode: target,
+      status: 'ACTIVE',
+      startedAt: at(-30, 10),
+    },
+  });
+  for (let i = 0; i < path.length; i += 1) {
+    await tx.journeyEvent.create({
+      data: {
+        id: uuid(),
+        journeyId,
+        stageId: path[i].id,
+        fromStageCode: i === 0 ? null : path[i - 1].code,
+        toStageCode: path[i].code,
+        notificationOutcome: 'NONE',
+        actorId: args.adminId,
+        changedAt: at(-30 + i * 3, 10),
+      },
+    });
   }
 }
 
@@ -808,7 +854,8 @@ async function main(): Promise<void> {
         data: { totalAmount: UNIT_PRICE + c3opt.surchargeTotal },
       });
       await createOrderForContract(tx, {
-        seq: 103, contract: c3, itemStatuses: ['CREATED'], adminId,
+        // 옵션은 확정했고 채촌은 아직 — 계약완료 직후 정상 상태다(준비 판정과 같은 값).
+        seq: 103, contract: c3, itemStatuses: ['MEASUREMENT_PENDING'], adminId,
       });
 
       await createContract(tx, {
@@ -907,7 +954,12 @@ async function main(): Promise<void> {
         {
           seq: 301,
           name: '제작01 발주대기',
-          statuses: ['CREATED', 'OPTION_PENDING', 'MEASUREMENT_PENDING', 'READY_TO_ORDER'],
+          /*
+            준비 단계 상태는 이제 옵션 확정·채촌 연결에서 자동으로 나온다(2026-08-04 현업 확정).
+            그래서 상태를 그냥 심지 않고 아래에서 준비 데이터를 그 상태에 맞게 갈라 심는다.
+            계약완료된 품목은 최소 옵션대기부터 시작하므로 CREATED는 더 이상 나오지 않는다.
+          */
+          statuses: ['OPTION_PENDING', 'MEASUREMENT_PENDING', 'READY_TO_ORDER', 'READY_TO_ORDER'],
         },
         {
           seq: 302,
@@ -942,17 +994,32 @@ async function main(): Promise<void> {
           measurementDate: dateOnly(-28), completedAt: at(-28, 15), adminId,
         });
 
+        /*
+          준비(옵션 확정·채촌 연결)가 곧 품목 상태다 — 목표 상태에 맞춰 준비 데이터를 갈라 심는다.
+          옵션대기 = 옵션 미확정, 채촌대기 = 옵션만 확정, 그 뒤 = 옵션 확정 + 채촌 연결.
+        */
+        const optionConfirmedOf = (status: string) => status !== 'OPTION_PENDING' && status !== 'CREATED';
+        const measureLinkedOf = (status: string) =>
+          optionConfirmedOf(status) && status !== 'MEASUREMENT_PENDING';
+
         let surchargeSum = 0;
         const sessionByItem = new Map<string, string>();
-        for (const item of contract.items) {
+        for (let i = 0; i < contract.items.length; i += 1) {
+          const item = contract.items[i];
+          const confirmed = optionConfirmedOf(group.statuses[i]);
           const opt = await createOptionSession(tx, {
-            contractItemId: item.id, stages: suit.twoPiece, pickCount: suit.twoPiece.length,
-            status: 'CONFIRMED', versionId: suit.versionId, fabricName: '네이비 울 100%', adminId,
+            contractItemId: item.id, stages: suit.twoPiece,
+            // 미확정 세션은 앞 두 단계까지만 골라 둔 '진행중'으로 남긴다.
+            pickCount: confirmed ? suit.twoPiece.length : 2,
+            status: confirmed ? 'CONFIRMED' : 'IN_PROGRESS',
+            versionId: suit.versionId, fabricName: '네이비 울 100%', adminId,
             times: {
-              started: at(-32, 10), saved: at(-31, 14), reviewed: at(-31, 14), confirmed: at(-30, 11),
+              started: at(-32, 10), saved: at(-31, 14),
+              ...(confirmed ? { reviewed: at(-31, 14), confirmed: at(-30, 11) } : {}),
             },
           });
-          surchargeSum += opt.surchargeTotal;
+          // 미확정 세션의 추가금액은 아직 계약에 반영되지 않는다.
+          if (confirmed) surchargeSum += opt.surchargeTotal;
           sessionByItem.set(item.id, opt.sessionId);
         }
         await tx.contractVersion.update({
@@ -962,6 +1029,9 @@ async function main(): Promise<void> {
 
         await createOrderForContract(tx, {
           seq: group.seq, contract, itemStatuses: group.statuses, adminId,
+          // 진행 단계(고객 여정)도 주문과 함께 선다 — 계약완료된 건은 CUSTOM 트랙에 올라가 있다.
+          journeyStageCode:
+            group.seq === 301 ? 'STYLE_CONSULTING' : group.seq === 302 ? 'ORDER_REQUESTED' : 'RELEASED',
         });
 
         const orderItems = await tx.orderItem.findMany({
@@ -971,16 +1041,19 @@ async function main(): Promise<void> {
         const order = await tx.order.findFirstOrThrow({ where: { contractId: contract.contractId } });
 
         for (const orderItem of orderItems) {
-          await tx.orderItemMeasurement.create({
-            data: {
-              id: uuid(),
-              orderItemId: orderItem.id,
-              measurementSessionId: measurement.id,
-              isCurrent: true,
-              linkedAt: at(-28, 16),
-              linkedBy: adminId,
-            },
-          });
+          // 채촌은 그 품목의 준비가 거기까지 간 경우에만 붙어 있다(옵션대기·채촌대기는 아직 없다).
+          if (measureLinkedOf(orderItem.status)) {
+            await tx.orderItemMeasurement.create({
+              data: {
+                id: uuid(),
+                orderItemId: orderItem.id,
+                measurementSessionId: measurement.id,
+                isCurrent: true,
+                linkedAt: at(-28, 16),
+                linkedBy: adminId,
+              },
+            });
+          }
           // 작업지시서는 발주(제작요청) 이후 품목에만 발행돼 있다.
           if (EVENT_CHAIN.includes(orderItem.status)) {
             await issueWorkOrder(tx, {
@@ -1006,18 +1079,6 @@ async function main(): Promise<void> {
             });
         }
 
-        // 진행 단계(고객 여정) — 계약완료된 건은 CUSTOM 트랙에 올라가 있다.
-        await tx.customerJourney.create({
-          data: {
-            id: uuid(),
-            customerId: contract.customerId,
-            orderId: order.id,
-            trackType: 'CUSTOM',
-            currentStageCode: group.seq === 301 ? 'STYLE_CONSULTING' : group.seq === 302 ? 'ORDER_REQUESTED' : 'RELEASED',
-            status: 'ACTIVE',
-            startedAt: at(-40, 10),
-          },
-        });
       }
     },
     { timeout: 120_000 },

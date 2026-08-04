@@ -8,6 +8,7 @@ import {
   DiffOutlined,
   PlusOutlined,
   PrinterOutlined,
+  RightOutlined,
   SaveOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
@@ -897,9 +898,26 @@ export function MeasurementEditPage() {
           </Card>
         )}
 
-        {/* 목록·계약 상세 등 여러 경로로 들어오므로 하단에도 이전화면 복귀 버튼을 둔다 */}
+        {/* 하단은 화면 이동 전용 — 왼쪽은 온 곳으로, 오른쪽은 다음 목적지(제작 관리). */}
         <Card>
-          <BackButton />
+          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+            <BackButton />
+            <Button
+              size="large"
+              style={{ height: 56, minWidth: 140, fontSize: 18 }}
+              disabled={!session}
+              onClick={() =>
+                // 계약이 잡힌 채촌은 그 계약의 제작 관리로, 아직 없으면 고객으로 추린 제작 관리 목록으로.
+                navigate(
+                  session?.contractId
+                    ? `/contracts/${session.contractId}/production`
+                    : `/production?q=${encodeURIComponent(session?.customerPhone ?? '')}`,
+                )
+              }
+            >
+              제작 관리 이동 <RightOutlined />
+            </Button>
+          </Space>
         </Card>
       </Col>
 

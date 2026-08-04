@@ -84,6 +84,8 @@ export interface OptionProgressItem {
   productCategory: ProductCategory;
   contractId: string;
   contractNo: string;
+  /** 계약 구분 이름 (계약 목록의 같은 열). 계약에 구분이 없으면 null */
+  contractTypeName: string | null;
   customerName: string;
   /** 고객 전화번호 (목록에서 고객 식별용) */
   customerPhone: string;
