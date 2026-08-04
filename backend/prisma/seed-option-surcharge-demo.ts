@@ -59,6 +59,10 @@ async function wipePrevious() {
     await tx.optionSelectionValue.deleteMany({
       where: { selectionSession: { contractItemId: { in: contractItemIds } } },
     });
+    // 세션에 매달린 부위 속성(component attrs)을 먼저 지워야 세션을 지울 수 있다 (FK).
+    await tx.optionSelectionComponentAttr.deleteMany({
+      where: { selectionSession: { contractItemId: { in: contractItemIds } } },
+    });
     await tx.optionSelectionSession.deleteMany({ where: { contractItemId: { in: contractItemIds } } });
     // 다른 시드(seed:journeys 등)가 이 고객·주문에 붙였을 수 있는 여정(+이벤트)을 먼저 지운다
     await tx.journeyEvent.deleteMany({ where: { journey: { customerId: customer.id } } });
@@ -257,11 +261,25 @@ async function main() {
       contractSurcharge += surcharge;
     }
 
-    // 4) 옵션 추가금액을 계약 현재 버전 총액에 반영
+    // 4) 옵션 추가금액을 계약 현재 버전 총액에 반영 + 품목 맨 아래 '옵션(추가금액)' 롤업 라인 (2026-08-04)
     if (contractSurcharge > 0) {
       await tx.contractVersion.update({
         where: { id: versionId },
         data: { totalAmount: { increment: contractSurcharge } },
+      });
+      await tx.contractLine.create({
+        data: {
+          id: uuid(),
+          contractVersionId: versionId,
+          transactionType: 'OPTION',
+          productCategory: 'OPTION',
+          itemDescription: '옵션(추가금액)',
+          quantity: 1,
+          unitPrice: contractSurcharge,
+          lineAmount: contractSurcharge,
+          sortOrder: 100,
+          isOptionRollup: true,
+        },
       });
     }
 

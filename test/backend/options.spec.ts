@@ -863,6 +863,13 @@ describe('옵션 마스터·선택 세션 (Phase 3)', () => {
     );
     expect(after).toBe(before + 55000);
 
+    // 옵션 추가금액은 품목 맨 아래 '옵션(추가금액)' 롤업 라인으로도 남는다(합계가 어긋나지 않게).
+    const rollup = await ctx.prisma.contractLine.findMany({
+      where: { contractVersionId: versionId, isOptionRollup: true },
+    });
+    expect(rollup).toHaveLength(1);
+    expect(Number(rollup[0].lineAmount)).toBe(55000);
+
     // 계약금액 수정 감사로그가 남는다.
     const audits = await ctx.prisma.auditLog.count({
       where: { entityType: 'CONTRACT_VERSION', entityId: versionId, action: 'UPDATE' },

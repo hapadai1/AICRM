@@ -413,6 +413,10 @@ model ContractLine {
   vestUnitPrice     Decimal? @map("vest_unit_price") @db.Decimal(14, 2)
   notes             String?  @map("notes")
   sortOrder         Int      @default(0) @map("sort_order")
+  /// 스타일 컨설팅 옵션 추가금액을 합산해 품목 맨 아래에 싣는 시스템 롤업 라인 여부.
+  /// 백엔드(syncOptionRollupLine)가 소유·재생성한다 — 화면·저장 본문에서는 편집·전송하지 않고,
+  /// 컨설팅 대상 품목(ContractItem)·주문 물리화·계약서 출력 라인에서는 제외한다.
+  isOptionRollup    Boolean  @default(false) @map("is_option_rollup")
   createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   contractVersion ContractVersion @relation(fields: [contractVersionId], references: [id])

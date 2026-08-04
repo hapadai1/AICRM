@@ -526,7 +526,14 @@ export class StatsService {
           select: {
             contractedAt: true,
             currentVersion: {
-              select: { lines: { select: { productCategory: true, lineAmount: true } } },
+              // 옵션 추가금액은 아래 세션(surchargeApplied)에서 별도 '옵션' 항목으로 더한다 —
+              // 품목줄로도 실리는 롤업 라인(isOptionRollup)을 함께 세면 이중 계산된다.
+              select: {
+                lines: {
+                  where: { isOptionRollup: false },
+                  select: { productCategory: true, lineAmount: true },
+                },
+              },
             },
             // 옵션 추가금액은 계약 품목(계약 소유)에 붙은 현재 옵션 세션이 들고 있다.
             items: {
