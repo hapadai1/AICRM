@@ -5,6 +5,7 @@ import { BusinessException } from '../../common/business.exception';
 import { AuthUser } from '../../common/decorators';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { ContractsService } from '../contracts/contracts.service';
 import { syncPrepStatuses } from '../production/prep-status';
 import { anyInProduction } from '../production/production-status';
 import { compareChoiceCodes } from './choice-codes';
@@ -116,6 +117,7 @@ export class OptionSessionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly contracts: ContractsService,
   ) {}
 
   /**
@@ -768,6 +770,9 @@ export class OptionSessionsService {
       where: { id: session.id },
       data: { surchargeApplied: state.total, surchargeAppliedAt: new Date() },
     });
+    // 계약 금액에 더한 만큼 품목 맨 아래 '옵션(추가금액)' 롤업 라인도 갱신한다.
+    // (surchargeApplied 반영 뒤에 불러 이 세션 몫까지 합계에 든다.)
+    await this.contracts.syncOptionRollupLine(tx, this.contractOf(session)!.id, versionId);
     await this.audit.log(
       {
         userId: actor.id,

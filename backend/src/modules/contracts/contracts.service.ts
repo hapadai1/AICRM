@@ -393,6 +393,8 @@ export class ContractsService {
         // 라인이 바뀌면 컨설팅 대상 품목도 수량에 맞춰 정합한다 (기존 선택은 보존).
         // 수정하기로 만든 버전이면 그 사유를 품목 취소 사유로 남긴다.
         await this.syncContractItems(tx, id, draft.id, draft.changeReason);
+        // 라인을 통째로 다시 만들었으니, 컨설팅 옵션 추가금액 롤업 라인도 다시 붙인다.
+        await this.syncOptionRollupLine(tx, id, draft.id);
       }
       const updatedDraft = await tx.contractVersion.update({
         where: { id: draft.id },
@@ -633,7 +635,10 @@ export class ContractsService {
 
     const lines: ContractLineDto[] =
       dto.lines ??
-      base.lines.map((l) => ({
+      // 옵션 롤업 라인은 새 버전에서 세션 합계로 다시 만든다 — 그대로 복사하면 일반 품목으로 굳는다.
+      base.lines
+        .filter((l) => !l.isOptionRollup)
+        .map((l) => ({
         transactionType: l.transactionType,
         productCategory: l.productCategory,
         itemDescription: l.itemDescription ?? undefined,
@@ -663,6 +668,8 @@ export class ContractsService {
       });
       // 품목은 계약 소유라 손대지 않는다 — 새 버전 라인으로 참조만 다시 걸고 수량 차이를 반영한다.
       await this.syncContractItems(tx, id, created.id, dto.changeReason ?? null);
+      // 이어지는 컨설팅 옵션 추가금액을 새 버전에도 롤업 라인으로 반영한다.
+      await this.syncOptionRollupLine(tx, id, created.id);
       // 수정 중에는 계약서를 다시 작성하는 상태다 → 작성중으로 되돌리고 이 버전을 현재로 잡는다.
       await this.updateContractGuarded(tx, id, contract.rowVersion, {
         status: 'DRAFT',
@@ -958,7 +965,7 @@ export class ContractsService {
       // 품목표는 계약서 라인을 그대로 편다 — 베스트는 자기 행을 갖지 않는다 (현업 확정 2026-08-01).
       // 정장은 상의·하의·베스트가 한 벌이고, 어느 벌에서 베스트를 뺄지는 스타일 컨설팅에서
       // 정해 품목 계층(items)에 나타난다. 라인 금액은 저장된 값을 쪼개지 않고 그대로 싣는다.
-      lines: sortDocumentLines(version?.lines ?? []).map((l) => ({
+      lines: sortDocumentLines((version?.lines ?? []).filter((l) => !l.isOptionRollup)).map((l) => ({
         transactionType: l.transactionType,
         productCategory: l.productCategory,
         categoryLabel: CATEGORY_LABEL[l.productCategory] ?? l.productCategory,
@@ -1349,7 +1356,9 @@ export class ContractsService {
     }
 
     // 베스트는 자기 행을 갖지 않는다 (현업 확정 2026-08-01) — 웹 계약서와 같은 규칙.
-    const lines: ContractExcelLine[] = sortDocumentLines(version.lines).map((l) => ({
+    const lines: ContractExcelLine[] = sortDocumentLines(
+      version.lines.filter((l) => !l.isOptionRollup),
+    ).map((l) => ({
       category: CATEGORY_LABEL[l.productCategory] ?? l.productCategory,
       components: componentLabels(l.productCategory),
       quantity: l.quantity,
@@ -1394,6 +1403,62 @@ export class ContractsService {
   }
 
   // ---------------------------------------------------------------------------
+  // 내부: 옵션 추가금액 롤업 라인
+  // ---------------------------------------------------------------------------
+
+  /**
+   * 스타일 컨설팅 옵션 추가금액을 계약 품목 맨 아래 '옵션(추가금액)' 한 줄로 동기화한다.
+   *
+   * 금액은 그 계약의 **현재 확정 세션들**의 반영 누계(surchargeApplied) 합계다 —
+   * 확정 시 applyPendingTx가 계약 버전 금액(totalAmount)에 더한 값과 정확히 같아,
+   * 롤업 라인 합계와 계약 금액이 어긋나지 않는다.
+   *
+   * 이 라인은 백엔드가 소유한다: 화면 저장 본문에는 실려 오지 않고(프론트가 제외),
+   * 라인 재생성(초안 수정·변경계약)·확정 반영 때마다 여기서 지우고 다시 만든다.
+   * 합계가 0이면 라인을 두지 않는다.
+   */
+  async syncOptionRollupLine(
+    tx: Prisma.TransactionClient,
+    contractId: string,
+    versionId: string,
+  ): Promise<void> {
+    const sessions = await tx.optionSelectionSession.findMany({
+      where: { contractItem: { contractId }, isCurrent: true },
+      select: { surchargeApplied: true },
+    });
+    const total = sessions.reduce((sum, s) => sum + Number(s.surchargeApplied), 0);
+
+    // 항상 먼저 걷어낸다 — 금액이 바뀌었거나 0이 되면 한 줄만 남기거나 없애기 위해.
+    await tx.contractLine.deleteMany({
+      where: { contractVersionId: versionId, isOptionRollup: true },
+    });
+    if (total <= 0) return;
+
+    const agg = await tx.contractLine.aggregate({
+      where: { contractVersionId: versionId },
+      _max: { sortOrder: true },
+    });
+    await tx.contractLine.create({
+      data: {
+        id: randomUUID(),
+        contractVersionId: versionId,
+        // 실제 거래방식·품목이 아니라 옵션 합산 라인임을 나타내는 표식값.
+        transactionType: 'OPTION',
+        productCategory: 'OPTION',
+        itemDescription: '옵션(추가금액)',
+        quantity: 1,
+        unitPrice: total,
+        lineAmount: total,
+        vestIncluded: false,
+        vestUnitPrice: null,
+        notes: null,
+        sortOrder: (agg._max.sortOrder ?? 0) + 1,
+        isOptionRollup: true,
+      },
+    });
+  }
+
+  // ---------------------------------------------------------------------------
   // 내부: 주문·품목 펼침
   // ---------------------------------------------------------------------------
 
@@ -1417,7 +1482,8 @@ export class ContractsService {
     cancelReason: string | null,
   ): Promise<void> {
     const lines = await tx.contractLine.findMany({
-      where: { contractVersionId: versionId },
+      // 옵션 추가금액 롤업 라인은 실제 벌이 아니므로 컨설팅 대상 품목으로 펼치지 않는다.
+      where: { contractVersionId: versionId, isOptionRollup: false },
       orderBy: { sortOrder: 'asc' },
     });
 

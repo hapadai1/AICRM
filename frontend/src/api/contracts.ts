@@ -65,6 +65,8 @@ interface ContractLineApiRow {
   lineAmount?: string | number | null;
   notes?: string | null;
   sortOrder: number;
+  /** 스타일 컨설팅 옵션 추가금액을 합산한 시스템 롤업 라인이면 true (백엔드 소유·읽기전용) */
+  isOptionRollup?: boolean;
 }
 
 /** 백엔드 contract_versions 행 (상태 필드명은 versionStatus, 사유는 changeReason) */
@@ -138,6 +140,11 @@ export interface ContractLine {
   amount: number;
   note?: string;
   itemDescription?: string;
+  /**
+   * 스타일 컨설팅 옵션 추가금액을 합산해 품목 맨 아래에 싣는 시스템 라인.
+   * 백엔드가 소유·재생성하므로 **읽기 전용**이다 — 편집·삭제하거나 저장 본문에 실어 보내지 않는다.
+   */
+  isOptionRollup?: boolean;
 }
 
 export interface ContractLineInput {
@@ -236,6 +243,7 @@ function toLine(row: ContractLineApiRow): ContractLine {
     amount: toNumber(row.lineAmount) ?? 0,
     note: row.notes ?? undefined,
     itemDescription: row.itemDescription ?? undefined,
+    isOptionRollup: row.isOptionRollup ?? false,
   };
 }
 

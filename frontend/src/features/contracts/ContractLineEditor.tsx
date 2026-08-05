@@ -16,6 +16,12 @@ export interface EditableLine {
   /** 라인 금액 — 수량 × 단가 (직접 수정도 허용) */
   amount: number;
   note?: string;
+  /**
+   * 스타일 컨설팅 옵션 추가금액을 합산한 시스템 라인. **읽기 전용**이다 —
+   * 백엔드가 소유·재생성하므로 편집·삭제하지 않고 저장 본문에도 싣지 않는다.
+   * 표에서는 항상 맨 아래에 '옵션(추가금액)' 한 줄로 보인다.
+   */
+  isOptionRollup?: boolean;
 }
 
 let lineKeySeq = 0;
@@ -80,126 +86,144 @@ export function ContractLineEditor({ value, onChange, disabled }: ContractLineEd
     );
   };
 
-  const rows: EditorRow[] = value.map((l) => ({ ...l, rowKey: l.key }));
+  // 옵션 추가금액 롤업 라인은 컨설팅 결과라 항상 맨 아래에 고정한다 — 새 품목 행을 추가해도 밑에 남는다.
+  const rows: EditorRow[] = [...value]
+    .sort((a, b) => Number(!!a.isOptionRollup) - Number(!!b.isOptionRollup))
+    .map((l) => ({ ...l, rowKey: l.key }));
 
   const columns: ColumnsType<EditorRow> = [
     {
       title: '거래 방식',
       dataIndex: 'transactionType',
       width: 108,
-      render: (_, l) => (
-        <Select
-          style={{ width: '100%' }}
-          variant="filled"
-          value={l.transactionType}
-          options={TRANSACTION_OPTIONS}
-          disabled={disabled}
-          onChange={(v) => update(l.key, { transactionType: v })}
-        />
-      ),
+      render: (_, l) =>
+        l.isOptionRollup ? null : (
+          <Select
+            style={{ width: '100%' }}
+            variant="filled"
+            value={l.transactionType}
+            options={TRANSACTION_OPTIONS}
+            disabled={disabled}
+            onChange={(v) => update(l.key, { transactionType: v })}
+          />
+        ),
     },
     {
       title: '품목',
       dataIndex: 'productCategory',
       width: 118,
-      render: (_, l) => (
-        <Select
-          style={{ width: '100%' }}
-          variant="filled"
-          value={l.productCategory}
-          options={CATEGORY_OPTIONS}
-          disabled={disabled}
-          onChange={(v) => update(l.key, { productCategory: v })}
-        />
-      ),
+      render: (_, l) =>
+        l.isOptionRollup ? (
+          <span style={{ fontWeight: 600 }}>옵션(추가금액)</span>
+        ) : (
+          <Select
+            style={{ width: '100%' }}
+            variant="filled"
+            value={l.productCategory}
+            options={CATEGORY_OPTIONS}
+            disabled={disabled}
+            onChange={(v) => update(l.key, { productCategory: v })}
+          />
+        ),
     },
     {
       title: '수량',
       dataIndex: 'quantity',
       width: 84,
       align: 'right',
-      render: (_, l) => (
-        <InputNumber
-          className="num-input"
-          style={{ width: '100%' }}
-          variant="filled"
-          controls={false}
-          min={1}
-          value={l.quantity}
-          disabled={disabled}
-          onChange={(v) => update(l.key, { quantity: v ?? 1 })}
-        />
-      ),
+      render: (_, l) =>
+        l.isOptionRollup ? null : (
+          <InputNumber
+            className="num-input"
+            style={{ width: '100%' }}
+            variant="filled"
+            controls={false}
+            min={1}
+            value={l.quantity}
+            disabled={disabled}
+            onChange={(v) => update(l.key, { quantity: v ?? 1 })}
+          />
+        ),
     },
     {
       title: '단가(원)',
       dataIndex: 'unitPrice',
       width: 132,
       align: 'right',
-      render: (_, l) => (
-        <InputNumber
-          className="num-input"
-          style={{ width: '100%' }}
-          variant="filled"
-          controls={false}
-          min={0}
-          step={10000}
-          value={l.unitPrice}
-          formatter={THOUSANDS}
-          disabled={disabled}
-          onChange={(v) => update(l.key, { unitPrice: v ?? 0 })}
-        />
-      ),
+      render: (_, l) =>
+        l.isOptionRollup ? null : (
+          <InputNumber
+            className="num-input"
+            style={{ width: '100%' }}
+            variant="filled"
+            controls={false}
+            min={0}
+            step={10000}
+            value={l.unitPrice}
+            formatter={THOUSANDS}
+            disabled={disabled}
+            onChange={(v) => update(l.key, { unitPrice: v ?? 0 })}
+          />
+        ),
     },
     {
       // 금액 = 수량 × 단가 자동 계산. 조정이 필요하면 직접 고칠 수 있다.
+      // 옵션 롤업 라인은 컨설팅에서 합산돼 넘어온 값이라 읽기 전용으로만 보여 준다.
       title: '금액(원)',
       dataIndex: 'amount',
       width: 140,
       align: 'right',
-      render: (_, l) => (
-        <InputNumber
-          className="num-input"
-          style={{ width: '100%', fontWeight: 600 }}
-          variant="filled"
-          controls={false}
-          min={0}
-          step={10000}
-          value={l.amount || 0}
-          formatter={THOUSANDS}
-          disabled={disabled}
-          onChange={(v) => update(l.key, { amount: v ?? 0 })}
-        />
-      ),
+      render: (_, l) =>
+        l.isOptionRollup ? (
+          <span style={{ fontWeight: 600 }}>{THOUSANDS(l.amount || 0)}</span>
+        ) : (
+          <InputNumber
+            className="num-input"
+            style={{ width: '100%', fontWeight: 600 }}
+            variant="filled"
+            controls={false}
+            min={0}
+            step={10000}
+            value={l.amount || 0}
+            formatter={THOUSANDS}
+            disabled={disabled}
+            onChange={(v) => update(l.key, { amount: v ?? 0 })}
+          />
+        ),
     },
     {
       title: '비고',
       dataIndex: 'note',
-      render: (_, l) => (
-        <Input
-          value={l.note}
-          variant="filled"
-          placeholder="비고"
-          disabled={disabled}
-          onChange={(e) => update(l.key, { note: e.target.value })}
-        />
-      ),
+      render: (_, l) =>
+        l.isOptionRollup ? (
+          <span style={{ color: 'rgba(0,0,0,0.45)' }}>스타일 컨설팅에서 자동 반영</span>
+        ) : (
+          <Input
+            value={l.note}
+            variant="filled"
+            placeholder="비고"
+            disabled={disabled}
+            onChange={(e) => update(l.key, { note: e.target.value })}
+          />
+        ),
     },
     {
       title: '',
       key: 'actions',
       width: 44,
       align: 'center',
-      render: (_, l) => (
-        <Button
-          type="text"
-          danger
-          icon={<DeleteOutlined />}
-          disabled={disabled}
-          aria-label="품목 행 삭제"
-          onClick={() => onChange(value.filter((x) => x.key !== l.key))}
-        />
-      ),
+      // 옵션 롤업 라인은 백엔드 소유라 삭제 버튼을 두지 않는다.
+      render: (_, l) =>
+        l.isOptionRollup ? null : (
+          <Button
+            type="text"
+            danger
+            icon={<DeleteOutlined />}
+            disabled={disabled}
+            aria-label="품목 행 삭제"
+            onClick={() => onChange(value.filter((x) => x.key !== l.key))}
+          />
+        ),
     },
   ];
 
