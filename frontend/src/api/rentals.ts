@@ -715,10 +715,8 @@ export function fetchAvailabilityCalendar(filters: RentalCalendarFilters): Promi
 
 export type RentalSelectionStatus = 'IN_PROGRESS' | 'CONFIRMED';
 
-export const RENTAL_SELECTION_STATUS_META: Record<RentalSelectionStatus, { label: string; color: string }> = {
-  IN_PROGRESS: { label: '작성 중', color: 'processing' },
-  CONFIRMED: { label: '확정', color: 'green' },
-};
+// 상태 표시명·색의 정본은 중앙 사전(api/status-catalog)이다 — 기존 import 경로 유지를 위해 재노출.
+export { RENTAL_SELECTION_STATUS_META } from './status-catalog';
 
 /** 선택 세션의 선택된 실물 요약 (detail.components[].selectedItem) */
 export interface RentalSelectedItem {

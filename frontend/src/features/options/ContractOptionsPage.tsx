@@ -47,6 +47,7 @@ import {
 import type { RentalComponentType } from '../../api/rentals';
 import {
   fetchRentalSelectionProgress,
+  RENTAL_SELECTION_STATUS_META,
   saveRentalLine,
   startRentalSelection,
 } from '../../api/rentals';
@@ -117,12 +118,7 @@ function isOptionDone(item: OptionProgressItem): boolean {
   return item.totalStages > 0 && item.completedStages >= item.totalStages;
 }
 
-/** 렌탈 선택 상태 배지 메타 (맞춤 OPTION_STATUS_META와 같은 형태) */
-const RENTAL_ROW_STATUS_META: Record<string, { label: string; color: string }> = {
-  NOT_STARTED: { label: '미시작', color: 'default' },
-  IN_PROGRESS: { label: '작성 중', color: 'processing' },
-  CONFIRMED: { label: '확정', color: 'green' },
-};
+// 렌탈 선택 상태 배지의 정본은 중앙 사전(RENTAL_SELECTION_STATUS_META)이다 — 사본을 걷어냈다.
 
 export function ContractOptionsPage() {
   const { id = '' } = useParams();
@@ -438,12 +434,12 @@ export function ContractOptionsPage() {
             label={
               row.kind === 'CUSTOM'
                 ? metaOf(OPTION_STATUS_META, row.status).label
-                : (RENTAL_ROW_STATUS_META[row.status]?.label ?? row.status)
+                : metaOf(RENTAL_SELECTION_STATUS_META, row.status).label
             }
             color={
               row.kind === 'CUSTOM'
                 ? metaOf(OPTION_STATUS_META, row.status).color
-                : (RENTAL_ROW_STATUS_META[row.status]?.color ?? 'default')
+                : metaOf(RENTAL_SELECTION_STATUS_META, row.status).color
             }
           />
         </Space>

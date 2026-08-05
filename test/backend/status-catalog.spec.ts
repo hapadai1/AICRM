@@ -29,7 +29,7 @@ describe('상태 사전 (status-catalog)', () => {
     expect(orderItemCodes.slice(0, flows.orderItem.length)).toEqual(flows.orderItem);
 
     // 화면이 쓰는 도메인이 모두 있고, 모든 엔트리에 표시명·색이 있다.
-    for (const domain of ['contract', 'contract-version', 'order', 'order-item', 'component', 'option-session', 'work-order', 'measurement-type']) {
+    for (const domain of ['contract', 'contract-version', 'order', 'order-item', 'component', 'option-session', 'rental-selection', 'work-order', 'measurement-type']) {
       expect(statuses[domain]?.length).toBeGreaterThan(0);
       for (const entry of statuses[domain]) {
         expect(entry.label).toBeTruthy();

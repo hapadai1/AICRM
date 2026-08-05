@@ -6,10 +6,8 @@ export const CUSTOMER_STATUS_META: Record<CustomerStatus, { label: string; color
   INACTIVE: { label: '비활성', color: 'default' },
 };
 
-export const TRANSACTION_TYPE_LABEL: Record<'CUSTOM' | 'RENTAL', string> = {
-  CUSTOM: '맞춤',
-  RENTAL: '렌탈',
-};
+// 거래방식 라벨의 정본은 contracts/labels다 — 사본이 어긋나지 않게 재노출한다 (2026-08-05).
+export { TRANSACTION_TYPE_LABEL } from '../contracts/labels';
 
 /** 원 단위 정수 금액 표기 (값이 없으면 '-') */
 export function formatAmount(amount: number | null | undefined): string {

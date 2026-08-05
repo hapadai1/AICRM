@@ -73,7 +73,14 @@ export const COMPONENT_STATUS_META: Record<string, StatusMeta> = {
   CANCELLED: { label: '취소', color: 'red' },
 };
 
-/** 옵션·렌탈 선택 세션 (스타일 컨설팅) 진행 상태. */
+/** 렌탈 선택 세션 (렌탈 스타일 컨설팅) 진행 상태 — NOT_STARTED는 세션 없음의 화면 표기. */
+export const RENTAL_SELECTION_STATUS_META: Record<string, StatusMeta> = {
+  NOT_STARTED: { label: '미시작', color: 'default' },
+  IN_PROGRESS: { label: '작성 중', color: 'processing' },
+  CONFIRMED: { label: '확정', color: 'green' },
+};
+
+/** 옵션 선택 세션 (맞춤 스타일 컨설팅) 진행 상태. */
 export const OPTION_STATUS_META: Record<string, StatusMeta> = {
   NOT_STARTED: { label: '미시작', color: 'default' },
   IN_PROGRESS: { label: '진행중', color: 'blue' },
@@ -138,6 +145,7 @@ const DOMAIN_MAPS: Record<string, Record<string, StatusMeta>> = {
   order: ORDER_STATUS_META,
   'order-item': ORDER_ITEM_STATUS_META,
   component: COMPONENT_STATUS_META,
+  'rental-selection': RENTAL_SELECTION_STATUS_META,
   'option-session': OPTION_STATUS_META,
   'work-order': WORK_ORDER_STATUS_META,
   'measurement-type': MEASUREMENT_TYPE_META,

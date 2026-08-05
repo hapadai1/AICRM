@@ -92,7 +92,13 @@ export const STATUS_CATALOG: Record<string, StatusCatalogEntry[]> = {
     [...COMPONENT_STATUS_FLOW, 'RESERVED', 'CHECKED_OUT', 'RETURNED', 'CANCELLED'],
     COMPONENT_META,
   ),
-  /** 옵션·렌탈 선택 세션 (스타일 컨설팅) 진행 상태. */
+  /** 렌탈 선택 세션 (렌탈 스타일 컨설팅) 진행 상태 — NOT_STARTED는 세션 없음의 화면 표기. */
+  'rental-selection': [
+    { code: 'NOT_STARTED', label: '미시작', color: 'default' },
+    { code: 'IN_PROGRESS', label: '작성 중', color: 'processing' },
+    { code: 'CONFIRMED', label: '확정', color: 'green' },
+  ],
+  /** 옵션 선택 세션 (맞춤 스타일 컨설팅) 진행 상태. */
   'option-session': [
     { code: 'NOT_STARTED', label: '미시작', color: 'default' },
     { code: 'IN_PROGRESS', label: '진행중', color: 'blue' },
