@@ -8,7 +8,9 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FilesService } from '../files/files.service';
 import { COMPONENT_GROUP_LABELS, componentGroupsFor } from '../options/option-component-groups';
+import { autoLinkMeasurements } from '../measurements/measurement-link';
 import { orderItemIdsOfContract, syncPrepStatuses } from '../production/prep-status';
+import { anyInProduction } from '../production/production-status';
 import { buildContractExcel, ContractExcelLine } from './contract-excel';
 import {
   CancelContractDto,
@@ -465,8 +467,8 @@ export class ContractsService {
         undefined,
         { status: contract.status },
       );
-    // 컨설팅 잠금과 같은 규칙 — 제작 진행 중(제작요청 이후) 벌은 손대지 않는다 (0731).
-    const inProduction = item.orderItems.some((o) => o.status !== 'CREATED' && o.status !== 'CANCELLED');
+    // 컨설팅 잠금과 같은 규칙 — 제작 진행 중(발주 이후) 벌은 손대지 않는다 (0731).
+    const inProduction = anyInProduction(item.orderItems);
     if (inProduction)
       throw new BusinessException(
         'INVALID_STATUS_TRANSITION',
@@ -579,6 +581,13 @@ export class ContractsService {
     await this.ensureJourneysForOrders(tx, contract.customerId, orders, completedAt, actor.id);
     await this.advanceJourneysToContractConfirmed(tx, contract.customerId, completedAt, actor.id);
 
+    /*
+      계약 전에 미리 잰 채촌을 방금 생긴 품목에 붙인다 (현업 확정 2026-08-05).
+      정상 순서는 '컨설팅에서 채촌 → 계약완료'인데, 그때는 주문이 없어 붙일 자리가 없었다.
+      여기서 붙이지 않으면 준비가 끝난 적이 없는 것으로 남아 제작 목록에 뜨지 않는다.
+    */
+    await autoLinkMeasurements(tx, contract.customerId, actor.id);
+
     // 계약 전에 끝내 둔 준비(옵션 확정·채촌)를 물리화된 품목 상태에 반영한다.
     await syncPrepStatuses(tx, await orderItemIdsOfContract(tx, contract.id), actor.id);
 
@@ -631,8 +640,6 @@ export class ContractsService {
         quantity: l.quantity,
         unitPrice: l.unitPrice === null ? undefined : Number(l.unitPrice),
         lineAmount: Number(l.lineAmount),
-        vestIncluded: l.vestIncluded,
-        vestUnitPrice: l.vestUnitPrice === null ? undefined : Number(l.vestUnitPrice),
         notes: l.notes ?? undefined,
         sortOrder: l.sortOrder,
       }));
@@ -1415,13 +1422,11 @@ export class ContractsService {
     });
 
     // 라인을 벌 단위 슬롯으로 편다 — 슬롯 순서(라인 sortOrder → 수량)가 품목 순번(#1…#n)과 짝이 된다.
-    // 베스트 포함 여부는 라인 값이라, 같은 키의 라인이 여럿이면 벌마다 다르게 가져갈 수 있다.
-    const slotsByKey = new Map<string, Array<{ lineId: string; vestIncluded: boolean }>>();
+    const slotsByKey = new Map<string, Array<{ lineId: string }>>();
     for (const line of lines) {
       const key = `${line.transactionType}|${line.productCategory}`;
       const slots = slotsByKey.get(key) ?? [];
-      for (let n = 0; n < line.quantity; n += 1)
-        slots.push({ lineId: line.id, vestIncluded: line.vestIncluded });
+      for (let n = 0; n < line.quantity; n += 1) slots.push({ lineId: line.id });
       slotsByKey.set(key, slots);
     }
 
@@ -1565,10 +1570,7 @@ export class ContractsService {
           data: { id: randomUUID(), contractItemId: item.id, componentType: 'VEST', sequenceNo: 1, status: 'CREATED' },
         });
     } else if (vest && vest.status !== 'CANCELLED') {
-      const inProduction = item.orderItems.some(
-        (o) => o.status !== 'CREATED' && o.status !== 'CANCELLED',
-      );
-      if (inProduction)
+      if (anyInProduction(item.orderItems))
         throw new BusinessException(
           'INVALID_STATUS_TRANSITION',
           `${item.displayName}은(는) 제작 진행 중이라 베스트를 제외할 수 없습니다. 제작·입출고 화면에서 상태를 되돌린 뒤 진행해 주세요.`,
@@ -2287,15 +2289,11 @@ export class ContractsService {
     }
   }
 
+  /**
+   * 계약서 라인 저장값. 베스트는 여기서 다루지 않는다 (현업 확정 2026-08-01) —
+   * 정장은 상의·하의·베스트가 한 벌이고, 뺄지 말지는 스타일 컨설팅이 벌마다 정한다.
+   */
   private toLineData(line: ContractLineDto, index: number) {
-    // 베스트는 맞춤 정장 라인에서만 켤 수 있다 (현업 확정 2026-07-30).
-    // 값을 주지 않으면 맞춤 정장은 포함(3피스)이 기본이다 (현업 확정 2026-07-31).
-    const vestIncluded =
-      line.vestIncluded ?? this.isVestCapable(line.transactionType, line.productCategory);
-    if (vestIncluded && !this.isVestCapable(line.transactionType, line.productCategory))
-      throw new BusinessException('VALIDATION_ERROR', '베스트는 맞춤 정장 품목에만 추가할 수 있습니다.', [
-        { field: `lines[${index}].vestIncluded`, reason: 'NOT_CUSTOM_SUIT' },
-      ]);
     return {
       id: randomUUID(),
       transactionType: line.transactionType,
@@ -2304,9 +2302,6 @@ export class ContractsService {
       quantity: line.quantity,
       unitPrice: line.unitPrice ?? null,
       lineAmount: line.lineAmount ?? 0,
-      vestIncluded,
-      // 단가는 포함일 때만 의미가 있다 — 제외 라인은 null로 정규화해 문서·차감 계산이 안 흔들리게 한다.
-      vestUnitPrice: vestIncluded ? (line.vestUnitPrice ?? 0) : null,
       notes: line.notes ?? null,
       sortOrder: line.sortOrder ?? index + 1,
     };
@@ -2323,7 +2318,6 @@ interface ContractLineSummarySource {
   itemDescription?: string | null;
   quantity: number;
   lineAmount?: unknown;
-  vestIncluded?: boolean;
 }
 
 /**
@@ -2333,8 +2327,7 @@ interface ContractLineSummarySource {
 function lineSummary(line: ContractLineSummarySource): string {
   const name = line.itemDescription?.trim() || CATEGORY_LABEL[line.productCategory] || line.productCategory;
   const amount = Number(line.lineAmount ?? 0);
-  const vest = line.vestIncluded ? ' (베스트 포함)' : '';
-  return `${name}${vest} ${line.quantity}개 ${amount.toLocaleString('ko-KR')}원`;
+  return `${name} ${line.quantity}개 ${amount.toLocaleString('ko-KR')}원`;
 }
 
 /** 대분류의 기본 구성품을 한글 세부품목 라벨로 (설계서 03 §5.3). */

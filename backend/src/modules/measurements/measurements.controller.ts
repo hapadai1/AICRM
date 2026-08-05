@@ -101,19 +101,10 @@ export class MeasurementsController {
     return this.measurementsService.remove(id, actor);
   }
 
-  /** MEAS-002 완료 해제 */
-  @Post('measurements/:id/reopen')
-  @RequirePermission('MEASUREMENT_EDIT')
-  reopen(@Param('id') id: string, @CurrentUser() actor: AuthUser) {
-    return this.measurementsService.reopen(id, actor);
-  }
-
-  /** MEAS-002 완료 처리 */
-  @Post('measurements/:id/complete')
-  @RequirePermission('MEASUREMENT_EDIT')
-  complete(@Param('id') id: string, @CurrentUser() actor: AuthUser) {
-    return this.measurementsService.complete(id, actor);
-  }
+  /*
+    채촌은 '완료' 상태를 두지 않는다 (현업 확정 2026-08-05) — 작성·수정만 한다.
+    [완료]·[완료 해제] 엔드포인트를 걷어냈고, 쓸 수 있는 채촌인지는 **값이 들었는가**로 가른다.
+  */
 
   /** MEAS-001 기존 버전 복사 */
   @Post('measurements/:id/clone')

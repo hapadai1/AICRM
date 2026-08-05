@@ -230,41 +230,6 @@ describe('대시보드 (dashboard)', () => {
     expect(tasks.find((t) => t.entityId === orderItemId)).toBeUndefined();
   });
 
-  it('REPRINT_NEEDED: 출력 이후 옵션 재확정 시 포함되고 신규 버전 출력 시 제외된다', async () => {
-    // 출력 직후에는 재출력 대상이 아니다
-    let tasks = await getTasks('REPRINT_NEEDED');
-    expect(tasks.find((t) => t.entityId === orderItemId)).toBeUndefined();
-
-    // 옵션 확정 시각이 마지막 출력보다 이후가 되도록 변경
-    await ctx.prisma.optionSelectionSession.update({
-      where: { id: optionSessionId },
-      data: { confirmedAt: new Date(Date.now() + 60_000) },
-    });
-    tasks = await getTasks('REPRINT_NEEDED');
-    const row = tasks.find((t) => t.taskId === `reprint_needed:${orderItemId}`);
-    expect(row).toBeDefined();
-
-    // 최신 원본으로 신규 버전을 출력하면 해소된다
-    await ctx.prisma.workOrderVersion.create({
-      data: {
-        id: randomUUID(),
-        workOrderId,
-        versionNo: 2,
-        sourceOptionSessionId: optionSessionId,
-        sourceMeasurementSessionId: measurementSessionId,
-        optionSnapshot: {},
-        measurementSnapshot: {},
-        sourceHash: 'hash-v2',
-        outputFileId,
-        status: 'ISSUED',
-        issuedBy: adminId,
-        issuedAt: new Date(Date.now() + 120_000),
-      },
-    });
-    tasks = await getTasks('REPRINT_NEEDED');
-    expect(tasks.find((t) => t.entityId === orderItemId)).toBeUndefined();
-  });
-
   it('LATE_RETURN: 반납 예정일 경과 미반납 배정이 포함되고 반납 처리 시 제외된다', async () => {
     componentId = randomUUID();
     await ctx.prisma.orderItemComponent.create({
@@ -383,7 +348,7 @@ describe('대시보드 (dashboard)', () => {
     expect(data.week.reduce((sum: number, w: { count: number }) => sum + w.count, 0)).toBe(1);
 
     expect(Object.keys(data.taskCounts).sort()).toEqual(
-      ['INBOUND_DELAY', 'LATE_RETURN', 'REPRINT_NEEDED', 'UNORDERED'].sort(),
+      ['INBOUND_DELAY', 'LATE_RETURN', 'UNORDERED'].sort(),
     );
     // 앞선 테스트에서 모든 판정이 해소된 상태
     expect(data.taskCounts.UNORDERED).toBe(0);

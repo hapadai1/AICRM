@@ -50,7 +50,6 @@ import {
   MEASUREMENT_FIELDS,
   MEASUREMENT_GROUP_LABELS,
   MEASUREMENT_TYPE_LABELS,
-  completeMeasurement,
   createMeasurement,
   deleteMeasurement,
   deleteMeasurementImage,
@@ -64,8 +63,7 @@ import {
 import { BackButton } from '../../shared/BackButton';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
-import { labelOf, metaOf } from '../../shared/status-meta';
-import { MEASUREMENT_STATUS_META } from './meas-meta';
+import { labelOf } from '../../shared/status-meta';
 import { MeasurementRecordStrip } from './MeasurementRecordStrip';
 import { NumericKeypad } from './NumericKeypad';
 
@@ -349,20 +347,6 @@ export function MeasurementEditPage() {
     onError: (e) => message.error(e instanceof ApiError ? e.message : '저장에 실패했습니다.'),
   });
 
-  const completeMutation = useMutation({
-    mutationFn: async () => {
-      const saved = await saveMutation.mutateAsync();
-      return completeMeasurement(saved.id);
-    },
-    onSuccess: (completed) => {
-      message.success('채촌이 완료 처리되었습니다.');
-      queryClient.setQueryData(['measurements', 'detail', id], completed);
-      void invalidate();
-      void queryClient.invalidateQueries({ queryKey: ['workorders'] });
-    },
-    onError: (e) => message.error(e instanceof ApiError ? e.message : '완료 처리에 실패했습니다.'),
-  });
-
   const deleteMutation = useMutation({
     mutationFn: () => deleteMeasurement(session?.id ?? ''),
     onSuccess: () => {
@@ -373,14 +357,13 @@ export function MeasurementEditPage() {
     onError: (e) => message.error(e instanceof ApiError ? e.message : '삭제에 실패했습니다.'),
   });
 
-  /** 작업지시서 출력에 쓰인 채촌 — 지시서와 어긋나므로 잠긴다 (설계서 09 §2.1) */
-  const locked = session?.locked ?? false;
   /**
-   * 완료한 채촌도 읽기 전용이다 (현업 확정 2026-08-05).
-   * 완료는 "이 치수로 옷을 만들어도 된다"는 확정이므로, 그 뒤에 값이 바뀌면 무엇을 보고 만들었는지
-   * 알 수 없게 된다. 완료 해제는 두지 않는다 — 다시 재야 하면 [새 채촌]으로 기록을 새로 남긴다.
+   * 채촌은 '완료' 상태를 두지 않는다 (현업 확정 2026-08-05) — 작성·수정만 한다.
+   * 잠기는 자리는 **그 치수로 일이 시작된 뒤**뿐이다: 계약완료, 발주, 작업지시서 출력.
+   * 서버가 그 판정을 `locked`로 내려 준다.
    */
-  const readOnly = locked || (session?.completed ?? false);
+  const locked = session?.locked ?? false;
+  const readOnly = locked;
   const fieldOrder = MEASUREMENT_FIELDS.map((f) => f.key);
 
   const moveActive = (delta: number) => {
@@ -487,22 +470,6 @@ export function MeasurementEditPage() {
     });
   };
 
-  /**
-   * 완료는 되돌릴 수 없다 (현업 확정 2026-08-05) — 누르는 순간 이 기록은 보기 전용이 된다.
-   * 한 번 더 묻지 않으면 손이 미끄러진 것과 확정한 것을 구별할 방법이 없다.
-   * 다시 재는 길을 함께 적어 준다 — 처음부터 넣는 것이 아니라 값을 끌어와 고치는 일이다.
-   */
-  const confirmComplete = () => {
-    modal.confirm({
-      title: '이 채촌을 완료할까요?',
-      content:
-        '완료하면 값을 수정할 수 없습니다. 다시 재야 하면 [새 채촌]에서 [직전 채촌 값 불러오기]로 값을 가져와 주세요.',
-      okText: '완료',
-      cancelText: '취소',
-      onOk: () => completeMutation.mutateAsync(),
-    });
-  };
-
   const renderField = (def: MeasurementFieldDef) => {
     const value = form.values[def.key] ?? '';
     const active = activeKey === def.key;
@@ -569,7 +536,6 @@ export function MeasurementEditPage() {
     </Card>
   );
 
-  const statusMeta = metaOf(MEASUREMENT_STATUS_META, session?.status);
   // 저장한 채촌 목록은 최신 순으로 온다 — 현재 기록 바로 다음 항목이 직전 채촌이다.
   const records = recordsQuery.data ?? [];
   const currentIndex = records.findIndex((r) => r.id === session?.id);
@@ -675,7 +641,8 @@ export function MeasurementEditPage() {
                           {it.displayName}
                         </Tag>
                       ))}
-                      <StatusBadge label={statusMeta.label} color={statusMeta.color} />
+                      {/* 채촌은 상태를 두지 않는다 (2026-08-05) — 잠긴 것만 알린다. */}
+                      {locked && <StatusBadge label="진행 시작" color="default" />}
                     </>
                   )}
                 </Space>
@@ -949,7 +916,7 @@ export function MeasurementEditPage() {
           <Card
             title={
               readOnly
-                ? `${locked ? '출력된' : '완료한'} 채촌 — 보기 전용`
+                ? '진행이 시작된 채촌 — 보기 전용'
                 : isNarrow
                   ? '저장'
                   : unit === 'INCH'
@@ -1017,16 +984,17 @@ export function MeasurementEditPage() {
                   )}
                 </Space>
               ) : (
-                /* 주요 동작(저장·완료)은 위 한 줄, 보조 동작(비교·삭제)은 아래 한 줄로 묶는다. */
+                /* 주요 동작(저장)은 위 한 줄, 보조 동작(비교·삭제)은 아래 한 줄로 묶는다. */
                 <Can permission="MEASUREMENT_EDIT">
                   <Space direction="vertical" size="small" style={{ width: '100%' }}>
                     <div style={{ display: 'flex', gap: 8 }}>
-                      {/* 작성 중인 채촌만 이 자리에 온다 — 완료하면 위 readOnly 분기로 넘어간다. */}
+                      {/* 채촌은 저장이 전부다 — 완료라는 단계를 두지 않는다 (2026-08-05). */}
                       <Button
+                        type="primary"
                         size="large"
                         style={{ flex: 1, height: 56, fontSize: 18 }}
                         icon={<SaveOutlined />}
-                        loading={saveMutation.isPending && !completeMutation.isPending}
+                        loading={saveMutation.isPending}
                         onClick={() =>
                           saveMutation.mutate(undefined, {
                             onSuccess: () => message.success('저장되었습니다.'),
@@ -1034,15 +1002,6 @@ export function MeasurementEditPage() {
                         }
                       >
                         저장
-                      </Button>
-                      <Button
-                        type="primary"
-                        size="large"
-                        style={{ flex: 1, height: 56, fontSize: 18 }}
-                        loading={completeMutation.isPending}
-                        onClick={confirmComplete}
-                      >
-                        완료
                       </Button>
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>

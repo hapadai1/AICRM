@@ -6,6 +6,7 @@ import { AuthUser } from '../../common/decorators';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { syncPrepStatuses } from '../production/prep-status';
+import { anyInProduction } from '../production/production-status';
 import { compareChoiceCodes } from './choice-codes';
 import { componentGroupsFor } from './option-component-groups';
 import {
@@ -370,9 +371,7 @@ export class OptionSessionsService {
         contractedAt: contract.contractedAt?.toISOString() ?? null,
         contractCreatedAt: contract.createdAt.toISOString(),
         // 제작 진행 중(제작요청 이후) 품목은 계약이 작성중이어도 컨설팅을 잠근다.
-        inProduction: item.orderItems.some(
-          (o) => o.status !== 'CREATED' && o.status !== 'CANCELLED',
-        ),
+        inProduction: anyInProduction(item.orderItems),
         customerId: contract.customer.id,
         customerName: contract.customer.name,
         customerPhone: contract.customer.phone,
@@ -485,9 +484,7 @@ export class OptionSessionsService {
       status: session.status,
       // 컨설팅 편집 가능 = 계약 작성중 + 품목 미진행 (현업 확정 2026-07-31). 화면 잠금 판단용.
       contractStatus: contract?.status ?? null,
-      inProduction: session.contractItem.orderItems.some(
-        (o) => o.status !== 'CREATED' && o.status !== 'CANCELLED',
-      ),
+      inProduction: anyInProduction(session.contractItem.orderItems),
       currentStageId: session.currentStageId,
       fabricName: session.fabricName,
       startedAt: session.startedAt,
@@ -689,9 +686,7 @@ export class OptionSessionsService {
       status: session.status,
       // 컨설팅 편집 가능 = 계약 작성중 + 품목 미진행 (현업 확정 2026-07-31). 확인서의 확정·변경 버튼 판단용.
       contractStatus: this.contractOf(session)?.status ?? null,
-      inProduction: session.contractItem.orderItems.some(
-        (o) => o.status !== 'CREATED' && o.status !== 'CANCELLED',
-      ),
+      inProduction: anyInProduction(session.contractItem.orderItems),
       fabricName: session.fabricName,
       // 이 벌에서 베스트를 뺐는가 — 확정 팝업의 "계약서 변경내용"에 함께 알린다.
       // 베스트 금액은 자동 차감하지 않으므로(값이 그때그때 다르다) 수기 조정을 안내한다.
@@ -1218,7 +1213,7 @@ export class OptionSessionsService {
    * 제작·입출고 화면의 [되돌리기]로 품목 상태를 생성으로 되돌린 뒤 진행한다.
    */
   private ensureItemNotInProduction(orderItems: Array<{ status: string }>): void {
-    const inProduction = orderItems.some((o) => o.status !== 'CREATED' && o.status !== 'CANCELLED');
+    const inProduction = anyInProduction(orderItems);
     if (inProduction)
       throw new BusinessException(
         'INVALID_STATUS_TRANSITION',

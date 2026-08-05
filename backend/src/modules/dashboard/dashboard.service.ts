@@ -17,7 +17,6 @@ const TASK_ENTITY_TYPE: Record<DashboardTaskType, string> = {
   LATE_RETURN: 'RENTAL_ALLOCATION',
   INBOUND_DELAY: 'ORDER_ITEM_COMPONENT',
   UNORDERED: 'ORDER_ITEM',
-  REPRINT_NEEDED: 'ORDER_ITEM',
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -169,8 +168,6 @@ export class DashboardService {
         return this.findInboundDelays();
       case 'UNORDERED':
         return this.findUnordered();
-      case 'REPRINT_NEEDED':
-        return this.findReprintNeeded();
     }
   }
 
@@ -270,58 +267,6 @@ export class DashboardService {
     );
   }
 
-  /** 재출력 필요: 최신 옵션 확정/채촌 연결 시각 > 마지막 작업지시서 출력 시각. */
-  private async findReprintNeeded(): Promise<DashboardTaskRow[]> {
-    const items = await this.prisma.orderItem.findMany({
-      where: {
-        status: { not: 'CANCELLED' },
-        workOrder: { versions: { some: {} } },
-        sourceContractItem: {
-          optionSelectionSessions: { some: { isCurrent: true, status: 'CONFIRMED' } },
-        },
-        measurementLinks: { some: { isCurrent: true } },
-      },
-      include: {
-        order: { include: { contract: { include: { customer: true } } } },
-        // 옵션 세션은 ContractItem에 붙는다 → sourceContractItem 경유(REACH-BACK).
-        sourceContractItem: {
-          select: {
-            optionSelectionSessions: {
-              where: { isCurrent: true, status: 'CONFIRMED' },
-              select: { confirmedAt: true },
-            },
-          },
-        },
-        measurementLinks: { where: { isCurrent: true }, select: { linkedAt: true } },
-        workOrder: {
-          include: { versions: { orderBy: { issuedAt: 'desc' }, take: 1, select: { issuedAt: true } } },
-        },
-      },
-    });
-
-    const rows: DashboardTaskRow[] = [];
-    for (const item of items) {
-      const lastIssuedAt = item.workOrder?.versions[0]?.issuedAt;
-      if (!lastIssuedAt) continue;
-      const sourceTimes = [
-        ...item.sourceContractItem.optionSelectionSessions.map((s) => s.confirmedAt?.getTime() ?? 0),
-        ...item.measurementLinks.map((l) => l.linkedAt.getTime()),
-      ];
-      const latestSourceAt = Math.max(0, ...sourceTimes);
-      if (latestSourceAt <= lastIssuedAt.getTime()) continue;
-      rows.push(
-        this.row('REPRINT_NEEDED', item.id, item.order.contract.customer, {
-          orderId: item.orderId,
-          orderNo: item.order.orderNo,
-          orderItemId: item.id,
-          itemLabel: item.displayName,
-          reason: '마지막 출력 이후 옵션·채촌 원본이 변경됨',
-          dueDate: toDateString(todayAsDbDate()),
-        }),
-      );
-    }
-    return this.withAcknowledged('REPRINT_NEEDED', rows);
-  }
 
   // ---------------------------------------------------------------------------
   // 공통

@@ -280,11 +280,13 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
   }
 
   /** 연결하지 않은 완료 채촌 (자동 선택 규칙 검증용) */
-  async function createCompletedMeasurement(
+  /** 값이 든 채촌 하나. 구분 기본은 스타일 컨설팅(INITIAL) — 자동 선택 대상이 되는 구분이다. */
+  async function createMeasurement(
     customerId: string,
     versionNo: number,
     measurementDate: string,
     chestValue: number,
+    measurementType = 'INITIAL',
   ): Promise<string> {
     const sessionId = randomUUID();
     await ctx.prisma.measurementSession.create({
@@ -293,8 +295,7 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
         customerId,
         versionNo,
         measurementDate: new Date(measurementDate),
-        measurementType: versionNo === 1 ? 'INITIAL' : 'FITTING',
-        completedAt: new Date(),
+        measurementType,
         createdBy: adminId,
         values: {
           create: [
@@ -457,10 +458,15 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
         .expect(404);
     });
 
-    it('연결이 없으면 최신 완료 채촌을 기본으로 잡고, 출력하면 그 채촌으로 확정된다', async () => {
+    it('연결이 없으면 최신 스타일 컨설팅 채촌을 기본으로 잡고, 출력하면 그 채촌으로 확정된다', async () => {
       const f = await createFixture({ linkMeasurement: false });
-      const older = await createCompletedMeasurement(f.customerId, 1, '2026-07-01', 96);
-      const latest = await createCompletedMeasurement(f.customerId, 2, '2026-07-20', 99);
+      const older = await createMeasurement(f.customerId, 1, '2026-07-01', 96);
+      const latest = await createMeasurement(f.customerId, 2, '2026-07-20', 99);
+      /*
+        가봉 채촌이 더 최신이어도 고르지 않는다 (현업 확정 2026-08-05) —
+        가봉은 그 옷을 고치려고 잰 것이라 새 옷의 기준이 아니다.
+      */
+      await createMeasurement(f.customerId, 3, '2026-07-25', 103, 'FITTING');
 
       const preview = await api(ctx)
         .get(`/api/v1/order-items/${f.orderItemId}/work-order/preview`)
@@ -492,14 +498,14 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
 
     it('연결이 확정된 뒤 더 최근 채촌이 생겨도 저절로 바뀌지 않는다', async () => {
       const f = await createFixture({ linkMeasurement: false });
-      const first = await createCompletedMeasurement(f.customerId, 1, '2026-07-05', 97);
+      const first = await createMeasurement(f.customerId, 1, '2026-07-05', 97);
       await api(ctx)
         .post(`/api/v1/order-items/${f.orderItemId}/work-order-versions`)
         .set(auth(ctx))
         .send({})
         .expect(201);
 
-      await createCompletedMeasurement(f.customerId, 2, '2026-08-02', 101);
+      await createMeasurement(f.customerId, 2, '2026-08-02', 101);
       const preview = await api(ctx)
         .get(`/api/v1/order-items/${f.orderItemId}/work-order/preview`)
         .set(auth(ctx))
@@ -639,17 +645,18 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
       expect(row.currentVersionNo).toBe(1);
     });
 
-    it('채촌 재연결 후 재출력 필요(REPRINT_NEEDED)로 판정된다', async () => {
+    /*
+      `재출력 필요`는 없앴다 (현업 확정 2026-08-05) — 출력은 발주와 같은 시점이고 발주하면
+      옵션·채촌이 잠기므로 출력 뒤에 근거가 바뀔 길이 없다. 채촌을 다시 걸어도 최신으로 남는다.
+    */
+    it('채촌을 다시 걸어도 출력본이 있으면 최신(CURRENT)이다', async () => {
       await createAndLinkMeasurement(fixture.customerId, fixture.orderItemId, 2, 99.5);
-      const res = await api(ctx)
-        .get('/api/v1/work-orders?status=REPRINT_NEEDED')
-        .set(auth(ctx))
-        .expect(200);
+      const res = await api(ctx).get('/api/v1/work-orders?status=CURRENT').set(auth(ctx)).expect(200);
       const row = res.body.data.find(
         (r: { orderItemId: string }) => r.orderItemId === fixture.orderItemId,
       );
       expect(row).toBeDefined();
-      expect(row.status).toBe('REPRINT_NEEDED');
+      expect(row.status).toBe('CURRENT');
     });
 
     it('재출력 시 V2가 생성되고 이전 버전은 SUPERSEDED가 된다', async () => {

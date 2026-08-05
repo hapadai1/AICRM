@@ -11,21 +11,19 @@ import { toDateOnly, toDateTime, toNumber } from './transform';
  * 작업지시서 상태 (WO-001 §7.8) — 백엔드 resolveWorkOrderStatus 판정 결과
  * - WAITING: 옵션 확정·채촌 연결 전 (정식 출력 불가)
  * - UNORDERED: 출력 가능하나 출력 이력 없음 (미주문)
- * - REPRINT_NEEDED: 마지막 출력 이후 옵션·채촌 변경 (재출력 필요)
  * - CURRENT: 최신 출력본이 유효
  */
-export type WorkOrderStatus = 'WAITING' | 'UNORDERED' | 'REPRINT_NEEDED' | 'CURRENT';
+export type WorkOrderStatus = 'WAITING' | 'UNORDERED' | 'CURRENT';
 
 /**
  * 목록 status 필터로 보낼 수 있는 값.
  * 백엔드 WORK_ORDER_LIST_STATUSES가 허용하는 3종뿐이며, WAITING을 보내면 400이다.
  * (행에는 WAITING이 올 수 있으므로 라벨 맵에는 그대로 남겨둔다.)
  */
-export type WorkOrderFilterStatus = 'UNORDERED' | 'REPRINT_NEEDED' | 'CURRENT';
+export type WorkOrderFilterStatus = 'UNORDERED' | 'CURRENT';
 
 export const WORK_ORDER_FILTER_STATUSES: WorkOrderFilterStatus[] = [
   'UNORDERED',
-  'REPRINT_NEEDED',
   'CURRENT',
 ];
 

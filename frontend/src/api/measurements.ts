@@ -6,14 +6,12 @@ import { toDateOnly, toNumber } from './transform';
  * 응답 형태·코드값은 백엔드(`measurements.service.ts`, `measurement-catalog.ts`)가 기준이다.
  *
  * 백엔드는 아래 형태로 응답한다. 화면용 뷰로 변환하는 책임은 이 모듈이 진다.
- * - 목록/상세: `measurementType`, `measurementDate`, `completed: boolean`, `linkedOrderItems`
+ * - 목록/상세: `measurementType`, `measurementDate`, `locked`, `linkedOrderItems`
  * - 채촌값: 객체가 아니라 `{ measurementCode, numericValue, textValue }` 배열
  * - 비교: `items` 배열 + `previous/current` 중첩
  */
 
 export type MeasurementType = 'INITIAL' | 'FITTING' | 'REMEASURE' | 'OTHER';
-/** 백엔드는 상태 코드 대신 `completed: boolean`을 보낸다. 화면 표시용 파생 코드. */
-export type MeasurementSessionStatus = 'DRAFT' | 'COMPLETED';
 /** 백엔드 body_section 코드 (UPPER/LOWER/SHIRT/SHOES) */
 export type MeasurementGroup = 'UPPER' | 'LOWER' | 'SHIRT' | 'SHOES';
 
@@ -31,11 +29,6 @@ export const MEASUREMENT_GROUP_LABELS: Record<string, string> = {
   SHIRT: '셔츠',
   SHOES: '구두',
 };
-
-/** completed 플래그 → 화면 상태 코드 */
-export function measurementStatusOf(completed: boolean): MeasurementSessionStatus {
-  return completed ? 'COMPLETED' : 'DRAFT';
-}
 
 export interface MeasurementFieldDef {
   /** 백엔드 measurement_code (JACKET_LENGTH, CHEST_UPPER, SLEEVE_LEFT ...) */
@@ -119,8 +112,6 @@ interface MeasurementSummaryApiRow {
   measurementType: string;
   previousSessionId?: string | null;
   fitPreference?: string | null;
-  completed: boolean;
-  completedAt?: string | null;
   createdBy?: MeasurementUserApiRow | null;
   staffName?: string;
   createdAt: string;
@@ -165,8 +156,6 @@ interface MeasurementSessionApiRow {
   fitPreference?: string | null;
   bodyNotes?: string | null;
   notes?: string | null;
-  completed: boolean;
-  completedAt?: string | null;
   createdBy?: MeasurementUserApiRow | null;
   createdAt: string;
   values: MeasurementValueApiRow[];
@@ -186,9 +175,6 @@ export interface MeasurementSummary {
   versionNo: number;
   measurementDate: string;
   measurementType: string;
-  /** completed 파생 상태 */
-  status: MeasurementSessionStatus;
-  completed: boolean;
   /** 백엔드는 담당자를 createdBy(작성자)로만 내려 준다. */
   staffName: string;
   valueCount: number;
@@ -213,8 +199,6 @@ export interface MeasurementSession {
   versionNo: number;
   measurementDate: string;
   measurementType: string;
-  status: MeasurementSessionStatus;
-  completed: boolean;
   locked: boolean;
   staffName: string;
   values: MeasurementValues;
@@ -233,8 +217,6 @@ function toSummary(row: MeasurementSummaryApiRow): MeasurementSummary {
     versionNo: row.versionNo,
     measurementDate: toDateOnly(row.measurementDate) ?? '',
     measurementType: row.measurementType,
-    status: measurementStatusOf(row.completed),
-    completed: row.completed,
     staffName: row.staffName ?? row.createdBy?.displayName ?? '-',
     valueCount: row.valueCount,
     linkedOrderItems: (row.linkedOrderItems ?? []).map((it) => ({ id: it.id, displayName: it.displayName })),
@@ -266,8 +248,6 @@ function toSession(row: MeasurementSessionApiRow): MeasurementSession {
     versionNo: row.versionNo,
     measurementDate: toDateOnly(row.measurementDate) ?? '',
     measurementType: row.measurementType,
-    status: measurementStatusOf(row.completed),
-    completed: row.completed,
     locked: row.locked ?? (row.workOrderVersionCount ?? 0) > 0,
     staffName: row.staffName ?? row.createdBy?.displayName ?? '-',
     values: toValueMap(row.values),
@@ -423,12 +403,10 @@ export interface MeasurementTargetRow {
   /** 계약서 현재 버전의 완료 예정일 (계약 목록과 같은 값) */
   dueDate: string | null;
   measurementCount: number;
-  measurementCompletedCount: number;
   lastSessionId: string | null;
   lastMeasurementDate: string | null;
   lastVersionNo: number | null;
   lastMeasurementType: MeasurementType | null;
-  lastCompleted: boolean | null;
 }
 
 /** 채촌 대상 목록 (페이지 없는 단순 배열) */
@@ -443,7 +421,6 @@ export interface MeasurementListParams {
   dateFrom?: string;
   dateTo?: string;
   type?: MeasurementType;
-  status?: MeasurementSessionStatus;
   page?: number;
   size?: number;
 }
@@ -464,7 +441,6 @@ export async function fetchMeasurementList(params: MeasurementListParams): Promi
       dateFrom: params.dateFrom || undefined,
       dateTo: params.dateTo || undefined,
       type: params.type || undefined,
-      status: params.status || undefined,
       page: params.page ?? 1,
       size: params.size ?? 30,
     },
@@ -558,22 +534,6 @@ export function updateMeasurement(
 /** 채촌 삭제 (작업지시서에 쓰인 채촌은 409) */
 export function deleteMeasurement(id: string): Promise<{ id: string; deleted: boolean }> {
   return request<{ id: string; deleted: boolean }>({ url: `/measurements/${id}`, method: 'DELETE' });
-}
-
-/** 채촌 완료 (§14.4) */
-export function completeMeasurement(id: string): Promise<MeasurementSession> {
-  return request<MeasurementSessionApiRow>({
-    url: `/measurements/${id}/complete`,
-    method: 'POST',
-  }).then(toSession);
-}
-
-/** 완료 해제 (설계서 09 §3.5) */
-export function reopenMeasurement(id: string): Promise<MeasurementSession> {
-  return request<MeasurementSessionApiRow>({
-    url: `/measurements/${id}/reopen`,
-    method: 'POST',
-  }).then(toSession);
 }
 
 /** 기존 버전 복사 (새 날짜 버전) */

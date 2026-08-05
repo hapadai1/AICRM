@@ -199,7 +199,7 @@ export interface ProductionComponent {
 /** 작업지시서 뷰 (제작 품목 행에 얹혀 오는 출력 게이트 상태) */
 export interface ProductionWorkOrderView {
   workOrderId?: string;
-  /** WAITING | UNORDERED | REPRINT_NEEDED | CURRENT */
+  /** WAITING | UNORDERED | CURRENT */
   status: string;
   currentVersionNo?: number;
   /** 최신 출력본 버전 id — 목록에서 바로 내려받을 때 쓴다 */

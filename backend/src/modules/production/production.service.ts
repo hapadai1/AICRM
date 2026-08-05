@@ -473,16 +473,22 @@ export class ProductionService {
   /** 제작 현황 목록: 품목 + 구성품 + 집계 상태 */
   async listProductionItems(query: ProductionItemsQueryDto) {
     /*
-      제작 관리는 계약완료된 건만 다룬다 (2026-08-04 현업 확정).
-      정상 경로에서는 계약완료(syncOrders)가 주문을, 그 직후 ensureJourneysForOrders가 진행을 만든다.
-      둘 중 하나라도 없는 주문은 진행 단계를 세울 수 없어 화면에서 빈 껍데기로 보였다 —
-      그런 주문은 목록에도 상세에도 내려보내지 않는다.
+      제작 관리에 뜨는 품목 (2026-08-05 현업 확정).
+
+      1) **주문이 있으면 뜬다.** 전에는 `계약 상태 = 계약완료`로 걸렀는데, 계약을 [수정하기]로
+         되돌리면 작성중이 되어 **제작 중인 옷이 화면에서 통째로 사라졌다.** 계약서를 고치는 것과
+         공장 일은 따로 돈다 — 되돌려도 입고·출고는 그대로 찍어야 한다. 주문은 계약완료로만
+         생기므로, 주문이 있다는 것 자체가 "한 번은 계약이 성립했다"는 뜻이다.
+      2) **준비가 끝난 것만 뜬다.** 준비 중(옵션대기·채촌대기)인 품목은 제작이 할 일이 없다.
+         준비 진행은 이미 품목 상태에 반영되므로(prep-status) 따로 계산하지 않고 상태로 거른다.
+      3) 진행(journey)이 없는 주문은 단계를 세울 수 없어 빈 껍데기로 보인다 — 계속 제외한다.
     */
+    const READY_FROM = ITEM_STATUS_FLOW.indexOf('READY_TO_ORDER');
+    const preparedStatuses = ITEM_STATUS_FLOW.slice(READY_FROM) as unknown as string[];
     const where: Prisma.OrderItemWhereInput = {
-      ...(query.status ? { status: query.status } : {}),
+      ...(query.status ? { status: query.status } : { status: { in: preparedStatuses } }),
       order: {
         ...(query.contractId ? { contractId: query.contractId } : {}),
-        contract: { status: 'COMPLETED' },
         journeys: { some: { status: { not: 'CANCELLED' } } },
       },
     };

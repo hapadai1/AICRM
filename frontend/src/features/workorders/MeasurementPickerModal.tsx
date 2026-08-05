@@ -49,7 +49,7 @@ export function MeasurementPickerModal({
   const { message } = App.useApp();
   const queryClient = useQueryClient();
   const [typeFilter, setTypeFilter] = useState<string>('ALL');
-  // 미완료 채촌은 품목에 연결할 수 없어 기본으로 감춘다.
+  // 값이 없는 채촌은 품목에 연결할 수 없어 기본으로 감춘다 (2026-08-05).
   const [completedOnly, setCompletedOnly] = useState(true);
 
   const recordsQuery = useQuery({
@@ -75,7 +75,7 @@ export function MeasurementPickerModal({
   const rows: PickerRow[] = records
     .map((r, i) => ({ ...r, title: titles[i] ?? '' }))
     .filter((r) => (typeFilter === 'ALL' ? true : r.measurementType === typeFilter))
-    .filter((r) => (completedOnly ? r.completed : true));
+    .filter((r) => (completedOnly ? r.valueCount > 0 : true));
 
   const columns: ColumnsType<PickerRow> = [
     {
@@ -97,10 +97,10 @@ export function MeasurementPickerModal({
       key: 'status',
       width: 110,
       render: (_, row) =>
-        row.completed ? (
-          <Tag color="green">완료</Tag>
+        row.valueCount > 0 ? (
+          <Tag color="green">기록됨</Tag>
         ) : (
-          <Tag color="orange">작성중</Tag>
+          <Tag color="orange">빈 기록</Tag>
         ),
     },
     { title: '담당', dataIndex: 'staffName', width: 110 },
@@ -115,11 +115,11 @@ export function MeasurementPickerModal({
         ) : (
           <Button
             type="primary"
-            disabled={!row.completed}
+            disabled={row.valueCount === 0}
             loading={pickMutation.isPending && pickMutation.variables === row.id}
             onClick={() => pickMutation.mutate(row.id)}
           >
-            {row.completed ? '선택' : '완료 필요'}
+            {row.valueCount > 0 ? '선택' : '값 필요'}
           </Button>
         ),
     },
@@ -139,7 +139,7 @@ export function MeasurementPickerModal({
           <Segmented value={typeFilter} options={TYPE_FILTERS} onChange={(v) => setTypeFilter(v as string)} />
           <Space size={6}>
             <Switch checked={completedOnly} onChange={setCompletedOnly} />
-            <Typography.Text type="secondary">완료된 채촌만</Typography.Text>
+            <Typography.Text type="secondary">값이 든 채촌만</Typography.Text>
           </Space>
         </Space>
         {recordsQuery.isLoading ? (

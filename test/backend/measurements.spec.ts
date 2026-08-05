@@ -103,7 +103,6 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
       })
       .expect(201);
     expect(res1.body.data.versionNo).toBe(1);
-    expect(res1.body.data.completed).toBe(false);
     sessionV1 = res1.body.data.id;
 
     // 알려진 코드는 분류가 자동 보완된다
@@ -208,55 +207,34 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
     expect(res.body.data.right.bodyNotes).toBe('가봉 후 보정');
   });
 
-  it('완료 전 세션은 품목에 연결할 수 없다', async () => {
+  it('빈 세션은 품목에 연결할 수 없다', async () => {
+    // 값이 하나도 없는 채촌이 작업지시서로 나가면 안 된다 (현업 확정 2026-08-05).
+    const blank = await api(ctx)
+      .post(`/api/v1/customers/${customerId}/measurements`)
+      .set(auth(ctx))
+      .send({ measurementDate: '2026-07-11', measurementType: 'OTHER' })
+      .expect(201);
     const res = await api(ctx)
       .put(`/api/v1/order-items/${orderItemId}/measurement`)
       .set(auth(ctx))
-      .send({ measurementSessionId: sessionV1 })
+      .send({ measurementSessionId: blank.body.data.id })
       .expect(422);
     expect(res.body.error.code).toBe('MEASUREMENT_NOT_COMPLETE');
+    await api(ctx).delete(`/api/v1/measurements/${blank.body.data.id}`).set(auth(ctx)).expect(200);
   });
 
-  it('완료 처리는 값 1개 이상을 요구하고 audit COMPLETE를 기록한다', async () => {
-    // 값 없는 세션은 완료 불가
+  it('빈 채촌은 품목에 연결할 수 없다 (값이 들어야 쓸 수 있다)', async () => {
+    // 채촌은 '완료' 상태를 두지 않는다 (현업 확정 2026-08-05) — 값 유무가 쓸 수 있는지를 가른다.
     const empty = await api(ctx)
       .post(`/api/v1/customers/${customerId}/measurements`)
       .set(auth(ctx))
       .send({ measurementDate: '2026-07-12', measurementType: 'OTHER' })
       .expect(201);
     emptySession = empty.body.data.id;
-    const fail = await api(ctx)
-      .post(`/api/v1/measurements/${emptySession}/complete`)
-      .set(auth(ctx))
-      .expect(422);
-    expect(fail.body.error.code).toBe('MEASUREMENT_NOT_COMPLETE');
-
-    // 값 있는 세션은 완료 성공 — completed_at 컬럼에 기록된다
-    const ok = await api(ctx)
-      .post(`/api/v1/measurements/${sessionV1}/complete`)
-      .set(auth(ctx))
-      .expect(201);
-    expect(ok.body.data.completed).toBe(true);
-    expect(ok.body.data.completedAt).toBeTruthy();
-    const row = await ctx.prisma.measurementSession.findUniqueOrThrow({ where: { id: sessionV1 } });
-    expect(row.completedAt).not.toBeNull();
-    await api(ctx).post(`/api/v1/measurements/${sessionV2}/complete`).set(auth(ctx)).expect(201);
-
-    // 감사로그는 이력용으로 계속 기록된다 (완료 판정 기준은 컬럼)
-    const audits = await ctx.prisma.auditLog.findMany({
-      where: { entityType: 'MEASUREMENT_SESSION', action: 'COMPLETE', entityId: sessionV1 },
-    });
-    expect(audits).toHaveLength(1);
-
-    // 중복 완료 차단
-    const dup = await api(ctx)
-      .post(`/api/v1/measurements/${sessionV1}/complete`)
-      .set(auth(ctx))
-      .expect(409);
-    expect(dup.body.error.code).toBe('INVALID_STATUS_TRANSITION');
+    expect(empty.body.data.completed).toBeUndefined();
   });
 
-  it('완료된 세션도 작업지시서 출력 전이면 수정할 수 있다 (설계서 09 §2.1)', async () => {
+  it('계약완료·발주 전이면 채촌을 언제든 수정할 수 있다', async () => {
     await api(ctx)
       .patch(`/api/v1/measurements/${sessionV1}`)
       .set(auth(ctx))
@@ -266,17 +244,15 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
     const detail = await api(ctx).get(`/api/v1/measurements/${sessionV1}`).set(auth(ctx)).expect(200);
     const chest = detail.body.data.values.find((v: any) => v.measurementCode === 'CHEST_UPPER');
     expect(chest.numericValue).toBe(100);
-    expect(detail.body.data.completed).toBe(true);
-    expect(detail.body.data.completedAt).toBeTruthy();
     expect(detail.body.data.locked).toBe(false);
     expect(detail.body.data.customerName).toBe('채촌 테스트 고객');
 
-    // 감사로그에 "완료 후 수정" 사유가 남는다
+    // 수정은 평범한 UPDATE로 남는다 — '완료 후 수정'이라는 특별한 사유는 없어졌다(완료 개념 제거).
     const audit = await ctx.prisma.auditLog.findFirst({
       where: { entityType: 'MEASUREMENT_SESSION', action: 'UPDATE', entityId: sessionV1 },
       orderBy: { createdAt: 'desc' },
     });
-    expect(audit?.reason).toBe('완료 후 수정');
+    expect(audit).toBeTruthy();
 
     // 원래 값으로 되돌려 이후 테스트(비교·복사)의 기대값을 유지한다
     await api(ctx)
@@ -312,16 +288,6 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
     await api(ctx).delete(`/api/v1/measurements/${target.body.data.id}`).set(auth(ctx)).expect(200);
   });
 
-  it('완료 해제 후 다시 완료할 수 있다', async () => {
-    const reopened = await api(ctx)
-      .post(`/api/v1/measurements/${sessionV2}/reopen`)
-      .set(auth(ctx))
-      .expect(201);
-    expect(reopened.body.data.completed).toBe(false);
-
-    await api(ctx).post(`/api/v1/measurements/${sessionV2}/complete`).set(auth(ctx)).expect(201);
-  });
-
   it('clone은 새 날짜·구분으로 값을 복사하고 previous_session_id를 연결한다', async () => {
     const res = await api(ctx)
       .post(`/api/v1/measurements/${sessionV1}/clone`)
@@ -333,7 +299,6 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
     expect(cloned.previousSessionId).toBe(sessionV1);
     expect(cloned.measurementDate).toBe('2026-07-20');
     expect(cloned.measurementType).toBe('REMEASURE');
-    expect(cloned.completed).toBe(false);
     expect(cloned.values).toHaveLength(3);
     const chest = cloned.values.find((v: any) => v.measurementCode === 'CHEST_UPPER');
     expect(chest.numericValue).toBe(98);
@@ -389,8 +354,6 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
     const v1Row = list.body.data.find((s: any) => s.id === sessionV1);
     expect(v1Row.linkedOrderItemCount).toBe(1);
     expect(v1Row.linkedOrderItems[0].displayName).toBe('SUIT-01');
-    expect(v1Row.completed).toBe(true);
-    expect(v1Row.completedAt).toBeTruthy();
 
     // 감사로그 LINK 기록
     const audits = await ctx.prisma.auditLog.findMany({
@@ -418,7 +381,6 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
       })
       .expect(201);
     expect(other.body.data.versionNo).toBe(1); // 버전은 고객별로 독립
-    await api(ctx).post(`/api/v1/measurements/${other.body.data.id}/complete`).set(auth(ctx)).expect(201);
 
     const res = await api(ctx)
       .put(`/api/v1/order-items/${orderItemId}/measurement`)
@@ -428,7 +390,7 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
     expect(res.body.error.code).toBe('VALIDATION_ERROR');
   });
 
-  it('전역 검색은 고객명·전화·기간·구분·상태로 필터한다 (MEAS-001)', async () => {
+  it('전역 검색은 고객명·전화·기간·구분으로 필터한다 (MEAS-001)', async () => {
     const all = await api(ctx).get('/api/v1/measurements').set(auth(ctx)).expect(200);
     // 두 고객의 기록이 모두 보인다 (고객을 고르지 않아도 조회된다)
     const customerIds: string[] = all.body.data.map((r: any) => r.customerId);
@@ -461,13 +423,6 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
       .expect(200);
     expect(byRange.body.data.every((r: any) => r.measurementDate >= '2026-07-10')).toBe(true);
     expect(byRange.body.data.every((r: any) => r.measurementDate <= '2026-07-12')).toBe(true);
-
-    const drafts = await api(ctx)
-      .get('/api/v1/measurements')
-      .query({ customerId, status: 'DRAFT' })
-      .set(auth(ctx))
-      .expect(200);
-    expect(drafts.body.data.every((r: any) => r.completed === false)).toBe(true);
 
     const remeasure = await api(ctx)
       .get('/api/v1/measurements')
@@ -503,7 +458,7 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
     await api(ctx).get(`/api/v1/measurements/${targetId}`).set(auth(ctx)).expect(404);
   });
 
-  it('작업지시서 출력에 쓰인 채촌은 수정·삭제·완료해제가 잠긴다', async () => {
+  it('작업지시서 출력에 쓰인 채촌은 수정·삭제가 잠긴다', async () => {
     // sessionV2는 orderItemId에 연결되어 있다. 그 상태로 작업지시서 버전을 만든다.
     const optionSet = await ctx.prisma.optionSet.findFirstOrThrow();
     const optionSetVersion = await ctx.prisma.optionSetVersion.create({
@@ -561,12 +516,6 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
 
     const del = await api(ctx).delete(`/api/v1/measurements/${sessionV2}`).set(auth(ctx)).expect(409);
     expect(del.body.error.code).toBe('MEASUREMENT_LOCKED');
-
-    const reopen = await api(ctx)
-      .post(`/api/v1/measurements/${sessionV2}/reopen`)
-      .set(auth(ctx))
-      .expect(409);
-    expect(reopen.body.error.code).toBe('MEASUREMENT_LOCKED');
 
     const detail = await api(ctx).get(`/api/v1/measurements/${sessionV2}`).set(auth(ctx)).expect(200);
     expect(detail.body.data.locked).toBe(true);

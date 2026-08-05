@@ -4,7 +4,6 @@ export const DASHBOARD_TASK_TYPES = [
   'LATE_RETURN',
   'INBOUND_DELAY',
   'UNORDERED',
-  'REPRINT_NEEDED',
 ] as const;
 export type DashboardTaskType = (typeof DASHBOARD_TASK_TYPES)[number];
 

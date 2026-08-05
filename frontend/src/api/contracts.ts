@@ -63,10 +63,6 @@ interface ContractLineApiRow {
   quantity: number;
   unitPrice?: string | number | null;
   lineAmount?: string | number | null;
-  /** 베스트(3피스) 포함 — 맞춤 정장 라인만 true 가능 (현업 확정 2026-07-30) */
-  vestIncluded?: boolean;
-  /** 베스트 포함 시 벌당 베스트 단가. 금액 = 수량 × (단가 + 베스트 단가) */
-  vestUnitPrice?: string | number | null;
   notes?: string | null;
   sortOrder: number;
 }
@@ -140,14 +136,6 @@ export interface ContractLine {
   quantity: number;
   unitPrice: number;
   amount: number;
-  /**
-   * 베스트(3피스) 포함 — 맞춤 정장 라인 전용. **읽기 전용이다.**
-   * 계약서는 더 이상 베스트를 다루지 않고(현업 확정 2026-08-01) 스타일 컨설팅에서 벌마다 정한다.
-   * 이 값은 이전 계약이 남긴 기록이라, 화면에 쓰지 않고 저장 본문에도 싣지 않는다.
-   */
-  vestIncluded: boolean;
-  /** 베스트 포함 시 벌당 베스트 단가(수기). vestIncluded 와 같은 이유로 읽기 전용. */
-  vestUnitPrice: number;
   note?: string;
   itemDescription?: string;
 }
@@ -246,8 +234,6 @@ function toLine(row: ContractLineApiRow): ContractLine {
     quantity: row.quantity,
     unitPrice: toNumber(row.unitPrice) ?? 0,
     amount: toNumber(row.lineAmount) ?? 0,
-    vestIncluded: row.vestIncluded ?? false,
-    vestUnitPrice: toNumber(row.vestUnitPrice) ?? 0,
     note: row.notes ?? undefined,
     itemDescription: row.itemDescription ?? undefined,
   };

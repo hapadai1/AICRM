@@ -50,8 +50,6 @@ export interface ContractSummary {
   woItemCount: number;
   /** 작업지시서 미출력(옵션·채촌 준비됐으나 미출력) 건수 */
   woUnorderedCount: number;
-  /** 작업지시서 재출력 필요 건수 */
-  woReprintCount: number;
   /** 옵션·채촌이 남아 아직 출력할 수 없는 건수 */
   woWaitingCount: number;
   woCurrentCount: number;
@@ -70,7 +68,6 @@ export function summarizeContract(items: ProductionItem[]): ContractSummary {
     progressPct: 0,
     woItemCount: 0,
     woUnorderedCount: 0,
-    woReprintCount: 0,
     woWaitingCount: 0,
     woCurrentCount: 0,
     cancelledCount: 0,
@@ -94,7 +91,6 @@ export function summarizeContract(items: ProductionItem[]): ContractSummary {
     if (it.transactionType !== 'RENTAL') {
       s.woItemCount += 1;
       if (it.workOrder.status === 'UNORDERED') s.woUnorderedCount += 1;
-      if (it.workOrder.status === 'REPRINT_NEEDED') s.woReprintCount += 1;
       if (it.workOrder.status === 'WAITING') s.woWaitingCount += 1;
       if (it.workOrder.status === 'CURRENT') s.woCurrentCount += 1;
     }
@@ -119,7 +115,7 @@ export function DdayTag({ due }: { due: string }) {
 
 /**
  * 작업지시서 현황 한 칸.
- * '전체 최신'은 낼 서류가 전부 최신일 때만 쓴다 — 예전에는 미출력·재출력만 세어서
+ * '전체 최신'은 낼 서류가 전부 최신일 때만 쓴다 — 예전에는 미출력만 세어서
  * 옵션·채촌이 안 끝나 아직 못 내는 품목(준비 미완)이 있어도 '전체 최신'으로 보였다.
  */
 export function WorkOrderCell({ summary }: { summary: ContractSummary }) {
@@ -127,7 +123,6 @@ export function WorkOrderCell({ summary }: { summary: ContractSummary }) {
   if (summary.woCurrentCount === summary.woItemCount) return <Tag color="green">전체 최신</Tag>;
   const parts: { status: string; label: string; count: number }[] = [
     { status: 'UNORDERED', label: '미출력', count: summary.woUnorderedCount },
-    { status: 'REPRINT_NEEDED', label: '재출력', count: summary.woReprintCount },
     { status: 'WAITING', label: '준비 미완', count: summary.woWaitingCount },
     { status: 'CURRENT', label: '최신', count: summary.woCurrentCount },
   ].filter((p) => p.count > 0);

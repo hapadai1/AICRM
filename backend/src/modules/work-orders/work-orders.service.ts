@@ -214,7 +214,7 @@ export class WorkOrdersService {
         versionNo: true,
         measurementDate: true,
         measurementType: true,
-        completedAt: true,
+        _count: { select: { values: true } },
       },
     });
 
@@ -246,7 +246,7 @@ export class WorkOrdersService {
         versionNo: c.versionNo,
         measurementDate: toDateString(c.measurementDate),
         measurementType: c.measurementType,
-        completed: c.completedAt != null,
+        completed: c._count.values > 0,
         isLinked: !!link && c.id === link.measurementSessionId,
       })),
       // 연결 없이 최신 채촌으로 자동 선택된 상태인지 — 화면 문구를 가르는 값이다.
@@ -258,11 +258,15 @@ export class WorkOrdersService {
       currentVersionId: currentVersion?.id ?? null,
       lastIssuedAt: currentVersion?.issuedAt.toISOString() ?? null,
       status: resolveWorkOrderStatus(session, link, currentVersion),
-      // 정식 출력 가능 판정 (docs/dev/08 §4): 옵션 확정 + 채촌 연결·완료
+      /*
+        정식 출력 가능 판정 — 옵션 확정 + **값이 든 채촌**.
+        채촌의 '완료' 표시는 걷어냈다(2026-08-05). 상태 대신 내용으로 가른다:
+        값이 하나도 없는 빈 채촌이 최신이라고 그대로 공장에 나가면 안 된다.
+      */
       optionConfirmed: session.status === 'CONFIRMED',
-      measurementCompleted: !!measurementSession && measurementSession.completedAt != null,
+      measurementCompleted: !!measurementSession && measurementSession.values.length > 0,
       printable:
-        session.status === 'CONFIRMED' && !!measurementSession && measurementSession.completedAt != null,
+        session.status === 'CONFIRMED' && !!measurementSession && measurementSession.values.length > 0,
     };
   }
 
@@ -450,8 +454,8 @@ export class WorkOrdersService {
 
         // 출력에 실제로 쓴 채촌으로 품목 연결을 확정한다 (현업 확정 2026-08-03).
         // 출력 시점에 쓴 것이 곧 기준이며, 뒤에 더 최근 채촌이 생겨도 저절로 바뀌지 않는다.
-        // 미완료 채촌은 연결 규칙상 기준이 될 수 없으므로 그대로 둔다.
-        if (measurementSession.completedAt != null && link?.measurementSessionId !== measurementSession.id) {
+        // 빈 채촌은 기준이 될 수 없으므로 그대로 둔다.
+        if (measurementSession.values.length > 0 && link?.measurementSessionId !== measurementSession.id) {
           await tx.orderItemMeasurement.updateMany({
             where: { orderItemId, isCurrent: true, NOT: { measurementSessionId: measurementSession.id } },
             data: { isCurrent: false },
@@ -625,10 +629,10 @@ export class WorkOrdersService {
     measurementSessionId: string | undefined,
   ): Promise<boolean> {
     if (measurementSessionId) return true;
-    const completed = await this.prisma.measurementSession.count({
-      where: { customerId: item.order.contract.customer.id, completedAt: { not: null } },
+    const usable = await this.prisma.measurementSession.count({
+      where: { customerId: item.order.contract.customer.id, values: { some: {} } },
     });
-    return completed > 0;
+    return usable > 0;
   }
 
   /**
@@ -636,9 +640,10 @@ export class WorkOrdersService {
    *
    * 1) 요청이 특정 채촌을 지목하면 그것,
    * 2) 품목에 연결된 채촌이 있으면 그것,
-   * 3) 둘 다 없으면 그 고객의 **가장 최근 완료 채촌**.
+   * 3) 둘 다 없으면 **스타일 컨설팅 구분의, 값이 든 가장 최근 채촌** (현업 확정 2026-08-05).
    *
-   * 셋 다 없으면(완료 채촌 0건) 출력 전제 미충족이다.
+   * 구분을 가리는 이유: 가봉·수선 채촌은 그 옷을 고치려고 잰 것이라 새 옷의 기준이 아니다.
+   * 값 유무를 보는 이유: '완료' 표시를 걷어냈으므로, 방금 열어 둔 빈 채촌이 최신일 수 있다.
    */
   private async resolveWorkOrderMeasurement(
     item: OrderItemWithSources,
@@ -650,14 +655,18 @@ export class WorkOrdersService {
     if (linkedSession) return linkedSession;
 
     const latest = await this.prisma.measurementSession.findFirst({
-      where: { customerId: item.order.contract.customer.id, completedAt: { not: null } },
+      where: {
+        customerId: item.order.contract.customer.id,
+        measurementType: 'INITIAL',
+        values: { some: {} },
+      },
       orderBy: [{ measurementDate: 'desc' }, { versionNo: 'desc' }],
       include: { values: { orderBy: [{ sortOrder: 'asc' }, { measurementCode: 'asc' }] } },
     });
     if (!latest) {
       throw new BusinessException(
         'WORK_ORDER_PREREQUISITE_MISSING',
-        '완료된 채촌이 없습니다. 채촌을 먼저 완료해 주세요.',
+        '쓸 수 있는 채촌이 없습니다. 스타일 컨설팅 채촌을 먼저 기록해 주세요.',
         undefined,
         { orderItemId: item.id, missing: ['MEASUREMENT_LINKED'] },
       );

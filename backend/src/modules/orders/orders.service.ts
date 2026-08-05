@@ -34,7 +34,7 @@ const ITEMS_PROGRESS_INCLUDE = {
   },
   measurementLinks: {
     where: { isCurrent: true },
-    select: { measurementSessionId: true, measurementSession: { select: { versionNo: true, completedAt: true } } },
+    select: { measurementSessionId: true, measurementSession: { select: { versionNo: true } } },
   },
   workOrder: { select: { versions: { select: { id: true } }, currentVersionId: true } },
 } satisfies Prisma.OrderItemInclude;
@@ -104,13 +104,10 @@ export class OrdersService {
         optionProgress: session
           ? { status: session.status, current: completedStages, total: totalStages }
           : { status: 'NOT_STARTED', current: 0, total: 0 },
+        // 채촌은 '완료' 상태를 두지 않는다 (2026-08-05) — 붙었는지만 본다.
         measurement: link
-          ? {
-              linked: true,
-              versionNo: link.measurementSession.versionNo,
-              completed: link.measurementSession.completedAt !== null,
-            }
-          : { linked: false, versionNo: null, completed: false },
+          ? { linked: true, versionNo: link.measurementSession.versionNo }
+          : { linked: false, versionNo: null },
         workOrderVersionCount: workOrder?.versions.length ?? 0,
         workOrderIssued: !!workOrder?.currentVersionId,
       };

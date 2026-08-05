@@ -21,11 +21,13 @@ import { COL } from '../../shared/table-width';
 import { ItemCompositionCell } from '../contracts/ItemCompositionCell';
 import { CONTRACT_STATUS_META } from '../contracts/labels';
 
-/** 이 계약의 채촌 상태 — 고객의 과거 이력이 아니라 계약에 연결된 채촌만 본다. */
+/**
+ * 이 계약의 채촌 상태 — 고객의 과거 이력이 아니라 계약에 연결된 채촌만 본다.
+ * 채촌은 '완료' 상태를 두지 않으므로(2026-08-05) 기록이 있는지만 가른다.
+ */
 function measurementStateOf(row: MeasurementTargetRow): { label: string; color: string } {
   if (row.measurementCount === 0) return { label: '미채촌', color: 'red' };
-  if (row.measurementCompletedCount > 0) return { label: '완료', color: 'green' };
-  return { label: '작성중', color: 'gold' };
+  return { label: '기록됨', color: 'green' };
 }
 
 type StateFilter = 'ALL' | 'NONE' | 'DONE';
@@ -154,9 +156,9 @@ export function MeasurementListPage({
         [r.customerName, r.customerPhone, r.contractNo].some((v) => v?.toLowerCase().includes(q)),
       );
     }
-    // 완료 = 완료 처리된 채촌이 하나라도 있는 계약, 미완료 = 그 외(미채촌·작성중)
-    if (filters.state === 'NONE') list = list.filter((r) => r.measurementCompletedCount === 0);
-    if (filters.state === 'DONE') list = list.filter((r) => r.measurementCompletedCount > 0);
+    // 미채촌 = 연결된 채촌이 없는 계약, 기록됨 = 하나라도 있는 계약
+    if (filters.state === 'NONE') list = list.filter((r) => r.measurementCount === 0);
+    if (filters.state === 'DONE') list = list.filter((r) => r.measurementCount > 0);
     return list;
   }, [query.data, customerId, embedded, filters]);
 

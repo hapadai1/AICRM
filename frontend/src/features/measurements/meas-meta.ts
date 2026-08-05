@@ -12,9 +12,3 @@ export const MEASUREMENT_TYPE_META: Record<string, StatusMeta> = {
   REMEASURE: { label: '수선', color: 'orange' },
   OTHER: { label: '기타', color: 'default' },
 };
-
-/** 상태 배지 메타. 백엔드는 `completed: boolean`만 주므로 파생 코드로 조회한다. */
-export const MEASUREMENT_STATUS_META: Record<string, StatusMeta> = {
-  DRAFT: { label: '작성중', color: 'default' },
-  COMPLETED: { label: '완료', color: 'green' },
-};

@@ -5,8 +5,7 @@ import { request } from './client';
 export type DashboardTaskType =
   | 'LATE_RETURN'
   | 'INBOUND_DELAY'
-  | 'UNORDERED'
-  | 'REPRINT_NEEDED';
+  | 'UNORDERED';
 
 export interface DashboardAppointment {
   id: string;

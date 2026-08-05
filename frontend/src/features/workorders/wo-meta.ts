@@ -8,7 +8,6 @@ import type { StatusMeta } from '../../shared/status-meta';
 export const WORK_ORDER_STATUS_META: Record<string, StatusMeta> = {
   WAITING: { label: '준비 미완', color: 'default' },
   UNORDERED: { label: '미주문', color: 'red' },
-  REPRINT_NEEDED: { label: '재출력 필요', color: 'orange' },
   CURRENT: { label: '최신', color: 'green' },
 };
 

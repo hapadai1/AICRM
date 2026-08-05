@@ -57,8 +57,11 @@ type OrderItemWithWorkOrderStatus = Prisma.OrderItemGetPayload<{
 }>;
 
 /**
- * 미주문·재출력 필요 판정 (통합설계서 §10.4, 데이터모델 §10.5).
- * 별도 업무 테이블 없이 조회 시점에 계산한다.
+ * 미주문 판정 (통합설계서 §10.4). 별도 업무 테이블 없이 조회 시점에 계산한다.
+ *
+ * `재출력 필요`는 없앴다 (현업 확정 2026-08-05). v1 설계에서 온 자동 판정이었는데,
+ * 출력은 발주와 같은 시점이고 **발주하면 옵션·채촌이 모두 잠기므로** 출력 뒤에 근거가
+ * 바뀔 길이 자체가 없다 — 뜰 수 없는 상태를 화면과 대시보드가 계속 이고 있었다.
  */
 export function resolveWorkOrderStatus(
   session: { confirmedAt: Date | null } | null,
@@ -68,10 +71,7 @@ export function resolveWorkOrderStatus(
   if (!currentVersion) {
     return session && link ? 'UNORDERED' : 'WAITING';
   }
-  const changedAfterIssue = [session?.confirmedAt, link?.linkedAt].some(
-    (t) => t != null && t.getTime() > currentVersion.issuedAt.getTime(),
-  );
-  return changedAfterIssue ? 'REPRINT_NEEDED' : 'CURRENT';
+  return 'CURRENT';
 }
 
 /**
