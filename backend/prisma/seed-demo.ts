@@ -425,27 +425,24 @@ function buildMeasurementSnapshot(m: SeededMeasurement): Prisma.InputJsonValue {
 }
 
 /**
- * 작업지시서 버전 생성. Excel 생성기는 사용하지 않고 빈 buffer 파일을
+ * 작업지시서 출력. Excel 생성기는 사용하지 않고 빈 buffer 파일을
  * FILE_STORAGE_PATH에 실제로 기록해 files 레코드와 저장소 정합을 유지한다.
+ *
+ * 작업지시서는 품목당 파일 하나다 (2026-08-05) — 버전을 쌓지 않으므로 한 번만 부른다.
+ * storageKey가 작업지시서 id라, 같은 건에 두 번 부르면 unique 제약에 걸린다.
  */
-async function issueWorkOrderVersion(
+async function issueWorkOrder(
   tx: Tx,
   args: {
     workOrderId: string;
-    versionNo: number;
     orderNo: string;
     productCategory: string;
     sequenceNo: number;
-    optionSessionId: string;
-    measurement: SeededMeasurement;
     issuedAt: Date;
-    status: 'ISSUED' | 'SENT' | 'SUPERSEDED';
-    changeReason?: string;
     adminId: string;
   },
-): Promise<string> {
+): Promise<void> {
   const fileName = `${args.orderNo}_${args.productCategory}-${String(args.sequenceNo).padStart(2, '0')}.xlsx`;
-  // 작업지시서는 품목당 파일 하나다 (2026-08-05) — 버전을 쌓지 않는다.
   const outputFileId = await createFile(tx, {
     storageKey: `work-orders/${args.workOrderId}.xlsx`,
     originalName: fileName,
@@ -456,7 +453,6 @@ async function issueWorkOrderVersion(
     where: { id: args.workOrderId },
     data: { outputFileId, issuedBy: args.adminId, issuedAt: args.issuedAt, status: 'COMPLETED' },
   });
-  return args.workOrderId;
 }
 
 // -----------------------------------------------------------------------------
@@ -975,33 +971,28 @@ async function main(): Promise<void> {
         await tx.workOrder.create({ data: { id, orderItemId } });
         return id;
       };
-      // 이서연 정장 #1: V1(대체됨) → V2(현재)
+      // 이서연 정장 #1 — 재출력해도 파일은 하나라, 마지막 출력 시각만 남는다.
       const woSy1 = await createWorkOrder(oi5);
-      await issueWorkOrderVersion(tx, {
-        workOrderId: woSy1, versionNo: 1, orderNo: 'ORD-260705-001', productCategory: 'SUIT', sequenceNo: 1,
-        optionSessionId: sessionSy1, measurement: syV1, issuedAt: at(-8, 14), status: 'SUPERSEDED', adminId,
+      await issueWorkOrder(tx, {
+        workOrderId: woSy1, orderNo: 'ORD-260705-001', productCategory: 'SUIT', sequenceNo: 1,
+        issuedAt: at(-8, 16), adminId,
       });
-      const woSy1v2 = await issueWorkOrderVersion(tx, {
-        workOrderId: woSy1, versionNo: 2, orderNo: 'ORD-260705-001', productCategory: 'SUIT', sequenceNo: 1,
-        optionSessionId: sessionSy1, measurement: syV1, issuedAt: at(-8, 16), status: 'ISSUED',
-        changeReason: '원단 로트 변경 반영 재출력', adminId,
-      });
-      // 이서연 셔츠 #1·#2: V1 (셔츠 #1은 이후 채촌 재연결로 재출력 필요 상태)
+      // 이서연 셔츠 #1·#2
       const woSy2 = await createWorkOrder(oi6);
-      const woSy2v1 = await issueWorkOrderVersion(tx, {
-        workOrderId: woSy2, versionNo: 1, orderNo: 'ORD-260705-001', productCategory: 'SHIRT', sequenceNo: 1,
-        optionSessionId: sessionSy2, measurement: syV1, issuedAt: at(-8, 14, 20), status: 'ISSUED', adminId,
+      await issueWorkOrder(tx, {
+        workOrderId: woSy2, orderNo: 'ORD-260705-001', productCategory: 'SHIRT', sequenceNo: 1,
+        issuedAt: at(-8, 14, 20), adminId,
       });
       const woSy3 = await createWorkOrder(oi7);
-      const woSy3v1 = await issueWorkOrderVersion(tx, {
-        workOrderId: woSy3, versionNo: 1, orderNo: 'ORD-260705-001', productCategory: 'SHIRT', sequenceNo: 2,
-        optionSessionId: sessionSy3, measurement: syV1, issuedAt: at(-8, 14, 40), status: 'ISSUED', adminId,
+      await issueWorkOrder(tx, {
+        workOrderId: woSy3, orderNo: 'ORD-260705-001', productCategory: 'SHIRT', sequenceNo: 2,
+        issuedAt: at(-8, 14, 40), adminId,
       });
-      // 정우성 정장 #1: V1 (완료 이력)
+      // 정우성 정장 #1 (완료 이력)
       const woWs = await createWorkOrder(oi8);
-      const woWsV1 = await issueWorkOrderVersion(tx, {
-        workOrderId: woWs, versionNo: 1, orderNo: 'ORD-260420-001', productCategory: 'SUIT', sequenceNo: 1,
-        optionSessionId: sessionWs, measurement: wsV1, issuedAt: at(-75, 10), status: 'SENT', adminId,
+      await issueWorkOrder(tx, {
+        workOrderId: woWs, orderNo: 'ORD-260420-001', productCategory: 'SUIT', sequenceNo: 1,
+        issuedAt: at(-75, 10), adminId,
       });
       console.log('work_orders: 4건 (품목당 파일 하나)');
 
