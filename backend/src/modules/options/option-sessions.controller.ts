@@ -1,5 +1,7 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Put, Query } from '@nestjs/common';
 import { AuthUser, CurrentUser, RequirePermission } from '../../common/decorators';
+import { OptionProgressService } from './option-progress.service';
+import { OptionSessionQueryService } from './option-session-query.service';
 import { OptionSessionsService } from './option-sessions.service';
 import {
   ConfirmSessionDto,
@@ -14,18 +16,22 @@ import {
 @Controller()
 @RequirePermission('OPTION_SELECT')
 export class OptionSessionsController {
-  constructor(private readonly service: OptionSessionsService) {}
+  constructor(
+    private readonly service: OptionSessionsService,
+    private readonly queryService: OptionSessionQueryService,
+    private readonly progressService: OptionProgressService,
+  ) {}
 
   /** 맞춤 품목별 옵션 진행 현황 (:id 라우트와 세그먼트 수가 달라 충돌 없음). contractId 지정 시 해당 계약으로 한정 */
   @Get('contract-items/option-progress')
   progress(@Query('contractId') contractId?: string) {
-    return this.service.progress(contractId);
+    return this.progressService.progress(contractId);
   }
 
   /** 품목의 현재(is_current) 옵션 세션 상세 — 없으면 { session: null } */
   @Get('contract-items/:id/option-session')
   currentSession(@Param('id') contractItemId: string) {
-    return this.service.currentSession(contractItemId);
+    return this.queryService.currentSession(contractItemId);
   }
 
   @Post('contract-items/:id/option-sessions')
@@ -39,12 +45,12 @@ export class OptionSessionsController {
 
   @Get('option-sessions/:id')
   detail(@Param('id') id: string) {
-    return this.service.detail(id);
+    return this.queryService.detail(id);
   }
 
   @Get('option-sessions/:id/resume')
   resume(@Param('id') id: string) {
-    return this.service.resume(id);
+    return this.queryService.resume(id);
   }
 
   @Put('option-sessions/:id/stages/:stageId')
@@ -76,7 +82,7 @@ export class OptionSessionsController {
 
   @Get('option-sessions/:id/review')
   review(@Param('id') id: string) {
-    return this.service.review(id);
+    return this.queryService.review(id);
   }
 
   @Post('option-sessions/:id/confirm')
@@ -88,7 +94,7 @@ export class OptionSessionsController {
   /** 옵션 추가금액과 계약금액 차액 조회 */
   @Get('option-sessions/:id/surcharge')
   surcharge(@Param('id') id: string) {
-    return this.service.surcharge(id);
+    return this.queryService.surcharge(id);
   }
 
   /** 미반영 차액을 계약 현재 버전 금액에 반영 (계약 버전은 올리지 않는다) */
