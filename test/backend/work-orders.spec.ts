@@ -22,7 +22,7 @@ interface Fixture {
   measurementSessionId: string | null;
 }
 
-describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
+describe('작업지시서 (Excel 출력 · 품목당 파일 하나)', () => {
   let ctx: TestContext;
   let adminId: string;
   let optionSetVersionId: string;
@@ -342,7 +342,7 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
     it('전제 미충족 시 Excel 출력도 422로 차단된다', async () => {
       const fixture = await createFixture({ confirmOption: true, linkMeasurement: false });
       const res = await api(ctx)
-        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order-versions`)
+        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order`)
         .set(auth(ctx))
         .send({ note: '출력 시도' })
         .expect(422);
@@ -351,11 +351,10 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
     });
   });
 
-  describe('미리보기·출력·버전', () => {
+  describe('미리보기·출력', () => {
     let fixture: Fixture;
     let workOrderId: string;
-    let v1Id: string;
-    let v2Id: string;
+    let firstFileId: string;
 
     beforeAll(async () => {
       fixture = await createFixture();
@@ -382,14 +381,12 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
       );
     });
 
-    it('양식 미리보기는 출력 전 값이 채워진 HTML을 주고 버전을 만들지 않는다', async () => {
+    it('양식 미리보기는 출력 전 값이 채워진 HTML을 주고 파일을 만들지 않는다', async () => {
       const res = await api(ctx)
         .get(`/api/v1/order-items/${fixture.orderItemId}/work-order/form-preview`)
         .set(auth(ctx))
         .expect(200);
-      const { html, versionNo } = res.body.data;
-      // 아직 출력 전이므로 "다음에 붙을 버전"을 알려준다
-      expect(versionNo).toBe(1);
+      const { html } = res.body.data;
       expect(html).toContain('테스트고객');
       expect(html).toContain('Zegna Navy 1201');
 
@@ -399,7 +396,7 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
         .set(auth(ctx))
         .expect(200);
       expect(after.body.data.workOrderId).toBeNull();
-      expect(after.body.data.currentVersionNo).toBeNull();
+      expect(after.body.data.docStatus).toBe('DRAFT');
     });
 
     it('미리보기는 채촌 후보 목록을 함께 주고, measurementSessionId로 다른 버전을 미리볼 수 있다', async () => {
@@ -482,7 +479,7 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
       ).toBe(0);
 
       await api(ctx)
-        .post(`/api/v1/order-items/${f.orderItemId}/work-order-versions`)
+        .post(`/api/v1/order-items/${f.orderItemId}/work-order`)
         .set(auth(ctx))
         .send({})
         .expect(201);
@@ -500,7 +497,7 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
       const f = await createFixture({ linkMeasurement: false });
       const first = await createMeasurement(f.customerId, 1, '2026-07-05', 97);
       await api(ctx)
-        .post(`/api/v1/order-items/${f.orderItemId}/work-order-versions`)
+        .post(`/api/v1/order-items/${f.orderItemId}/work-order`)
         .set(auth(ctx))
         .send({})
         .expect(201);
@@ -559,159 +556,64 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
       expect(row.customerName).toContain('테스트고객');
       expect(row.orderNo).toBe(fixture.orderNo);
       expect(row.itemLabel).toBe('정장 #1');
-      expect(row.currentVersionNo).toBeNull();
+      expect(row.docStatus).toBe('DRAFT');
     });
 
-    it('첫 Excel 출력으로 V1이 생성되고 파일이 실제 저장된다', async () => {
+    it('출력하면 파일이 생기고 작업지시서가 완료가 된다', async () => {
       const res = await api(ctx)
-        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order-versions`)
+        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order`)
         .set(auth(ctx))
         .send({ note: '최초 출력' })
         .expect(201);
       const data = res.body.data;
-      expect(data.versionNo).toBe(1);
       expect(data.workOrderId).toBeDefined();
-      expect(data.workOrderVersionId).toBeDefined();
-      expect(data.file.fileName).toBe(`${fixture.orderNo}_SUIT-01_V1.xlsx`);
+      // 버전 번호를 붙이지 않는다 — 품목당 파일 하나다 (현업 확정 2026-08-05).
+      expect(data.file.fileName).toBe(`${fixture.orderNo}_SUIT-01.xlsx`);
       expect(data.file.downloadUrl).toBe(`/api/v1/files/${data.file.id}`);
       workOrderId = data.workOrderId;
-      v1Id = data.workOrderVersionId;
+      firstFileId = data.file.id;
 
-      const version = await ctx.prisma.workOrderVersion.findUniqueOrThrow({
-        where: { id: v1Id },
+      const wo = await ctx.prisma.workOrder.findUniqueOrThrow({
+        where: { orderItemId: fixture.orderItemId },
         include: { outputFile: true },
       });
-      expect(version.status).toBe('ISSUED');
-      expect(version.sourceHash).toMatch(/^[0-9a-f]{64}$/);
-      expect(fs.existsSync(storagePath(version.outputFile.storageKey))).toBe(true);
+      expect(wo.status).toBe('COMPLETED');
+      expect(wo.outputFileId).toBe(firstFileId);
+      expect(fs.existsSync(storagePath(wo.outputFile!.storageKey))).toBe(true);
 
-      const workOrder = await ctx.prisma.workOrder.findUniqueOrThrow({
-        where: { orderItemId: fixture.orderItemId },
-      });
-      expect(workOrder.currentVersionId).toBe(v1Id);
-
-      // 출력 감사로그 (action=EXPORT)
       const auditRows = await ctx.prisma.auditLog.findMany({
-        where: { action: 'EXPORT', entityId: v1Id },
+        where: { action: 'EXPORT', entityId: workOrderId },
       });
       expect(auditRows).toHaveLength(1);
     });
 
-    it('스냅샷에 옵션명·치수가 보존된다', async () => {
-      const version = await ctx.prisma.workOrderVersion.findUniqueOrThrow({ where: { id: v1Id } });
-      const optionSnapshot = version.optionSnapshot as {
-        fabricName: string;
-        stages: Array<{ stageName: string; choiceName: string }>;
-      };
-      const measurementSnapshot = version.measurementSnapshot as {
-        versionNo: number;
-        measurementDate: string;
-        values: Array<{ measurementCode: string; value: number | null }>;
-      };
-      expect(optionSnapshot.fabricName).toBe('Zegna Navy 1201');
-      expect(optionSnapshot.stages).toEqual([
-        expect.objectContaining({ stageName: '라펠', choiceName: '노치드 라펠' }),
-        expect.objectContaining({ stageName: '벤트', choiceName: '사이드 벤트' }),
-      ]);
-      expect(measurementSnapshot.versionNo).toBe(1);
-      expect(measurementSnapshot.measurementDate).toBe('2026-07-01');
-      expect(measurementSnapshot.values).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ measurementCode: 'CHEST', value: 98.5 }),
-          expect.objectContaining({ measurementCode: 'SLEEVE', value: 61.5 }),
-        ]),
-      );
-    });
-
-    it('출력 후에는 미주문 목록에서 제외되고 CURRENT로 판정된다', async () => {
-      const unordered = await api(ctx)
-        .get('/api/v1/work-orders?status=UNORDERED')
-        .set(auth(ctx))
-        .expect(200);
-      expect(
-        unordered.body.data.some(
-          (r: { orderItemId: string }) => r.orderItemId === fixture.orderItemId,
-        ),
-      ).toBe(false);
-
-      const current = await api(ctx)
-        .get('/api/v1/work-orders?status=CURRENT')
-        .set(auth(ctx))
-        .expect(200);
-      const row = current.body.data.find(
-        (r: { orderItemId: string }) => r.orderItemId === fixture.orderItemId,
-      );
-      expect(row).toBeDefined();
-      expect(row.currentVersionNo).toBe(1);
-    });
-
-    /*
-      `재출력 필요`는 없앴다 (현업 확정 2026-08-05) — 출력은 발주와 같은 시점이고 발주하면
-      옵션·채촌이 잠기므로 출력 뒤에 근거가 바뀔 길이 없다. 채촌을 다시 걸어도 최신으로 남는다.
-    */
-    it('채촌을 다시 걸어도 출력본이 있으면 최신(CURRENT)이다', async () => {
-      await createAndLinkMeasurement(fixture.customerId, fixture.orderItemId, 2, 99.5);
-      const res = await api(ctx).get('/api/v1/work-orders?status=CURRENT').set(auth(ctx)).expect(200);
-      const row = res.body.data.find(
-        (r: { orderItemId: string }) => r.orderItemId === fixture.orderItemId,
-      );
-      expect(row).toBeDefined();
-      expect(row.status).toBe('CURRENT');
-    });
-
-    it('재출력 시 V2가 생성되고 이전 버전은 SUPERSEDED가 된다', async () => {
+    it('다시 출력하면 같은 파일을 덮어쓴다 (버전이 늘지 않는다)', async () => {
       const res = await api(ctx)
-        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order-versions`)
+        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order`)
         .set(auth(ctx))
-        .send({ note: '채촌 변경 반영 재출력' })
+        .send({ note: '재출력' })
         .expect(201);
-      expect(res.body.data.versionNo).toBe(2);
-      v2Id = res.body.data.workOrderVersionId;
+      // 파일 id·이름·저장 위치가 그대로다 — 새 파일이 생기지 않는다.
+      expect(res.body.data.file.id).toBe(firstFileId);
+      expect(res.body.data.file.fileName).toBe(`${fixture.orderNo}_SUIT-01.xlsx`);
 
-      const v1 = await ctx.prisma.workOrderVersion.findUniqueOrThrow({ where: { id: v1Id } });
-      expect(v1.status).toBe('SUPERSEDED');
-      const workOrder = await ctx.prisma.workOrder.findUniqueOrThrow({ where: { id: workOrderId } });
-      expect(workOrder.currentVersionId).toBe(v2Id);
-
-      const v2 = await ctx.prisma.workOrderVersion.findUniqueOrThrow({ where: { id: v2Id } });
-      const snapshot = v2.measurementSnapshot as {
-        versionNo: number;
-        values: Array<{ measurementCode: string; value: number | null }>;
-      };
-      expect(snapshot.versionNo).toBe(2);
-      expect(snapshot.values).toEqual(
-        expect.arrayContaining([expect.objectContaining({ measurementCode: 'CHEST', value: 99.5 })]),
-      );
+      const files = await ctx.prisma.file.count({
+        where: { storageKey: `work-orders/${workOrderId}.xlsx` },
+      });
+      expect(files).toBe(1);
     });
 
-    it('출력 이력은 최신 버전부터 반환한다', async () => {
-      const res = await api(ctx)
-        .get(`/api/v1/work-orders/${workOrderId}/versions`)
-        .set(auth(ctx))
-        .expect(200);
-      expect(res.body.data).toHaveLength(2);
-      expect(res.body.data[0]).toEqual(
-        expect.objectContaining({ versionNo: 2, status: 'ISSUED' }),
-      );
-      expect(res.body.data[1]).toEqual(
-        expect.objectContaining({ versionNo: 1, status: 'SUPERSEDED' }),
-      );
-      expect(res.body.data[0].file.downloadUrl).toMatch(/^\/api\/v1\/files\//);
-    });
-
-    it('작업지시서 상세는 현재 버전과 판정 상태를 반환한다', async () => {
-      const res = await api(ctx)
-        .get(`/api/v1/work-orders/${workOrderId}`)
-        .set(auth(ctx))
-        .expect(200);
+    it('작업지시서 상세는 파일·상태를 반환한다', async () => {
+      const res = await api(ctx).get(`/api/v1/work-orders/${workOrderId}`).set(auth(ctx)).expect(200);
       expect(res.body.data.status).toBe('CURRENT');
-      expect(res.body.data.currentVersion.versionNo).toBe(2);
+      expect(res.body.data.docStatus).toBe('COMPLETED');
+      expect(res.body.data.fileName).toBe(`${fixture.orderNo}_SUIT-01.xlsx`);
       expect(res.body.data.customerName).toContain('테스트고객');
     });
 
     it('저장된 Excel 파일을 다운로드(스트리밍)한다', async () => {
       const res = await api(ctx)
-        .get(`/api/v1/work-order-versions/${v2Id}/file`)
+        .get(`/api/v1/work-orders/${workOrderId}/file`)
         .set(auth(ctx))
         .buffer(true)
         .parse((response, callback) => {
@@ -736,13 +638,13 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
         __dirname,
         '../../backend/src/modules/work-orders/templates/suit-work-order.xlsx',
       );
-      const version = await ctx.prisma.workOrderVersion.findUniqueOrThrow({
-        where: { id: v2Id },
+      const wo = await ctx.prisma.workOrder.findUniqueOrThrow({
+        where: { id: workOrderId },
         include: { outputFile: true },
       });
       const [template, produced] = await Promise.all([
         JSZip.loadAsync(fs.readFileSync(templatePath)),
-        JSZip.loadAsync(fs.readFileSync(storagePath(version.outputFile.storageKey))),
+        JSZip.loadAsync(fs.readFileSync(storagePath(wo.outputFile!.storageKey))),
       ]);
       const drawingParts = Object.keys(template.files).filter(
         (name) => name.startsWith('xl/drawings/') || name.startsWith('xl/media/'),
@@ -758,28 +660,14 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
       }
     });
 
-    it('저장된 출력본을 양식 HTML로 미리본다', async () => {
-      const res = await api(ctx)
-        .get(`/api/v1/work-order-versions/${v2Id}/form-preview`)
-        .set(auth(ctx))
-        .expect(200);
-      const { html, versionNo } = res.body.data;
-      expect(versionNo).toBe(2);
-      expect(html).toContain('<table');
-      // 인쇄값·채운 값이 모두 표에 나타난다
-      expect(html).toContain('슈트에이전시(강남본점)');
-      expect(html).toContain('테스트고객');
-      // 병합은 colspan/rowspan으로 옮긴다
-      expect(html).toContain('colspan=');
-      // 도식도 함께 그린다 — 그림(data URI) · 지시선(svg line) · 빨간 동그라미
-      expect(html).toContain('<img src="data:image/');
-      expect(html).toContain('<line ');
-      expect(html).toContain('border-radius:50%');
-    });
+    /*
+      저장된 출력본을 화면에서 다시 그리는 기능은 없앴다 (2026-08-05) — 파일이 곧 결과물이라
+      받아서 열면 된다. 양식 HTML 미리보기는 '지금 값으로 그리기' 하나만 남는다(위 테스트).
+    */
 
     it('출력물은 실물 공장 양식(송파) 템플릿에 값이 채워져 있다', async () => {
       const res = await api(ctx)
-        .get(`/api/v1/work-order-versions/${v2Id}/file`)
+        .get(`/api/v1/work-orders/${workOrderId}/file`)
         .set(auth(ctx))
         .buffer(true)
         .parse((response, callback) => {
@@ -814,7 +702,7 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
     it('row_version 불일치 시 409 VERSION_CONFLICT', async () => {
       const fixture = await createFixture();
       const res = await api(ctx)
-        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order-versions`)
+        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order`)
         .set(auth(ctx))
         .send({ note: '충돌 테스트', version: 99 })
         .expect(409);
@@ -825,21 +713,22 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
       const fixture = await createFixture();
       const key = `wo-idem-${randomUUID()}`;
       const first = await api(ctx)
-        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order-versions`)
+        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order`)
         .set(auth(ctx))
         .set('Idempotency-Key', key)
         .send({ note: '멱등성 테스트' })
         .expect(201);
       const second = await api(ctx)
-        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order-versions`)
+        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order`)
         .set(auth(ctx))
         .set('Idempotency-Key', key)
         .send({ note: '멱등성 테스트' })
         .expect(201);
       expect(second.body.data).toEqual(first.body.data);
 
-      const count = await ctx.prisma.workOrderVersion.count({
-        where: { workOrder: { orderItemId: fixture.orderItemId } },
+      // 파일은 하나뿐이다 — 멱등 재요청으로 새 파일이 생기지 않는다.
+      const count = await ctx.prisma.file.count({
+        where: { storageKey: `work-orders/${first.body.data.workOrderId}.xlsx` },
       });
       expect(count).toBe(1);
     });
@@ -847,9 +736,9 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
 
   describe('앞마다/뒷마다 하의 요청사항 매핑 · 구두 간이 작업지시서 (설계서 05·06)', () => {
     /** 출력본 xlsx를 내려받아 워크북으로 로드한다. */
-    async function downloadWorkbook(versionId: string): Promise<ExcelJS.Workbook> {
+    async function downloadWorkbook(workOrderId: string): Promise<ExcelJS.Workbook> {
       const res = await api(ctx)
-        .get(`/api/v1/work-order-versions/${versionId}/file`)
+        .get(`/api/v1/work-orders/${workOrderId}/file`)
         .set(auth(ctx))
         .buffer(true)
         .parse((response, callback) => {
@@ -890,12 +779,12 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
       });
 
       const issued = await api(ctx)
-        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order-versions`)
+        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order`)
         .set(auth(ctx))
         .send({ note: '하의 요청 확인' })
         .expect(201);
 
-      const wb = await downloadWorkbook(issued.body.data.workOrderVersionId);
+      const wb = await downloadWorkbook(issued.body.data.workOrderId);
       const ws = wb.getWorksheet('작업지시서 (송파)')!;
       const lowerNote = String(ws.getCell('AA75').value);
       expect(lowerNote).toContain('[마다]');
@@ -908,13 +797,13 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
     it('구두(SHOES) 품목은 정장 템플릿이 아닌 간이 메모형 시트로 출력된다', async () => {
       const fixture = await createFixture({ productCategory: 'SHOES' });
       const issued = await api(ctx)
-        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order-versions`)
+        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order`)
         .set(auth(ctx))
         .send({ note: '구두 간이 출력' })
         .expect(201);
-      expect(issued.body.data.file.fileName).toBe(`${fixture.orderNo}_SHOES-01_V1.xlsx`);
+      expect(issued.body.data.file.fileName).toBe(`${fixture.orderNo}_SHOES-01.xlsx`);
 
-      const wb = await downloadWorkbook(issued.body.data.workOrderVersionId);
+      const wb = await downloadWorkbook(issued.body.data.workOrderId);
       // 정장 송파 템플릿 시트는 없고, 간이 시트만 있다.
       expect(wb.getWorksheet('작업지시서 (송파)')).toBeUndefined();
       const ws = wb.getWorksheet('구두 작업지시서');
@@ -932,9 +821,9 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
 
   describe('고객 신체 정보 출력 (v2 A2 · 설계서 06 §2.5)', () => {
     /** 출력본 xlsx를 내려받아 워크북으로 로드한다. */
-    async function downloadWorkbook(versionId: string): Promise<ExcelJS.Workbook> {
+    async function downloadWorkbook(workOrderId: string): Promise<ExcelJS.Workbook> {
       const res = await api(ctx)
-        .get(`/api/v1/work-order-versions/${versionId}/file`)
+        .get(`/api/v1/work-orders/${workOrderId}/file`)
         .set(auth(ctx))
         .buffer(true)
         .parse((response, callback) => {
@@ -956,12 +845,12 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
       });
 
       const issued = await api(ctx)
-        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order-versions`)
+        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order`)
         .set(auth(ctx))
         .send({ note: '신체 정보 확인' })
         .expect(201);
 
-      const ws = (await downloadWorkbook(issued.body.data.workOrderVersionId)).getWorksheet(
+      const ws = (await downloadWorkbook(issued.body.data.workOrderId)).getWorksheet(
         '작업지시서 (송파)',
       )!;
       expect(String(ws.getCell('J3').value)).toBe('178cm / 72.5kg');
@@ -973,12 +862,12 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
     it('신체 정보가 없으면 해당 칸을 비워 둔다(인쇄된 양식 그대로 손으로 적는다)', async () => {
       const fixture = await createFixture();
       const issued = await api(ctx)
-        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order-versions`)
+        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order`)
         .set(auth(ctx))
         .send({ note: '신체 정보 미입력' })
         .expect(201);
 
-      const ws = (await downloadWorkbook(issued.body.data.workOrderVersionId)).getWorksheet(
+      const ws = (await downloadWorkbook(issued.body.data.workOrderId)).getWorksheet(
         '작업지시서 (송파)',
       )!;
       expect(ws.getCell('J3').value).toBeNull();
@@ -993,12 +882,12 @@ describe('작업지시서 (Phase 4: Excel 출력·버전·스냅샷)', () => {
       });
 
       const issued = await api(ctx)
-        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order-versions`)
+        .post(`/api/v1/order-items/${fixture.orderItemId}/work-order`)
         .set(auth(ctx))
         .send({ note: '구두 신체 정보' })
         .expect(201);
 
-      const ws = (await downloadWorkbook(issued.body.data.workOrderVersionId)).getWorksheet(
+      const ws = (await downloadWorkbook(issued.body.data.workOrderId)).getWorksheet(
         '구두 작업지시서',
       )!;
       const cells: string[] = [];

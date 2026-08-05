@@ -239,7 +239,6 @@ export async function truncateBusinessData(prisma: PrismaService): Promise<void>
     'fitting_adjustments',
     'fitting_sessions',
     'production_events',
-    'work_order_versions',
     'work_orders',
     'order_item_measurements',
     'measurement_values',

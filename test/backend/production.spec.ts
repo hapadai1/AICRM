@@ -294,7 +294,7 @@ describe('제작 상태·부분 입출고·가봉 (ProductionModule)', () => {
       expect(['WAITING', 'UNORDERED', 'CURRENT']).toContain(found.workOrder.status);
       expect(typeof found.workOrder.canIssue).toBe('boolean');
       // 목록에서 최신 Excel을 바로 내려받으려면 버전 id·파일명이 함께 와야 한다.
-      expect(found.workOrder).toHaveProperty('currentVersionId');
+      expect(found.workOrder).toHaveProperty('docStatus');
       expect(found.workOrder).toHaveProperty('currentFileName');
     });
   });

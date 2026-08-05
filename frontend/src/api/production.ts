@@ -170,9 +170,10 @@ interface ProductionItemApiRow {
   workOrder: {
     workOrderId: string | null;
     status: string;
-    currentVersionNo: number | null;
-    currentVersionId: string | null;
+    docStatus: string;
+    workOrderFileKey: string | null;
     currentFileName: string | null;
+    uploadedFileName: string | null;
     lastIssuedAt: string | null;
     canIssue: boolean;
     optionConfirmedAt: string | null;
@@ -201,11 +202,14 @@ export interface ProductionWorkOrderView {
   workOrderId?: string;
   /** WAITING | UNORDERED | CURRENT */
   status: string;
-  currentVersionNo?: number;
-  /** 최신 출력본 버전 id — 목록에서 바로 내려받을 때 쓴다 */
-  currentVersionId?: string;
-  /** 최신 출력본 파일명 */
+  /** 작성중 | 완료 — 발주가 완료로 만든다 (2026-08-05) */
+  docStatus: string;
+  /** 파일이 있으면 작업지시서 id — 없으면 아직 뽑지 않았다 */
+  workOrderFileKey?: string;
+  /** 최신 파일명 (수기 최종본이 있으면 그 이름) */
   currentFileName?: string;
+  /** 수기 최종본 파일명 — 있으면 다운로드가 이 파일을 준다 (2026-08-05) */
+  uploadedFileName?: string;
   /** YYYY-MM-DD HH:mm */
   lastIssuedAt?: string;
   /** 출력 가능 여부 (준비 미완이면 false) */
@@ -274,9 +278,10 @@ function toProductionItem(row: ProductionItemApiRow): ProductionItem {
     workOrder: {
       workOrderId: row.workOrder.workOrderId ?? undefined,
       status: row.workOrder.status,
-      currentVersionNo: row.workOrder.currentVersionNo ?? undefined,
-      currentVersionId: row.workOrder.currentVersionId ?? undefined,
+      docStatus: row.workOrder.docStatus,
+      workOrderFileKey: row.workOrder.workOrderFileKey ?? undefined,
       currentFileName: row.workOrder.currentFileName ?? undefined,
+      uploadedFileName: row.workOrder.uploadedFileName ?? undefined,
       lastIssuedAt: toDateTime(row.workOrder.lastIssuedAt),
       canIssue: row.workOrder.canIssue,
       optionConfirmedAt: toDateTime(row.workOrder.optionConfirmedAt),

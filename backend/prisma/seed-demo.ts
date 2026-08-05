@@ -444,37 +444,19 @@ async function issueWorkOrderVersion(
     adminId: string;
   },
 ): Promise<string> {
-  const versionId = uuid();
-  const optionSnapshot = await buildOptionSnapshot(tx, args.optionSessionId);
-  const measurementSnapshot = buildMeasurementSnapshot(args.measurement);
-  const sourceHash = createHash('sha256')
-    .update(JSON.stringify({ option: optionSnapshot, measurement: measurementSnapshot }))
-    .digest('hex');
-  const fileName = `${args.orderNo}_${args.productCategory}-${String(args.sequenceNo).padStart(2, '0')}_V${args.versionNo}.xlsx`;
+  const fileName = `${args.orderNo}_${args.productCategory}-${String(args.sequenceNo).padStart(2, '0')}.xlsx`;
+  // 작업지시서는 품목당 파일 하나다 (2026-08-05) — 버전을 쌓지 않는다.
   const outputFileId = await createFile(tx, {
-    storageKey: `work-orders/${versionId}.xlsx`,
+    storageKey: `work-orders/${args.workOrderId}.xlsx`,
     originalName: fileName,
     mimeType: XLSX_MIME,
     buffer: Buffer.alloc(0),
   });
-  await tx.workOrderVersion.create({
-    data: {
-      id: versionId,
-      workOrderId: args.workOrderId,
-      versionNo: args.versionNo,
-      sourceOptionSessionId: args.optionSessionId,
-      sourceMeasurementSessionId: args.measurement.id,
-      optionSnapshot,
-      measurementSnapshot,
-      sourceHash,
-      changeReason: args.changeReason ?? null,
-      outputFileId,
-      status: args.status,
-      issuedBy: args.adminId,
-      issuedAt: args.issuedAt,
-    },
+  await tx.workOrder.update({
+    where: { id: args.workOrderId },
+    data: { outputFileId, issuedBy: args.adminId, issuedAt: args.issuedAt, status: 'COMPLETED' },
   });
-  return versionId;
+  return args.workOrderId;
 }
 
 // -----------------------------------------------------------------------------
@@ -1004,28 +986,24 @@ async function main(): Promise<void> {
         optionSessionId: sessionSy1, measurement: syV1, issuedAt: at(-8, 16), status: 'ISSUED',
         changeReason: '원단 로트 변경 반영 재출력', adminId,
       });
-      await tx.workOrder.update({ where: { id: woSy1 }, data: { currentVersionId: woSy1v2 } });
       // 이서연 셔츠 #1·#2: V1 (셔츠 #1은 이후 채촌 재연결로 재출력 필요 상태)
       const woSy2 = await createWorkOrder(oi6);
       const woSy2v1 = await issueWorkOrderVersion(tx, {
         workOrderId: woSy2, versionNo: 1, orderNo: 'ORD-260705-001', productCategory: 'SHIRT', sequenceNo: 1,
         optionSessionId: sessionSy2, measurement: syV1, issuedAt: at(-8, 14, 20), status: 'ISSUED', adminId,
       });
-      await tx.workOrder.update({ where: { id: woSy2 }, data: { currentVersionId: woSy2v1 } });
       const woSy3 = await createWorkOrder(oi7);
       const woSy3v1 = await issueWorkOrderVersion(tx, {
         workOrderId: woSy3, versionNo: 1, orderNo: 'ORD-260705-001', productCategory: 'SHIRT', sequenceNo: 2,
         optionSessionId: sessionSy3, measurement: syV1, issuedAt: at(-8, 14, 40), status: 'ISSUED', adminId,
       });
-      await tx.workOrder.update({ where: { id: woSy3 }, data: { currentVersionId: woSy3v1 } });
       // 정우성 정장 #1: V1 (완료 이력)
       const woWs = await createWorkOrder(oi8);
       const woWsV1 = await issueWorkOrderVersion(tx, {
         workOrderId: woWs, versionNo: 1, orderNo: 'ORD-260420-001', productCategory: 'SUIT', sequenceNo: 1,
         optionSessionId: sessionWs, measurement: wsV1, issuedAt: at(-75, 10), status: 'SENT', adminId,
       });
-      await tx.workOrder.update({ where: { id: woWs }, data: { currentVersionId: woWsV1 } });
-      console.log('work_orders: 4건 / work_order_versions: 5건 (이서연 정장 V1·V2)');
+      console.log('work_orders: 4건 (품목당 파일 하나)');
 
       // -----------------------------------------------------------------------
       // 7) 제작 이벤트 (부분 입고·입고 지연 이력)

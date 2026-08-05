@@ -458,7 +458,7 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
     await api(ctx).get(`/api/v1/measurements/${targetId}`).set(auth(ctx)).expect(404);
   });
 
-  it('작업지시서 출력에 쓰인 채촌은 수정·삭제가 잠긴다', async () => {
+  it('발주가 나간 채촌은 수정·삭제가 잠긴다', async () => {
     // sessionV2는 orderItemId에 연결되어 있다. 그 상태로 작업지시서 버전을 만든다.
     const optionSet = await ctx.prisma.optionSet.findFirstOrThrow();
     const optionSetVersion = await ctx.prisma.optionSetVersion.create({
@@ -488,22 +488,29 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
         sizeBytes: BigInt(1024),
       },
     });
-    const workOrder = await ctx.prisma.workOrder.create({
-      data: { id: randomUUID(), orderItemId },
+    /*
+      채촌 잠금은 이제 **계약완료 또는 발주 이후**로 판정한다 (현업 확정 2026-08-05) —
+      작업지시서 출력본 수를 세던 것은 걷어냈다. 여기서는 발주로 잠근다.
+    */
+    await ctx.prisma.workOrder.create({
+      data: { id: randomUUID(), orderItemId, outputFileId: file.id, issuedBy: adminId, issuedAt: new Date(), status: 'COMPLETED' },
     });
-    await ctx.prisma.workOrderVersion.create({
+    await ctx.prisma.orderItem.update({
+      where: { id: orderItemId },
+      data: { status: 'PRODUCTION_REQUESTED' },
+    });
+    // 잠금은 '이 채촌이 붙은 품목'을 보고 판정한다 — 연결을 이 세션으로 옮긴다.
+    await ctx.prisma.orderItemMeasurement.updateMany({
+      where: { orderItemId, isCurrent: true },
+      data: { isCurrent: false },
+    });
+    await ctx.prisma.orderItemMeasurement.create({
       data: {
         id: randomUUID(),
-        workOrderId: workOrder.id,
-        versionNo: 1,
-        sourceOptionSessionId: optionSession.id,
-        sourceMeasurementSessionId: sessionV2,
-        optionSnapshot: {},
-        measurementSnapshot: {},
-        sourceHash: 'hash-lock-test',
-        outputFileId: file.id,
-        issuedBy: adminId,
-        issuedAt: new Date(),
+        orderItemId,
+        measurementSessionId: sessionV2,
+        isCurrent: true,
+        linkedBy: adminId,
       },
     });
 
@@ -519,7 +526,6 @@ describe('채촌(측정) 도메인 (Phase: measurements)', () => {
 
     const detail = await api(ctx).get(`/api/v1/measurements/${sessionV2}`).set(auth(ctx)).expect(200);
     expect(detail.body.data.locked).toBe(true);
-    expect(detail.body.data.workOrderVersionCount).toBe(1);
   });
 
   it('앞마다/뒷마다는 카탈로그로 하의(LOWER)·정렬·라벨이 보완된다 (설계서 05 §2.1)', async () => {

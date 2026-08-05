@@ -1,4 +1,4 @@
-import { downloadFile, request } from './client';
+import { downloadFile, openFileInNewTab, request } from './client';
 import { toDateOnly, toDateTime, toNumber } from './transform';
 
 /**
@@ -146,19 +146,6 @@ interface WorkOrderPreviewApi {
 }
 
 /** toVersionRow() 결과 */
-interface WorkOrderVersionApiRow {
-  id: string;
-  versionNo: number;
-  status: string;
-  changeReason: string | null;
-  sourceOptionSessionId: string;
-  sourceMeasurementSessionId: string;
-  sourceHash: string;
-  issuedBy: { id: string; displayName: string } | null;
-  issuedAt: string;
-  sentAt: string | null;
-  file: { id: string; fileName: string; downloadUrl: string };
-}
 
 // --- 화면용 뷰 ------------------------------------------------------------------
 
@@ -280,8 +267,6 @@ export interface WorkOrderFormPreview {
 /** §14.5 Excel 출력 응답 */
 export interface WorkOrderIssueResult {
   workOrderId: string;
-  workOrderVersionId: string;
-  versionNo: number;
   issuedAt: string;
   file: { id: string; fileName: string; downloadUrl: string };
 }
@@ -375,19 +360,6 @@ function toPreview(raw: WorkOrderPreviewApi): WorkOrderPreview {
   };
 }
 
-function toVersionRow(row: WorkOrderVersionApiRow): WorkOrderVersionRow {
-  return {
-    id: row.id,
-    versionNo: row.versionNo,
-    status: row.status,
-    issuedAt: toDateTime(row.issuedAt) ?? '-',
-    issuedByName: row.issuedBy?.displayName ?? '-',
-    fileName: row.file?.fileName ?? '-',
-    downloadUrl: row.file?.downloadUrl ?? '',
-    changeReason: row.changeReason ?? undefined,
-    measurementSessionId: row.sourceMeasurementSessionId,
-  };
-}
 
 // --- 호출부 --------------------------------------------------------------------
 
@@ -418,12 +390,12 @@ export function fetchWorkOrderPreview(
 }
 
 /** Excel 출력 → 새 작업지시서 버전 생성 (§14.5) */
-export function issueWorkOrderVersion(
+export function issueWorkOrder(
   orderItemId: string,
   body: { measurementSessionId?: string; note?: string },
 ): Promise<WorkOrderIssueResult> {
   return request<WorkOrderIssueResult>({
-    url: `/order-items/${orderItemId}/work-order-versions`,
+    url: `/order-items/${orderItemId}/work-order`,
     method: 'POST',
     data: body,
   });
@@ -443,22 +415,33 @@ export function fetchWorkOrderFormPreview(
   });
 }
 
-/** 저장된 출력본 양식 미리보기 — GET /work-order-versions/{id}/form-preview */
-export function fetchWorkOrderVersionFormPreview(versionId: string): Promise<WorkOrderFormPreview> {
-  return request<WorkOrderFormPreview>({ url: `/work-order-versions/${versionId}/form-preview` });
+/*
+  저장된 출력본을 화면에서 다시 그리는 기능과 출력 이력(버전 목록)은 없앴다 (2026-08-05).
+  작업지시서는 품목당 파일 하나이고, 다시 뽑으면 덮어쓴다 — 파일이 곧 결과물이다.
+*/
+
+/** 작업지시서 파일 내려받기 — 수기 최종본이 있으면 그것이 온다 */
+export function downloadWorkOrderFile(workOrderId: string, fileName: string): Promise<void> {
+  return downloadFile(`/work-orders/${workOrderId}/file`, fileName);
 }
 
-/**
- * 저장된 작업지시서 Excel 내려받기 — GET /work-order-versions/{versionId}/file.
- * 이미 만들어진 파일을 그대로 주므로 새 버전이 생기지 않는다.
- */
-export function downloadWorkOrderVersionFile(versionId: string, fileName: string): Promise<void> {
-  return downloadFile(`/work-order-versions/${versionId}/file`, fileName);
+/** 작업지시서 파일을 새 탭에서 연다 */
+export function openWorkOrderFile(workOrderId: string): Promise<void> {
+  return openFileInNewTab(`/work-orders/${workOrderId}/file`);
 }
 
-/** 출력 이력 — GET /work-orders/{workOrderId}/versions */
-export function fetchWorkOrderVersions(workOrderId: string): Promise<WorkOrderVersionRow[]> {
-  return request<WorkOrderVersionApiRow[]>({ url: `/work-orders/${workOrderId}/versions` }).then(
-    (rows) => (rows ?? []).map(toVersionRow),
-  );
+export function uploadWorkOrderFinalFile(
+  workOrderId: string,
+  file: File,
+): Promise<{ workOrderId: string; file: { id: string; fileName: string } }> {
+  const form = new FormData();
+  form.append('file', file);
+  return request({ url: `/work-orders/${workOrderId}/upload`, method: 'POST', data: form });
+}
+
+/** 잘못 올린 최종본 내리기 */
+export function removeWorkOrderFinalFile(
+  workOrderId: string,
+): Promise<{ workOrderId: string; removed: boolean }> {
+  return request({ url: `/work-orders/${workOrderId}/upload`, method: 'DELETE' });
 }

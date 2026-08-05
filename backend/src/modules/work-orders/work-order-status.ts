@@ -39,15 +39,12 @@ export const workOrderStatusSelect = Prisma.validator<Prisma.OrderItemSelect>()(
   workOrder: {
     select: {
       id: true,
-      // 파일명까지 뽑는 이유: 목록에서 미리보기 화면을 거치지 않고 최신 Excel을 바로 내려받는다.
-      currentVersion: {
-        select: {
-          id: true,
-          versionNo: true,
-          issuedAt: true,
-          outputFile: { select: { originalName: true } },
-        },
-      },
+      status: true,
+      issuedAt: true,
+      // 파일명까지 뽑는 이유: 목록에서 화면을 거치지 않고 Excel을 바로 내려받는다.
+      outputFile: { select: { originalName: true } },
+      // 수기 최종본이 있으면 그것이 최종이다 — 목록·창에 그 사실이 보여야 한다 (2026-08-05).
+      uploadedFile: { select: { originalName: true } },
     },
   },
 });
@@ -66,9 +63,9 @@ type OrderItemWithWorkOrderStatus = Prisma.OrderItemGetPayload<{
 export function resolveWorkOrderStatus(
   session: { confirmedAt: Date | null } | null,
   link: { linkedAt: Date } | null,
-  currentVersion: { issuedAt: Date } | null,
+  issued: boolean,
 ): WorkOrderListStatus | 'WAITING' {
-  if (!currentVersion) {
+  if (!issued) {
     return session && link ? 'UNORDERED' : 'WAITING';
   }
   return 'CURRENT';
@@ -90,11 +87,14 @@ export function canChangeWorkOrderMeasurement(itemStatus: string): boolean {
 export interface WorkOrderView {
   workOrderId: string | null;
   status: WorkOrderListStatus | 'WAITING';
-  currentVersionNo: number | null;
-  /** 최신 출력본 버전 id — 목록에서 바로 내려받을 때 쓴다 */
-  currentVersionId: string | null;
-  /** 최신 출력본 파일명 */
+  /** 작성중 | 완료 — 발주가 완료로 만든다 (2026-08-05) */
+  docStatus: string;
+  /** 작업지시서 id — 파일을 내려받을 때 쓴다. 아직 뽑지 않았으면 null */
+  workOrderFileKey: string | null;
+  /** 최신 출력본 파일명. 수기 최종본이 올라와 있으면 그 이름이다(다운로드도 그 파일이 나간다). */
   currentFileName: string | null;
+  /** 수기 최종본 파일명 — 없으면 null. 시스템 출력본만 있다는 뜻이다. */
+  uploadedFileName: string | null;
   /** ISO. 화면에서 표시 형식으로 정규화 */
   lastIssuedAt: string | null;
   /** 출력 가능 여부 (준비 미완이면 false) */
@@ -115,15 +115,16 @@ export function buildWorkOrderView(item: OrderItemWithWorkOrderStatus): WorkOrde
     item.sourceContractItem.rentalSelectionSessions[0] ??
     null;
   const link = item.measurementLinks[0] ?? null;
-  const currentVersion = item.workOrder?.currentVersion ?? null;
-  const status = resolveWorkOrderStatus(session, link, currentVersion);
+  const wo = item.workOrder ?? null;
+  const status = resolveWorkOrderStatus(session, link, !!wo?.outputFile);
   return {
-    workOrderId: item.workOrder?.id ?? null,
+    workOrderId: wo?.id ?? null,
     status,
-    currentVersionNo: currentVersion?.versionNo ?? null,
-    currentVersionId: currentVersion?.id ?? null,
-    currentFileName: currentVersion?.outputFile?.originalName ?? null,
-    lastIssuedAt: currentVersion?.issuedAt.toISOString() ?? null,
+    docStatus: wo?.status ?? 'DRAFT',
+    workOrderFileKey: wo?.outputFile ? (wo.id ?? null) : null,
+    currentFileName: wo?.uploadedFile?.originalName ?? wo?.outputFile?.originalName ?? null,
+    uploadedFileName: wo?.uploadedFile?.originalName ?? null,
+    lastIssuedAt: wo?.issuedAt?.toISOString() ?? null,
     canIssue: status !== 'WAITING',
     optionConfirmedAt: session?.confirmedAt?.toISOString() ?? null,
     measurementLinkedAt: link?.linkedAt.toISOString() ?? null,

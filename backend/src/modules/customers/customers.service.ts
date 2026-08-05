@@ -295,7 +295,7 @@ export class CustomersService {
                   },
                 },
                 measurementLinks: { where: { isCurrent: true }, select: { id: true } },
-                workOrder: { select: { versions: { select: { id: true } } } },
+                workOrder: { select: { outputFileId: true } },
               },
             },
           },
@@ -416,7 +416,7 @@ export class CustomersService {
           status: i.status,
           optionStatus: i.sourceContractItem.optionSelectionSessions[0]?.status ?? 'NOT_STARTED',
           measurementLinked: i.measurementLinks.length > 0,
-          workOrderVersionCount: i.workOrder?.versions.length ?? 0,
+          workOrderIssued: !!i.workOrder?.outputFileId,
         })),
       })),
       measurements: measurements.map((m) => ({

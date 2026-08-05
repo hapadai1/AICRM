@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { FilesModule } from '../files/files.module';
 import { WorkOrdersController } from './work-orders.controller';
 import { WorkOrdersService } from './work-orders.service';
 
@@ -7,6 +8,7 @@ import { WorkOrdersService } from './work-orders.service';
  * PrismaModule·AuditModule은 전역 모듈이라 별도 import가 필요 없다.
  */
 @Module({
+  imports: [FilesModule],
   controllers: [WorkOrdersController],
   providers: [WorkOrdersService],
 })

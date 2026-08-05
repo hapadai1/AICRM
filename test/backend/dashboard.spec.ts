@@ -209,21 +209,10 @@ describe('대시보드 (dashboard)', () => {
     });
     workOrderId = randomUUID();
     await ctx.prisma.workOrder.create({ data: { id: workOrderId, orderItemId } });
-    await ctx.prisma.workOrderVersion.create({
-      data: {
-        id: randomUUID(),
-        workOrderId,
-        versionNo: 1,
-        sourceOptionSessionId: optionSessionId,
-        sourceMeasurementSessionId: measurementSessionId,
-        optionSnapshot: {},
-        measurementSnapshot: {},
-        sourceHash: 'hash-v1',
-        outputFileId,
-        status: 'ISSUED',
-        issuedBy: adminId,
-        issuedAt: new Date(),
-      },
+    // 작업지시서는 품목당 파일 하나다 (2026-08-05) — 뽑았으면 '미주문'에서 빠진다.
+    await ctx.prisma.workOrder.update({
+      where: { id: workOrderId },
+      data: { outputFileId, issuedBy: adminId, issuedAt: new Date(), status: 'COMPLETED' },
     });
 
     const tasks = await getTasks('UNORDERED');

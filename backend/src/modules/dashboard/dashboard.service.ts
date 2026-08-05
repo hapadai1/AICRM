@@ -247,7 +247,7 @@ export class DashboardService {
           optionSelectionSessions: { some: { isCurrent: true, status: 'CONFIRMED' } },
         },
         measurementLinks: { some: { isCurrent: true } },
-        OR: [{ workOrder: null }, { workOrder: { versions: { none: {} } } }],
+        OR: [{ workOrder: null }, { workOrder: { outputFileId: null } }],
       },
       include: { order: { include: { contract: { include: { customer: true } } } } },
       orderBy: { createdAt: 'asc' },

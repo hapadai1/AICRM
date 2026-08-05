@@ -177,3 +177,17 @@ export async function downloadFile(path: string, fileName: string): Promise<void
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 }
+
+/**
+ * 파일을 새 탭에서 연다 (2026-08-05).
+ *
+ * 업로드본은 시스템이 만든 워크북이 아니라 담당자가 올린 파일이라 화면 안에 그릴 수 없다.
+ * 인증 헤더가 필요해 URL을 그대로 열 수 없으므로, 받아서 blob으로 연다 —
+ * PDF는 탭에서 바로 보이고 엑셀은 브라우저가 받는다.
+ */
+export async function openFileInNewTab(path: string): Promise<void> {
+  const response = await api.request({ url: path, responseType: 'blob' });
+  const url = URL.createObjectURL(response as unknown as Blob);
+  window.open(url, '_blank', 'noopener');
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}

@@ -10,26 +10,26 @@
  * 골라 두므로(measurementAutoSelected) 다른 것을 쓸 때만 [변경]을 편다.
  */
 import { useState } from 'react';
-import {
-  CheckCircleFilled,
-  DownloadOutlined,
-  EyeOutlined,
-  FileExcelOutlined,
-  MinusCircleOutlined,
-} from '@ant-design/icons';
+import { DeleteOutlined, DownloadOutlined, EyeOutlined, FileExcelOutlined, UploadOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, App, Button, Modal, Radio, Space, Spin, Tag, Tooltip, Typography } from 'antd';
+import { Alert, App, Button, Modal, Radio, Space, Spin, Tag, Tooltip, Typography, Upload } from 'antd';
+import type { RcFile } from 'antd/es/upload';
 import { useNavigate } from 'react-router-dom';
 import { ApiError } from '../../api/client';
 import { linkOrderItemMeasurement } from '../../api/measurements';
 import type { ProductionItem } from '../../api/production';
 import {
-  downloadWorkOrderVersionFile,
+  downloadWorkOrderFile,
   fetchWorkOrderFormPreview,
   fetchWorkOrderPreview,
+  issueWorkOrder,
+  openWorkOrderFile,
+  removeWorkOrderFinalFile,
+  uploadWorkOrderFinalFile,
   type WorkOrderMeasurementCandidate,
 } from '../../api/workorders';
 import { metaOf } from '../../shared/status-meta';
+import { PrepRow } from './PrepRow';
 import { MEASUREMENT_TYPE_META } from '../workorders/wo-meta';
 
 interface OrderRequestModalProps {
@@ -42,47 +42,6 @@ interface OrderRequestModalProps {
    */
   onRequest?: () => void;
   requesting?: boolean;
-}
-
-/**
- * 준비 한 줄 — `됐는지(아이콘) · 무엇(이름) · 상태 낱말 · 부가정보 · 가는 곳(버튼)`.
- * 다섯 칸의 x를 고정해 두 줄이 계단처럼 어긋나지 않게 한다.
- */
-function PrepRow({
-  label,
-  done,
-  detail,
-  action,
-  children,
-}: {
-  label: string;
-  done: boolean;
-  detail: React.ReactNode;
-  action?: React.ReactNode;
-  children?: React.ReactNode;
-}) {
-  return (
-    <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0' }}>
-        {done ? (
-          <CheckCircleFilled style={{ color: '#52c41a', fontSize: 16 }} />
-        ) : (
-          <MinusCircleOutlined style={{ color: '#bfbfbf', fontSize: 16 }} />
-        )}
-        <Typography.Text style={{ width: 96, flexShrink: 0 }}>{label}</Typography.Text>
-        <Typography.Text
-          type={done ? undefined : 'secondary'}
-          style={{ width: 48, flexShrink: 0 }}
-          strong={done}
-        >
-          {done ? '완료' : '미완료'}
-        </Typography.Text>
-        <div style={{ flex: 1, minWidth: 0 }}>{detail}</div>
-        {action}
-      </div>
-      {children}
-    </>
-  );
 }
 
 /** 채촌 한 줄 표기 — 구분 뱃지 + 채촌일. 현재 선택과 후보 목록이 같은 모양을 쓴다. */
@@ -118,6 +77,8 @@ export function OrderRequestModal({
   // 서류는 펼친 채로 연다 — 확인하고 내는 창이라 한 번 더 누르게 할 이유가 없다. [보기]로 접는다.
   const [showForm, setShowForm] = useState(true);
 
+  const wo = item.workOrder;
+
   const previewQuery = useQuery({
     queryKey: ['workorders', 'preview', item.orderItemId],
     queryFn: () => fetchWorkOrderPreview(item.orderItemId),
@@ -148,7 +109,40 @@ export function OrderRequestModal({
     onError: (e) => message.error(e instanceof ApiError ? e.message : '채촌을 연결하지 못했습니다.'),
   });
 
-  const wo = item.workOrder;
+  /*
+    수기 최종본 — 시스템이 뽑아 준 Excel을 손으로 고쳐 공장에 보낸 파일 (현업 확정 2026-08-05).
+    시스템은 열어 보지 않고 **보관만** 한다. 올라와 있으면 [다운로드]가 이 파일을 준다.
+  */
+  const uploadMutation = useMutation({
+    mutationFn: (file: File) => uploadWorkOrderFinalFile(wo.workOrderId as string, file),
+    onSuccess: async () => {
+      message.success('최종본을 올렸습니다.');
+      await queryClient.invalidateQueries({ queryKey: ['production'] });
+    },
+    onError: (e) => message.error(e instanceof ApiError ? e.message : '업로드에 실패했습니다.'),
+  });
+
+  /* [출력] — 그 자리에서 파일을 만든다. 다시 뽑으면 덮어쓴다 (2026-08-05). */
+  const issueMutation = useMutation({
+    mutationFn: () => issueWorkOrder(item.orderItemId, {}),
+    onSuccess: async (res) => {
+      message.success('작업지시서를 출력했습니다.');
+      await downloadWorkOrderFile(res.workOrderId, res.file.fileName);
+      await queryClient.invalidateQueries({ queryKey: ['production'] });
+      await queryClient.invalidateQueries({ queryKey: ['workorders'] });
+    },
+    onError: (e) => message.error(e instanceof ApiError ? e.message : '출력에 실패했습니다.'),
+  });
+
+  const removeUploadMutation = useMutation({
+    mutationFn: () => removeWorkOrderFinalFile(wo.workOrderId as string),
+    onSuccess: async () => {
+      message.success('최종본을 내렸습니다.');
+      await queryClient.invalidateQueries({ queryKey: ['production'] });
+    },
+    onError: (e) => message.error(e instanceof ApiError ? e.message : '내리지 못했습니다.'),
+  });
+
   const current = preview?.measurement;
   /* 값이 없는 채촌은 품목에 연결할 수 없다(서버가 거부한다) — 고를 수 없는 줄은 내지 않는다. */
   const candidates: WorkOrderMeasurementCandidate[] = (preview?.measurementCandidates ?? []).filter(
@@ -281,11 +275,10 @@ export function OrderRequestModal({
           >
             <Typography.Text strong>작업지시서</Typography.Text>
             <Typography.Text type="secondary" style={{ flex: 1 }}>
-              {wo.currentVersionNo
-                ? `V${wo.currentVersionNo}${wo.lastIssuedAt ? ` · ${wo.lastIssuedAt.slice(0, 10)} 출력` : ''}`
-                : formQuery.data
-                  ? `발주하면 V${formQuery.data.versionNo}로 출력됩니다`
-                  : ''}
+              {wo.docStatus === 'COMPLETED'
+                ? `완료${wo.lastIssuedAt ? ` · ${wo.lastIssuedAt.slice(0, 10)} 출력` : ''}`
+                : '작성중 — 발주하면 완료가 됩니다'}
+
             </Typography.Text>
             <Space size={6} wrap>
               <Tooltip title={printable ? '' : blockedReason ?? ''}>
@@ -300,32 +293,102 @@ export function OrderRequestModal({
                 </Button>
               </Tooltip>
               {/*
-                발주 전에는 출력 버튼을 내지 않는다 — [발주하기]가 출력까지 한다 (2026-08-05).
-                발주 뒤 다시 뽑아야 할 때만 이 자리가 열린다.
+                준비가 끝났으면 언제든 뽑을 수 있다 — [발주하기]가 출력까지 하지만,
+                미리 뽑아 보거나 다시 뽑는 길을 막을 이유는 없다 (2026-08-05 현업 지적).
               */}
-              {!onRequest && (
-                <Tooltip title={printable ? '' : blockedReason ?? ''}>
-                  <Button
-                    icon={<FileExcelOutlined />}
-                    disabled={!printable}
-                    onClick={() => navigate(`/work-orders/${item.orderItemId}`)}
-                  >
-                    재출력
-                  </Button>
-                </Tooltip>
-              )}
-              <Tooltip title={wo.currentVersionId ? `최신 출력본 V${wo.currentVersionNo}` : '출력본이 없습니다.'}>
+              <Tooltip title={printable ? '' : blockedReason ?? ''}>
+                <Button
+                  icon={<FileExcelOutlined />}
+                  disabled={!printable}
+                  loading={issueMutation.isPending}
+                  onClick={() => issueMutation.mutate()}
+                >
+                  {wo.workOrderFileKey ? '재출력' : '출력'}
+                </Button>
+              </Tooltip>
+              <Tooltip title={wo.workOrderFileKey ? '' : '아직 뽑은 파일이 없습니다.'}>
                 <Button
                   icon={<DownloadOutlined />}
-                  disabled={!wo.currentVersionId || !wo.currentFileName}
+                  disabled={!wo.workOrderFileKey || !wo.currentFileName}
                   onClick={() =>
-                    void downloadWorkOrderVersionFile(
-                      wo.currentVersionId as string,
+                    void downloadWorkOrderFile(
+                      wo.workOrderId as string,
                       wo.currentFileName as string,
                     )
                   }
                 >
                   다운로드
+                </Button>
+              </Tooltip>
+            </Space>
+          </div>
+
+          {/* --- 최종 작업지시서 — 손으로 고쳐 공장에 보낸 그 파일 -------------- */}
+          <div
+            style={{
+              marginTop: 10,
+              paddingTop: 10,
+              borderTop: '1px solid #f5f5f5',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+            }}
+          >
+            <Typography.Text strong>최종 작업지시서</Typography.Text>
+            <Typography.Text type={wo.uploadedFileName ? undefined : 'secondary'} style={{ flex: 1 }}>
+              {wo.uploadedFileName ?? '올린 파일 없음 — 시스템 출력본이 최종입니다'}
+            </Typography.Text>
+            <Space size={6} wrap>
+              {/*
+                업로드본은 시스템이 만든 워크북이 아니라 담당자가 올린 파일이라 창 안에 그릴 수 없다
+                — 새 탭에서 연다(PDF는 보이고 엑셀은 브라우저가 받는다). 2026-08-05.
+              */}
+              <Button
+                icon={<EyeOutlined />}
+                disabled={!wo.uploadedFileName}
+                onClick={() => void openWorkOrderFile(wo.workOrderId as string)}
+              >
+                보기
+              </Button>
+              <Tooltip title={wo.workOrderFileKey ? '' : '작업지시서를 먼저 출력해야 붙일 자리가 생깁니다.'}>
+                <Upload
+                  accept=".xlsx,.pdf"
+                  showUploadList={false}
+                  disabled={!wo.workOrderFileKey}
+                  beforeUpload={(file: RcFile) => {
+                    uploadMutation.mutate(file);
+                    return false;
+                  }}
+                >
+                  <Button
+                    icon={<UploadOutlined />}
+                    disabled={!wo.workOrderFileKey}
+                    loading={uploadMutation.isPending}
+                  >
+                    {wo.uploadedFileName ? '교체' : '업로드'}
+                  </Button>
+                </Upload>
+              </Tooltip>
+              <Button
+                icon={<DownloadOutlined />}
+                disabled={!wo.uploadedFileName}
+                onClick={() =>
+                  void downloadWorkOrderFile(
+                    wo.workOrderId as string,
+                    wo.currentFileName as string,
+                  )
+                }
+              >
+                다운로드
+              </Button>
+              <Tooltip title="올린 파일을 내립니다. 시스템 출력본이 다시 최종이 됩니다.">
+                <Button
+                  icon={<DeleteOutlined />}
+                  disabled={!wo.uploadedFileName}
+                  loading={removeUploadMutation.isPending}
+                  onClick={() => removeUploadMutation.mutate()}
+                >
+                  내리기
                 </Button>
               </Tooltip>
             </Space>

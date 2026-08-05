@@ -221,22 +221,14 @@ export class AuditNamesService {
           select: { id: true, orderItem: { select: ORDER_ITEM_IDENTITY_SELECT } },
         })
         .then((rows) => rows.map((r) => [r.id, orderItemIdentity(r.orderItem)] as const)),
-    WORK_ORDER_VERSION: (ids) =>
-      this.prisma.workOrderVersion
+    // 작업지시서는 품목당 하나다 — 버전 개념을 걷어냈다 (2026-08-05).
+    WORK_ORDER: (ids) =>
+      this.prisma.workOrder
         .findMany({
           where: { id: { in: ids } },
-          select: {
-            id: true,
-            versionNo: true,
-            workOrder: { select: { orderItem: { select: ORDER_ITEM_IDENTITY_SELECT } } },
-          },
+          select: { id: true, orderItem: { select: ORDER_ITEM_IDENTITY_SELECT } },
         })
-        .then((rows) =>
-          rows.map(
-            (r) =>
-              [r.id, { ...orderItemIdentity(r.workOrder.orderItem), versionNo: r.versionNo }] as const,
-          ),
-        ),
+        .then((rows) => rows.map((r) => [r.id, orderItemIdentity(r.orderItem)] as const)),
     RENTAL_SELECTION_SESSION: (ids) =>
       this.prisma.rentalSelectionSession
         .findMany({

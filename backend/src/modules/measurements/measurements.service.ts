@@ -39,7 +39,6 @@ const MAX_IMAGES = 50;
 
 /** 잠금 판정에 필요한 최소 모양 — 목록·상세 쿼리가 모두 이 모양을 만족한다. */
 interface LockSource {
-  _count: { workOrderVersions: number };
   orderItemLinks: { orderItem: { status: string; order: { contract: { status: string } } } }[];
 }
 
@@ -50,12 +49,11 @@ interface LockSource {
  * 두 시점이 그것을 가른다:
  *  - **계약완료**: 치수가 주문으로 넘어갔다. 계약서를 [수정하기]로 되돌리면 다시 열린다.
  *  - **발주 이후**: 공장이 이미 그 치수로 만들고 있다.
- * 작업지시서 출력본이 있는 세션도 잠근다 — 출력물의 근거를 보존한다.
  *
- * 예전에는 '완료' 표시가 편집을 막았는데, 완료는 상태 관리에서 걷어냈다.
+ * 예전에는 '완료' 표시가 편집을 막았고, 작업지시서 출력본 수도 함께 봤다. 완료는 걷어냈고,
+ * 출력은 발주와 같은 시점이라 위 두 조건에 이미 들어 있다 (2026-08-05).
  */
 function isMeasurementLocked(session: LockSource): boolean {
-  if (session._count.workOrderVersions > 0) return true;
   return session.orderItemLinks.some(
     (l) =>
       l.orderItem.order.contract.status === 'COMPLETED' ||
@@ -91,7 +89,6 @@ const SESSION_INCLUDE = {
       },
     },
   },
-  _count: { select: { workOrderVersions: true } },
 } satisfies Prisma.MeasurementSessionInclude;
 
 type SessionWithValues = Prisma.MeasurementSessionGetPayload<{ include: typeof SESSION_INCLUDE }>;
@@ -153,7 +150,7 @@ export class MeasurementsService {
         include: {
           createdByUser: { select: { id: true, displayName: true } },
           customer: { select: { id: true, name: true, phone: true } },
-          _count: { select: { values: true, workOrderVersions: true } },
+          _count: { select: { values: true } },
           orderItemLinks: {
             where: { isCurrent: true },
             select: {
@@ -187,7 +184,6 @@ export class MeasurementsService {
       valueCount: s._count.values,
       linkedOrderItems: s.orderItemLinks.map((l) => l.orderItem),
       linkedOrderItemCount: s.orderItemLinks.length,
-      workOrderVersionCount: s._count.workOrderVersions,
       locked: isMeasurementLocked(s),
       fitPreference: s.fitPreference,
       previousSessionId: s.previousSessionId,
@@ -368,7 +364,7 @@ export class MeasurementsService {
       orderBy: [{ measurementDate: 'desc' }, { versionNo: 'desc' }],
       include: {
         createdByUser: { select: { id: true, displayName: true } },
-        _count: { select: { values: true, workOrderVersions: true } },
+        _count: { select: { values: true } },
         orderItemLinks: {
           where: { isCurrent: true },
           select: {
@@ -998,7 +994,6 @@ export class MeasurementsService {
         displayName: l.orderItem.displayName,
         productCategory: l.orderItem.productCategory,
       })),
-      workOrderVersionCount: session._count.workOrderVersions,
       locked: isMeasurementLocked(session),
       relatedOrderId: session.relatedOrderId,
       versionNo: session.versionNo,

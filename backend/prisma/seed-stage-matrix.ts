@@ -265,35 +265,17 @@ async function issueWorkOrder(
   const workOrderId = uuid();
   await tx.workOrder.create({ data: { id: workOrderId, orderItemId: args.orderItemId } });
 
-  const versionId = uuid();
-  const optionSnapshot = await buildOptionSnapshot(tx, args.optionSessionId);
-  const measurementSnapshot = buildMeasurementSnapshot(args.measurement);
-  const sourceHash = createHash('sha256')
-    .update(JSON.stringify({ option: optionSnapshot, measurement: measurementSnapshot }))
-    .digest('hex');
+  // 작업지시서는 품목당 파일 하나다 (2026-08-05) — 버전을 쌓지 않는다.
   const outputFileId = await createFile(tx, {
-    storageKey: `work-orders/${versionId}.xlsx`,
-    originalName: `${args.orderNo}_SUIT-${String(args.sequenceNo).padStart(2, '0')}_V1.xlsx`,
+    storageKey: `work-orders/${workOrderId}.xlsx`,
+    originalName: `${args.orderNo}_SUIT-${String(args.sequenceNo).padStart(2, '0')}.xlsx`,
     mimeType: XLSX_MIME,
     buffer: Buffer.alloc(0),
   });
-  await tx.workOrderVersion.create({
-    data: {
-      id: versionId,
-      workOrderId,
-      versionNo: 1,
-      sourceOptionSessionId: args.optionSessionId,
-      sourceMeasurementSessionId: args.measurement.id,
-      optionSnapshot,
-      measurementSnapshot,
-      sourceHash,
-      outputFileId,
-      status: 'ISSUED',
-      issuedBy: args.adminId,
-      issuedAt: args.issuedAt,
-    },
+  await tx.workOrder.update({
+    where: { id: workOrderId },
+    data: { outputFileId, issuedBy: args.adminId, issuedAt: args.issuedAt, status: 'COMPLETED' },
   });
-  await tx.workOrder.update({ where: { id: workOrderId }, data: { currentVersionId: versionId } });
 }
 
 // -----------------------------------------------------------------------------
@@ -747,11 +729,11 @@ async function resetStageMatrix(): Promise<number> {
     await prisma.workOrder.findMany({ where: { orderItemId: { in: orderItemIds } }, select: { id: true } })
   ).map((w) => w.id);
   const workOrderFileIds = (
-    await prisma.workOrderVersion.findMany({
-      where: { workOrderId: { in: workOrderIds } },
-      select: { outputFileId: true },
+    await prisma.workOrder.findMany({
+      where: { id: { in: workOrderIds } },
+      select: { outputFileId: true, uploadedFileId: true },
     })
-  ).map((v) => v.outputFileId);
+  ).flatMap((w) => [w.outputFileId, w.uploadedFileId].filter((id): id is string => !!id));
   const measurementIds = (
     await prisma.measurementSession.findMany({
       where: { customerId: { in: customerIds } },
@@ -766,9 +748,11 @@ async function resetStageMatrix(): Promise<number> {
   await prisma.$transaction(
     async (tx) => {
       await tx.productionEvent.deleteMany({ where: { orderItemId: { in: orderItemIds } } });
-      // work_orders.current_version_id 가 버전을 참조하므로 먼저 끊는다.
-      await tx.workOrder.updateMany({ where: { id: { in: workOrderIds } }, data: { currentVersionId: null } });
-      await tx.workOrderVersion.deleteMany({ where: { workOrderId: { in: workOrderIds } } });
+      // work_orders 가 파일을 참조하므로 파일을 지우기 전에 연결을 끊는다.
+      await tx.workOrder.updateMany({
+        where: { id: { in: workOrderIds } },
+        data: { outputFileId: null, uploadedFileId: null },
+      });
       await tx.workOrder.deleteMany({ where: { id: { in: workOrderIds } } });
       await tx.orderItemMeasurement.deleteMany({ where: { orderItemId: { in: orderItemIds } } });
       await tx.orderItemComponent.deleteMany({ where: { orderItemId: { in: orderItemIds } } });

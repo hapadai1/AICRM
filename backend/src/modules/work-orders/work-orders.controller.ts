@@ -1,6 +1,20 @@
-import { Body, Controller, Get, Headers, Param, Post, Query, Res } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Headers,
+  Param,
+  Post,
+  Query,
+  Res,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
 import { AuthUser, CurrentUser, RequirePermission } from '../../common/decorators';
+import { UploadedMulterFile } from '../files/files.service';
 import { IssueWorkOrderVersionDto, WorkOrderListQueryDto } from './work-orders.dto';
 import { WorkOrdersService } from './work-orders.service';
 
@@ -22,12 +36,10 @@ export class WorkOrdersController {
     return this.workOrdersService.detail(id);
   }
 
-  /** WO-002 출력 이력 */
-  @Get('work-orders/:id/versions')
-  @RequirePermission('WORK_ORDER_VIEW')
-  versions(@Param('id') id: string) {
-    return this.workOrdersService.versions(id);
-  }
+  /*
+    출력 이력(GET /work-orders/:id/versions)은 없앴다 (현업 확정 2026-08-05) —
+    작업지시서는 품목당 파일 하나이고 다시 뽑으면 덮어쓴다. 이력은 감사로그에 남는다.
+  */
 
   /**
    * WO-002 작업지시서 미리보기 (확정 옵션·채촌 표 데이터).
@@ -55,15 +67,8 @@ export class WorkOrdersController {
     return this.workOrdersService.formPreview(orderItemId, measurementSessionId || undefined);
   }
 
-  /** WO-002 저장된 출력본 양식 미리보기 (출력 이력 보기) */
-  @Get('work-order-versions/:id/form-preview')
-  @RequirePermission('WORK_ORDER_VIEW')
-  versionFormPreview(@Param('id') versionId: string) {
-    return this.workOrdersService.versionFormPreview(versionId);
-  }
-
-  /** WO-002 Excel 출력·버전 생성 (Idempotency-Key 지원) */
-  @Post('order-items/:id/work-order-versions')
+  /** WO-002 Excel 출력 — 품목당 파일 하나를 만들고, 다시 뽑으면 덮어쓴다 (Idempotency-Key 지원) */
+  @Post('order-items/:id/work-order')
   @RequirePermission('WORK_ORDER_ISSUE')
   issue(
     @Param('id') orderItemId: string,
@@ -74,10 +79,32 @@ export class WorkOrdersController {
     return this.workOrdersService.issue(orderItemId, dto, idempotencyKey, actor);
   }
 
-  /** 저장된 Excel 다운로드 (스트리밍) */
-  @Get('work-order-versions/:id/file')
+  /** 저장된 Excel 다운로드 (스트리밍). 수기 최종본이 있으면 그것을 내려 준다. */
+  @Get('work-orders/:id/file')
   @RequirePermission('WORK_ORDER_VIEW')
-  downloadFile(@Param('id') versionId: string, @Res() res: Response) {
-    return this.workOrdersService.streamFile(versionId, res);
+  downloadFile(@Param('id') workOrderId: string, @Res() res: Response) {
+    return this.workOrdersService.streamFile(workOrderId, res);
+  }
+
+  /**
+   * 수기 최종본 올리기 (현업 확정 2026-08-05).
+   * 시스템 출력본을 손으로 고쳐 공장에 보낸 파일을 **보관만** 한다 — 열어서 값을 꺼내지 않는다.
+   */
+  @Post('work-orders/:id/upload')
+  @RequirePermission('WORK_ORDER_ISSUE')
+  @UseInterceptors(FileInterceptor('file'))
+  uploadFinalFile(
+    @Param('id') workOrderId: string,
+    @UploadedFile() file: UploadedMulterFile | undefined,
+    @CurrentUser() actor: AuthUser,
+  ) {
+    return this.workOrdersService.uploadFinalFile(workOrderId, file, actor);
+  }
+
+  /** 잘못 올린 최종본 내리기 */
+  @Delete('work-orders/:id/upload')
+  @RequirePermission('WORK_ORDER_ISSUE')
+  removeFinalFile(@Param('id') workOrderId: string, @CurrentUser() actor: AuthUser) {
+    return this.workOrdersService.removeFinalFile(workOrderId, actor);
   }
 }

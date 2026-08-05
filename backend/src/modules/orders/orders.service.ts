@@ -36,7 +36,7 @@ const ITEMS_PROGRESS_INCLUDE = {
     where: { isCurrent: true },
     select: { measurementSessionId: true, measurementSession: { select: { versionNo: true } } },
   },
-  workOrder: { select: { versions: { select: { id: true } }, currentVersionId: true } },
+  workOrder: { select: { status: true, outputFileId: true } },
 } satisfies Prisma.OrderItemInclude;
 
 /**
@@ -108,8 +108,9 @@ export class OrdersService {
         measurement: link
           ? { linked: true, versionNo: link.measurementSession.versionNo }
           : { linked: false, versionNo: null },
-        workOrderVersionCount: workOrder?.versions.length ?? 0,
-        workOrderIssued: !!workOrder?.currentVersionId,
+        // 작업지시서는 품목당 하나다 — 뽑았는지와 상태만 본다 (2026-08-05).
+        workOrderIssued: !!workOrder?.outputFileId,
+        workOrderStatus: workOrder?.status ?? 'DRAFT',
       };
     });
   }

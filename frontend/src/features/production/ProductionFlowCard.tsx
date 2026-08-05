@@ -39,7 +39,7 @@ import {
 } from '../../api/production';
 import { Can } from '../../shared/Can';
 import { NotificationConfirmModal, type SendOutcome } from '../../shared/NotificationConfirmModal';
-import { issueWorkOrderVersion } from '../../api/workorders';
+import { issueWorkOrder } from '../../api/workorders';
 import { WorkOrderFormPreviewModal } from '../workorders/WorkOrderFormPreviewModal';
 import { FittingModal } from './FittingModal';
 import { StageProgress, type StageRow } from './StageProgress';
@@ -196,8 +196,7 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
         옵션도 채촌도 바뀔 수 없고, `재출력 필요` 같은 판정이 필요 없어졌다.
         이미 출력본이 있으면 다시 뽑지 않는다(되돌렸다 다시 발주하는 경우).
       */
-      if (!item.workOrder.currentVersionId)
-        await issueWorkOrderVersion(item.orderItemId, {});
+      if (!item.workOrder.workOrderFileKey) await issueWorkOrder(item.orderItemId, {});
       if (canRequestProduction(item.itemStatus))
         await postItemProductionEvent(item.orderItemId, { toStatus: 'PRODUCTION_REQUESTED' });
       return;
@@ -518,6 +517,11 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
                 setOrderModal({ item: row.item, request: { stage, row, index: i } });
                 return;
               }
+              // 완성복 발주도 같은 흐름 — 가봉을 확인하고 낸다 (2026-08-05).
+              if (stage.effect === 'ITEM_FITTING' && stage.extras === 'FITTING' && row.item) {
+                setFittingTarget(row.item);
+                return;
+              }
               runComplete(stage, i, [row]);
             }}
             onUncomplete={(row) => uncompleteMutation.mutate({ row, stage })}
@@ -538,7 +542,11 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
                       ? workOrderExtras(it, blocked)
                       : null
                 : stage.extras === 'FITTING'
-                  ? fittingExtras
+                  ? /* 완성복 발주 전에는 [완성복발주]가 그 창을 연다 — 버튼이 둘일 이유가 없다. */
+                    (it, blocked) =>
+                      rows.find((r) => r.target.targetId === it.orderItemId)?.target.completed
+                        ? fittingExtras(it, blocked)
+                        : null
                   : undefined
             }
             pendingKey={pendingKey}
@@ -671,7 +679,6 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
             if (row.target.completed) return '이미 완성복 발주를 끝냈습니다.';
             return blockedReasonAt(at)(row);
           })()}
-          onPreviewForm={() => setFormPreviewItemId(fittingTarget.orderItemId)}
         />
       )}
 

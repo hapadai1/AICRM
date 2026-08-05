@@ -57,7 +57,6 @@ export interface WorkOrderExcelData {
   productCategory: string;
   sequenceNo: number;
   fabricName: string | null;
-  versionNo: number;
   issuedAt: Date;
   note: string | null;
   /** 주문일 (order.createdAt 또는 계약일) */
@@ -466,7 +465,7 @@ export async function buildWorkOrderWorkbook(data: WorkOrderExcelData): Promise<
   if (unmappedMeasurements.length > 0) noteLines.push(`[치수] ${unmappedMeasurements.join(' / ')}`);
   noteLines.push(
     `[출력] ${data.orderNo} ${data.itemLabel}(${data.productCategory}#${data.sequenceNo}) · ` +
-      `작업지시서 V${data.versionNo} ${fmtDate(data.issuedAt)} · ` +
+      `작업지시서 V${0} ${fmtDate(data.issuedAt)} · ` +
       `채촌 V${data.measurementVersionNo} ${data.measurementDate}`,
   );
   const noteCell = ws.getCell(CELL.upperNote);
@@ -572,7 +571,7 @@ export async function buildShoesWorkOrderExcel(data: WorkOrderExcelData): Promis
   label('품목', `${data.itemLabel} (${data.productCategory}#${data.sequenceNo})`);
   label('주문일', fmtDate(data.orderDate));
   label('완성예정일', fmtDate(data.completionDate));
-  label('작업지시서', `V${data.versionNo} · ${fmtDate(data.issuedAt)}`);
+  label('작업지시서', `V${0} · ${fmtDate(data.issuedAt)}`);
 
   ws.addRow([]);
   section('확정 옵션');

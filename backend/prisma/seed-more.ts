@@ -490,31 +490,17 @@ async function main(): Promise<void> {
         };
         const versionId = uuid();
         const fileName = `${args.orderNo}_${args.productCategory}-${String(args.sequenceNo).padStart(2, '0')}_V1.xlsx`;
+        // 작업지시서는 품목당 파일 하나다 (2026-08-05) — 버전을 쌓지 않는다.
         const outputFileId = await createFile(tx, {
-          storageKey: `work-orders/${versionId}.xlsx`,
+          storageKey: `work-orders/${workOrderId}.xlsx`,
           originalName: fileName,
           mimeType: XLSX_MIME,
           buffer: Buffer.alloc(0),
         });
-        await tx.workOrderVersion.create({
-          data: {
-            id: versionId,
-            workOrderId,
-            versionNo: 1,
-            sourceOptionSessionId: args.optionSessionId,
-            sourceMeasurementSessionId: m.id,
-            optionSnapshot,
-            measurementSnapshot,
-            sourceHash: createHash('sha256')
-              .update(JSON.stringify({ option: optionSnapshot, measurement: measurementSnapshot }))
-              .digest('hex'),
-            outputFileId,
-            status: args.status,
-            issuedBy: adminId,
-            issuedAt: args.issuedAt,
-          },
+        await tx.workOrder.update({
+          where: { id: workOrderId },
+          data: { outputFileId, issuedBy: adminId, issuedAt: args.issuedAt, status: 'COMPLETED' },
         });
-        await tx.workOrder.update({ where: { id: workOrderId }, data: { currentVersionId: versionId } });
       };
 
       const productionEvent = async (args: {
