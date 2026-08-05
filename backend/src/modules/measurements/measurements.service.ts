@@ -620,10 +620,18 @@ export class MeasurementsService {
     if (session.values.length === 0)
       throw new BusinessException('MEASUREMENT_NOT_COMPLETE', '채촌값이 1개 이상 입력되어야 완료할 수 있습니다.');
 
-    const completed = await this.prisma.measurementSession.update({
-      where: { id },
-      data: { completedAt: new Date() },
-      include: SESSION_INCLUDE,
+    // 완료와 동시에 관련 주문의 맞춤 품목에 자동 연결한다 — 별도 연결 UI 없이 준비를 끝낸다.
+    // 이미 현재 연결이 있는 품목은 건드리지 않아, 재체촌이 기존 선택을 덮지 않고 누락분만 채운다.
+    const { completed, autoLinked } = await this.prisma.$transaction(async (tx) => {
+      const completed = await tx.measurementSession.update({
+        where: { id },
+        data: { completedAt: new Date() },
+        include: SESSION_INCLUDE,
+      });
+      const autoLinked = await this.linkSessionToOrderItems(tx, session, actor.id, {
+        override: false,
+      });
+      return { completed, autoLinked };
     });
     await this.autoLinkOrderItems(completed.id, completed.customerId, completed.relatedOrderId, actor);
     await this.audit.log({
@@ -640,9 +648,30 @@ export class MeasurementsService {
         versionNo: completed.versionNo,
         valueCount: completed.values.length,
         completedAt: completed.completedAt,
+        autoLinkedItemCount: autoLinked.length,
       },
     });
-    return this.toDetail(completed);
+    for (const link of autoLinked) {
+      await this.audit.log({
+        userId: actor.id,
+        action: 'LINK',
+        entityType: 'ORDER_ITEM_MEASUREMENT',
+        entityId: link.id,
+        after: {
+          orderItemId: link.orderItemId,
+          measurementSessionId: id,
+          isCurrent: true,
+          auto: true,
+        },
+      });
+    }
+    // 자동 연결이 있었으면 linkedOrderItems가 바뀌므로 최신 상태를 다시 읽어 반환한다.
+    if (autoLinked.length === 0) return this.toDetail(completed);
+    const fresh = await this.prisma.measurementSession.findUnique({
+      where: { id },
+      include: SESSION_INCLUDE,
+    });
+    return this.toDetail(fresh ?? completed);
   }
 
   /** 기존 버전 복사: 새 날짜·구분으로 값 전체 복사, previous_session_id 연결 */
@@ -831,6 +860,97 @@ export class MeasurementsService {
       linkedBy: link.linkedBy,
       linkedAt: link.linkedAt,
     };
+  }
+
+  /**
+   * 완료된 세션을 관련 주문(relatedOrder)의 맞춤 품목에 연결한다.
+   * - override=false: 현재 연결이 없는 품목만 채운다 (완료 시 자동 연결 — 기존 선택을 덮지 않는다).
+   * - override=true: 취소 아닌 맞춤 품목 전체를 이 세션으로 교체한다 (재체촌 스왑·수동 연결).
+   * relatedOrder가 없거나 렌탈 주문이면 아무 것도 하지 않는다.
+   * 반환: 이번에 현재 연결로 만든 품목 목록.
+   */
+  private async linkSessionToOrderItems(
+    tx: Prisma.TransactionClient,
+    session: { id: string; relatedOrderId: string | null },
+    actorId: string,
+    opts: { override: boolean },
+  ): Promise<Array<{ id: string; orderItemId: string }>> {
+    if (!session.relatedOrderId) return [];
+    const items = await tx.orderItem.findMany({
+      where: {
+        orderId: session.relatedOrderId,
+        status: { not: 'CANCELLED' },
+        order: { transactionType: 'CUSTOM' },
+        ...(opts.override ? {} : { measurementLinks: { none: { isCurrent: true } } }),
+      },
+      select: { id: true },
+    });
+    const linked: Array<{ id: string; orderItemId: string }> = [];
+    for (const item of items) {
+      if (opts.override)
+        await tx.orderItemMeasurement.updateMany({
+          where: {
+            orderItemId: item.id,
+            isCurrent: true,
+            NOT: { measurementSessionId: session.id },
+          },
+          data: { isCurrent: false },
+        });
+      const existing = await tx.orderItemMeasurement.findFirst({
+        where: { orderItemId: item.id, measurementSessionId: session.id },
+      });
+      const link = existing
+        ? await tx.orderItemMeasurement.update({
+            where: { id: existing.id },
+            data: { isCurrent: true, linkedBy: actorId, linkedAt: new Date() },
+          })
+        : await tx.orderItemMeasurement.create({
+            data: {
+              id: randomUUID(),
+              orderItemId: item.id,
+              measurementSessionId: session.id,
+              isCurrent: true,
+              linkedBy: actorId,
+            },
+          });
+      linked.push({ id: link.id, orderItemId: item.id });
+    }
+    return linked;
+  }
+
+  /**
+   * 완료된 채촌을 관련 주문의 맞춤 품목 전체에 (재)연결한다 — 재체촌 스왑·연결 누락 복구용.
+   * 완료 시 자동 연결과 달리 기존 연결을 이 세션으로 교체한다(override).
+   */
+  async linkToRelatedOrder(id: string, actor: AuthUser) {
+    const session = await this.prisma.measurementSession.findUnique({
+      where: { id },
+      select: { id: true, relatedOrderId: true, completedAt: true },
+    });
+    if (!session) throw new NotFoundException('채촌 세션이 없습니다.');
+    if (session.completedAt === null)
+      throw new BusinessException('MEASUREMENT_NOT_COMPLETE', '완료된 채촌만 품목에 연결할 수 있습니다.');
+    if (!session.relatedOrderId)
+      throw new BusinessException('VALIDATION_ERROR', '연결할 계약(주문)이 지정되지 않은 채촌입니다.');
+
+    const linked = await this.prisma.$transaction((tx) =>
+      this.linkSessionToOrderItems(tx, session, actor.id, { override: true }),
+    );
+    for (const link of linked) {
+      await this.audit.log({
+        userId: actor.id,
+        action: 'LINK',
+        entityType: 'ORDER_ITEM_MEASUREMENT',
+        entityId: link.id,
+        after: { orderItemId: link.orderItemId, measurementSessionId: id, isCurrent: true },
+      });
+    }
+    const fresh = await this.prisma.measurementSession.findUnique({
+      where: { id },
+      include: SESSION_INCLUDE,
+    });
+    if (!fresh) throw new NotFoundException('채촌 세션이 없습니다.');
+    return this.toDetail(fresh);
   }
 
   // ---------------------------------------------------------------------------

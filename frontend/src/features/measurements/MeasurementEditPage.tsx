@@ -30,6 +30,7 @@ import {
   Space,
   Spin,
   Tag,
+  Tooltip,
   Typography,
   Upload,
 } from 'antd';
@@ -58,6 +59,8 @@ import {
   fetchMeasurementImages,
   fetchMeasurements,
   formatInch,
+  linkMeasurementToOrder,
+  reopenMeasurement,
   updateMeasurement,
   uploadMeasurementImage,
 } from '../../api/measurements';
@@ -359,8 +362,32 @@ export function MeasurementEditPage() {
       queryClient.setQueryData(['measurements', 'detail', id], completed);
       void invalidate();
       void queryClient.invalidateQueries({ queryKey: ['workorders'] });
+      void queryClient.invalidateQueries({ queryKey: ['production'] });
     },
     onError: (e) => message.error(e instanceof ApiError ? e.message : '완료 처리에 실패했습니다.'),
+  });
+
+  // 재체촌 스왑·연결 누락 복구 — 이 채촌을 계약의 맞춤 품목에 (재)연결한다.
+  const linkOrderMutation = useMutation({
+    mutationFn: () => linkMeasurementToOrder(session?.id ?? ''),
+    onSuccess: (updated) => {
+      message.success('이 채촌을 계약 품목에 연결했습니다.');
+      queryClient.setQueryData(['measurements', 'detail', id], updated);
+      void invalidate();
+      void queryClient.invalidateQueries({ queryKey: ['workorders'] });
+      void queryClient.invalidateQueries({ queryKey: ['production'] });
+    },
+    onError: (e) => message.error(e instanceof ApiError ? e.message : '품목 연결에 실패했습니다.'),
+  });
+
+  const reopenMutation = useMutation({
+    mutationFn: () => reopenMeasurement(session?.id ?? ''),
+    onSuccess: (reopened) => {
+      message.success('완료를 해제했습니다. 값을 수정할 수 있습니다.');
+      queryClient.setQueryData(['measurements', 'detail', id], reopened);
+      void invalidate();
+    },
+    onError: (e) => message.error(e instanceof ApiError ? e.message : '완료 해제에 실패했습니다.'),
   });
 
   const deleteMutation = useMutation({
@@ -794,6 +821,36 @@ export function MeasurementEditPage() {
                     <Button size="small" type="primary" icon={<PlusOutlined />} onClick={startNewRecord}>
                       새 채촌
                     </Button>
+                  </Can>
+                }
+              />
+            )}
+            {!readOnly && session?.completed && (
+              <Alert
+                type="info"
+                showIcon
+                message="완료된 채촌입니다. 수정 후 [저장]하면 그대로 반영됩니다."
+                description="완료는 작업지시서에 쓸 수 있다는 표시로, 수정을 막지 않습니다. 완료 표시를 되돌리려면 [완료 해제]를 누르세요."
+                action={
+                  <Can permission="MEASUREMENT_EDIT">
+                    <Space size={8}>
+                      <Tooltip title="이 채촌을 계약의 맞춤 품목에 연결(교체)합니다. 재체촌 후 이 버전으로 바꿀 때 사용하세요.">
+                        <Button
+                          size="small"
+                          loading={linkOrderMutation.isPending}
+                          onClick={() => linkOrderMutation.mutate()}
+                        >
+                          품목에 연결
+                        </Button>
+                      </Tooltip>
+                      <Button
+                        size="small"
+                        loading={reopenMutation.isPending}
+                        onClick={() => reopenMutation.mutate()}
+                      >
+                        완료 해제
+                      </Button>
+                    </Space>
                   </Can>
                 }
               />

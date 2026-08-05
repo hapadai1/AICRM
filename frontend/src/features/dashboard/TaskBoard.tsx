@@ -31,7 +31,11 @@ const TASK_TYPES: DashboardTaskType[] = [
 function taskTargetPath(task: DashboardTask): string {
   switch (task.taskType) {
     case 'LATE_RETURN':
-      return task.rentalItemId ? `/rentals/${task.rentalItemId}` : '/rentals';
+      // 반납 지연은 출고·반납 화면에서 처리한다. 주문번호로 걸러 들어가면
+      // 해당 건이 "반납 대상" 탭에 바로 뜬다. (/rentals/:id 경로는 없다)
+      return task.orderNo
+        ? `/rentals/handover?q=${encodeURIComponent(task.orderNo)}`
+        : '/rentals/handover';
     case 'UNORDERED':
     case 'REPRINT_NEEDED':
     case 'INBOUND_DELAY':

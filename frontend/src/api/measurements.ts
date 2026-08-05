@@ -568,6 +568,14 @@ export function completeMeasurement(id: string): Promise<MeasurementSession> {
   }).then(toSession);
 }
 
+/** 완료된 채촌을 관련 주문의 맞춤 품목에 (재)연결 — 재체촌 스왑·연결 누락 복구 */
+export function linkMeasurementToOrder(id: string): Promise<MeasurementSession> {
+  return request<MeasurementSessionApiRow>({
+    url: `/measurements/${id}/link-order`,
+    method: 'POST',
+  }).then(toSession);
+}
+
 /** 완료 해제 (설계서 09 §3.5) */
 export function reopenMeasurement(id: string): Promise<MeasurementSession> {
   return request<MeasurementSessionApiRow>({

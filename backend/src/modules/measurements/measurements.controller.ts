@@ -166,4 +166,11 @@ export class MeasurementsController {
   ) {
     return this.measurementsService.linkOrderItem(id, dto, actor);
   }
+
+  /** 완료된 채촌을 관련 주문의 맞춤 품목에 (재)연결 — 재체촌 스왑·연결 누락 복구 */
+  @Post('measurements/:id/link-order')
+  @RequirePermission('MEASUREMENT_EDIT')
+  linkToRelatedOrder(@Param('id') id: string, @CurrentUser() actor: AuthUser) {
+    return this.measurementsService.linkToRelatedOrder(id, actor);
+  }
 }

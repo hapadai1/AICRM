@@ -190,6 +190,8 @@ export function ContractFormPage() {
         unitPrice: l.unitPrice,
         amount: l.amount,
         note: l.note,
+        // 컨설팅 옵션 추가금액 롤업 라인 — 읽기 전용으로 표시하고 저장 본문에는 싣지 않는다.
+        isOptionRollup: l.isOptionRollup,
       }),
     );
     setLines(loaded);
@@ -233,17 +235,21 @@ export function ContractFormPage() {
       photoDate: fmt(values.photoDate),
       weddingDate: fmt(values.weddingDate),
       // 자동 모드는 품목 합계를 그대로 보낸다(폼 값 동기화 타이밍에 기대지 않는다).
+      // lineTotal에는 옵션 롤업 라인이 포함돼, 계약 금액이 옵션 추가금액까지 담은 전체 금액이 된다.
       totalAmount: manualTotal ? (values.totalAmount ?? 0) : lineTotal,
       note: values.note,
-      lines: lines.map((l) => ({
-        id: l.id,
-        transactionType: l.transactionType,
-        productCategory: l.productCategory,
-        quantity: l.quantity,
-        unitPrice: l.unitPrice,
-        amount: l.amount,
-        note: l.note?.trim() || undefined,
-      })),
+      // 옵션 롤업 라인은 백엔드가 소유·재생성하므로 저장 본문에서 뺀다(보내면 일반 품목으로 굳는다).
+      lines: lines
+        .filter((l) => !l.isOptionRollup)
+        .map((l) => ({
+          id: l.id,
+          transactionType: l.transactionType,
+          productCategory: l.productCategory,
+          quantity: l.quantity,
+          unitPrice: l.unitPrice,
+          amount: l.amount,
+          note: l.note?.trim() || undefined,
+        })),
     };
   };
 
@@ -622,7 +628,9 @@ export function ContractFormPage() {
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                   {manualTotal
                     ? `품목 합계 ${formatKrw(lineTotal)} · 품목을 고쳐도 이 금액은 따라가지 않습니다`
-                    : `품목 ${lines.length}건 · 수량 ${lines.reduce((s, l) => s + (l.quantity || 0), 0)}개 자동 합계`}
+                    : `품목 ${lines.filter((l) => !l.isOptionRollup).length}건 · 수량 ${lines
+                        .filter((l) => !l.isOptionRollup)
+                        .reduce((s, l) => s + (l.quantity || 0), 0)}개 자동 합계 (옵션 추가금액 포함)`}
                 </Typography.Text>
               </Flex>
               {/* 자동 모드에서도 폼 값은 유지해야 저장·검증이 동작한다. */}
