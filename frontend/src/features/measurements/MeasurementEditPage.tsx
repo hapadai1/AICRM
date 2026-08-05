@@ -58,7 +58,6 @@ import {
   fetchMeasurementImages,
   fetchMeasurements,
   formatInch,
-  reopenMeasurement,
   updateMeasurement,
   uploadMeasurementImage,
 } from '../../api/measurements';
@@ -364,16 +363,6 @@ export function MeasurementEditPage() {
     onError: (e) => message.error(e instanceof ApiError ? e.message : '완료 처리에 실패했습니다.'),
   });
 
-  const reopenMutation = useMutation({
-    mutationFn: () => reopenMeasurement(session?.id ?? ''),
-    onSuccess: (reopened) => {
-      message.success('완료를 해제했습니다. 값을 수정할 수 있습니다.');
-      queryClient.setQueryData(['measurements', 'detail', id], reopened);
-      void invalidate();
-    },
-    onError: (e) => message.error(e instanceof ApiError ? e.message : '완료 해제에 실패했습니다.'),
-  });
-
   const deleteMutation = useMutation({
     mutationFn: () => deleteMeasurement(session?.id ?? ''),
     onSuccess: () => {
@@ -384,8 +373,14 @@ export function MeasurementEditPage() {
     onError: (e) => message.error(e instanceof ApiError ? e.message : '삭제에 실패했습니다.'),
   });
 
-  // 작업지시서 출력에 쓰인 채촌은 읽기 전용 (설계서 09 §2.1)
-  const readOnly = session?.locked ?? false;
+  /** 작업지시서 출력에 쓰인 채촌 — 지시서와 어긋나므로 잠긴다 (설계서 09 §2.1) */
+  const locked = session?.locked ?? false;
+  /**
+   * 완료한 채촌도 읽기 전용이다 (현업 확정 2026-08-05).
+   * 완료는 "이 치수로 옷을 만들어도 된다"는 확정이므로, 그 뒤에 값이 바뀌면 무엇을 보고 만들었는지
+   * 알 수 없게 된다. 완료 해제는 두지 않는다 — 다시 재야 하면 [새 채촌]으로 기록을 새로 남긴다.
+   */
+  const readOnly = locked || (session?.completed ?? false);
   const fieldOrder = MEASUREMENT_FIELDS.map((f) => f.key);
 
   const moveActive = (delta: number) => {
@@ -489,6 +484,22 @@ export function MeasurementEditPage() {
         session.measurementType,
       )}`,
       onOk: () => deleteMutation.mutateAsync(),
+    });
+  };
+
+  /**
+   * 완료는 되돌릴 수 없다 (현업 확정 2026-08-05) — 누르는 순간 이 기록은 보기 전용이 된다.
+   * 한 번 더 묻지 않으면 손이 미끄러진 것과 확정한 것을 구별할 방법이 없다.
+   * 다시 재는 길을 함께 적어 준다 — 처음부터 넣는 것이 아니라 값을 끌어와 고치는 일이다.
+   */
+  const confirmComplete = () => {
+    modal.confirm({
+      title: '이 채촌을 완료할까요?',
+      content:
+        '완료하면 값을 수정할 수 없습니다. 다시 재야 하면 [새 채촌]에서 [직전 채촌 값 불러오기]로 값을 가져와 주세요.',
+      okText: '완료',
+      cancelText: '취소',
+      onOk: () => completeMutation.mutateAsync(),
     });
   };
 
@@ -765,35 +776,23 @@ export function MeasurementEditPage() {
               )}
             </Space>
 
+            {/* 잠긴 이유가 서로 달라 안내도 나눈다 — 출력된 기록인가, 내가 완료한 기록인가. */}
             {readOnly && (
               <Alert
                 type="warning"
                 showIcon
-                message="작업지시서 출력에 사용된 채촌입니다."
-                description="값을 바꾸면 이미 나간 지시서와 어긋나므로 수정·삭제가 잠겨 있습니다. 새로 재서 다른 기록으로 저장해 주세요."
+                message={
+                  locked ? '작업지시서 출력에 사용된 채촌입니다.' : '완료한 채촌입니다.'
+                }
+                description={
+                  locked
+                    ? '값을 바꾸면 이미 나간 지시서와 어긋나므로 수정·삭제가 잠겨 있습니다. 새로 재서 다른 기록으로 저장해 주세요.'
+                    : '완료한 치수는 수정할 수 없습니다. 다시 재야 하면 [새 채촌]에서 [직전 채촌 값 불러오기]로 값을 가져와 주세요.'
+                }
                 action={
                   <Can permission="MEASUREMENT_EDIT">
                     <Button size="small" type="primary" icon={<PlusOutlined />} onClick={startNewRecord}>
                       새 채촌
-                    </Button>
-                  </Can>
-                }
-              />
-            )}
-            {!readOnly && session?.completed && (
-              <Alert
-                type="info"
-                showIcon
-                message="완료된 채촌입니다. 수정 후 [저장]하면 그대로 반영됩니다."
-                description="완료는 작업지시서에 쓸 수 있다는 표시로, 수정을 막지 않습니다. 완료 표시를 되돌리려면 [완료 해제]를 누르세요."
-                action={
-                  <Can permission="MEASUREMENT_EDIT">
-                    <Button
-                      size="small"
-                      loading={reopenMutation.isPending}
-                      onClick={() => reopenMutation.mutate()}
-                    >
-                      완료 해제
                     </Button>
                   </Can>
                 }
@@ -950,7 +949,7 @@ export function MeasurementEditPage() {
           <Card
             title={
               readOnly
-                ? '출력된 채촌 — 보기 전용'
+                ? `${locked ? '출력된' : '완료한'} 채촌 — 보기 전용`
                 : isNarrow
                   ? '저장'
                   : unit === 'INCH'
@@ -990,8 +989,8 @@ export function MeasurementEditPage() {
                   </Button>
                 </Can>
               ) : readOnly ? (
-                /* 작업지시서에 출력된 채촌 — 수정·삭제가 막혀 있으므로 안 눌리는 버튼을 두지 않는다.
-                   새로 재는 것만 남긴다 (현업 확정 2026-08-01). */
+                /* 출력됐거나 완료한 채촌 — 수정·삭제가 막혀 있으므로 안 눌리는 버튼을 두지 않는다.
+                   새로 재는 것만 남긴다 (현업 확정 2026-08-01, 완료까지 확대 2026-08-05). */
                 <Space direction="vertical" size="small" style={{ width: '100%' }}>
                   <Can permission="MEASUREMENT_EDIT">
                     <Button
@@ -1022,7 +1021,7 @@ export function MeasurementEditPage() {
                 <Can permission="MEASUREMENT_EDIT">
                   <Space direction="vertical" size="small" style={{ width: '100%' }}>
                     <div style={{ display: 'flex', gap: 8 }}>
-                      {/* 채촌은 언제든 수정 — 완료 후에도 저장할 수 있다 (현업 확정 2026-07-31). */}
+                      {/* 작성 중인 채촌만 이 자리에 온다 — 완료하면 위 readOnly 분기로 넘어간다. */}
                       <Button
                         size="large"
                         style={{ flex: 1, height: 56, fontSize: 18 }}
@@ -1040,9 +1039,8 @@ export function MeasurementEditPage() {
                         type="primary"
                         size="large"
                         style={{ flex: 1, height: 56, fontSize: 18 }}
-                        disabled={session?.completed}
                         loading={completeMutation.isPending}
-                        onClick={() => completeMutation.mutate()}
+                        onClick={confirmComplete}
                       >
                         완료
                       </Button>

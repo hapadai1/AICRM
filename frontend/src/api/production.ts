@@ -512,6 +512,21 @@ export function receiveComponent(
   });
 }
 
+/**
+ * 단계 처리 취소 — POST /order-items/{id}/undo-stage.
+ * 잘못 누른 것을 없던 일로 되돌린다(그 단계가 찍은 상태·일자만 지운다).
+ */
+export function undoStage(
+  orderItemId: string,
+  body: { effect: string; componentId?: string },
+): Promise<{ id: string; status: string }> {
+  return request<{ id: string; status: string }>({
+    url: `/order-items/${orderItemId}/undo-stage`,
+    method: 'POST',
+    data: body,
+  });
+}
+
 /** 구성품 출고 — POST /components/{id}/release (§13.5) */
 export function releaseComponent(
   componentId: string,

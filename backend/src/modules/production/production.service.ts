@@ -18,12 +18,14 @@ import {
 } from './production-status';
 import { buildFittingSheetExcel } from './fitting-sheet-excel';
 import { FITTING_FILE_PURPOSE, fittingCoverage } from './fitting.constants';
+import { prepStatusFor } from './prep-status';
 import {
   CreateFittingDto,
   CreateProductionEventDto,
   ProductionItemsQueryDto,
   ReceiveComponentDto,
   ReleaseComponentDto,
+  UndoStageDto,
 } from './production.dto';
 
 const EVENT_SELECT = {
@@ -59,6 +61,33 @@ function toDate(value?: string): Date | undefined {
 function today(): Date {
   return new Date(new Date().toISOString().slice(0, 10));
 }
+
+/**
+ * 구성품 단계 처리를 되돌릴 때 쓰는 표 — `그 단계가 남긴 상태 → 직전 상태`.
+ * from에 없는 구성품은 그 단계로 처리된 적이 없으므로 건드리지 않는다.
+ */
+const COMPONENT_UNDO: Record<
+  string,
+  { from: string[]; to: string; clear?: 'IN' | 'OUT'; itemFallback: string }
+> = {
+  COMPONENT_BASTING: {
+    from: ['BASTING_RECEIVED'],
+    to: 'PRODUCTION_IN_PROGRESS',
+    itemFallback: 'PRODUCTION_IN_PROGRESS',
+  },
+  COMPONENT_RECEIVE: {
+    from: ['RECEIVED'],
+    to: 'PRODUCTION_COMPLETED',
+    clear: 'IN',
+    itemFallback: 'PRODUCTION_COMPLETED',
+  },
+  COMPONENT_RELEASE: {
+    from: ['RELEASED'],
+    to: 'RECEIVED',
+    clear: 'OUT',
+    itemFallback: 'RECEIVED',
+  },
+};
 
 /** 역행·취소 사유를 이벤트 메모에 함께 남긴다 (production_events에 별도 사유 컬럼 없음). */
 function mergeNotes(notes?: string, reason?: string): string | undefined {
@@ -295,6 +324,126 @@ export class ProductionService {
       tx,
     );
     return computed;
+  }
+
+  // ---------------------------------------------------------------------------
+  // 단계 처리 취소 (오조작 정정)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * 그 단계가 만든 제작 기록만 되돌린다 (2026-08-05 현업 확정).
+   *
+   * 업무를 되돌리는 기능이 아니다 — 담당자가 화면에서 잘못 누른 것을 없던 일로 만드는 것이다.
+   * 그래서 사유를 묻지 않고, 되돌리는 범위도 그 단계가 찍은 것(품목 상태·구성품 상태·입출고
+   * 일자)으로 한정한다. 공장에 이미 나간 일을 되돌리는 것은 오프라인에서 처리한다.
+   */
+  async undoStage(orderItemId: string, dto: UndoStageDto, actor: AuthUser) {
+    const item = await this.prisma.orderItem.findUnique({
+      where: { id: orderItemId },
+      include: { components: { select: { id: true, status: true, active: true } } },
+    });
+    if (!item) throw new NotFoundException('주문 품목이 없습니다.');
+    if (item.status === CANCELLED)
+      throw new BusinessException('INVALID_STATUS_TRANSITION', '취소된 품목은 되돌릴 수 없습니다.');
+
+    const eventDate = today();
+    await this.prisma.$transaction(async (tx) => {
+      if (dto.effect === 'ITEM_REQUEST' || dto.effect === 'ITEM_FITTING') {
+        // 품목 단위로 찍은 단계 — 그 단계 직전 상태로 내린다.
+        const target =
+          dto.effect === 'ITEM_REQUEST'
+            ? await prepStatusFor(tx, orderItemId)
+            : item.components.some((c) => c.active && c.status === 'BASTING_RECEIVED')
+              ? 'BASTING_RECEIVED'
+              : 'PRODUCTION_REQUESTED';
+        await this.setItemStatus(tx, orderItemId, item.status, target, eventDate, actor);
+        return;
+      }
+
+      const undo = COMPONENT_UNDO[dto.effect];
+      const targets = item.components.filter(
+        (c) =>
+          c.active &&
+          c.status !== CANCELLED &&
+          (dto.componentId ? c.id === dto.componentId : true) &&
+          undo.from.includes(c.status),
+      );
+      for (const c of targets) {
+        await tx.orderItemComponent.update({
+          where: { id: c.id },
+          data: {
+            status: undo.to,
+            ...(undo.clear === 'IN' ? { actualInboundAt: null } : {}),
+            ...(undo.clear === 'OUT' ? { actualOutboundAt: null } : {}),
+          },
+        });
+        await tx.productionEvent.create({
+          data: {
+            id: randomUUID(),
+            orderItemId,
+            componentId: c.id,
+            eventType: undo.to,
+            previousStatus: c.status,
+            newStatus: undo.to,
+            eventDate,
+            notes: '단계 처리 취소(잘못 누름)',
+            actorId: actor.id,
+          },
+        });
+      }
+      if (targets.length === 0) return;
+
+      // 품목 상태는 구성품 집계를 따른다 — 집계가 안 나오면 그 단계 직전 상태로 내린다.
+      const after = await tx.orderItem.findUniqueOrThrow({
+        where: { id: orderItemId },
+        include: { components: { select: { status: true, active: true } } },
+      });
+      const computed = computeAggregateStatus(after.components) ?? undo.itemFallback;
+      await this.setItemStatus(tx, orderItemId, after.status, computed, eventDate, actor);
+    });
+
+    return this.prisma.orderItem.findUniqueOrThrow({
+      where: { id: orderItemId },
+      select: { id: true, status: true },
+    });
+  }
+
+  /** 품목 상태를 지정 상태로 되돌리고 이력·감사로그를 남긴다 (취소 전용 — 검증은 호출부에서 끝냈다). */
+  private async setItemStatus(
+    tx: Prisma.TransactionClient,
+    orderItemId: string,
+    from: string,
+    to: string,
+    eventDate: Date,
+    actor: AuthUser,
+  ): Promise<void> {
+    if (from === to) return;
+    await tx.orderItem.update({ where: { id: orderItemId }, data: { status: to } });
+    await tx.productionEvent.create({
+      data: {
+        id: randomUUID(),
+        orderItemId,
+        componentId: null,
+        eventType: to,
+        previousStatus: from,
+        newStatus: to,
+        eventDate,
+        notes: '단계 처리 취소(잘못 누름)',
+        actorId: actor.id,
+      },
+    });
+    await this.audit.log(
+      {
+        userId: actor.id,
+        action: 'STATUS_CHANGE',
+        entityType: 'ORDER_ITEM',
+        entityId: orderItemId,
+        before: { status: from },
+        after: { status: to },
+        reason: '단계 처리 취소',
+      },
+      tx,
+    );
   }
 
   // ---------------------------------------------------------------------------

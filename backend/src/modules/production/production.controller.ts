@@ -20,6 +20,7 @@ import {
   ProductionItemsQueryDto,
   ReceiveComponentDto,
   ReleaseComponentDto,
+  UndoStageDto,
 } from './production.dto';
 import { ProductionService } from './production.service';
 
@@ -66,6 +67,12 @@ export class ProductionController {
     @CurrentUser() actor: AuthUser,
   ) {
     return this.productionService.releaseComponent(id, dto, actor);
+  }
+
+  @Post('order-items/:id/undo-stage')
+  @RequirePermission('PRODUCTION_EDIT')
+  undoStage(@Param('id') id: string, @Body() dto: UndoStageDto, @CurrentUser() actor: AuthUser) {
+    return this.productionService.undoStage(id, dto, actor);
   }
 
   @Get('orders/:id/production-history')

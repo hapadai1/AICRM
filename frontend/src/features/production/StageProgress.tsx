@@ -12,13 +12,12 @@ import type { ReactNode } from 'react';
 import {
   COMPONENT_STATUS_RANK,
   COMPONENT_TYPE_LABELS,
-  PRODUCTION_STATUS_META,
   type ProductionComponent,
   type ProductionItem,
 } from '../../api/production';
 import type { StageItem } from '../../api/journeys';
 import { Can } from '../../shared/Can';
-import { labelOf, metaOf } from '../../shared/status-meta';
+import { labelOf } from '../../shared/status-meta';
 import {
   ACTION_WIDTH,
   DATE_WIDTH,
@@ -26,7 +25,7 @@ import {
   STATUS_WIDTH,
   actionButtonStyle,
 } from './production-layout';
-import { stageReached, type ProductionStage } from './production-stages';
+import type { ProductionStage } from './production-stages';
 
 export interface StageRow {
   key: string;
@@ -48,6 +47,13 @@ interface StageProgressProps {
   onUncomplete: (row: StageRow) => void;
   /** 구성품 하나만 처리 */
   onComponent: (row: StageRow, component: ProductionComponent) => void;
+  /** 구성품 하나의 처리를 되돌린다 (잘못 누름 정정) */
+  onUndoComponent: (row: StageRow, component: ProductionComponent) => void;
+  /**
+   * 되돌릴 수 없는 사유. 다음 단계까지 간 품목을 여기서 되돌리면 앞뒤가 어긋나므로
+   * 뒤 단계부터 하나씩 정정하게 한다.
+   */
+  undoBlockedReason?: (row: StageRow) => string | null;
   /**
    * 단계에 얹는 제작 고유 버튼 (작업지시서·가봉).
    * 그 단계가 아직 차례가 아니면 서류도 낼 수 없으므로 잠금 사유를 함께 넘긴다.
@@ -55,6 +61,12 @@ interface StageProgressProps {
   renderExtras?: (item: ProductionItem, blocked: string | null) => ReactNode;
   /** 처리 중인 행 key */
   pendingKey?: string;
+  /**
+   * 단계 전체 처리 버튼([전체 발주]). 표의 **머리 행**에 넣는다 —
+   * 단계 줄에 따로 그리면 표 여백을 코드로 계산해 맞춰야 해서 몇 px씩 어긋났다
+   * (2026-08-05 현업 지적). 같은 표의 같은 열에 두면 브라우저가 맞춰 준다.
+   */
+  bulk?: ReactNode;
   /**
    * 아직 이 단계를 눌러선 안 되는 품목의 사유. 앞 단계를 건너뛰고 뒤 단계를 처리하면
    * 어디까지 왔는지가 기록에서 사라지므로, 순서를 화면이 지킨다.
@@ -91,9 +103,12 @@ export function StageProgress({
   onComplete,
   onUncomplete,
   onComponent,
+  onUndoComponent,
+  undoBlockedReason,
   renderExtras,
   pendingKey,
   blockedReason,
+  bulk,
 }: StageProgressProps) {
   if (rows.length === 0) return null;
 
@@ -114,78 +129,40 @@ export function StageProgress({
     줄마다 버튼이 다른 x에서 시작해 계단처럼 보였다(2026-08-04 현업 지적).
   */
 
-  /** 진행에 완료 기록은 없지만 제작 상태가 이미 이 단계를 지난 품목 */
-  const reachedOnly = (row: StageRow) =>
-    !row.target.completed && stageReached(stage, row.item?.itemStatus);
-
-  const statusCell = (row: StageRow) => {
-    if (reachedOnly(row)) {
-      /*
-        날짜와는 상관없다 — 실물(제작 상태)이 이 단계를 이미 지났는데 진행 완료 기록만 없는 줄이다.
-        `지남`이라고 적었더니 납기가 지난 것으로 읽혔다(2026-08-05 현업 지적) — 없는 것이 기록이므로
-        그대로 `미기록`이라 적고, [완료 기록] 버튼으로 기록을 남길 수 있게 둔다.
-      */
-      return (
-        <Tooltip
-          title={`제작은 이미 이 단계를 지났는데(현재 ${
-            metaOf(PRODUCTION_STATUS_META, row.item?.itemStatus ?? '').label
-          }) 진행 완료 기록이 없습니다. [완료 기록]을 누르면 기록만 남깁니다.`}
-        >
-          <Typography.Text type="warning">미기록</Typography.Text>
-        </Tooltip>
-      );
-    }
-    /*
-      제작 상태(발주 가능·제작 중…)를 함께 적었더니 단계마다 다른 낱말이 늘어서서
-      "이 단계를 끝냈는가"가 되레 흐려졌다(2026-08-04 현업 지적). 완료/미완료만 적는다.
-    */
-    return row.target.completed ? (
+  /*
+    상태는 `완료 / 미완료` 둘뿐이고 버튼도 줄마다 하나다 (2026-08-05 현업 확정).
+    미완료면 그 단계 이름(`발주`), 완료면 그 이름에 취소를 붙인다(`발주 취소`).
+    취소는 업무를 되돌리는 기능이 아니라 **시스템을 잘못 누른 것을 정정**하는 기능이다.
+  */
+  const statusCell = (row: StageRow) =>
+    row.target.completed ? (
       <Typography.Text type="success">완료</Typography.Text>
     ) : (
       <Typography.Text type="secondary">미완료</Typography.Text>
     );
-  };
 
   const actionCell = (row: StageRow) => {
-    /*
-      기록이 없다고 일을 못 하게 두지 않는다 — 실물이 지나간 줄에도 버튼을 낸다.
-      [발주]가 아니라 [완료 기록]인 이유: 실물은 이미 처리됐으므로 여기서 하는 일은
-      진행에 완료(와 그 시각)를 남기는 것뿐이다(2026-08-05 현업 확정).
-    */
-    if (reachedOnly(row)) {
-      return (
-        <Can permission="JOURNEY_EDIT">
-          <Tooltip title="진행에 이 단계 완료를 남깁니다(제작 상태는 이미 지나 있어 그대로 둡니다).">
-            <Button
-              size="small"
-              loading={pendingKey === row.key}
-              onClick={() => onComplete(row)}
-              style={actionButtonStyle}
-            >
-              완료 기록
-            </Button>
-          </Tooltip>
-        </Can>
-      );
-    }
+    if (!stage.action) return null;
     if (row.target.completed) {
+      // 다음 단계까지 간 품목은 여기서 못 되돌린다 — 뒤에서부터 하나씩 정정한다.
+      const locked = undoBlockedReason?.(row) ?? null;
       return (
         <Can permission="JOURNEY_EDIT">
-          <Tooltip title="완료 취소 — 진행 기록만 되돌립니다(입출고 일자는 그대로).">
+          <Tooltip title={locked ?? '잘못 누른 처리를 되돌립니다.'}>
             <Button
               size="small"
               icon={<RollbackOutlined />}
+              disabled={!!locked}
               loading={pendingKey === row.key}
               onClick={() => onUncomplete(row)}
               style={actionButtonStyle}
             >
-              완료 취소
+              {stage.action} 취소
             </Button>
           </Tooltip>
         </Can>
       );
     }
-    if (!stage.action) return null;
     const blocked = blockedReason?.(row) ?? null;
     return (
       <Can permission="JOURNEY_EDIT">
@@ -250,7 +227,21 @@ export function StageProgress({
                 모순처럼 읽혔다(2026-08-04 현업 지적) — 이름만 적는다.
               */}
               {!perComponent ? null : done ? (
-                <Typography.Text type="secondary">{date ?? '완료'}</Typography.Text>
+                <Space size={6}>
+                  <Typography.Text type="secondary">{date?.slice(0, 10) ?? '완료'}</Typography.Text>
+                  <Can permission="PRODUCTION_EDIT">
+                    <Tooltip title="잘못 누른 처리를 되돌립니다.">
+                      <Button
+                        size="small"
+                        icon={<RollbackOutlined />}
+                        loading={pendingKey === `${row.key}:${c.id}`}
+                        onClick={() => onUndoComponent(row, c)}
+                      >
+                        {stage.action} 취소
+                      </Button>
+                    </Tooltip>
+                  </Can>
+                </Space>
               ) : c.status === 'CANCELLED' ? (
                 <Typography.Text type="secondary">취소됨</Typography.Text>
               ) : blockedReason?.(row) ? (
@@ -275,7 +266,7 @@ export function StageProgress({
 
   const columns: ColumnsType<StageRow> = [
     {
-      title: '품목',
+      title: '',
       key: 'item',
       width: NAME_WIDTH,
       render: (_, row) => (
@@ -292,9 +283,10 @@ export function StageProgress({
         </Space>
       ),
     },
-    { title: '상태', key: 'status', width: STATUS_WIDTH, render: (_, row) => statusCell(row) },
-    { title: stage.label, key: 'action', width: ACTION_WIDTH, render: (_, row) => actionCell(row) },
-    { title: '날짜', key: 'date', width: DATE_WIDTH, render: (_, row) => dateCell(row) },
+    { title: '', key: 'status', width: STATUS_WIDTH, render: (_, row) => statusCell(row) },
+    // 머리 행에는 [전체 …]만 둔다 — 열 이름을 적으면 단계마다 같은 말이 반복돼 시끄럽다.
+    { title: bulk ?? '', key: 'action', width: ACTION_WIDTH, render: (_, row) => actionCell(row) },
+    { title: '', key: 'date', width: DATE_WIDTH, render: (_, row) => dateCell(row) },
     {
       title: '',
       key: 'extras',
@@ -307,7 +299,7 @@ export function StageProgress({
     <Table<StageRow>
       size="small"
       rowKey="key"
-      showHeader={false}
+      showHeader={!!bulk}
       columns={columns}
       dataSource={rows}
       pagination={false}

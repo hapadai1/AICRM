@@ -34,6 +34,20 @@ export class ReleaseComponentDto {
   @IsOptional() @IsString() notes?: string;
 }
 
+/**
+ * 단계 처리 취소 — 방금 누른 것을 없던 일로 되돌린다 (2026-08-05 현업 확정).
+ *
+ * 업무를 되돌리는 기능이 아니라 **시스템을 잘못 누른 것을 정정**하는 기능이다.
+ * 그래서 그 단계가 만든 기록(품목 상태·구성품 상태·입출고 일자)만 지우고 사유는 묻지 않는다.
+ */
+export class UndoStageDto {
+  /** 되돌릴 단계 처리의 종류 (화면의 ProductionStage.effect와 같은 값) */
+  @IsIn(['ITEM_REQUEST', 'ITEM_FITTING', 'COMPONENT_BASTING', 'COMPONENT_RECEIVE', 'COMPONENT_RELEASE'])
+  effect: string;
+  /** 구성품 하나만 되돌릴 때 (미지정 시 그 단계로 처리된 구성품 전체) */
+  @IsOptional() @IsUUID() componentId?: string;
+}
+
 export class ProductionItemsQueryDto extends PageQueryDto {
   /** 품목 집계 상태 필터 (§13.4 코드) */
   @IsOptional() @IsString() status?: string;

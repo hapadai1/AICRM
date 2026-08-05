@@ -33,6 +33,7 @@ import {
   postItemProductionEvent,
   receiveComponent,
   releaseComponent,
+  undoStage,
   type ProductionComponent,
   type ProductionItem,
 } from '../../api/production';
@@ -53,7 +54,6 @@ import {
   PREP_STAGE_CODE,
   needsDate,
   prepDone,
-  stageReached,
   stagesForTrack,
   type ProductionStage,
 } from './production-stages';
@@ -148,12 +148,20 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
           ? '옵션이 확정되어야 시작할 수 있습니다.'
           : '옵션 확정과 채촌이 끝나야 시작할 수 있습니다.';
     }
-    // 앞 단계는 진행 기록이든 제작 상태든 지나갔으면 끝난 것으로 본다.
     const prevStage = stages[index - 1];
     const prev = rowsOf(index - 1).find((r) => r.key === row.key);
-    const prevDone =
-      prev?.target.completed || stageReached(prevStage, row.item?.itemStatus ?? prev?.item?.itemStatus);
-    return prevDone ? null : `‘${prevStage.label}’를 먼저 끝내야 합니다.`;
+    return prev?.target.completed ? null : `‘${prevStage.label}’를 먼저 끝내야 합니다.`;
+  };
+
+  /**
+   * 이 단계를 되돌릴 수 없는 사유 — 다음 단계까지 간 품목은 뒤에서부터 정정해야
+   * 앞뒤가 어긋나지 않는다(마지막으로 끝낸 단계에서만 취소가 열린다).
+   */
+  const undoBlockedReasonAt = (index: number) => (row: StageRow): string | null => {
+    const next = stages[index + 1];
+    if (!next) return null;
+    const done = rowsOf(index + 1).find((r) => r.key === row.key)?.target.completed;
+    return done ? `‘${next.label}’를 먼저 취소해 주세요.` : null;
   };
 
   /** 그 단계에서 아직 손대지 않은 구성품 */
@@ -261,14 +269,47 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
     },
   });
 
+  /*
+    취소 = 잘못 누른 것을 없던 일로 되돌린다 (2026-08-05 현업 확정).
+    진행 기록만 지우면 품목 상태가 앞선 채로 남아 화면과 사실이 어긋나므로,
+    그 단계가 찍은 제작 기록(품목·구성품 상태, 입출고 일자)까지 함께 되돌린다.
+  */
   const uncompleteMutation = useMutation({
-    mutationFn: (v: { row: StageRow; stageCode: string }) =>
-      uncompleteStageItem(journeyId as string, v.stageCode, v.row.target.targetId),
-    onSuccess: () => {
-      message.success('완료를 취소했습니다.');
+    mutationFn: async (v: { row: StageRow; stage: ProductionStage }) => {
+      setPendingKey(v.row.key);
+      await uncompleteStageItem(journeyId as string, v.stage.code, v.row.target.targetId);
+      if (v.stage.effect) await undoStage(v.row.target.targetId, { effect: v.stage.effect });
+    },
+    onSuccess: (_, v) => {
+      setPendingKey(undefined);
+      message.success(`${v.stage.action ?? '처리'}를 취소했습니다.`);
       invalidate();
     },
-    onError: (e) => message.error(e instanceof ApiError ? e.message : '완료 취소에 실패했습니다.'),
+    onError: (e) => {
+      setPendingKey(undefined);
+      message.error(e instanceof ApiError ? e.message : '취소에 실패했습니다.');
+    },
+  });
+
+  /** 구성품 하나만 되돌린다 — 품목 줄의 취소와 같은 규칙, 범위만 한 부위다. */
+  const undoComponentMutation = useMutation({
+    mutationFn: async (v: { stage: ProductionStage; row: StageRow; component: ProductionComponent }) => {
+      setPendingKey(`${v.row.key}:${v.component.id}`);
+      if (v.stage.effect)
+        await undoStage(v.row.target.targetId, {
+          effect: v.stage.effect,
+          componentId: v.component.id,
+        });
+    },
+    onSuccess: () => {
+      setPendingKey(undefined);
+      message.success('취소했습니다.');
+      invalidate();
+    },
+    onError: (e) => {
+      setPendingKey(undefined);
+      message.error(e instanceof ApiError ? e.message : '취소에 실패했습니다.');
+    },
   });
 
   /** 구성품 하나만 처리 — 진행 완료는 찍지 않는다(품목이 다 끝나야 완료다). */
@@ -357,12 +398,12 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
 
   // 진행에는 이 카드에 없는 단계(상담 예약·계약 확정·준비)가 앞에 있다 — 이 화면의 단계만 센다.
   const viewOf = (code: string) => detail?.stages.find((s) => s.code === code);
-  /** 그 단계를 끝낸 품목 — 진행의 완료 기록이거나, 제작 상태가 이미 지나갔거나. */
-  const rowDone = (stage: ProductionStage) => (row: StageRow) =>
-    row.target.completed || stageReached(stage, row.item?.itemStatus);
+  /** 그 단계를 끝낸 품목 — 판정은 진행의 완료 기록 하나로 통일한다(2026-08-05 현업 확정). */
   const stageDone = (stage: ProductionStage, index: number) => {
     const rows = rowsOf(index);
-    return rows.length > 0 ? rows.every(rowDone(stage)) : !!viewOf(stage.code)?.completed;
+    return rows.length > 0
+      ? rows.every((r) => r.target.completed)
+      : !!viewOf(stage.code)?.completed;
   };
   const doneStages = stages.filter((s, i) => stageDone(s, i)).length;
   const totalStages = stages.length;
@@ -371,8 +412,7 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
   const stepItems = stages.map((stage, i) => {
     const view = viewOf(stage.code);
     const rows = rowsOf(i);
-    const done = rowDone(stage);
-    const pending = rows.filter((r) => !done(r));
+    const pending = rows.filter((r) => !r.target.completed);
     const isCurrent = detail?.currentStageCode === stage.code;
 
     /*
@@ -452,9 +492,12 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
               setExpanded((cur) => (cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]))
             }
             onComplete={(row) => runComplete(stage, i, [row])}
-            onUncomplete={(row) => uncompleteMutation.mutate({ row, stageCode: stage.code })}
+            onUncomplete={(row) => uncompleteMutation.mutate({ row, stage })}
             onComponent={(row, component) => runComponent(stage, i, row, component)}
+            onUndoComponent={(row, component) => undoComponentMutation.mutate({ stage, row, component })}
+            undoBlockedReason={undoBlockedReasonAt(i)}
             blockedReason={blocked}
+            bulk={bulk}
             renderExtras={
               stage.extras === 'WORK_ORDER'
                 ? workOrderExtras
@@ -485,7 +528,6 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
             </Typography.Text>
           </span>
           <Space size={8} wrap>
-            {bulk}
             {contact}
             {view?.completedAt && (
               <Typography.Text type="secondary" style={{ fontWeight: 400 }}>

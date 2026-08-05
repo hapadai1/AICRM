@@ -165,7 +165,8 @@ export function MeasurementListPage({
     update({ page: pagination.current ?? 1, size: pagination.pageSize ?? filters.size });
   };
 
-  // 앞 다섯 열(고객·계약 구분·계약일·완료 예정일·상태)은 계약 목록과 같은 규격·같은 값이다.
+  // 앞 다섯 열(고객·계약 구분·계약일·완료 예정일·계약 상태)은 계약 목록과 같은 규격·같은 값이다.
+  // 계약 목록과 달리 여기에는 채촌 상태가 같이 서므로 열 이름에 "계약"을 붙여 구분한다.
   const columns: ColumnsType<MeasurementTargetRow> = [
     {
       title: '고객',
@@ -195,7 +196,7 @@ export function MeasurementListPage({
       ),
     },
     // 기간 필터의 기준값이라 표에도 둔다 — 왜 이 건이 걸렸는지 열에서 바로 확인되어야 한다.
-    // 계약일 전(작성중)은 작성일이 대신 들어온다 — 그 구분은 상태 열이 한다.
+    // 계약일 전(작성중)은 작성일이 대신 들어온다 — 그 구분은 계약 상태 열이 한다.
     { title: '계약일', dataIndex: 'contractDate', width: COL.name },
     {
       title: '완료 예정일',
@@ -210,7 +211,7 @@ export function MeasurementListPage({
        * 주문을 그대로 둔 채 작성중·서명완료로 돌아온다. 채촌하러 들어가기 전에 그 사실이 보여야 한다.
        * 취소 계약은 주문이 있으면 취소 자체가 막혀 여기 나타나지 않는다.
        */
-      title: '상태',
+      title: '계약 상태',
       dataIndex: 'contractStatus',
       width: COL.status,
       render: (v: string) => {

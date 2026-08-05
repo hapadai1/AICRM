@@ -99,6 +99,21 @@ export async function syncPrepStatuses(
   }
 }
 
+/**
+ * 그 품목이 지금 서 있어야 할 준비 상태 — 발주를 취소할 때 어디로 내릴지 정하는 데 쓴다.
+ * (발주 전 자리는 옵션 확정·채촌 연결이 정하므로 여기서 다시 계산한다.)
+ */
+export async function prepStatusFor(
+  tx: Prisma.TransactionClient,
+  orderItemId: string,
+): Promise<string> {
+  const item = await tx.orderItem.findUniqueOrThrow({
+    where: { id: orderItemId },
+    select: PREP_SELECT,
+  });
+  return prepStatusOf(item);
+}
+
 /** 계약 한 건의 살아있는 품목 id — 준비가 계약 단위로 움직일 때 쓴다. */
 export async function orderItemIdsOfContract(
   tx: Prisma.TransactionClient,
