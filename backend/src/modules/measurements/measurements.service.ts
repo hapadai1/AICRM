@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { BusinessException } from '../../common/business.exception';
+import { toDateOnlyString as toDateString } from '../../common/date';
 import { AuthUser } from '../../common/decorators';
 import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -93,9 +94,7 @@ const SESSION_INCLUDE = {
 
 type SessionWithValues = Prisma.MeasurementSessionGetPayload<{ include: typeof SESSION_INCLUDE }>;
 
-function toDateString(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
+// toDateString은 common/date.ts의 toDateOnlyString을 쓴다.
 
 function toNumberOrNull(value: Prisma.Decimal | null): number | null {
   return value === null ? null : Number(value);

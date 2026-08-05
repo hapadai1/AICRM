@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Customer, Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { BusinessException } from '../../common/business.exception';
+import { toDateOnlyStringOrNull as toDateOnly } from '../../common/date';
 import { AuthUser } from '../../common/decorators';
 import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -34,10 +35,7 @@ const CUSTOMER_SELECT = {
   updatedAt: true,
 } as const;
 
-/** 화면 표기용 YYYY-MM-DD 문자열 (null 유지) */
-function toDateOnly(value: Date | null | undefined): string | null {
-  return value ? value.toISOString().slice(0, 10) : null;
-}
+// toDateOnly는 common/date.ts의 toDateOnlyStringOrNull을 쓴다 (화면 표기용, null 유지).
 
 /** 중복 안내 시 노출하는 기존 고객 요약 */
 function duplicateSummary(customer: Customer) {

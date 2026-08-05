@@ -72,29 +72,18 @@ export const ALLOCATION_EVENT_TYPES = {
   CANCELLED: 'CANCELLED',
 } as const;
 
-export const DATE_ONLY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
-
-/** 'YYYY-MM-DD' → UTC 자정 Date (@db.Date 컬럼 저장용) */
-export function parseDateOnly(value: string): Date {
-  return new Date(`${value}T00:00:00.000Z`);
-}
-
-/** Date → 'YYYY-MM-DD' */
-export function toDateOnlyString(value: Date): string {
-  return value.toISOString().slice(0, 10);
-}
-
-/** 'YYYY-MM-DD' + n일 → 'YYYY-MM-DD'. 날짜 컬럼이 UTC 자정이라 시간대 보정이 필요 없다. */
-export function addDaysToDateOnly(value: string, days: number): string {
-  const date = parseDateOnly(value);
-  date.setUTCDate(date.getUTCDate() + days);
-  return toDateOnlyString(date);
-}
-
-/** 오늘 'YYYY-MM-DD' */
-export function todayDateOnly(): string {
-  return toDateOnlyString(new Date());
-}
+/*
+  날짜 헬퍼는 common/date.ts가 단일 출처다 (2026-08-05). 기존 소비처의 import 경로를
+  지키기 위해 재노출한다. 이 이동으로 todayDateOnly의 '오늘' 기준이 UTC 달력에서
+  로컬(매장) 달력으로 바뀌었다 — KST 자정~오전 9시에 하루 어긋나던 것이 맞는 값이 된다.
+*/
+export {
+  DATE_ONLY_REGEX,
+  addDaysToDateOnly,
+  parseDateOnly,
+  toDateOnlyString,
+  todayDateOnly,
+} from '../../common/date';
 
 /**
  * rental_allocation_no_overlap EXCLUDE 제약(23P01) 위반 감지.

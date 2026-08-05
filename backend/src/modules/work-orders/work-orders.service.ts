@@ -7,6 +7,7 @@ import { createReadStream, existsSync } from 'fs';
 import { mkdir, unlink, writeFile } from 'fs/promises';
 import { dirname, resolve } from 'path';
 import { BusinessException } from '../../common/business.exception';
+import { toDateOnlyString as toDateString } from '../../common/date';
 import { AuthUser } from '../../common/decorators';
 import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -79,9 +80,7 @@ type ConfirmedOptionSession =
 type MeasurementSessionWithValues =
   OrderItemWithSources['measurementLinks'][number]['measurementSession'];
 
-function toDateString(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
+// toDateString은 common/date.ts의 toDateOnlyString을 쓴다.
 
 /** 작업지시서 양식의 상의/하의/조끼 '벌' 칸 (구성품 타입별 개수) */
 function countComponents(components: Array<{ componentType: string }>): {

@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { BusinessException, FieldError } from '../../common/business.exception';
+import { toDateOrUndefined as toDate, todayAsDbDate as today } from '../../common/date';
 import { AuthUser } from '../../common/decorators';
 import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -105,13 +106,7 @@ interface RollupItem {
   units: { status: string }[];
 }
 
-function toDate(value?: string): Date | undefined {
-  return value ? new Date(value) : undefined;
-}
-
-function today(): Date {
-  return new Date(new Date().toISOString().slice(0, 10));
-}
+// 날짜 헬퍼는 common/date.ts가 단일 출처다 — '오늘'은 매장(로컬) 달력 기준이다.
 
 @Injectable()
 export class RepairsService {

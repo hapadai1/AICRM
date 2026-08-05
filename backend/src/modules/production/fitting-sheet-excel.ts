@@ -1,4 +1,5 @@
 import ExcelJS from 'exceljs';
+import { toDateOnlyString as toDateOnly } from '../../common/date';
 import { FITTING_AREA_CODES, fittingAreaName } from './fitting.constants';
 
 /**
@@ -56,9 +57,7 @@ function styleValueCell(cell: ExcelJS.Cell): void {
   cell.border = THIN_BORDER;
 }
 
-function toDateOnly(value: Date): string {
-  return value.toISOString().slice(0, 10);
-}
+// toDateOnly는 common/date.ts의 toDateOnlyString을 쓴다.
 
 function componentLabel(type: string | null, seq: number | null): string {
   if (!type) return '전체';

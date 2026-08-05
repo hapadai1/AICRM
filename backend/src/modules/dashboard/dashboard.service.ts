@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { BusinessException } from '../../common/business.exception';
+import { toDateOnlyStringOrNull as toDateString, todayAsDbDate } from '../../common/date';
 import { AuthUser } from '../../common/decorators';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -21,16 +22,6 @@ const TASK_ENTITY_TYPE: Record<DashboardTaskType, string> = {
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** 로컬 달력 기준 오늘 날짜를 UTC 자정 Date로 반환 (@db.Date 비교용). */
-function todayAsDbDate(): Date {
-  const now = new Date();
-  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
-}
-
-function toDateString(value: Date | null | undefined): string | null {
-  return value ? value.toISOString().slice(0, 10) : null;
-}
 
 /** 로컬 달력 기준 YYYY-MM-DD 문자열 */
 function localDateKey(d: Date): string {

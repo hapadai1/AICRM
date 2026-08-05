@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import { todayAsDbDate } from '../../common/date';
 import { consultingSessionSelect, pickConsultingSession } from '../work-orders/work-order-status';
 import { applyItemStatus } from './item-status';
 import { CANCELLED, ITEM_STATUS_FLOW } from './production-status';
@@ -72,7 +73,7 @@ export async function syncPrepStatuses(
       orderItemId: item.id,
       from: item.status,
       to: target,
-      eventDate: new Date(new Date().toISOString().slice(0, 10)),
+      eventDate: todayAsDbDate(),
       notes: '준비 진행 자동 반영(옵션 확정·채촌 연결)',
       actorId,
     });

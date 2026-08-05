@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { BusinessException } from '../../common/business.exception';
+import { toDateOrNull as toDate, todayAsDbDate } from '../../common/date';
 import { AuthUser } from '../../common/decorators';
 import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -1751,7 +1752,7 @@ export class ContractsService {
             orderItemId: existing.id,
             from: existing.status,
             to: 'CANCELLED',
-            eventDate: new Date(new Date().toISOString().slice(0, 10)),
+            eventDate: todayAsDbDate(),
             notes: '계약 변경으로 품목 취소',
             cancelled: { reason: opts.cancelReason ?? '계약 변경' },
             actorId,
@@ -2299,9 +2300,7 @@ export class ContractsService {
   }
 }
 
-function toDate(value?: string | null): Date | null {
-  return value ? new Date(value) : null;
-}
+// 날짜 헬퍼는 common/date.ts가 단일 출처다.
 
 /** 감사로그 품목 요약의 입력 — 저장된 행(Decimal)과 요청 DTO(number)를 모두 받는다. */
 interface ContractLineSummarySource {

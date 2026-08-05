@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { BusinessException } from '../../common/business.exception';
+import { todayAsDbDate } from '../../common/date';
 import { AuthUser } from '../../common/decorators';
 import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -972,7 +973,7 @@ export class JourneysService {
           repairRequestId: repairId,
           previousStatus: repair.status,
           newStatus: 'CUSTOMER_NOTIFIED',
-          eventDate: new Date(new Date().toISOString().slice(0, 10)),
+          eventDate: todayAsDbDate(),
           notes: '진행 카드에서 수선 입고 안내 발송',
           actorId: actor.id,
         },
