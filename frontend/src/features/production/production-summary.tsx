@@ -6,30 +6,15 @@
 import { Space, Tag, Typography } from 'antd';
 import dayjs from 'dayjs';
 import type { ProductionItem } from '../../api/production';
+import { ITEM_STATUS_FLOW } from '../../api/status-catalog';
 import { metaOf } from '../../shared/status-meta';
 import { WORK_ORDER_STATUS_META } from '../workorders/wo-meta';
 
-/** 품목 제작 흐름 순서 (백엔드 ITEM_STATUS_FLOW). 진행률 계산용. */
-const ITEM_STATUS_ORDER = [
-  'CREATED',
-  'OPTION_PENDING',
-  'MEASUREMENT_PENDING',
-  'READY_TO_ORDER',
-  'PRODUCTION_REQUESTED',
-  'PRODUCTION_IN_PROGRESS',
-  'BASTING_RECEIVED',
-  'FITTING_COMPLETED',
-  'PRODUCTION_COMPLETED',
-  'PARTIALLY_RECEIVED',
-  'RECEIVED',
-  'PARTIALLY_RELEASED',
-  'RELEASED',
-];
-
+/** 진행률 — 품목 제작 흐름(중앙 사전 ITEM_STATUS_FLOW)에서 지금 어디까지 왔는가. */
 function itemProgress(status: string): number {
   if (status === 'COMPLETED' || status === 'RELEASED') return 1;
-  const i = ITEM_STATUS_ORDER.indexOf(status);
-  return i < 0 ? 0 : i / (ITEM_STATUS_ORDER.length - 1);
+  const i = ITEM_STATUS_FLOW.indexOf(status);
+  return i < 0 ? 0 : i / (ITEM_STATUS_FLOW.length - 1);
 }
 
 export interface ContractSummary {

@@ -40,6 +40,16 @@ import {
   type CustomerRepairRow,
   type CustomerSaveBody,
 } from '../../api/customers';
+import { ALLOCATION_STATUS_META } from '../../api/rentals';
+import { repairStatusMeta } from '../../api/repairs';
+import {
+  CONTRACT_STATUS_META,
+  COMPONENT_STATUS_META,
+  MEASUREMENT_TYPE_META,
+  ORDER_ITEM_STATUS_META,
+  ORDER_STATUS_META,
+  OPTION_STATUS_META,
+} from '../../api/status-catalog';
 import { BackButton } from '../../shared/BackButton';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
@@ -49,56 +59,15 @@ import { CUSTOMER_STATUS_META, TRANSACTION_TYPE_LABEL, formatAmount } from './cu
 import { metaOf } from '../../shared/status-meta';
 import { usePageTitle } from '../../shared/page-title-store';
 
-/** 업무 상태 코드의 한국어 표시명 (없는 코드는 원문 표기) */
-const STATUS_LABEL: Record<string, string> = {
-  DRAFT: '초안',
-  CONFIRMED: '확정',
-  CHANGED: '변경',
-  CANCELLED: '취소',
-  COMPLETED: '완료',
-  IN_PROGRESS: '진행중',
-  CREATED: '생성',
-  RESERVED: '배정',
-  OPTION_PENDING: '옵션 대기',
-  MEASUREMENT_PENDING: '채촌 대기',
-  READY_TO_ORDER: '주문 준비완료',
-  PRODUCTION_REQUESTED: '제작 요청',
-  PRODUCTION_IN_PROGRESS: '제작중',
-  PARTIALLY_RECEIVED: '부분 입고',
-  RECEIVED: '입고',
-  RELEASED: '출고완료',
-  CHECKED_OUT: '대여중',
-  RETURNED_HOLD: '반납 검수중',
-  RETURNED: '반납완료',
-};
-
-/** 수선 상태는 RECEIVED가 "접수"라 공통 라벨과 다르게 표기한다. */
-const REPAIR_STATUS_LABEL: Record<string, string> = {
-  RECEIVED: '접수',
-  IN_PROGRESS: '수선중',
-  COMPLETED: '완료',
-  CANCELLED: '취소',
-};
-
-const OPTION_STATUS_META: Record<string, { label: string; color: string }> = {
-  NOT_STARTED: { label: '미시작', color: 'default' },
-  IN_PROGRESS: { label: '진행중', color: 'blue' },
-  REVIEW: { label: '확인대기', color: 'orange' },
-  CONFIRMED: { label: '확정', color: 'green' },
-};
+/*
+  상태 표시명은 중앙 사전(api/status-catalog)에서 도메인별로 가져온다 (2026-08-05).
+  전에는 계약·주문품목·렌탈·수선 코드를 한 맵에 섞어 두어 코드가 겹치면 뜻이
+  충돌했고(수선 RECEIVED=접수 vs 품목 RECEIVED=입고), 수선의 실제 상태 코드
+  (REQUESTED·RETURNED_TO_SHOP·CUSTOMER_NOTIFIED)는 맵에 없어 원문으로 노출됐다.
+*/
 
 // 구성품 표시명은 중앙(api/code-labels) 공유 맵을 쓴다(관리자 편집 전 화면 반영).
 const COMPONENT_TYPE_LABEL = COMPONENT_TYPE_LABELS;
-
-const MEASUREMENT_TYPE_LABEL: Record<string, string> = {
-  INITIAL: '스타일 컨설팅',
-  FITTING: '가봉',
-  REMEASURE: '수선',
-};
-
-function statusLabel(code: string): string {
-  return STATUS_LABEL[code] ?? code;
-}
 
 /** 요약표 탭 상단의 "해당 화면으로 이동" 링크 */
 function GoToScreen({ path, label }: { path: string; label: string }) {
@@ -217,7 +186,7 @@ export function CustomerDetailPage() {
       title: '상태',
       dataIndex: 'status',
       width: 90,
-      render: (v: string) => statusLabel(v),
+      render: (v: string) => metaOf(CONTRACT_STATUS_META, v).label,
     },
     { title: '버전', dataIndex: 'currentVersionNo', width: 70, render: (v: number) => `v${v}` },
     { title: '계약일', dataIndex: 'contractedAt', width: 110, render: (v?: string) => v ?? '-' },
@@ -239,7 +208,7 @@ export function CustomerDetailPage() {
       width: 90,
       render: (v: 'CUSTOM' | 'RENTAL') => TRANSACTION_TYPE_LABEL[v],
     },
-    { title: '상태', dataIndex: 'status', width: 100, render: (v: string) => statusLabel(v) },
+    { title: '상태', dataIndex: 'status', width: 100, render: (v: string) => metaOf(ORDER_STATUS_META, v).label },
     { title: '완료예정일', dataIndex: 'completionDueDate', width: 110, render: (v?: string) => v ?? '-' },
     {
       title: '품목',
@@ -248,7 +217,7 @@ export function CustomerDetailPage() {
         <Space wrap size={4}>
           {(r.items ?? []).map((i) => (
             <Tag key={i.id}>
-              {i.displayName} · {statusLabel(i.status)}
+              {i.displayName} · {metaOf(ORDER_ITEM_STATUS_META, i.status).label}
             </Tag>
           ))}
         </Space>
@@ -292,7 +261,7 @@ export function CustomerDetailPage() {
       title: '구분',
       dataIndex: 'type',
       width: 90,
-      render: (v: string) => MEASUREMENT_TYPE_LABEL[v] ?? v,
+      render: (v: string) => metaOf(MEASUREMENT_TYPE_META, v).label,
     },
     { title: '담당자', dataIndex: 'staffName', width: 140 },
     {
@@ -320,7 +289,7 @@ export function CustomerDetailPage() {
       width: 90,
       render: (v: string) => COMPONENT_TYPE_LABEL[v] ?? v,
     },
-    { title: '상태', dataIndex: 'status', width: 110, render: (v: string) => statusLabel(v) },
+    { title: '상태', dataIndex: 'status', width: 110, render: (v: string) => metaOf(COMPONENT_STATUS_META, v).label },
     { title: '입고 예정일', dataIndex: 'expectedInboundDate', width: 110, render: (v?: string) => v ?? '-' },
     { title: '실제 입고일', dataIndex: 'actualInboundAt', width: 110, render: (v?: string) => v ?? '-' },
     { title: '출고일', dataIndex: 'actualOutboundAt', width: 110, render: (v?: string) => v ?? '-' },
@@ -336,7 +305,8 @@ export function CustomerDetailPage() {
       render: (v: string) => COMPONENT_TYPE_LABEL[v] ?? v,
     },
     { title: '실물 관리 ID', dataIndex: 'rentalItemCode', width: 170, render: (v?: string) => v ?? '-' },
-    { title: '상태', dataIndex: 'status', width: 110, render: (v: string) => statusLabel(v) },
+    // 이 행의 status는 렌탈 배정 상태다(RESERVED/CHECKED_OUT/RETURNED) — 배정 사전으로 읽는다.
+    { title: '상태', dataIndex: 'status', width: 110, render: (v: string) => metaOf(ALLOCATION_STATUS_META, v).label },
   ];
 
   const repairColumns: ColumnsType<CustomerRepairRow> = [
@@ -347,7 +317,7 @@ export function CustomerDetailPage() {
       title: '상태',
       dataIndex: 'status',
       width: 110,
-      render: (v: string) => REPAIR_STATUS_LABEL[v] ?? statusLabel(v),
+      render: (v: string) => repairStatusMeta(v).label,
     },
   ];
 

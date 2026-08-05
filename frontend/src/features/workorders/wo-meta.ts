@@ -1,27 +1,7 @@
-import type { StatusMeta } from '../../shared/status-meta';
-
 /**
- * 작업지시서 상태 배지 메타 (WO-001).
- * 백엔드가 보내는 상태는 4종이지만 필터로 보낼 수 있는 값은 3종뿐이다(api/workorders.ts 참고).
- * 조회는 반드시 `metaOf(WORK_ORDER_STATUS_META, code)`로 한다.
+ * 작업지시서·채촌 배지 메타 — 정본은 중앙 사전(api/status-catalog)이다 (2026-08-05).
+ * 여기 있던 정의는 채촌 화면(meas-meta)의 사본과 색이 어긋나 있어 사전으로 모았다.
+ * 기존 소비처의 import 경로를 지키기 위해 재노출한다.
+ * 조회는 반드시 `metaOf(맵, code)`로 한다.
  */
-export const WORK_ORDER_STATUS_META: Record<string, StatusMeta> = {
-  WAITING: { label: '준비 미완', color: 'default' },
-  UNORDERED: { label: '미주문', color: 'red' },
-  CURRENT: { label: '최신', color: 'green' },
-};
-
-/** 출력 버전 상태 (work_order_versions.status) */
-export const WORK_ORDER_VERSION_STATUS_META: Record<string, StatusMeta> = {
-  ISSUED: { label: '유효', color: 'green' },
-  SENT: { label: '발송', color: 'blue' },
-  SUPERSEDED: { label: '이전본', color: 'default' },
-};
-
-/** 채촌 유형 (measurement_sessions.measurement_type) */
-export const MEASUREMENT_TYPE_META: Record<string, StatusMeta> = {
-  INITIAL: { label: '스타일 컨설팅', color: 'blue' },
-  FITTING: { label: '가봉', color: 'gold' },
-  REMEASURE: { label: '수선', color: 'purple' },
-  OTHER: { label: '기타', color: 'default' },
-};
+export { MEASUREMENT_TYPE_META, WORK_ORDER_STATUS_META } from '../../api/status-catalog';

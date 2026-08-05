@@ -22,6 +22,7 @@ import { useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { useHydrateCodeLabels } from '../api/code-labels';
+import { useHydrateStatusCatalog } from '../api/status-catalog';
 import { usePageTitleStore } from '../shared/page-title-store';
 import { ReauthModal } from '../shared/ReauthModal';
 import { useAuthStore } from './auth-store';
@@ -51,6 +52,8 @@ export function AppLayout() {
 
   // 코드 상수 기준정보(품목·구성품·수선구분) 표시명을 받아 공유 맵에 반영한다.
   useHydrateCodeLabels();
+  // 상태 코드 사전(표시명·색·흐름 순서)도 같은 방식으로 반영한다.
+  useHydrateStatusCatalog();
 
   const permissions = user?.permissions ?? [];
   const canSeeAdmin =

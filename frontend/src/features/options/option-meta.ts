@@ -1,6 +1,5 @@
 import type { CSSProperties } from 'react';
 import type { ProductCategory } from '../../api/options';
-import type { StatusMeta } from '../../shared/status-meta';
 
 /**
  * 옵션 세션의 fabric 필드는 품목마다 뜻이 다르다.
@@ -18,14 +17,10 @@ export function fabricFieldPlaceholder(category: ProductCategory | undefined | n
 
 /**
  * 옵션 진행상태 배지 메타 (텍스트+색상 병기 — 색상 단독 금지).
+ * 정본은 중앙 사전(api/status-catalog)이다 — 기존 import 경로 유지를 위해 재노출한다.
  * 백엔드가 미등록 코드를 보내도 죽지 않도록 조회는 반드시 `metaOf()`를 쓴다.
  */
-export const OPTION_STATUS_META: Record<string, StatusMeta> = {
-  NOT_STARTED: { label: '미시작', color: 'default' },
-  IN_PROGRESS: { label: '진행중', color: 'blue' },
-  REVIEW: { label: '확인대기', color: 'orange' },
-  CONFIRMED: { label: '확정', color: 'green' },
-};
+export { OPTION_STATUS_META } from '../../api/status-catalog';
 
 /**
  * 선택지 사진을 담는 틀.

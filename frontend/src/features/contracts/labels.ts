@@ -40,63 +40,16 @@ export const PRODUCT_CATEGORY_LABEL = PRODUCT_CATEGORY_LABELS as Record<ProductC
 export const COMPONENT_TYPE_LABEL = COMPONENT_TYPE_LABELS;
 
 /**
- * 계약 상태 라벨 (현업 확정 2026-07-30).
- * 흐름: 작성중(수정·컨설팅) → 서명완료 → 계약완료 → 수정하기(버전업) → 작성중 … 반복.
- * 취소는 작성중에서만.
+ * 상태 메타의 정본은 중앙 사전(api/status-catalog)이다 — 화면마다 사본이 어긋나던 것을
+ * 한곳으로 모았다(2026-08-05). 기존 소비처의 import 경로를 지키기 위해 재노출한다.
  */
-export const CONTRACT_STATUS_META: Record<string, StatusMeta> = {
-  DRAFT: { label: '작성중', color: 'gold' },
-  SIGNED: { label: '서명완료', color: 'geekblue' },
-  COMPLETED: { label: '계약완료', color: 'blue' },
-  CANCELLED: { label: '취소', color: 'red' },
-};
-
-export const CONTRACT_VERSION_STATUS_META: Record<string, StatusMeta> = {
-  DRAFT: { label: '작성중', color: 'gold' },
-  CONFIRMED: { label: '적용', color: 'green' },
-  SUPERSEDED: { label: '이전 버전', color: 'default' },
-};
-
-/**
- * 주문 헤더 상태 — 실제로 쓰이는 값은 생성·취소 둘뿐이다 (현업 확정 2026-07-31).
- * 진행 상태는 품목(ORDER_ITEM_STATUS_META)이 담당한다.
- */
-export const ORDER_STATUS_META: Record<string, StatusMeta> = {
-  CREATED: { label: '생성', color: 'default' },
-  CANCELLED: { label: '취소', color: 'red' },
-};
-
-export const ORDER_ITEM_STATUS_META: Record<string, StatusMeta> = {
-  CREATED: { label: '생성', color: 'default' },
-  OPTION_PENDING: { label: '옵션 대기', color: 'gold' },
-  MEASUREMENT_PENDING: { label: '채촌 대기', color: 'gold' },
-  READY_TO_ORDER: { label: '발주 가능(미주문)', color: 'orange' },
-  PRODUCTION_REQUESTED: { label: '제작 요청', color: 'blue' },
-  PRODUCTION_IN_PROGRESS: { label: '제작중', color: 'blue' },
-  BASTING_RECEIVED: { label: '가봉 입고', color: 'geekblue' },
-  FITTING_COMPLETED: { label: '가봉 완료', color: 'geekblue' },
-  PRODUCTION_COMPLETED: { label: '제작 완료', color: 'cyan' },
-  PARTIALLY_RECEIVED: { label: '부분 입고', color: 'cyan' },
-  RECEIVED: { label: '입고 완료', color: 'green' },
-  PARTIALLY_RELEASED: { label: '부분 출고', color: 'green' },
-  RELEASED: { label: '출고', color: 'green' },
-  COMPLETED: { label: '완료', color: 'green' },
-  CANCELLED: { label: '취소', color: 'red' },
-};
-
-export const COMPONENT_STATUS_META: Record<string, StatusMeta> = {
-  CREATED: { label: '생성', color: 'default' },
-  PRODUCTION_REQUESTED: { label: '제작 요청', color: 'blue' },
-  PRODUCTION_IN_PROGRESS: { label: '제작중', color: 'blue' },
-  BASTING_RECEIVED: { label: '가봉 입고', color: 'geekblue' },
-  PRODUCTION_COMPLETED: { label: '제작 완료', color: 'cyan' },
-  RECEIVED: { label: '입고', color: 'green' },
-  RELEASED: { label: '출고', color: 'green' },
-  RESERVED: { label: '렌탈 예약', color: 'purple' },
-  CHECKED_OUT: { label: '렌탈 출고', color: 'magenta' },
-  RETURNED: { label: '반납', color: 'cyan' },
-  CANCELLED: { label: '취소', color: 'red' },
-};
+export {
+  CONTRACT_STATUS_META,
+  CONTRACT_VERSION_STATUS_META,
+  ORDER_STATUS_META,
+  ORDER_ITEM_STATUS_META,
+  COMPONENT_STATUS_META,
+} from '../../api/status-catalog';
 
 /** 공용 헬퍼 위임 — 라벨 맵 직접 인덱싱(MAP[code].label) 금지 */
 export function metaOf(map: Record<string, StatusMeta>, code: string | undefined | null): StatusMeta {
