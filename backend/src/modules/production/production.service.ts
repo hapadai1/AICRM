@@ -9,7 +9,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FilesService, UploadedMulterFile } from '../files/files.service';
 import { buildWorkOrderView, workOrderStatusSelect } from '../work-orders/work-order-status';
-import { applyItemStatus } from './item-status';
+import { applyComponentStatus, applyItemStatus } from './item-status';
 import {
   AGGREGATE_ONLY_STATUSES,
   CANCELLED,
@@ -227,24 +227,26 @@ export class ProductionService {
     },
   ) {
     const result = await this.prisma.$transaction(async (tx) => {
-      const event = await tx.productionEvent.create({
-        data: {
-          id: randomUUID(),
-          orderItemId: component.orderItemId,
-          componentId: component.id,
-          eventType: change.eventType,
-          previousStatus: component.status,
-          newStatus: change.newStatus,
-          expectedDate: change.expectedDate,
-          eventDate: change.eventDate,
-          notes: change.notes,
-          actorId: actor.id,
-        },
+      // 상태 갱신·이력 생성은 단일 기록자(applyComponentStatus)로.
+      const written = await applyComponentStatus(tx, {
+        componentId: component.id,
+        orderItemId: component.orderItemId,
+        from: component.status,
+        to: change.newStatus,
+        eventType: change.eventType,
+        eventDate: change.eventDate,
+        expectedDate: change.expectedDate,
+        notes: change.notes,
+        data: change.componentData,
+        actorId: actor.id,
+      });
+      // 검증이 동일 상태 재설정을 이미 거부하므로 written은 항상 있다.
+      const event = await tx.productionEvent.findUniqueOrThrow({
+        where: { id: written!.eventId },
         select: EVENT_SELECT,
       });
-      const updated = await tx.orderItemComponent.update({
+      const updated = await tx.orderItemComponent.findUniqueOrThrow({
         where: { id: component.id },
-        data: { status: change.newStatus, ...(change.componentData ?? {}) },
         select: COMPONENT_SELECT,
       });
       await this.audit.log(
@@ -350,26 +352,18 @@ export class ProductionService {
           undo.from.includes(c.status),
       );
       for (const c of targets) {
-        await tx.orderItemComponent.update({
-          where: { id: c.id },
+        await applyComponentStatus(tx, {
+          componentId: c.id,
+          orderItemId,
+          from: c.status,
+          to: undo.to,
+          eventDate,
+          notes: '단계 처리 취소(잘못 누름)',
           data: {
-            status: undo.to,
             ...(undo.clear === 'IN' ? { actualInboundAt: null } : {}),
             ...(undo.clear === 'OUT' ? { actualOutboundAt: null } : {}),
           },
-        });
-        await tx.productionEvent.create({
-          data: {
-            id: randomUUID(),
-            orderItemId,
-            componentId: c.id,
-            eventType: undo.to,
-            previousStatus: c.status,
-            newStatus: undo.to,
-            eventDate,
-            notes: '단계 처리 취소(잘못 누름)',
-            actorId: actor.id,
-          },
+          actorId: actor.id,
         });
       }
       if (targets.length === 0) return;

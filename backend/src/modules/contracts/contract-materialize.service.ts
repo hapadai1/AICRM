@@ -5,7 +5,7 @@ import { todayAsDbDate } from '../../common/date';
 import { AuthUser } from '../../common/decorators';
 import { AuditService } from '../audit/audit.service';
 import { autoLinkMeasurements } from '../measurements/measurement-link';
-import { applyItemStatus } from '../production/item-status';
+import { applyComponentStatus, applyItemStatus } from '../production/item-status';
 import { orderItemIdsOfContract, syncPrepStatuses } from '../production/prep-status';
 import { asAuditClient, nextNo, OrderSummary } from './contracts.shared';
 
@@ -191,10 +191,17 @@ export class ContractMaterializeService {
             where: { id: existing.id },
             data: { rowVersion: { increment: 1 } },
           });
-          await tx.orderItemComponent.updateMany({
-            where: { orderItemId: existing.id, status: 'CREATED' },
-            data: { status: 'CANCELLED' },
-          });
+          for (const oc of existing.components.filter((c) => c.status === 'CREATED')) {
+            await applyComponentStatus(tx, {
+              componentId: oc.id,
+              orderItemId: existing.id,
+              from: oc.status,
+              to: 'CANCELLED',
+              eventDate: todayAsDbDate(),
+              notes: '계약 변경으로 품목 취소',
+              actorId,
+            });
+          }
         }
         continue;
       }
@@ -222,7 +229,7 @@ export class ContractMaterializeService {
         });
       } else if (existing.status !== 'CANCELLED') {
         // 수정하기(버전업)로 부위가 바뀐 경우(베스트 추가·제외) 재완료 시 구성품을 증분 반영한다.
-        await this.syncOrderItemComponents(tx, existing, ci.components);
+        await this.syncOrderItemComponents(tx, existing, ci.components, actorId);
       }
     }
 
@@ -244,6 +251,7 @@ export class ContractMaterializeService {
       components: { id: string; componentType: string; sequenceNo: number; status: string }[];
     },
     contractComponents: { componentType: string; sequenceNo: number; status: string }[],
+    actorId: string,
   ): Promise<void> {
     const activeContract = contractComponents.filter((c) => c.status !== 'CANCELLED');
     const matchOf = (type: string, seq: number) =>
@@ -262,7 +270,16 @@ export class ContractMaterializeService {
           },
         });
       } else if (match.status === 'CANCELLED') {
-        await tx.orderItemComponent.update({ where: { id: match.id }, data: { status: 'CREATED' } });
+        // 취소돼 있던 부위를 되살린다(베스트 추가) — 왜 되살아났는지 이력에 남긴다.
+        await applyComponentStatus(tx, {
+          componentId: match.id,
+          orderItemId: orderItem.id,
+          from: match.status,
+          to: 'CREATED',
+          eventDate: todayAsDbDate(),
+          notes: '계약 재완료 부위 정합(베스트 포함)',
+          actorId,
+        });
       }
     }
 
@@ -271,7 +288,15 @@ export class ContractMaterializeService {
         (cc) => cc.componentType === oc.componentType && cc.sequenceNo === oc.sequenceNo,
       );
       if (!stillActive && oc.status === 'CREATED')
-        await tx.orderItemComponent.update({ where: { id: oc.id }, data: { status: 'CANCELLED' } });
+        await applyComponentStatus(tx, {
+          componentId: oc.id,
+          orderItemId: orderItem.id,
+          from: oc.status,
+          to: 'CANCELLED',
+          eventDate: todayAsDbDate(),
+          notes: '계약 재완료 부위 정합(베스트 제외)',
+          actorId,
+        });
     }
   }
 
