@@ -43,9 +43,10 @@ import {
   COMPONENT_STATUS_META,
   CONTRACT_STATUS_META,
   CONTRACT_VERSION_STATUS_META,
-  OPTION_STATUS_META,
   ORDER_ITEM_STATUS_META,
 } from '../contracts/labels';
+// 옵션 상태 메타의 정본은 option-meta다 — labels.ts에 있던 사본은 색까지 어긋나 있어 걷어냈다.
+import { OPTION_STATUS_META } from '../options/option-meta';
 import { CUSTOMER_STATUS_META } from '../customers/customer-constants';
 import type { AuditLogItem } from '../../api/admin';
 

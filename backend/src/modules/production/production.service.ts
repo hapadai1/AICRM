@@ -135,14 +135,10 @@ export class ProductionService {
         },
         select: EVENT_SELECT,
       });
+      // CANCELLED 처리 분기는 없다 — validateTransition이 취소 진입을 이미 거부한다.
       await tx.orderItem.update({
         where: { id: orderItemId },
-        data: {
-          status: dto.newStatus,
-          ...(dto.newStatus === CANCELLED
-            ? { cancelledReason: dto.reason ?? dto.notes, cancelledAt: new Date() }
-            : {}),
-        },
+        data: { status: dto.newStatus },
       });
       await this.audit.log(
         {

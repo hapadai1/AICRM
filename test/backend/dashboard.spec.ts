@@ -75,6 +75,19 @@ describe('대시보드 (dashboard)', () => {
     await ctx.prisma.order.create({
       data: { id: orderId, orderNo: 'ORD-260701-001', contractId, transactionType: 'CUSTOM', status: 'CREATED' },
     });
+    // 미주문 판정은 제작 목록과 같은 모집단을 쓴다 — 진행(journey) 없는 주문은 제외되므로
+    // 실제 흐름(계약완료가 진행을 보장)대로 진행을 함께 만든다.
+    await ctx.prisma.customerJourney.create({
+      data: {
+        id: randomUUID(),
+        customerId,
+        orderId,
+        trackType: 'CUSTOM',
+        currentStageCode: 'CONTRACT_CONFIRMED',
+        status: 'ACTIVE',
+        startedAt: new Date(),
+      },
+    });
     const lineId = randomUUID();
     await ctx.prisma.contractLine.create({
       data: {

@@ -84,13 +84,6 @@ export const ORDER_ITEM_STATUS_META: Record<string, StatusMeta> = {
   CANCELLED: { label: '취소', color: 'red' },
 };
 
-export const OPTION_STATUS_META: Record<string, StatusMeta> = {
-  NOT_STARTED: { label: '미시작', color: 'default' },
-  IN_PROGRESS: { label: '진행중', color: 'blue' },
-  REVIEW: { label: '확인대기', color: 'gold' },
-  CONFIRMED: { label: '확정', color: 'green' },
-};
-
 export const COMPONENT_STATUS_META: Record<string, StatusMeta> = {
   CREATED: { label: '생성', color: 'default' },
   PRODUCTION_REQUESTED: { label: '제작 요청', color: 'blue' },

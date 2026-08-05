@@ -710,6 +710,10 @@ export class ContractsService {
    * **작성중·서명완료 + 주문 없음일 때만 취소한다**(현업 확정 2026-07-31).
    * 주문이 생긴 계약(완료 후 수정하기로 되돌린 경우 포함)은 취소하지 않는다 —
    * 실물 정리는 렌탈 메뉴·오프라인에서 한다.
+   *
+   * 진행(journey)은 여기서 건드리지 않는다 (현업 확정 2026-08-05).
+   * 계약 전 진행은 계약과 직접 연결돼 있지 않아 "이 계약의 진행"을 기계가 확정할 수 없고,
+   * 진행은 사람이 관리하는 표시 레이어다(스키마 §12) — 정리는 진행 보드에서 담당자가 닫는다.
    */
   async cancel(id: string, dto: CancelContractDto, actor: AuthUser) {
     const contract = await this.getContractOrThrow(id);
@@ -753,28 +757,9 @@ export class ContractsService {
         });
       }
 
-      const orders = await tx.order.findMany({ where: { contractId: id }, select: { id: true } });
-      const orderIds = orders.map((o) => o.id);
-      if (orderIds.length > 0) {
-        await tx.order.updateMany({
-          where: { id: { in: orderIds } },
-          data: { status: 'CANCELLED', rowVersion: { increment: 1 } },
-        });
-        // 미진행 품목만 취소, 진행 중 품목은 업무 판단 대상으로 상태 유지
-        const targets = await tx.orderItem.findMany({
-          where: { orderId: { in: orderIds }, status: 'CREATED' },
-          select: { id: true },
-        });
-        const targetIds = targets.map((t) => t.id);
-        await tx.orderItem.updateMany({
-          where: { id: { in: targetIds } },
-          data: { status: 'CANCELLED', cancelledReason: dto.reason, cancelledAt, rowVersion: { increment: 1 } },
-        });
-        await tx.orderItemComponent.updateMany({
-          where: { orderItemId: { in: targetIds }, status: 'CREATED' },
-          data: { status: 'CANCELLED' },
-        });
-      }
+      // 주문은 여기서 다루지 않는다 — 위 가드가 주문 있는 계약의 취소를 이미 막았다.
+      // (예전에 주문·품목을 함께 취소하는 블록이 있었지만 가드 때문에 절대 실행되지 않았고,
+      //  폐기된 `status === 'CREATED'` 기준까지 담고 있어 걷어냈다. 2026-08-05)
       await this.audit.log(
         {
           userId: actor.id,
@@ -794,9 +779,10 @@ export class ContractsService {
   /**
    * 계약 삭제 — 임시저장(DRAFT)·취소(CANCELLED) 한정.
    *
-   * 확정된 계약은 취소로만 정리한다(이력 보존). 취소된 계약이라도 작업지시서·렌탈 배정처럼
-   * 실제 진행 산출물이 남아 있으면 지우지 않고 거부한다. 지울 수 있는 건 계약이 만든 것들
-   * (버전·라인·주문·주문품목·구성품)뿐이고, 고객의 기록인 연락 이력·진행 단계는 링크만 끊고 남긴다.
+   * 확정된 계약은 취소로만 정리한다(이력 보존). 지울 수 있는 건 계약이 만든 것들
+   * (버전·라인·컨설팅 산출물)뿐이다. 주문이 생긴 계약은 아래 가드가 삭제를 막으므로
+   * 주문·작업지시서·제작 이력은 여기서 만날 일이 없다 — 취소도 주문 전에만 되니(0731)
+   * 삭제 가능한 계약에는 주문이 존재할 수 없다.
    */
   async remove(id: string, actor: AuthUser) {
     const contract = await this.getContractOrThrow(id);
@@ -808,55 +794,18 @@ export class ContractsService {
         { status: contract.status },
       );
 
-    const orders = await this.prisma.order.findMany({
-      where: { contractId: id },
-      select: { id: true },
-    });
     // 작성중이라도 주문이 생긴 계약(완료 후 수정하기로 되돌린 경우)은 삭제 금지 —
     // 작성중이 "계약 전 초안"과 "완료 후 재작성"을 겸하므로 주문 존재로 가른다 (현업 확정 2026-07-31).
-    if (orders.length > 0)
+    const orderCount = await this.prisma.order.count({ where: { contractId: id } });
+    if (orderCount > 0)
       throw new BusinessException(
         'CONTRACT_NOT_DELETABLE',
         '주문이 생성된 계약은 삭제할 수 없습니다.',
         undefined,
-        { orderCount: orders.length },
-      );
-    const orderIds = orders.map((o) => o.id);
-    const items = orderIds.length
-      ? await this.prisma.orderItem.findMany({
-          where: { orderId: { in: orderIds } },
-          select: { id: true },
-        })
-      : [];
-    const itemIds = items.map((i) => i.id);
-
-    const blockers = await this.findDeleteBlockers(itemIds);
-    if (blockers.length > 0)
-      throw new BusinessException(
-        'CONTRACT_NOT_DELETABLE',
-        `진행 이력이 있어 삭제할 수 없습니다 (${blockers.join(' · ')}). 계약 취소로 정리해 주세요.`,
-        undefined,
-        { blockers },
+        { orderCount },
       );
 
     await this.prisma.$transaction(async (tx) => {
-      if (itemIds.length > 0) {
-        await tx.orderItemComponent.deleteMany({ where: { orderItemId: { in: itemIds } } });
-        await tx.orderItem.deleteMany({ where: { id: { in: itemIds } } });
-      }
-      if (orderIds.length > 0) {
-        // 연락 이력·고객 진행은 계약이 아니라 고객의 기록이다. 참조만 끊고 남긴다.
-        await tx.notificationHistory.updateMany({
-          where: { orderId: { in: orderIds } },
-          data: { orderId: null },
-        });
-        await tx.customerJourney.updateMany({
-          where: { orderId: { in: orderIds } },
-          data: { orderId: null },
-        });
-        await tx.order.deleteMany({ where: { id: { in: orderIds } } });
-      }
-
       const versions = await tx.contractVersion.findMany({
         where: { contractId: id },
         select: { id: true },
@@ -888,7 +837,6 @@ export class ContractsService {
             contractNo: contract.contractNo,
             status: contract.status,
             customerId: contract.customerId,
-            orderIds,
           },
         },
         asAuditClient(tx),
@@ -896,41 +844,6 @@ export class ContractsService {
     });
 
     return { id, contractNo: contract.contractNo, deleted: true };
-  }
-
-  /** 삭제를 막는 진행 산출물을 사람이 읽을 이름으로 모은다. 비어 있으면 삭제 가능. */
-  private async findDeleteBlockers(orderItemIds: string[]): Promise<string[]> {
-    if (orderItemIds.length === 0) return [];
-    const where = { orderItemId: { in: orderItemIds } };
-    const componentIds = (
-      await this.prisma.orderItemComponent.findMany({ where, select: { id: true } })
-    ).map((c) => c.id);
-
-    // 옵션·렌탈 선택은 가계약 컨설팅 산출물이라 삭제 시 함께 정리한다 → 삭제 차단 사유가 아니다.
-    // 실제 진행 산출물(작업지시서·제작·가봉·채촌·수선·렌탈배정)만 삭제를 막는다.
-    const [workOrders, production, fittings, measurements, repairs, allocations] = await Promise.all([
-      this.prisma.workOrder.count({ where }),
-      this.prisma.productionEvent.count({ where }),
-      this.prisma.fittingSession.count({ where }),
-      this.prisma.orderItemMeasurement.count({ where }),
-      this.prisma.repairRequest.count({ where }),
-      componentIds.length
-        ? this.prisma.rentalAllocation.count({
-            where: { orderItemComponentId: { in: componentIds } },
-          })
-        : Promise.resolve(0),
-    ]);
-
-    return [
-      [workOrders, '작업지시서'],
-      [production, '제작 이력'],
-      [fittings, '가봉'],
-      [measurements, '채촌 연결'],
-      [repairs, '수선'],
-      [allocations, '렌탈 배정'],
-    ]
-      .filter(([count]) => (count as number) > 0)
-      .map(([, label]) => label as string);
   }
 
   /**
