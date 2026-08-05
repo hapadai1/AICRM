@@ -10,6 +10,7 @@ import { FilesService } from '../files/files.service';
 import { COMPONENT_GROUP_LABELS, componentGroupsFor } from '../options/option-component-groups';
 import { autoLinkMeasurements } from '../measurements/measurement-link';
 import { orderItemIdsOfContract, syncPrepStatuses } from '../production/prep-status';
+import { applyItemStatus } from '../production/item-status';
 import { anyInProduction } from '../production/production-status';
 import { buildContractExcel, ContractExcelLine } from './contract-excel';
 import {
@@ -570,12 +571,17 @@ export class ContractsService {
       },
     });
 
-    const orders = await this.syncOrders(tx, contract.id, {
-      completionDueDate: version.completionDueDate,
-      photoDate: version.photoDate,
-      weddingDate: version.weddingDate,
-      cancelReason: null,
-    });
+    const orders = await this.syncOrders(
+      tx,
+      contract.id,
+      {
+        completionDueDate: version.completionDueDate,
+        photoDate: version.photoDate,
+        weddingDate: version.weddingDate,
+        cancelReason: null,
+      },
+      actor.id,
+    );
 
     // AUTO 진행단계 훅 (설계서 02 §9.2 / 03 §6 / 07 §7.1).
     // (1) 주문별 진행을 보장하고 — 없으면 계약 단계에서 시작시킨다.
@@ -1673,6 +1679,7 @@ export class ContractsService {
       weddingDate: Date | null;
       cancelReason: string | null;
     },
+    actorId: string,
   ): Promise<OrderSummary[]> {
     const items = await tx.contractItem.findMany({
       where: { contractId },
@@ -1739,14 +1746,19 @@ export class ContractsService {
         // 안전핀: 계약 변경 경로로는 미진행(CREATED) 주문품목만 취소한다.
         // 진행 중 품목이 취소되는 경로는 없다 — 실물 정리는 오프라인 (현업 확정 2026-07-31).
         if (existing && existing.status === 'CREATED') {
+          // 상태 갱신·이력은 단일 기록자(applyItemStatus)로 — 왜 취소됐는지 제작 이력에도 남는다.
+          await applyItemStatus(tx, {
+            orderItemId: existing.id,
+            from: existing.status,
+            to: 'CANCELLED',
+            eventDate: new Date(new Date().toISOString().slice(0, 10)),
+            notes: '계약 변경으로 품목 취소',
+            cancelled: { reason: opts.cancelReason ?? '계약 변경' },
+            actorId,
+          });
           await tx.orderItem.update({
             where: { id: existing.id },
-            data: {
-              status: 'CANCELLED',
-              cancelledReason: opts.cancelReason ?? '계약 변경',
-              cancelledAt: new Date(),
-              rowVersion: { increment: 1 },
-            },
+            data: { rowVersion: { increment: 1 } },
           });
           await tx.orderItemComponent.updateMany({
             where: { orderItemId: existing.id, status: 'CREATED' },

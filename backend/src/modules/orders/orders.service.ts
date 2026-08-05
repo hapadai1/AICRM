@@ -126,6 +126,15 @@ export class OrdersService {
       throw new BusinessException('INVALID_STATUS_TRANSITION', '취소된 품목에는 구성품을 추가할 수 없습니다.', undefined, {
         status: item.status,
       });
+    // 입출고가 시작된 품목에 CREATED 구성품이 붙으면 집계 상태(전체/부분 입·출고)가 뒤로
+    // 뒤집힌다 — 품목 상태와 실물이 어긋난 채 방치되던 구멍을 막는다 (2026-08-05).
+    if (['PARTIALLY_RECEIVED', 'RECEIVED', 'PARTIALLY_RELEASED', 'RELEASED'].includes(item.status))
+      throw new BusinessException(
+        'INVALID_STATUS_TRANSITION',
+        '입고·출고가 시작된 품목에는 구성품을 추가할 수 없습니다. 구성 변경은 계약 [수정하기]로 진행해 주세요.',
+        undefined,
+        { status: item.status },
+      );
 
     const nextSeq =
       item.components

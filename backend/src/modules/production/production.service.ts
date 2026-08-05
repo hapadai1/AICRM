@@ -8,6 +8,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FilesService, UploadedMulterFile } from '../files/files.service';
 import { buildWorkOrderView, workOrderStatusSelect } from '../work-orders/work-order-status';
+import { applyItemStatus } from './item-status';
 import {
   AGGREGATE_ONLY_STATUSES,
   CANCELLED,
@@ -120,25 +121,15 @@ export class ProductionService {
     validateTransition(ITEM_STATUS_FLOW, item.status, dto.newStatus, dto.reason, '품목');
 
     const event = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.productionEvent.create({
-        data: {
-          id: randomUUID(),
-          orderItemId,
-          componentId: null,
-          eventType: dto.newStatus,
-          previousStatus: item.status,
-          newStatus: dto.newStatus,
-          expectedDate: toDate(dto.expectedDate),
-          eventDate: toDate(dto.eventDate) ?? today(),
-          notes: mergeNotes(dto.notes, dto.reason),
-          actorId: actor.id,
-        },
-        select: EVENT_SELECT,
-      });
-      // CANCELLED 처리 분기는 없다 — validateTransition이 취소 진입을 이미 거부한다.
-      await tx.orderItem.update({
-        where: { id: orderItemId },
-        data: { status: dto.newStatus },
+      // 상태 갱신·이력 생성은 단일 기록자(applyItemStatus)로 — CANCELLED 진입은 검증이 이미 거부했다.
+      const written = await applyItemStatus(tx, {
+        orderItemId,
+        from: item.status,
+        to: dto.newStatus,
+        eventDate: toDate(dto.eventDate) ?? today(),
+        expectedDate: toDate(dto.expectedDate),
+        notes: mergeNotes(dto.notes, dto.reason),
+        actorId: actor.id,
       });
       await this.audit.log(
         {
@@ -152,7 +143,11 @@ export class ProductionService {
         },
         tx,
       );
-      return created;
+      // 응답은 기존과 같은 이벤트 뷰 모양을 유지한다 (written은 동일 상태 재설정이 아니므로 항상 있다).
+      return tx.productionEvent.findUniqueOrThrow({
+        where: { id: written!.eventId },
+        select: EVENT_SELECT,
+      });
     });
     return event;
   }
@@ -293,19 +288,14 @@ export class ProductionService {
     const computed = computeAggregateStatus(item.components);
     if (!computed || computed === item.status || item.status === CANCELLED) return item.status;
 
-    await tx.orderItem.update({ where: { id: orderItemId }, data: { status: computed } });
-    await tx.productionEvent.create({
-      data: {
-        id: randomUUID(),
-        orderItemId,
-        componentId: null,
-        eventType: 'ITEM_STATUS_AGGREGATED',
-        previousStatus: item.status,
-        newStatus: computed,
-        eventDate,
-        notes: '구성품 상태 집계에 따른 품목 상태 갱신',
-        actorId: actor.id,
-      },
+    await applyItemStatus(tx, {
+      orderItemId,
+      from: item.status,
+      to: computed,
+      eventType: 'ITEM_STATUS_AGGREGATED',
+      eventDate,
+      notes: '구성품 상태 집계에 따른 품목 상태 갱신',
+      actorId: actor.id,
     });
     await this.audit.log(
       {
@@ -414,19 +404,13 @@ export class ProductionService {
     actor: AuthUser,
   ): Promise<void> {
     if (from === to) return;
-    await tx.orderItem.update({ where: { id: orderItemId }, data: { status: to } });
-    await tx.productionEvent.create({
-      data: {
-        id: randomUUID(),
-        orderItemId,
-        componentId: null,
-        eventType: to,
-        previousStatus: from,
-        newStatus: to,
-        eventDate,
-        notes: '단계 처리 취소(잘못 누름)',
-        actorId: actor.id,
-      },
+    await applyItemStatus(tx, {
+      orderItemId,
+      from,
+      to,
+      eventDate,
+      notes: '단계 처리 취소(잘못 누름)',
+      actorId: actor.id,
     });
     await this.audit.log(
       {

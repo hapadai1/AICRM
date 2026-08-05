@@ -122,6 +122,18 @@ describe('주문·품목·구성품 (Phase 2)', () => {
     expect(res.body.data.expectedInboundDate).toContain('2026-08-01');
   });
 
+  it('입고·출고가 시작된 품목에는 구성품을 추가할 수 없다', async () => {
+    // 출고까지 끝난 품목에 CREATED 구성품이 붙으면 집계 상태가 부분 출고로 뒤집힌다 — 거부돼야 한다.
+    await ctx.prisma.orderItem.update({ where: { id: suitItemId }, data: { status: 'RELEASED' } });
+    const res = await api(ctx)
+      .post(`/api/v1/order-items/${suitItemId}/components`)
+      .set(auth(ctx))
+      .send({ componentType: 'VEST' })
+      .expect(409);
+    expect(res.body.error.code).toBe('INVALID_STATUS_TRANSITION');
+    await ctx.prisma.orderItem.update({ where: { id: suitItemId }, data: { status: 'CREATED' } });
+  });
+
   it('허용되지 않은 구성품 타입은 400을 반환한다', async () => {
     const res = await api(ctx)
       .post(`/api/v1/order-items/${suitItemId}/components`)
