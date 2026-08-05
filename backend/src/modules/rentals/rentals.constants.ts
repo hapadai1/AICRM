@@ -24,6 +24,9 @@ export const RENTAL_ITEM_STATUSES = [
 /** 신규 배정 가능 실물 상태 (통합설계서 11.5 — 기간 미중복이면 예약 중 실물도 다른 기간에 배정 가능) */
 export const ASSIGNABLE_ITEM_STATUSES = ['AVAILABLE', 'RESERVED'];
 
+/** 실물이 살아 있지만 지금은 빌려줄 수 없는 상태 (세탁·수선 대기 등) — 집계·수량 선택 공용 */
+export const HOLD_ITEM_STATUSES = ['RETURNED_HOLD', 'ALTERATION', 'UNAVAILABLE'];
+
 /** 배정 상태 (실물 상태와 같은 이유로 PREPARING 제거) */
 export const RENTAL_ALLOCATION_STATUSES = ['RESERVED', 'CHECKED_OUT', 'RETURNED', 'CANCELLED'];
 

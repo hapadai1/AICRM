@@ -3,6 +3,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { RentalAllocationsController } from './rental-allocations.controller';
 import { RentalAllocationsService } from './rental-allocations.service';
 import { RentalInventoryController } from './rental-inventory.controller';
+import { RentalInventoryQueryService } from './rental-inventory-query.service';
 import { RentalInventoryService } from './rental-inventory.service';
 import { RentalNotesService } from './rental-notes.service';
 import { RentalPolicyController } from './rental-policy.controller';
@@ -23,6 +24,7 @@ import { RentalSelectionService } from './rental-selection.service';
   ],
   providers: [
     RentalInventoryService,
+    RentalInventoryQueryService,
     RentalAllocationsService,
     RentalSelectionService,
     RentalPolicyService,
