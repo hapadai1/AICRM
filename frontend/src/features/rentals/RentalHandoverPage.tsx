@@ -1,4 +1,4 @@
-import { SwapOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, SwapOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
@@ -19,7 +19,7 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import dayjs, { type Dayjs } from 'dayjs';
 import { useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ApiError } from '../../api/client';
 import {
   ALLOCATION_NOTE_KIND_META,
@@ -51,6 +51,7 @@ const defaultHistoryRange = (): [Dayjs, Dayjs] => [dayjs().subtract(3, 'month'),
 export function RentalHandoverPage() {
   const { message } = App.useApp();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
 
   const [checkoutTarget, setCheckoutTarget] = useState<RentalAllocation | null>(null);
   const [returnTarget, setReturnTarget] = useState<RentalAllocation | null>(null);
@@ -680,6 +681,10 @@ export function RentalHandoverPage() {
 
       <PageCard>
         <Space size="large" wrap>
+          {/* 확인사항 등 다른 화면에서 특정 주문으로 걸러 들어온다. 온 곳으로 되돌린다. */}
+          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>
+            이전화면
+          </Button>
           <StatusBadge label="지연: 픽업일 또는 반납 예정일이 오늘 이전" color="red" />
         </Space>
       </PageCard>
