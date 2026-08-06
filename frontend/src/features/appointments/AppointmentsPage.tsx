@@ -11,7 +11,7 @@ import { App, Button, DatePicker, Empty, Input, Segmented, Space, Spin, Tag, Typ
 import type { ColumnsType } from 'antd/es/table';
 import dayjs, { type Dayjs } from 'dayjs';
 import { useMemo, useState, type CSSProperties } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   fetchAppointments,
   syncNaverReservations,
@@ -198,7 +198,12 @@ export function AppointmentsPage() {
   const { message } = App.useApp();
   const queryClient = useQueryClient();
 
-  const [mode, setMode] = useState<ViewMode>('day');
+  // 대시보드 "월간 일정" 버튼 등에서 ?view=month 로 진입할 수 있게 초기 모드를 URL에서 읽는다.
+  const [searchParams] = useSearchParams();
+  const [mode, setMode] = useState<ViewMode>(() => {
+    const v = searchParams.get('view');
+    return v === 'day' || v === 'week' || v === 'month' || v === 'list' ? v : 'day';
+  });
   const [baseDate, setBaseDate] = useState<Dayjs>(() => dayjs());
   // 목록 뷰 기본 기간은 "오늘 이후" — 종료일은 비워 둔다(설계서 07 D4).
   const [listRange, setListRange] = useState<[Dayjs | null, Dayjs | null]>(() => [dayjs(), null]);
