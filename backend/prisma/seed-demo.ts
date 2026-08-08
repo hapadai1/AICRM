@@ -1246,7 +1246,7 @@ async function main(): Promise<void> {
       };
 
       // 오늘 6건
-      await appointment({ customerId: 정우성, purposeCode: 'RENTAL_RETURN', start: at(0, 9, 30), end: at(0, 10), status: 'RESERVED', notes: '렌탈 구두 반납(지연분 포함) 예정' });
+      await appointment({ customerId: 정우성, purposeCode: 'RENTAL_RETURN', start: at(0, 10), end: at(0, 10, 30), status: 'RESERVED', notes: '렌탈 구두 반납(지연분 포함) 예정' });
       await appointment({ customerId: 김민준, purposeCode: 'RENTAL_PICKUP', start: at(0, 10, 30), end: at(0, 11), status: 'CONFIRMED', notes: '촬영용 렌탈 정장·구두 픽업' });
       const apPjh = await appointment({
         customerId: 박지훈, purposeCode: 'INITIAL_CONSULTATION', start: at(0, 11, 30), end: at(0, 12),

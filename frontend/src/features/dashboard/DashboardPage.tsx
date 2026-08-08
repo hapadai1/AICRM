@@ -161,13 +161,11 @@ export function DashboardPage() {
     return list.filter((a) => purposeFilter.includes(a.purposeCode));
   }, [summary, purposeFilter]);
 
-  // 업무시간(10~20시) 밖 예약은 격자에 그리지 않는다. 예전에는 조용히 사라져
-  // 대시보드에서 아예 안 보였으므로, 예약 화면처럼 건수를 아래에 알린다.
+  // 업무시간(10~20시) 밖 예약은 격자에 그리지 않는다.
   const gridAppointments = useMemo(
     () => filteredAppointments.filter(inBusinessHours),
     [filteredAppointments],
   );
-  const outOfHoursCount = filteredAppointments.length - gridAppointments.length;
 
   // 예약이 있는 구간만 그린다 — 빈 격자로 카드 높이를 늘리지 않는다.
   const range = useMemo(() => visibleRange(gridAppointments), [gridAppointments]);
@@ -249,38 +247,44 @@ export function DashboardPage() {
                     borderColor: isToday ? token.colorPrimary : isSelected ? SEMANTIC_COLOR.selectedBorder : undefined,
                     boxShadow: isSelected ? '0 0 0 2px rgba(250,173,20,0.2)' : undefined,
                   }}
-                  styles={{ body: { padding: '10px 8px' } }}
+                  styles={{ body: { padding: '8px 12px' } }}
                 >
                   <div
                     style={{
                       display: 'flex',
-                      flexDirection: 'column',
+                      flexDirection: 'row',
                       alignItems: 'center',
-                      gap: 4,
+                      justifyContent: 'center',
+                      gap: 50,
                     }}
                   >
-                    <span style={{ fontSize: 12, fontWeight: 600, color: dowColor, lineHeight: 1 }}>
-                      {d.format('dd')}
-                      {isToday ? ' · 오늘' : ''}
-                    </span>
+                    {/* 좌측: 날짜 + 요일을 가로로 나란히 표기 */}
+                    <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'baseline', gap: 5 }}>
+                      <span
+                        style={{
+                          fontSize: 18,
+                          fontWeight: 700,
+                          lineHeight: 1.2,
+                          color: isToday ? token.colorPrimary : token.colorText,
+                        }}
+                      >
+                        {/* 월이 바뀌는 1일은 몇 월인지 함께 표기 */}
+                        {d.date() === 1 ? d.format('M/D') : d.format('D')}
+                      </span>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: dowColor, lineHeight: 1 }}>
+                        {d.format('dd')}
+                        {isToday ? ' · 오늘' : ''}
+                      </span>
+                    </div>
+                    {/* 우측: 예약 건수 배지 */}
                     <span
                       style={{
-                        fontSize: 22,
-                        fontWeight: 700,
-                        lineHeight: 1.2,
-                        color: isToday ? token.colorPrimary : token.colorText,
-                      }}
-                    >
-                      {/* 월이 바뀌는 1일은 몇 월인지 함께 표기 */}
-                      {d.date() === 1 ? d.format('M/D') : d.format('D')}
-                    </span>
-                    <span
-                      style={{
-                        fontSize: 12,
-                        fontWeight: hasCount ? 600 : 400,
-                        lineHeight: '18px',
-                        padding: '0 8px',
-                        borderRadius: 9,
+                        fontSize: 14,
+                        fontWeight: hasCount ? 700 : 400,
+                        lineHeight: '20px',
+                        padding: '0 9px',
+                        borderRadius: 10,
+                        whiteSpace: 'nowrap',
                         color: hasCount ? '#fff' : token.colorTextQuaternary,
                         background: hasCount ? token.colorPrimary : undefined,
                       }}
@@ -376,13 +380,6 @@ export function DashboardPage() {
                 </Tag>
               </div>
             ))}
-          </div>
-        )}
-        {outOfHoursCount > 0 && (
-          <div style={{ marginTop: 8 }}>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              표시 구간(10:00~20:00) 외 예약 {outOfHoursCount}건 — 예약 화면에서 확인하세요.
-            </Typography.Text>
           </div>
         )}
       </Card>
