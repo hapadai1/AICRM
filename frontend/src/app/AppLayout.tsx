@@ -212,17 +212,22 @@ export function AppLayout() {
         >
           <div
             style={{
-              height: 64,
+              height: 88,
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center',
+              justifyContent: 'flex-start',
+              paddingLeft: 24,
               color: '#fff',
               fontSize: 18,
               fontWeight: 700,
               letterSpacing: 1,
             }}
           >
-            <SkinOutlined style={{ marginRight: 8 }} />
+            <img
+              src="/suit-agency-logo.png"
+              alt=""
+              style={{ height: 68, marginRight: 8 }}
+            />
             AICRM
           </div>
           <div style={{ flex: 1, overflowY: 'auto' }}>
