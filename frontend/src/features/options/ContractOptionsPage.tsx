@@ -353,17 +353,16 @@ export function ContractOptionsPage() {
         </Space>
       </Card>
 
-      {/* 하단은 화면 이동 전용 — 왼쪽은 온 곳으로, 오른쪽은 다음 목적지(이 계약자의 채촌). */}
+      {/* 하단은 화면 이동 전용 — 왼쪽은 온 곳으로, 오른쪽은 유상 옵션·합계가 반영된 진행중 계약으로. */}
       <Card>
         <Space style={{ width: '100%', justifyContent: 'space-between' }}>
           <BackButton />
           <Button
-            size="large"
-            style={{ height: 56, minWidth: 140, fontSize: 18 }}
+            type="primary"
             disabled={!contract}
-            onClick={() => navigate(`/measurements?customerId=${contract?.customerId}`)}
+            onClick={() => navigate(`/contracts/new?contractId=${id}`)}
           >
-            채촌으로 <RightOutlined />
+            진행중 계약으로 <RightOutlined />
           </Button>
         </Space>
       </Card>
