@@ -14,6 +14,7 @@ import {
   Card,
   Col,
   DatePicker,
+  Divider,
   Flex,
   Form,
   Input,
@@ -204,7 +205,12 @@ export function ContractFormPage() {
 
   const totalWatch = Form.useWatch('totalAmount', form);
   const lineTotal = linesTotal(lines);
+  // 금액 분해: 품목 합계(옵션 롤업 제외) + 옵션 추가 합계(롤업) = 총 계약금액.
+  const itemsSubtotal = lines.filter((l) => !l.isOptionRollup).reduce((s, l) => s + (l.amount || 0), 0);
+  const optionsSubtotal = lines.filter((l) => l.isOptionRollup).reduce((s, l) => s + (l.amount || 0), 0);
   const totalAmount = manualTotal ? (totalWatch ?? 0) : lineTotal;
+  // 선택 옵션 추가금이 계약금액에 반영됐는지 — '반영 확인' 배지용 (컨설팅 확정으로만 바뀌므로 저장본 기준).
+  const surcharge = draft?.optionSurcharge;
   /** 직접 입력 합계 − 품목 합계. 음수면 할인, 양수면 추가. */
   const totalDiff = totalAmount - lineTotal;
 
@@ -338,7 +344,14 @@ export function ContractFormPage() {
 
   /** [서명하기] — 미저장 내용이 있으면 먼저 저장한 뒤 서명 캔버스를 연다. */
   const handleOpenSign = async () => {
-    const values = await form.validateFields();
+    let values: FormValues;
+    try {
+      values = await form.validateFields();
+    } catch {
+      // 필수 입력(계약 구분·계약일 등) 누락 — antd가 해당 필드에 오류를 표시한다.
+      // reject를 삼켜 미처리 Promise(콘솔 에러)로 새지 않게 한다.
+      return;
+    }
     if (lines.length === 0) {
       message.error('품목을 1개 이상 입력해 주세요.');
       return;
@@ -567,9 +580,19 @@ export function ContractFormPage() {
         <Card
           title="품목"
           extra={
-            <Typography.Text type="secondary">
-              금액은 수량 × 단가로 자동 계산됩니다 (필요하면 직접 수정)
-            </Typography.Text>
+            // 선택 옵션 추가금이 계약금액에 들어갔는지 배지로 확인시킨다 (옵션이 있을 때만).
+            surcharge && surcharge.total > 0 ? (
+              <Tag
+                color={surcharge.pending === 0 ? 'green' : 'orange'}
+                style={{ fontSize: 13, padding: '4px 12px', borderRadius: 16, marginInlineEnd: 0 }}
+              >
+                {surcharge.pending === 0
+                  ? `옵션 추가금 반영완료 (${formatKrw(surcharge.applied)})`
+                  : surcharge.pending > 0
+                    ? `옵션 추가금 미반영 +${formatKrw(surcharge.pending)}`
+                    : `옵션 추가금 초과반영 ${formatKrw(surcharge.pending)}`}
+              </Tag>
+            ) : null
           }
           style={{ marginBottom: 16 }}
         >
@@ -602,9 +625,27 @@ export function ContractFormPage() {
           }
         >
           <Flex vertical gap={12}>
-            <Flex justify="space-between" align="flex-end" wrap gap={16}>
-              <Flex vertical gap={4}>
-                <Typography.Text type="secondary">합계 금액 (계약 금액)</Typography.Text>
+            {/* 금액 분해: 품목 합계 + 옵션 추가 합계 = 총 계약금액 */}
+            <Flex vertical gap={8} style={{ maxWidth: 420 }}>
+              <Flex justify="space-between" align="center">
+                <Typography.Text type="secondary">품목 합계</Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: 15 }}>
+                  {formatKrw(itemsSubtotal)}
+                </Typography.Text>
+              </Flex>
+              {optionsSubtotal > 0 && (
+                <Flex justify="space-between" align="center">
+                  <Typography.Text type="secondary">옵션 추가 합계</Typography.Text>
+                  <Typography.Text type="secondary" style={{ fontSize: 15 }}>
+                    +{formatKrw(optionsSubtotal)}
+                  </Typography.Text>
+                </Flex>
+              )}
+              <Divider style={{ margin: '4px 0' }} />
+              <Flex justify="space-between" align="center" gap={16}>
+                <Typography.Text strong style={{ fontSize: 16 }}>
+                  총 계약금액
+                </Typography.Text>
                 {manualTotal ? (
                   <Form.Item
                     name="totalAmount"
@@ -614,24 +655,17 @@ export function ContractFormPage() {
                     <InputNumber
                       className="num-input"
                       size="large"
-                      style={{ width: 220, fontWeight: 700 }}
+                      style={{ width: 200, fontWeight: 700 }}
                       min={0}
                       step={100000}
                       formatter={THOUSANDS}
                     />
                   </Form.Item>
                 ) : (
-                  <Typography.Title level={2} style={{ margin: 0 }}>
+                  <Typography.Title level={3} style={{ margin: 0 }}>
                     {formatKrw(lineTotal)}
                   </Typography.Title>
                 )}
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  {manualTotal
-                    ? `품목 합계 ${formatKrw(lineTotal)} · 품목을 고쳐도 이 금액은 따라가지 않습니다`
-                    : `품목 ${lines.filter((l) => !l.isOptionRollup).length}건 · 수량 ${lines
-                        .filter((l) => !l.isOptionRollup)
-                        .reduce((s, l) => s + (l.quantity || 0), 0)}개 자동 합계 (옵션 추가금액 포함)`}
-                </Typography.Text>
               </Flex>
               {/* 자동 모드에서도 폼 값은 유지해야 저장·검증이 동작한다. */}
               {!manualTotal && (
@@ -699,7 +733,7 @@ export function ContractFormPage() {
         title="계약서 서명"
         footer={null}
         width={560}
-        destroyOnClose
+        destroyOnHidden
         onCancel={() => setSignOpen(false)}
       >
         {flow?.currentVersionId && (

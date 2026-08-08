@@ -273,7 +273,12 @@ export class ContractsService {
   }
 
   async getDetail(id: string) {
-    return this.document.getDetail(id);
+    const contract = await this.document.getDetail(id);
+    // 선택 옵션 추가금이 계약금액에 반영됐는지 배지로 보여주기 위한 계약 단위 요약.
+    (contract as typeof contract & {
+      optionSurcharge?: { total: number; applied: number; pending: number };
+    }).optionSurcharge = await this.items.contractSurchargeSummary(contract.id);
+    return contract;
   }
 
   async getVersions(id: string) {

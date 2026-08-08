@@ -6,7 +6,8 @@ import { AuthUser } from '../../common/decorators';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { anyInProduction } from '../production/production-status';
-import { asAuditClient, CATEGORY_LABEL, COMPONENT_MAP } from './contracts.shared';
+import { SESSION_INCLUDE, surchargeTotalOf } from '../options/option-session.shared';
+import { asAuditClient, CATEGORY_LABEL, COMPONENT_LABEL, COMPONENT_MAP } from './contracts.shared';
 
 /**
  * 계약 품목·컨설팅 동기화 (2026-08-05 contracts.service에서 분리).
@@ -180,15 +181,16 @@ export class ContractItemsService {
   }
 
   /**
-   * 스타일 컨설팅 옵션 추가금액을 계약 품목 맨 아래 '옵션(추가금액)' 한 줄로 동기화한다.
+   * 스타일 컨설팅 옵션 추가금액을 계약 품목의 '옵션(추가금액)' 라인으로 동기화한다.
    *
-   * 금액은 그 계약의 **현재 확정 세션들**의 반영 누계(surchargeApplied) 합계다 —
-   * 확정 시 applyPendingTx가 계약 버전 금액(totalAmount)에 더한 값과 정확히 같아,
-   * 롤업 라인 합계와 계약 금액이 어긋나지 않는다.
+   * **소스 맞춤 라인마다 한 줄씩** 만들어 그 라인 바로 아래에 오도록 둔다(현업 요청 2026-08-08):
+   * 맞춤 정장 라인 → 그 정장의 옵션(추가금액) 라인 → 다음 맞춤 정장 라인 → …
+   * 금액은 그 라인에 속한 벌들의 반영 누계(surchargeApplied) 합계라, 확정 시 계약 버전
+   * 금액(totalAmount)에 더한 값과 합이 정확히 같다.
    *
    * 이 라인은 백엔드가 소유한다: 화면 저장 본문에는 실려 오지 않고(프론트가 제외),
    * 라인 재생성(초안 수정·변경계약)·확정 반영 때마다 여기서 지우고 다시 만든다.
-   * 합계가 0이면 라인을 두지 않는다.
+   * 옵션이 붙은 벌이 없으면 라인을 두지 않는다.
    */
   async syncOptionRollupLine(
     tx: Prisma.TransactionClient,
@@ -197,38 +199,115 @@ export class ContractItemsService {
   ): Promise<void> {
     const sessions = await tx.optionSelectionSession.findMany({
       where: { contractItem: { contractId }, isCurrent: true },
-      select: { surchargeApplied: true },
+      // 벌 순번으로 정렬해 한 라인에 여러 벌이 있을 때 정장 #1, #2… 순으로 싣는다.
+      orderBy: { contractItem: { sequenceNo: 'asc' } },
+      select: {
+        surchargeApplied: true,
+        contractItem: { select: { displayName: true, sourceContractLineId: true } },
+        // 비고에 부위별로 나열할 유료 옵션 — 추가금액이 붙은 선택지만. 단계의 부위(componentGroup)로 묶는다.
+        values: {
+          where: { extraPriceSnapshot: { gt: 0 } },
+          select: {
+            optionChoice: { select: { choiceName: true } },
+            optionStage: { select: { componentGroup: true, sequenceNo: true } },
+          },
+        },
+      },
     });
-    const total = sessions.reduce((sum, s) => sum + Number(s.surchargeApplied), 0);
 
-    // 항상 먼저 걷어낸다 — 금액이 바뀌었거나 0이 되면 한 줄만 남기거나 없애기 위해.
+    // 항상 먼저 걷어낸다 — 금액·구성이 바뀌면 라인을 다시 만들기 위해.
     await tx.contractLine.deleteMany({
       where: { contractVersionId: versionId, isOptionRollup: true },
     });
-    if (total <= 0) return;
 
-    const agg = await tx.contractLine.aggregate({
-      where: { contractVersionId: versionId },
-      _max: { sortOrder: true },
+    // 유료 옵션을 상의 → 하의 → 베스트 순으로 부위별 한 줄씩 묶어 적는다.
+    const GROUP_ORDER: Record<string, number> = { JACKET: 0, TROUSERS: 1, VEST: 2, SHIRT: 3, SHOES: 4 };
+    const groupNote = (vals: Array<{ name: string; group: string | null }>): string => {
+      const byGroup = new Map<string, string[]>();
+      for (const v of vals) {
+        const key = v.group ?? '';
+        const names = byGroup.get(key) ?? [];
+        names.push(v.name);
+        byGroup.set(key, names);
+      }
+      return [...byGroup.entries()]
+        .sort((a, b) => (GROUP_ORDER[a[0]] ?? 99) - (GROUP_ORDER[b[0]] ?? 99))
+        .map(([g, names]) => (g ? `${COMPONENT_LABEL[g] ?? g}: ${names.join(', ')}` : names.join(', ')))
+        .join('\n');
+    };
+
+    // 소스 맞춤 라인별로 벌(정장)을 묶는다 — 옵션이 붙은 벌만. 옵션은 단계 순번대로 정렬한다.
+    type Val = { name: string; group: string | null };
+    const byLine = new Map<string, Array<{ name: string; vals: Val[]; subtotal: number }>>();
+    for (const s of sessions) {
+      const lineId = s.contractItem.sourceContractLineId;
+      const vals: Val[] = [...s.values]
+        .sort((a, b) => a.optionStage.sequenceNo - b.optionStage.sequenceNo)
+        .map((v) => ({ name: v.optionChoice.choiceName, group: v.optionStage.componentGroup }));
+      if (!lineId || vals.length === 0) continue;
+      const arr = byLine.get(lineId) ?? [];
+      arr.push({ name: s.contractItem.displayName, vals, subtotal: Number(s.surchargeApplied) });
+      byLine.set(lineId, arr);
+    }
+    if (byLine.size === 0) return;
+
+    // 소스 라인의 sortOrder를 그대로 물려줘, 조회 정렬(sortOrder→롤업 뒤)에서 라인 바로 아래에 오게 한다.
+    const sourceLines = await tx.contractLine.findMany({
+      where: { contractVersionId: versionId, id: { in: [...byLine.keys()] } },
+      select: { id: true, sortOrder: true },
     });
-    await tx.contractLine.create({
-      data: {
-        id: randomUUID(),
-        contractVersionId: versionId,
-        // 실제 거래방식·품목이 아니라 옵션 합산 라인임을 나타내는 표식값.
-        transactionType: 'OPTION',
-        productCategory: 'OPTION',
-        itemDescription: '옵션(추가금액)',
-        quantity: 1,
-        unitPrice: total,
-        lineAmount: total,
-        vestIncluded: false,
-        vestUnitPrice: null,
-        notes: null,
-        sortOrder: (agg._max.sortOrder ?? 0) + 1,
-        isOptionRollup: true,
-      },
+    for (const src of sourceLines) {
+      const items = byLine.get(src.id)!;
+      const subtotalSum = items.reduce((sum, it) => sum + it.subtotal, 0);
+      // 한 라인에 벌이 여럿이면 정장명·소계를 머리로, 그 아래 부위별 옵션을 적고 벌 사이는 빈 줄로 띄운다.
+      // 한 벌뿐이면 부위별 옵션만 적는다.
+      const notes =
+        items.length > 1
+          ? items
+              .map((it) => `${it.name} (${it.subtotal.toLocaleString('ko-KR')}원)\n${groupNote(it.vals)}`)
+              .join('\n\n')
+          : groupNote(items[0].vals);
+      await tx.contractLine.create({
+        data: {
+          id: randomUUID(),
+          contractVersionId: versionId,
+          // 실제 거래방식·품목이 아니라 옵션 합산 라인임을 나타내는 표식값.
+          transactionType: 'OPTION',
+          productCategory: 'OPTION',
+          itemDescription: '옵션(추가금액)',
+          quantity: 1,
+          unitPrice: subtotalSum,
+          lineAmount: subtotalSum,
+          vestIncluded: false,
+          vestUnitPrice: null,
+          notes,
+          sortOrder: src.sortOrder,
+          isOptionRollup: true,
+        },
+      });
+    }
+  }
+
+  /**
+   * 계약 전체의 선택 옵션 추가금 반영 상태 — 계약서 작성 화면의 '반영 확인' 배지용.
+   * total: 현재 선택된 유료 옵션 합계, applied: 계약금액에 이미 반영한 누계, pending: 미반영 차액.
+   * total 계산은 활성 단계(베스트 제외 등)를 거르는 surchargeTotalOf를 벌마다 재사용해
+   * 컨설팅 화면(추가금액 패널)과 같은 기준을 따른다.
+   */
+  async contractSurchargeSummary(
+    contractId: string,
+  ): Promise<{ total: number; applied: number; pending: number }> {
+    const sessions = await this.prisma.optionSelectionSession.findMany({
+      where: { contractItem: { contractId }, isCurrent: true },
+      include: SESSION_INCLUDE,
     });
+    let total = 0;
+    let applied = 0;
+    for (const s of sessions) {
+      total += surchargeTotalOf(s);
+      applied += Number(s.surchargeApplied);
+    }
+    return { total, applied, pending: total - applied };
   }
 
   /**

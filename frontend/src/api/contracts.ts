@@ -122,6 +122,8 @@ interface ContractDetailApiRow extends Omit<ContractListApiRow, 'contractType' |
   currentVersion?: ContractVersionApiRow | null;
   versions: ContractVersionApiRow[];
   orders: ContractOrderApiRow[];
+  /** 선택 옵션 추가금 반영 상태 (계약금액 반영 확인 배지용) */
+  optionSurcharge?: { total: number; applied: number; pending: number } | null;
 }
 
 // ---------- 화면용 뷰 ----------
@@ -226,6 +228,11 @@ export interface ContractDetail {
   lines: ContractLine[];
   versions: ContractVersion[];
   orders: ContractOrderSummary[];
+  /**
+   * 선택 옵션 추가금이 계약금액에 반영됐는지 요약.
+   * total: 현재 선택 유료옵션 합계, applied: 반영 누계, pending: 미반영 차액.
+   */
+  optionSurcharge?: { total: number; applied: number; pending: number };
   /**
    * 낙관적 잠금 값. 백엔드 응답 필드는 rowVersion 이며 요청 본문 필드명은 version 이다.
    * toContractDetail 에서 rowVersion 을 매핑한다 (변경/취소 확정 요청에 사용).
@@ -333,6 +340,7 @@ function toContractDetail(row: ContractDetailApiRow): ContractDetail {
       transactionType: o.transactionType,
       status: o.status,
     })),
+    optionSurcharge: row.optionSurcharge ?? undefined,
     // 낙관적 잠금: 백엔드 응답 rowVersion → 요청 본문 version 으로 그대로 전달한다.
     version: row.rowVersion,
   };

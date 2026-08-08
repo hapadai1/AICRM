@@ -74,7 +74,8 @@ export interface ContractDocumentItem {
 }
 
 export const VERSION_INCLUDE = {
-  lines: { orderBy: { sortOrder: 'asc' } },
+  // 롤업 라인은 소스 라인과 같은 sortOrder를 갖는다 → 같은 순서에서 롤업을 뒤로 보내 라인 바로 아래에 붙인다.
+  lines: { orderBy: [{ sortOrder: 'asc' }, { isOptionRollup: 'asc' }] },
 } satisfies Prisma.ContractVersionInclude;
 
 export const DETAIL_INCLUDE = {
