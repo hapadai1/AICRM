@@ -252,17 +252,21 @@ export function DashboardPage() {
                   <div
                     style={{
                       display: 'flex',
-                      flexDirection: 'row',
+                      flexDirection: 'column',
                       alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 50,
+                      gap: 12,
                     }}
                   >
-                    {/* 좌측: 날짜 + 요일을 가로로 나란히 표기 */}
-                    <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'baseline', gap: 5 }}>
+                    {/* 윗줄: 요일 */}
+                    <span style={{ fontSize: 14, fontWeight: 600, color: dowColor, lineHeight: 1 }}>
+                      {d.format('dd')}
+                      {isToday ? ' · 오늘' : ''}
+                    </span>
+                    {/* 아랫줄: 날짜 + 예약 건수 */}
+                    <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 30 }}>
                       <span
                         style={{
-                          fontSize: 18,
+                          fontSize: 22,
                           fontWeight: 700,
                           lineHeight: 1.2,
                           color: isToday ? token.colorPrimary : token.colorText,
@@ -271,26 +275,21 @@ export function DashboardPage() {
                         {/* 월이 바뀌는 1일은 몇 월인지 함께 표기 */}
                         {d.date() === 1 ? d.format('M/D') : d.format('D')}
                       </span>
-                      <span style={{ fontSize: 12, fontWeight: 600, color: dowColor, lineHeight: 1 }}>
-                        {d.format('dd')}
-                        {isToday ? ' · 오늘' : ''}
+                      <span
+                        style={{
+                          fontSize: 16,
+                          fontWeight: hasCount ? 700 : 400,
+                          lineHeight: '22px',
+                          padding: '0 10px',
+                          borderRadius: 11,
+                          whiteSpace: 'nowrap',
+                          color: hasCount ? '#fff' : token.colorTextQuaternary,
+                          background: hasCount ? token.colorPrimary : undefined,
+                        }}
+                      >
+                        {day.count}건
                       </span>
                     </div>
-                    {/* 우측: 예약 건수 배지 */}
-                    <span
-                      style={{
-                        fontSize: 14,
-                        fontWeight: hasCount ? 700 : 400,
-                        lineHeight: '20px',
-                        padding: '0 9px',
-                        borderRadius: 10,
-                        whiteSpace: 'nowrap',
-                        color: hasCount ? '#fff' : token.colorTextQuaternary,
-                        background: hasCount ? token.colorPrimary : undefined,
-                      }}
-                    >
-                      {day.count}건
-                    </span>
                   </div>
                 </Card>
               </Col>
