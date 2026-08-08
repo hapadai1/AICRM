@@ -13,6 +13,7 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { fetchDashboardSummary } from '../../api/dashboard';
 import type { DashboardAppointment } from '../../api/dashboard';
+import { fetchAppointmentPurposes } from '../../api/appointments';
 import { SharedMemoCard } from './SharedMemoCard';
 import { TaskBoard } from './TaskBoard';
 import { SEMANTIC_COLOR } from '../../app/theme';
@@ -147,13 +148,18 @@ export function DashboardPage() {
   });
   const summary = summaryQuery.data;
 
-  const purposeOptions = useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const apt of summary?.appointments ?? []) {
-      seen.set(apt.purposeCode, apt.purposeName);
-    }
-    return Array.from(seen, ([value, label]) => ({ value, label }));
-  }, [summary]);
+  // 목적 필터 옵션 — 기준정보 관리의 예약 목적 마스터와 동일하게(active만, sortOrder 순).
+  // 그날 예약에 등장한 목적만 뽑던 방식은 예약 없는 목적이 필터에서 누락돼 목록을 마스터와 맞춘다.
+  const purposesQuery = useQuery({
+    queryKey: ['appointment-purposes'],
+    queryFn: fetchAppointmentPurposes,
+    staleTime: 5 * 60_000,
+  });
+
+  const purposeOptions = useMemo(
+    () => (purposesQuery.data ?? []).map((p) => ({ value: p.code, label: p.name })),
+    [purposesQuery.data],
+  );
 
   const filteredAppointments = useMemo(() => {
     const list = summary?.appointments ?? [];
