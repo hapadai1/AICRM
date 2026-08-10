@@ -281,6 +281,7 @@ export class CustomersService {
               select: {
                 id: true,
                 displayName: true,
+                productCategory: true,
                 status: true,
                 // 옵션 세션은 ContractItem에 붙는다 → sourceContractItem 경유(REACH-BACK).
                 sourceContractItem: {
@@ -411,6 +412,7 @@ export class CustomersService {
         items: o.items.map((i) => ({
           id: i.id,
           displayName: i.displayName,
+          productCategory: i.productCategory,
           status: i.status,
           optionStatus: i.sourceContractItem.optionSelectionSessions[0]?.status ?? 'NOT_STARTED',
           measurementLinked: i.measurementLinks.length > 0,

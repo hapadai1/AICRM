@@ -10,6 +10,7 @@ import {
   Empty,
   Form,
   Input,
+  InputNumber,
   List,
   Modal,
   Result,
@@ -24,7 +25,7 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import type { Appointment, Consultation } from '../../api/appointments';
 import { ApiError } from '../../api/client';
@@ -46,7 +47,6 @@ import {
   CONTRACT_STATUS_META,
   COMPONENT_STATUS_META,
   MEASUREMENT_TYPE_META,
-  ORDER_ITEM_STATUS_META,
   ORDER_STATUS_META,
   OPTION_STATUS_META,
 } from '../../api/status-catalog';
@@ -54,8 +54,8 @@ import { BackButton } from '../../shared/BackButton';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { APPT_STATUS_META, SOURCE_META } from '../appointments/appointment-constants';
-import { JourneyCard } from '../journeys/JourneyCard';
-import { CUSTOMER_STATUS_META, TRANSACTION_TYPE_LABEL, formatAmount } from './customer-constants';
+import { ItemCompositionCell } from '../contracts/ItemCompositionCell';
+import { CUSTOMER_STATUS_META, formatAmount } from './customer-constants';
 import { metaOf } from '../../shared/status-meta';
 import { usePageTitle } from '../../shared/page-title-store';
 
@@ -149,6 +149,111 @@ export function CustomerDetailPage() {
   const statusMeta = metaOf(CUSTOMER_STATUS_META, customer.customerStatus);
   const money = (v: number) => formatAmount(v);
 
+  // 헤더 배지: 계약서가 있으면 고객상태(미계약/계약) 대신 대표 계약서 상태를 보여준다.
+  // 대표 = 진행중(작성중·서명완료) 우선, 없으면 최신 계약완료. (data.contracts는 최신순)
+  // 취소만 있거나 계약서가 없으면 고객상태로, 비활성 고객은 항상 비활성으로 둔다.
+  const repContract =
+    customer.customerStatus === 'INACTIVE'
+      ? undefined
+      : (data.contracts.find((c) => c.status === 'DRAFT' || c.status === 'SIGNED') ??
+        data.contracts.find((c) => c.status === 'COMPLETED'));
+  const headerBadge = repContract
+    ? { ...metaOf(CONTRACT_STATUS_META, repContract.status), contractNo: repContract.contractNo }
+    : { ...statusMeta, contractNo: null };
+
+  /*
+    진행 요약 — 각 메뉴(예약·계약·컨설팅·채촌·제작·렌탈·수선)의 현재 상태만 읽어
+    보여주고 해당 메뉴로 이동만 시킨다. 저장·기능 없는 읽기 전용 파생 뷰다.
+    (진행 상태를 별도 테이블로 관리하던 방식을 걷어내고, 각 도메인 상태를 그대로 비춘다.)
+  */
+  const summaryRows: { key: string; label: string; status: ReactNode; to: string }[] = [];
+  if (data.appointments.length || data.consultations.length) {
+    const latestAppt = data.appointments.reduce<Appointment | undefined>(
+      (m, a) => (!m || a.startAt > m.startAt ? a : m),
+      undefined,
+    );
+    summaryRows.push({
+      key: 'appt',
+      label: '예약·상담',
+      status: latestAppt ? (
+        <StatusBadge
+          label={metaOf(APPT_STATUS_META, latestAppt.status).label}
+          color={metaOf(APPT_STATUS_META, latestAppt.status).color}
+        />
+      ) : (
+        `상담 ${data.consultations.length}건`
+      ),
+      to: '/appointments',
+    });
+  }
+  if (data.contracts.length) {
+    const c = repContract ?? data.contracts[0];
+    summaryRows.push({
+      key: 'contract',
+      label: '계약',
+      status: (
+        <Space size={6} wrap>
+          <span>{c.contractNo}</span>
+          <StatusBadge
+            label={metaOf(CONTRACT_STATUS_META, c.status).label}
+            color={metaOf(CONTRACT_STATUS_META, c.status).color}
+          />
+        </Space>
+      ),
+      to: '/contracts',
+    });
+  }
+  const customItems = data.orders
+    .filter((o) => o.transactionType === 'CUSTOM')
+    .flatMap((o) => o.items ?? []);
+  if (customItems.length) {
+    const confirmed = customItems.filter((i) => i.optionStatus === 'CONFIRMED').length;
+    summaryRows.push({
+      key: 'option',
+      label: '옵션·컨설팅',
+      status: `옵션 확정 ${confirmed}/${customItems.length} 품목`,
+      to: '/production',
+    });
+  }
+  if (data.measurements.length) {
+    summaryRows.push({
+      key: 'measure',
+      label: '채촌',
+      status: `${data.measurements.length}회`,
+      to: `/measurements?customerId=${customer.id}`,
+    });
+  }
+  if (data.components.length) {
+    summaryRows.push({
+      key: 'production',
+      label: '제작·입출고',
+      status: `${data.components.length} 구성품`,
+      to: '/production',
+    });
+  }
+  if (data.rentals.length) {
+    summaryRows.push({
+      key: 'rental',
+      label: '렌탈',
+      status: `${data.rentals.length}건`,
+      to: '/rentals',
+    });
+  }
+  if (data.repairs.length) {
+    const latestRepair = data.repairs[0];
+    summaryRows.push({
+      key: 'repair',
+      label: '수선',
+      status: (
+        <StatusBadge
+          label={repairStatusMeta(latestRepair.status).label}
+          color={repairStatusMeta(latestRepair.status).color}
+        />
+      ),
+      to: '/repairs',
+    });
+  }
+
   const appointmentColumns: ColumnsType<Appointment> = [
     {
       title: '예약 일시',
@@ -202,26 +307,25 @@ export function CustomerDetailPage() {
       render: (v: string, r) => <Link to={`/orders/${r.id}`}>{v}</Link>,
     },
     { title: '계약번호', dataIndex: 'contractNo', width: 150 },
-    {
-      title: '거래 방식',
-      dataIndex: 'transactionType',
-      width: 90,
-      render: (v: 'CUSTOM' | 'RENTAL') => TRANSACTION_TYPE_LABEL[v],
-    },
     { title: '상태', dataIndex: 'status', width: 100, render: (v: string) => metaOf(ORDER_STATUS_META, v).label },
     { title: '완료예정일', dataIndex: 'completionDueDate', width: 110, render: (v?: string) => v ?? '-' },
     {
+      // 계약관리 목록의 '품목 구성'과 같은 규칙 — 거래구분 태그 + "정장 1 · 구두 1".
+      // 주문은 행마다 거래방식이 하나라, 해당 방식 쪽 counts에만 채워 한 줄로 낸다.
       title: '품목',
       dataIndex: 'items',
-      render: (_, r) => (
-        <Space wrap size={4}>
-          {(r.items ?? []).map((i) => (
-            <Tag key={i.id}>
-              {i.displayName} · {metaOf(ORDER_ITEM_STATUS_META, i.status).label}
-            </Tag>
-          ))}
-        </Space>
-      ),
+      render: (_, r) => {
+        const counts = (r.items ?? []).reduce<Partial<Record<string, number>>>((acc, i) => {
+          acc[i.productCategory] = (acc[i.productCategory] ?? 0) + 1;
+          return acc;
+        }, {});
+        return (
+          <ItemCompositionCell
+            customCounts={r.transactionType === 'CUSTOM' ? counts : {}}
+            rentalCounts={r.transactionType === 'RENTAL' ? counts : {}}
+          />
+        );
+      },
     },
   ];
 
@@ -339,8 +443,11 @@ export function CustomerDetailPage() {
             <Typography.Title level={4} style={{ margin: 0 }}>
               {customer.name}
             </Typography.Title>
-            <StatusBadge label={statusMeta.label} color={statusMeta.color} />
             <Typography.Text type="secondary">{customer.phone}</Typography.Text>
+            <StatusBadge label={headerBadge.label} color={headerBadge.color} />
+            {headerBadge.contractNo && (
+              <Typography.Text type="secondary">({headerBadge.contractNo})</Typography.Text>
+            )}
           </Space>
           <Space wrap>
             <Can permission="CUSTOMER_EDIT">
@@ -350,6 +457,9 @@ export function CustomerDetailPage() {
                   editForm.setFieldsValue({
                     name: customer.name,
                     phone: customer.phone,
+                    heightCm: customer.heightCm ?? undefined,
+                    weightKg: customer.weightKg ?? undefined,
+                    age: customer.age ?? undefined,
                     email: customer.email,
                     notes: customer.notes,
                   });
@@ -398,13 +508,20 @@ export function CustomerDetailPage() {
         </Row>
       </Card>
 
-      {/* 진행 단계는 "이 고객이 지금 어디까지 왔는지"라 탭보다 위에 둔다 (개발설계서 05 G-11) */}
-      <JourneyCard
-        customerId={customer.id}
-        customerName={customer.name}
-        contracts={data.contracts}
-        orders={data.orders}
-      />
+      {/* 진행 요약 — 각 메뉴의 현재 상태만 비추고 이동시킨다(읽기 전용). */}
+      {summaryRows.length > 0 && (
+        <Card title="진행 요약" size="small">
+          <List
+            size="small"
+            dataSource={summaryRows}
+            renderItem={(r) => (
+              <List.Item actions={[<Link key="go" to={r.to}>이동 →</Link>]}>
+                <List.Item.Meta title={r.label} description={r.status} />
+              </List.Item>
+            )}
+          />
+        </Card>
+      )}
 
       <Card>
         <Tabs
@@ -417,6 +534,9 @@ export function CustomerDetailPage() {
                 <Descriptions column={{ xs: 1, md: 2 }} bordered size="small">
                   <Descriptions.Item label="이름">{customer.name}</Descriptions.Item>
                   <Descriptions.Item label="전화번호">{customer.phone}</Descriptions.Item>
+                  <Descriptions.Item label="키">{customer.heightCm != null ? `${customer.heightCm} cm` : '-'}</Descriptions.Item>
+                  <Descriptions.Item label="몸무게">{customer.weightKg != null ? `${customer.weightKg} kg` : '-'}</Descriptions.Item>
+                  <Descriptions.Item label="나이">{customer.age != null ? `${customer.age} 세` : '-'}</Descriptions.Item>
                   <Descriptions.Item label="이메일">{customer.email ?? '-'}</Descriptions.Item>
                   <Descriptions.Item label="고객 상태">
                     <StatusBadge label={statusMeta.label} color={statusMeta.color} />
@@ -604,7 +724,7 @@ export function CustomerDetailPage() {
             .then((values) => updateMutation.mutate({ ...values, version: customer.version }));
         }}
         onCancel={() => setEditOpen(false)}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={editForm} layout="vertical" requiredMark>
           <Form.Item label="이름" name="name" rules={[{ required: true, message: '이름을 입력해 주세요.' }]}>
@@ -619,6 +739,15 @@ export function CustomerDetailPage() {
             ]}
           >
             <Input maxLength={13} />
+          </Form.Item>
+          <Form.Item label="키 (cm)" name="heightCm">
+            <InputNumber style={{ width: '100%' }} min={0} max={300} placeholder="예: 175" />
+          </Form.Item>
+          <Form.Item label="몸무게 (kg)" name="weightKg">
+            <InputNumber style={{ width: '100%' }} min={0} max={500} step={0.1} placeholder="예: 68.5" />
+          </Form.Item>
+          <Form.Item label="나이" name="age">
+            <InputNumber style={{ width: '100%' }} min={0} max={150} placeholder="예: 32" />
           </Form.Item>
           <Form.Item label="이메일" name="email" rules={[{ type: 'email', message: '이메일 형식이 아닙니다.' }]}>
             <Input maxLength={100} />
