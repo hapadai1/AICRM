@@ -44,6 +44,8 @@ interface DocRow {
   itemLabel: string;
   orderNo?: string;
   quantity: number;
+  /** 단가 — 작성중 품목표와 컬럼을 맞추기 위해 금액과 별도로 싣는다 (벌 단위면 금액과 같다) */
+  unitPrice: number;
   amount: number;
   notes?: string;
   components: RowComponent[];
@@ -70,6 +72,7 @@ function buildRows(data?: ContractDocument): DocRow[] {
           itemLabel: it.displayName,
           orderNo: it.orderNo ?? undefined,
           quantity: 1,
+          unitPrice: line.unitPrice || (line.quantity ? line.lineAmount / line.quantity : 0),
           amount: line.unitPrice || (line.quantity ? line.lineAmount / line.quantity : 0),
           notes: line.notes,
           // 유료 옵션이 붙은 부위 + 컨설팅에서 뺀 베스트("제외"로 남긴다 — 현업 확정 2026-08-01).
@@ -94,6 +97,7 @@ function buildRows(data?: ContractDocument): DocRow[] {
       transactionType: line.transactionType,
       itemLabel: line.quantity > 1 ? `${categoryLabel} ×${line.quantity}` : categoryLabel,
       quantity: line.quantity,
+      unitPrice: line.unitPrice,
       amount: line.lineAmount,
       notes: line.notes,
       components: [],
@@ -141,19 +145,25 @@ export function ContractDocumentView({ contractId }: { contractId: string }) {
 
   const columns: ColumnsType<DocRow> = [
     {
+      // 거래 방식(맞춤·렌탈)은 작성중 품목표처럼 별도 열로 둔다 — 품목 열에 칩으로 섞지 않는다.
+      title: '거래 방식',
+      key: 'transactionType',
+      width: 96,
+      render: (_, r) => (
+        <Tag color={TRANSACTION_TYPE_TAG_COLOR[r.transactionType]} style={{ margin: 0 }}>
+          {TRANSACTION_TYPE_LABEL[r.transactionType]}
+        </Tag>
+      ),
+    },
+    {
       // 열 폭은 전부 지정한다 — 한 열만 비워 두면 그 열이 남는 폭을 혼자 먹는다.
       // 남는 폭은 지정 폭 비율대로 나뉘므로, 선택 옵션이 가장 크게 늘어난다.
       title: '품목',
       key: 'item',
-      width: hasOptions ? 260 : undefined,
+      width: hasOptions ? 200 : undefined,
       render: (_, r) => (
         <Space direction="vertical" size={2}>
-          <Space size={6}>
-            <Tag color={TRANSACTION_TYPE_TAG_COLOR[r.transactionType]} style={{ margin: 0 }}>
-              {TRANSACTION_TYPE_LABEL[r.transactionType]}
-            </Tag>
-            <Typography.Text strong>{r.itemLabel}</Typography.Text>
-          </Space>
+          <Typography.Text strong>{r.itemLabel}</Typography.Text>
           {r.orderNo && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {r.orderNo}
@@ -168,9 +178,17 @@ export function ContractDocumentView({ contractId }: { contractId: string }) {
         </Space>
       ),
     },
-    { title: '개수', dataIndex: 'quantity', width: 70, align: 'right' },
+    { title: '수량', dataIndex: 'quantity', width: 70, align: 'right' },
     {
-      title: '금액',
+      // 작성중 품목표와 컬럼을 맞추기 위해 단가를 별도로 보여준다(벌 단위 행은 금액과 같다).
+      title: '단가(원)',
+      dataIndex: 'unitPrice',
+      width: 130,
+      align: 'right',
+      render: (v: number) => formatKrw(v),
+    },
+    {
+      title: '금액(원)',
       dataIndex: 'amount',
       width: 130,
       align: 'right',
@@ -242,7 +260,7 @@ export function ContractDocumentView({ contractId }: { contractId: string }) {
           pagination={false}
           columns={columns}
           dataSource={rows}
-          scroll={{ x: hasOptions ? 1140 : 760 }}
+          scroll={{ x: hasOptions ? 1370 : 990 }}
           locale={{ emptyText: '품목이 없습니다.' }}
         />
 
