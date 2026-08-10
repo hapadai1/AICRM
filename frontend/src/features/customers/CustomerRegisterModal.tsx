@@ -4,7 +4,7 @@
  * 두 경로가 같은 필드를 채우도록 '최초 예약일'도 여기서 입력할 수 있게 두었다.
  */
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { App, DatePicker, Form, Input, Modal } from 'antd';
+import { App, DatePicker, Form, Input, InputNumber, Modal } from 'antd';
 import type { Dayjs } from 'dayjs';
 import { ApiError } from '../../api/client';
 import { createCustomer, type CustomerBase, type CustomerSaveBody } from '../../api/customers';
@@ -24,6 +24,9 @@ interface Props {
 interface FormValues {
   name: string;
   phone: string;
+  heightCm?: number;
+  weightKg?: number;
+  age?: number;
   email?: string;
   notes?: string;
   firstReservedAt?: Dayjs;
@@ -86,7 +89,7 @@ export function CustomerRegisterModal({ open, onClose, onGoDetail, onRegistered 
         );
       }}
       onCancel={close}
-      destroyOnClose
+      destroyOnHidden
     >
       <Form form={form} layout="vertical" requiredMark>
         <Form.Item label="이름" name="name" rules={[{ required: true, message: '이름을 입력해 주세요.' }]}>
@@ -101,6 +104,15 @@ export function CustomerRegisterModal({ open, onClose, onGoDetail, onRegistered 
           ]}
         >
           <Input placeholder="010-0000-0000" maxLength={13} />
+        </Form.Item>
+        <Form.Item label="키 (cm)" name="heightCm">
+          <InputNumber style={{ width: '100%' }} min={0} max={300} placeholder="예: 175" />
+        </Form.Item>
+        <Form.Item label="몸무게 (kg)" name="weightKg">
+          <InputNumber style={{ width: '100%' }} min={0} max={500} step={0.1} placeholder="예: 68.5" />
+        </Form.Item>
+        <Form.Item label="나이" name="age">
+          <InputNumber style={{ width: '100%' }} min={0} max={150} placeholder="예: 32" />
         </Form.Item>
         <Form.Item label="이메일" name="email" rules={[{ type: 'email', message: '이메일 형식이 아닙니다.' }]}>
           <Input maxLength={100} />

@@ -166,6 +166,13 @@ export function CustomerDetailPage() {
     보여주고 해당 메뉴로 이동만 시킨다. 저장·기능 없는 읽기 전용 파생 뷰다.
     (진행 상태를 별도 테이블로 관리하던 방식을 걷어내고, 각 도메인 상태를 그대로 비춘다.)
   */
+  // 각 영역을 그 고객의 전용 화면으로 딥링크한다 — 주문번호/계약번호 → 계약id 매핑.
+  const contractIdByNo = new Map(data.contracts.map((c) => [c.contractNo, c.id]));
+  const contractIdOfOrderNo = (orderNo: string) => {
+    const o = data.orders.find((x) => x.orderNo === orderNo);
+    return o?.contractNo ? contractIdByNo.get(o.contractNo) : undefined;
+  };
+
   const summaryRows: { key: string; label: string; status: ReactNode; to: string }[] = [];
   if (data.appointments.length || data.consultations.length) {
     const latestAppt = data.appointments.reduce<Appointment | undefined>(
@@ -183,7 +190,7 @@ export function CustomerDetailPage() {
       ) : (
         `상담 ${data.consultations.length}건`
       ),
-      to: '/appointments',
+      to: latestAppt ? `/appointments/${latestAppt.id}` : '/appointments',
     });
   }
   if (data.contracts.length) {
@@ -200,19 +207,25 @@ export function CustomerDetailPage() {
           />
         </Space>
       ),
-      to: '/contracts',
+      to: `/contracts/${c.id}`,
     });
   }
+  const customOrder = data.orders.find(
+    (o) => o.transactionType === 'CUSTOM' && (o.items?.length ?? 0) > 0,
+  );
   const customItems = data.orders
     .filter((o) => o.transactionType === 'CUSTOM')
     .flatMap((o) => o.items ?? []);
   if (customItems.length) {
     const confirmed = customItems.filter((i) => i.optionStatus === 'CONFIRMED').length;
+    const optionContractId = customOrder?.contractNo
+      ? contractIdByNo.get(customOrder.contractNo)
+      : undefined;
     summaryRows.push({
       key: 'option',
       label: '옵션·컨설팅',
       status: `옵션 확정 ${confirmed}/${customItems.length} 품목`,
-      to: '/production',
+      to: optionContractId ? `/contracts/${optionContractId}/options` : '/production',
     });
   }
   if (data.measurements.length) {
@@ -224,19 +237,21 @@ export function CustomerDetailPage() {
     });
   }
   if (data.components.length) {
+    const prodContractId = contractIdOfOrderNo(data.components[0].orderNo);
     summaryRows.push({
       key: 'production',
       label: '제작·입출고',
       status: `${data.components.length} 구성품`,
-      to: '/production',
+      to: prodContractId ? `/contracts/${prodContractId}/production` : '/production',
     });
   }
   if (data.rentals.length) {
+    const rentalContractId = contractIdOfOrderNo(data.rentals[0].orderNo);
     summaryRows.push({
       key: 'rental',
       label: '렌탈',
       status: `${data.rentals.length}건`,
-      to: '/rentals',
+      to: rentalContractId ? `/contracts/${rentalContractId}/production` : '/rentals',
     });
   }
   if (data.repairs.length) {
@@ -250,7 +265,7 @@ export function CustomerDetailPage() {
           color={repairStatusMeta(latestRepair.status).color}
         />
       ),
-      to: '/repairs',
+      to: `/repairs?customerId=${customer.id}&customerName=${encodeURIComponent(customer.name)}`,
     });
   }
 

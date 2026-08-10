@@ -14,7 +14,6 @@ import { ContractTypeAdminPage } from '../features/contracts/ContractTypeAdminPa
 import { CustomerDetailPage } from '../features/customers/CustomerDetailPage';
 import { CustomersPage } from '../features/customers/CustomersPage';
 import { DashboardPage } from '../features/dashboard/DashboardPage';
-import { JourneyBoardPage } from '../features/journeys/JourneyBoardPage';
 import { MeasurementComparePage } from '../features/measurements/MeasurementComparePage';
 import { MeasurementEditPage } from '../features/measurements/MeasurementEditPage';
 import { MeasurementListPage } from '../features/measurements/MeasurementListPage';
@@ -67,8 +66,6 @@ export const router = createBrowserRouter([
       { path: 'appointments/:id', element: <AppointmentDetailPage /> },
       { path: 'customers', element: <CustomersPage /> },
       { path: 'customers/:id', element: <CustomerDetailPage /> },
-      // 진행 현황 — 단계별 칸반 (개발설계서 05 G-11)
-      { path: 'journeys', element: <JourneyBoardPage /> },
       // 계약·주문 (new가 :id보다 먼저)
       { path: 'contracts', element: <ContractListPage /> },
       { path: 'contracts/new', element: <ContractFormPage /> },

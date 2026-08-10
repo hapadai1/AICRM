@@ -87,7 +87,6 @@ export function AppLayout() {
 
   const adminMenuItems: MenuItem[] = [
     { key: '/', icon: <DashboardOutlined />, label: '대시보드' },
-    { key: '/journeys', icon: <SwapOutlined />, label: '진행 현황' },
     { key: '/appointments', icon: <CalendarOutlined />, label: '예약' },
     { key: '/customers', icon: <TeamOutlined />, label: '고객' },
     { key: '/contracts', icon: <FileTextOutlined />, label: '계약 관리' },

@@ -17,6 +17,7 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import dayjs, { type Dayjs } from 'dayjs';
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { ApiError } from '../../api/client';
 import { LAYOUT } from '../../app/theme';
 import { DataTable } from '../../shared/DataTable';
@@ -141,10 +142,18 @@ export function RepairsPage() {
   const { message } = App.useApp();
   const queryClient = useQueryClient();
 
+  // 고객 상세 '진행 요약'에서 ?customerId=&customerName= 로 넘어오면 그 고객으로 걸러 연다.
+  const [searchParams] = useSearchParams();
+  const urlCustomerId = searchParams.get('customerId') ?? undefined;
+  const urlCustomerName = searchParams.get('customerName') ?? undefined;
+
   const [statusFilter, setStatusFilter] = useState<RepairStatus | undefined>();
   // 목록을 여는 이유는 대개 "지금 처리할 게 뭐냐"라 진행중으로 시작한다(비우면 전체).
-  const [phaseFilter, setPhaseFilter] = useState<RepairPhase | undefined>('IN_PROGRESS');
-  const [customerFilter, setCustomerFilter] = useState<string | undefined>();
+  // 단, 특정 고객으로 들어오면 그 고객의 수선 전체를 봐야 하므로 단계 필터를 풀어 둔다.
+  const [phaseFilter, setPhaseFilter] = useState<RepairPhase | undefined>(
+    urlCustomerId ? undefined : 'IN_PROGRESS',
+  );
+  const [customerFilter, setCustomerFilter] = useState<string | undefined>(urlCustomerId);
   const [customerKeyword, setCustomerKeyword] = useState('');
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(30);
@@ -210,8 +219,9 @@ export function RepairsPage() {
       }),
     onSuccess: (r) => {
       message.success(`${r.customerName} 고객의 수선이 접수되었습니다.`);
+      // destroyOnHidden가 닫힐 때 Form을 언마운트하므로 별도 resetFields는 불필요하다
+      // (언마운트된 폼에 호출하면 "useForm not connected" 경고가 난다).
       setReceiptOpen(false);
-      receiptForm.resetFields();
       invalidate();
     },
     onError: (e) => message.error(e instanceof ApiError ? e.message : '수선 접수에 실패했습니다.'),
@@ -221,8 +231,8 @@ export function RepairsPage() {
     mutationFn: (v: { repair: Repair; toStatus: RepairStatus; notes?: string }) =>
       postRepairStatusEvent(v.repair.id, { newStatus: v.toStatus, notes: v.notes }),
     onSuccess: (result, v) => {
+      // destroyOnHidden가 폼을 언마운트하므로 resetFields 불필요(경고 방지).
       setStatusTarget(null);
-      noteForm.resetFields();
       invalidate();
       // 연락 대상 상태면 문구를 확인하고 보낼 수 있게 확인창을 띄운다.
       if (result.suggestedNotification) {
@@ -245,6 +255,10 @@ export function RepairsPage() {
     value: c.id,
     label: `${c.name} (${c.phone})`,
   }));
+  // URL로 넘어온 고객이 검색결과에 아직 없으면, 선택칩에 이름이 뜨도록 옵션을 미리 넣는다.
+  if (urlCustomerId && !customerOptions.some((o) => o.value === urlCustomerId)) {
+    customerOptions.unshift({ value: urlCustomerId, label: urlCustomerName ?? urlCustomerId });
+  }
 
   // 대상 품목: 계약에 등록된 물품이 아니라 품목 목록에서 자유롭게 고른다.
   const targetProductOptions = REPAIR_TARGET_PRODUCTS.map((code) => ({
@@ -253,7 +267,7 @@ export function RepairsPage() {
   }));
 
   const openStatusChange = (repair: Repair, toStatus: RepairStatus) => {
-    noteForm.resetFields();
+    // 모달이 열리며 Form이 새로 마운트되므로(초기값 적용) 별도 resetFields 불필요.
     setStatusTarget({ repair, toStatus });
   };
 
@@ -589,7 +603,7 @@ export function RepairsPage() {
         cancelText="취소"
         confirmLoading={createMutation.isPending}
         width={640}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form<ReceiptValues>
           form={receiptForm}
@@ -773,7 +787,7 @@ export function RepairsPage() {
         okText={isRevert ? '되돌리기' : '변경'}
         cancelText="닫기"
         confirmLoading={statusMutation.isPending}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form
           form={noteForm}

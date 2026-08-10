@@ -1,6 +1,6 @@
 import { FilterOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Button, Checkbox, Empty, Input, Radio, Segmented, Space } from 'antd';
+import { Button, Checkbox, Empty, Input, Radio, Space } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -10,16 +10,10 @@ import { Can } from '../../shared/Can';
 import { DataTable } from '../../shared/DataTable';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
+import { metaOf } from '../../shared/status-meta';
 import { COL } from '../../shared/table-width';
 import { CustomerRegisterModal } from './CustomerRegisterModal';
-import { TRANSACTION_TYPE_LABEL } from './customer-constants';
-
-/** 진행 journey 상태별 세부 단계 배지 색상 (진행상태 재정의 02) */
-const JOURNEY_STATUS_COLOR: Record<'ACTIVE' | 'COMPLETED' | 'CANCELLED', string> = {
-  ACTIVE: 'processing',
-  COMPLETED: 'green',
-  CANCELLED: 'default',
-};
+import { CUSTOMER_STATUS_META, TRANSACTION_TYPE_LABEL } from './customer-constants';
 
 /**
  * CUST-001 고객 목록 (설계서 07 §2).
@@ -32,14 +26,13 @@ export function CustomersPage() {
   const [q, setQ] = useState('');
   const [scope, setScope] = useState<'CONTRACT' | 'ALL'>('CONTRACT');
   const [transactionType, setTransactionType] = useState<'CUSTOM' | 'RENTAL' | undefined>(undefined);
-  const [progress, setProgress] = useState<'ACTIVE' | 'DONE' | 'ALL'>('ALL');
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(30);
   const [createOpen, setCreateOpen] = useState(false);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['customers', { q, scope, transactionType: transactionType ?? '', progress, page, size }],
-    queryFn: () => fetchCustomers({ q, scope, transactionType, progress, page, size }),
+    queryKey: ['customers', { q, scope, transactionType: transactionType ?? '', page, size }],
+    queryFn: () => fetchCustomers({ q, scope, transactionType, page, size }),
   });
 
   const runSearch = () => {
@@ -88,17 +81,11 @@ export function CustomersPage() {
     {
       title: '고객 상태',
       dataIndex: 'customerStatus',
-      width: COL.wide,
-      // 계약상태 배지는 제외하고 진행 journey의 세부 단계(진행상태)만 출력
-      render: (_v: CustomerListItem['customerStatus'], row) =>
-        row.currentStage ? (
-          <StatusBadge
-            label={row.currentStage.name}
-            color={JOURNEY_STATUS_COLOR[row.currentStage.status] ?? 'default'}
-          />
-        ) : (
-          '-'
-        ),
+      width: COL.status,
+      render: (v: CustomerListItem['customerStatus']) => {
+        const m = metaOf(CUSTOMER_STATUS_META, v);
+        return <StatusBadge label={m.label} color={m.color} />;
+      },
     },
     {
       title: '계약 건수',
@@ -138,19 +125,6 @@ export function CustomersPage() {
                 >
                   전체 고객
                 </Checkbox>
-                {/* 진행상태 검색(설계서 06 §2 / 02): 진행중/완료/전체 */}
-                <Segmented<'ACTIVE' | 'DONE' | 'ALL'>
-                  value={progress}
-                  onChange={(v) => {
-                    setProgress(v);
-                    setPage(1);
-                  }}
-                  options={[
-                    { label: '전체', value: 'ALL' },
-                    { label: '진행중', value: 'ACTIVE' },
-                    { label: '완료', value: 'DONE' },
-                  ]}
-                />
               </>
             }
             actions={
