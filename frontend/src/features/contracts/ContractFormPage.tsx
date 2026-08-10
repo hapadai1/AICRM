@@ -580,17 +580,22 @@ export function ContractFormPage() {
         <Card
           title="품목"
           extra={
-            // 선택 옵션 추가금이 계약금액에 들어갔는지 배지로 확인시킨다 (옵션이 있을 때만).
-            surcharge && surcharge.total > 0 ? (
+            // 금액은 **반영(확정)된 옵션 기준**으로만 뜬다 — 각 품목 확인서의 계약 반영 버튼을 눌러
+            // 미반영 차액(pending)이 0이 됐을 때 비로소 "반영완료 (금액)"을 보여준다.
+            // 선택만 하고 미확정인 품목이 남아 있으면(pending>0) 금액 없이 안내만 띄운다.
+            surcharge && surcharge.applied > 0 && surcharge.pending === 0 ? (
               <Tag
-                color={surcharge.pending === 0 ? 'green' : 'orange'}
+                color="green"
                 style={{ fontSize: 13, padding: '4px 12px', borderRadius: 16, marginInlineEnd: 0 }}
               >
-                {surcharge.pending === 0
-                  ? `옵션 추가금 반영완료 (${formatKrw(surcharge.applied)})`
-                  : surcharge.pending > 0
-                    ? `옵션 추가금 미반영 +${formatKrw(surcharge.pending)}`
-                    : `옵션 추가금 초과반영 ${formatKrw(surcharge.pending)}`}
+                옵션 추가금 반영완료 ({formatKrw(surcharge.applied)})
+              </Tag>
+            ) : surcharge && surcharge.pending > 0 ? (
+              <Tag
+                color="orange"
+                style={{ fontSize: 13, padding: '4px 12px', borderRadius: 16, marginInlineEnd: 0 }}
+              >
+                옵션 미반영 — 확인서에서 계약 반영 필요
               </Tag>
             ) : null
           }
