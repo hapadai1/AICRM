@@ -275,7 +275,7 @@ export function ContractTypeAdminPage() {
           setOpen(false);
           setEditing(null);
         }}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={form} layout="vertical" style={{ marginTop: 8 }}>
           {!editing && (

@@ -106,7 +106,7 @@ export function AdminNotificationTemplatesPage() {
         width={640}
         confirmLoading={saveMutation.isPending}
         onOk={submit}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form<FormValues> form={form} layout="vertical">
           <Row gutter={16}>

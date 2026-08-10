@@ -184,7 +184,7 @@ function MasterTable({ type, title }: { type: MasterType; title: string }) {
             updateMutation.mutate({ id: editTarget.id, payload: values });
           })
         }
-        destroyOnClose
+        destroyOnHidden
       >
         <Form<EditFormValues> form={editForm} layout="vertical">
           <Form.Item label="코드">
@@ -215,7 +215,7 @@ function MasterTable({ type, title }: { type: MasterType; title: string }) {
         cancelText="취소"
         confirmLoading={createMutation.isPending}
         onOk={() => void createForm.validateFields().then((values) => createMutation.mutate(values))}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form<CreateFormValues> form={createForm} layout="vertical">
           <Form.Item
@@ -326,7 +326,7 @@ function CodeLabelTable({ domain, title }: { domain: CodeLabelDomain; title: str
             updateMutation.mutate({ code: editTarget.code, label: values.label });
           })
         }
-        destroyOnClose
+        destroyOnHidden
       >
         <Form<CodeLabelFormValues> form={form} layout="vertical">
           <Form.Item label="코드">

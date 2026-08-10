@@ -628,7 +628,7 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
         okText={dateAsk?.stage.action ?? '처리'}
         cancelText="취소"
         confirmLoading={completeMutation.isPending || componentMutation.isPending}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form
           form={dateForm}

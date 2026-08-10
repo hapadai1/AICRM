@@ -7,6 +7,7 @@ import {
   HttpStatus,
   Logger,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { Response } from 'express';
 import { BusinessException } from './business.exception';
 
@@ -56,6 +57,31 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         : status === HttpStatus.NOT_FOUND ? 'NOT_FOUND'
         : 'INTERNAL_ERROR';
       res.status(status).json({ error: { code, message: exception.message }, meta });
+      return;
+    }
+
+    // Prisma 오류 매핑 — 잘못된 형식의 ID(예: UUID가 아닌 경로 파라미터)나 없는 레코드가
+    // 500으로 새지 않도록 4xx로 변환한다. (P2025=없음 → 404, 그 외 형식·제약 위반 → 400)
+    if (exception instanceof Prisma.PrismaClientKnownRequestError) {
+      if (exception.code === 'P2025') {
+        res.status(HttpStatus.NOT_FOUND).json({
+          error: { code: 'NOT_FOUND', message: '대상을 찾을 수 없습니다.' },
+          meta,
+        });
+        return;
+      }
+      res.status(HttpStatus.BAD_REQUEST).json({
+        error: { code: 'VALIDATION_ERROR', message: '입력값을 확인해 주세요.' },
+        meta,
+      });
+      return;
+    }
+    // 잘못된 형식의 값이 쿼리 엔진에 닿기 전에 검증 단계에서 걸린 경우.
+    if (exception instanceof Prisma.PrismaClientValidationError) {
+      res.status(HttpStatus.BAD_REQUEST).json({
+        error: { code: 'VALIDATION_ERROR', message: '입력값을 확인해 주세요.' },
+        meta,
+      });
       return;
     }
 

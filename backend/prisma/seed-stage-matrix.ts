@@ -22,6 +22,7 @@ import { createHash, randomUUID } from 'crypto';
 import { mkdirSync, writeFileSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 import { confirmConsultingForContracts } from './consulting-seed';
+import { ITEM_STATUS_FLOW } from '../src/modules/production/production-status';
 
 const prisma = new PrismaClient();
 
@@ -527,6 +528,25 @@ const COMPONENT_STATUS_OF: Record<string, string> = {
   CANCELLED: 'CANCELLED',
 };
 
+/**
+ * 맞춤 진행 단계 → 그 단계를 지난 것으로 보는 품목 상태(reachedAt).
+ * 프론트 production-stages.ts의 CUSTOM_STAGES와 같은 표다 — 이게 어긋나면
+ * 상단 진행률(itemStatus 기준)과 진행 카드(단계 완료 기록 기준)가 다시 갈린다.
+ * 준비(STYLE_CONSULTING)는 첫 발주 때 함께 완료로 찍히므로 발주 임계(PRODUCTION_REQUESTED)를 쓴다
+ * (ProductionFlowCard.completeMutation: 첫 단계 처리 시 준비 완료도 함께 남긴다).
+ */
+const CUSTOM_STAGE_REACHED: Array<{ code: string; reachedAt: string }> = [
+  { code: 'STYLE_CONSULTING', reachedAt: 'PRODUCTION_REQUESTED' },
+  { code: 'ORDER_REQUESTED', reachedAt: 'PRODUCTION_REQUESTED' },
+  { code: 'BASTING_RECEIVED', reachedAt: 'BASTING_RECEIVED' },
+  { code: 'FITTING_DONE', reachedAt: 'FITTING_COMPLETED' },
+  { code: 'PRODUCT_RECEIVED', reachedAt: 'RECEIVED' },
+  { code: 'RELEASED', reachedAt: 'RELEASED' },
+];
+
+/** 품목 제작 상태의 흐름 순위 (CANCELLED 등 흐름 밖은 -1) */
+const itemRank = (status: string): number => (ITEM_STATUS_FLOW as readonly string[]).indexOf(status);
+
 /** 품목 상태까지 오는 동안 남았을 이벤트 이력 (제작 요청 이후 단계만 기록된다) */
 const EVENT_CHAIN = [
   'PRODUCTION_REQUESTED',
@@ -566,6 +586,7 @@ async function createOrderForContract(
     },
   });
 
+  const createdItems: Array<{ orderItemId: string; status: string }> = [];
   for (let i = 0; i < args.contract.items.length; i += 1) {
     const item = args.contract.items[i];
     const status = args.itemStatuses[i];
@@ -581,6 +602,7 @@ async function createOrderForContract(
         status,
       },
     });
+    createdItems.push({ orderItemId, status });
 
     const componentTypes = item.vest ? ['JACKET', 'TROUSERS', 'VEST'] : ['JACKET', 'TROUSERS'];
     const componentIds: string[] = [];
@@ -646,7 +668,20 @@ async function createOrderForContract(
     이 데모 계약도 진행을 세워 둬야 제작 화면에 나온다.
     거쳐 온 단계는 이벤트로 남겨 각 단계의 완료일이 화면에 찍히게 한다.
   */
-  const target = args.journeyStageCode ?? 'CONTRACT_CONFIRMED';
+  /*
+    진행이 서 있는 현재 단계 — 전 품목이 지난 마지막 단계 다음, 즉 "아직 다 못 지난 첫 단계".
+    품목 상태가 제각각인 데모 계약이라도 진행 포인터가 실제와 맞도록 상태에서 계산한다
+    (예전엔 journeyStageCode를 그대로 박아, 출고완료로 세워 놓고 완료 기록은 0건이었다).
+    발주 전(어떤 품목도 제작요청에 못 닿음)이면 넘겨받은 기본 단계(준비/계약확정)에 그대로 둔다.
+  */
+  const activeRanks = createdItems.map((ci) => itemRank(ci.status)).filter((r) => r >= 0);
+  let target = args.journeyStageCode ?? 'CONTRACT_CONFIRMED';
+  for (const st of CUSTOM_STAGE_REACHED) {
+    if (st.code === 'STYLE_CONSULTING') continue; // 준비는 이 카드 밖 단계라 포인터로 세우지 않는다
+    const need = itemRank(st.reachedAt);
+    if (activeRanks.some((r) => r >= need)) target = st.code;
+    if (!activeRanks.every((r) => r >= need)) break;
+  }
   const stages = await tx.journeyStage.findMany({
     where: { trackType: 'CUSTOM', active: true },
     orderBy: { sequenceNo: 'asc' },
@@ -682,6 +717,32 @@ async function createOrderForContract(
         changedAt: at(-30 + i * 3, 10),
       },
     });
+  }
+
+  /*
+    단계별 품목 완료 기록 — 제작 화면(진행 카드)이 "몇 개 끝났나"를 읽는 유일한 근거다.
+    itemStatus만 앞서고 이 기록이 없으면 상단 진행률(88%)과 카드(0/5)가 어긋난다.
+    실제 발주 흐름이 상태 전진과 함께 이 기록을 남기는 것과 같게, 각 품목이 제작 상태로
+    지난 단계마다 완료를 찍는다(취소 품목은 대상이 아니다 — resolveTargets도 제외한다).
+  */
+  for (const ci of createdItems) {
+    const rank = itemRank(ci.status);
+    if (rank < 0) continue;
+    for (let s = 0; s < CUSTOM_STAGE_REACHED.length; s += 1) {
+      const st = CUSTOM_STAGE_REACHED[s];
+      if (rank < itemRank(st.reachedAt)) continue;
+      await tx.journeyStageItemCompletion.create({
+        data: {
+          id: uuid(),
+          journeyId,
+          stageCode: st.code,
+          targetType: 'ORDER_ITEM',
+          targetId: ci.orderItemId,
+          completedAt: at(-24 + s * 3, 11),
+          completedBy: args.adminId,
+        },
+      });
+    }
   }
 }
 

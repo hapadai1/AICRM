@@ -247,7 +247,7 @@ function ColorToneTable() {
         okText="추가"
         cancelText="취소"
         confirmLoading={createMutation.isPending}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form<ColorFormValues> form={form} layout="vertical">
           <Form.Item
