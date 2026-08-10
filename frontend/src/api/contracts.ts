@@ -63,10 +63,6 @@ interface ContractLineApiRow {
   quantity: number;
   unitPrice?: string | number | null;
   lineAmount?: string | number | null;
-  /** 베스트(3피스) 포함 — 맞춤 정장 라인만 true 가능 (현업 확정 2026-07-30) */
-  vestIncluded?: boolean;
-  /** 베스트 포함 시 벌당 베스트 단가. 금액 = 수량 × (단가 + 베스트 단가) */
-  vestUnitPrice?: string | number | null;
   notes?: string | null;
   sortOrder: number;
   /** 스타일 컨설팅 옵션 추가금액을 합산한 시스템 롤업 라인이면 true (백엔드 소유·읽기전용) */
@@ -126,6 +122,8 @@ interface ContractDetailApiRow extends Omit<ContractListApiRow, 'contractType' |
   currentVersion?: ContractVersionApiRow | null;
   versions: ContractVersionApiRow[];
   orders: ContractOrderApiRow[];
+  /** 선택 옵션 추가금 반영 상태 (계약금액 반영 확인 배지용) */
+  optionSurcharge?: { total: number; applied: number; pending: number } | null;
 }
 
 // ---------- 화면용 뷰 ----------
@@ -142,14 +140,6 @@ export interface ContractLine {
   quantity: number;
   unitPrice: number;
   amount: number;
-  /**
-   * 베스트(3피스) 포함 — 맞춤 정장 라인 전용. **읽기 전용이다.**
-   * 계약서는 더 이상 베스트를 다루지 않고(현업 확정 2026-08-01) 스타일 컨설팅에서 벌마다 정한다.
-   * 이 값은 이전 계약이 남긴 기록이라, 화면에 쓰지 않고 저장 본문에도 싣지 않는다.
-   */
-  vestIncluded: boolean;
-  /** 베스트 포함 시 벌당 베스트 단가(수기). vestIncluded 와 같은 이유로 읽기 전용. */
-  vestUnitPrice: number;
   note?: string;
   itemDescription?: string;
   /**
@@ -239,6 +229,11 @@ export interface ContractDetail {
   versions: ContractVersion[];
   orders: ContractOrderSummary[];
   /**
+   * 선택 옵션 추가금이 계약금액에 반영됐는지 요약.
+   * total: 현재 선택 유료옵션 합계, applied: 반영 누계, pending: 미반영 차액.
+   */
+  optionSurcharge?: { total: number; applied: number; pending: number };
+  /**
    * 낙관적 잠금 값. 백엔드 응답 필드는 rowVersion 이며 요청 본문 필드명은 version 이다.
    * toContractDetail 에서 rowVersion 을 매핑한다 (변경/취소 확정 요청에 사용).
    */
@@ -253,8 +248,6 @@ function toLine(row: ContractLineApiRow): ContractLine {
     quantity: row.quantity,
     unitPrice: toNumber(row.unitPrice) ?? 0,
     amount: toNumber(row.lineAmount) ?? 0,
-    vestIncluded: row.vestIncluded ?? false,
-    vestUnitPrice: toNumber(row.vestUnitPrice) ?? 0,
     note: row.notes ?? undefined,
     itemDescription: row.itemDescription ?? undefined,
     isOptionRollup: row.isOptionRollup ?? false,
@@ -347,6 +340,7 @@ function toContractDetail(row: ContractDetailApiRow): ContractDetail {
       transactionType: o.transactionType,
       status: o.status,
     })),
+    optionSurcharge: row.optionSurcharge ?? undefined,
     // 낙관적 잠금: 백엔드 응답 rowVersion → 요청 본문 version 으로 그대로 전달한다.
     version: row.rowVersion,
   };

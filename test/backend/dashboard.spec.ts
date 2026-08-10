@@ -75,6 +75,19 @@ describe('대시보드 (dashboard)', () => {
     await ctx.prisma.order.create({
       data: { id: orderId, orderNo: 'ORD-260701-001', contractId, transactionType: 'CUSTOM', status: 'CREATED' },
     });
+    // 미주문 판정은 제작 목록과 같은 모집단을 쓴다 — 진행(journey) 없는 주문은 제외되므로
+    // 실제 흐름(계약완료가 진행을 보장)대로 진행을 함께 만든다.
+    await ctx.prisma.customerJourney.create({
+      data: {
+        id: randomUUID(),
+        customerId,
+        orderId,
+        trackType: 'CUSTOM',
+        currentStageCode: 'CONTRACT_CONFIRMED',
+        status: 'ACTIVE',
+        startedAt: new Date(),
+      },
+    });
     const lineId = randomUUID();
     await ctx.prisma.contractLine.create({
       data: {
@@ -209,59 +222,13 @@ describe('대시보드 (dashboard)', () => {
     });
     workOrderId = randomUUID();
     await ctx.prisma.workOrder.create({ data: { id: workOrderId, orderItemId } });
-    await ctx.prisma.workOrderVersion.create({
-      data: {
-        id: randomUUID(),
-        workOrderId,
-        versionNo: 1,
-        sourceOptionSessionId: optionSessionId,
-        sourceMeasurementSessionId: measurementSessionId,
-        optionSnapshot: {},
-        measurementSnapshot: {},
-        sourceHash: 'hash-v1',
-        outputFileId,
-        status: 'ISSUED',
-        issuedBy: adminId,
-        issuedAt: new Date(),
-      },
+    // 작업지시서는 품목당 파일 하나다 (2026-08-05) — 뽑았으면 '미주문'에서 빠진다.
+    await ctx.prisma.workOrder.update({
+      where: { id: workOrderId },
+      data: { outputFileId, issuedBy: adminId, issuedAt: new Date(), status: 'COMPLETED' },
     });
 
     const tasks = await getTasks('UNORDERED');
-    expect(tasks.find((t) => t.entityId === orderItemId)).toBeUndefined();
-  });
-
-  it('REPRINT_NEEDED: 출력 이후 옵션 재확정 시 포함되고 신규 버전 출력 시 제외된다', async () => {
-    // 출력 직후에는 재출력 대상이 아니다
-    let tasks = await getTasks('REPRINT_NEEDED');
-    expect(tasks.find((t) => t.entityId === orderItemId)).toBeUndefined();
-
-    // 옵션 확정 시각이 마지막 출력보다 이후가 되도록 변경
-    await ctx.prisma.optionSelectionSession.update({
-      where: { id: optionSessionId },
-      data: { confirmedAt: new Date(Date.now() + 60_000) },
-    });
-    tasks = await getTasks('REPRINT_NEEDED');
-    const row = tasks.find((t) => t.taskId === `reprint_needed:${orderItemId}`);
-    expect(row).toBeDefined();
-
-    // 최신 원본으로 신규 버전을 출력하면 해소된다
-    await ctx.prisma.workOrderVersion.create({
-      data: {
-        id: randomUUID(),
-        workOrderId,
-        versionNo: 2,
-        sourceOptionSessionId: optionSessionId,
-        sourceMeasurementSessionId: measurementSessionId,
-        optionSnapshot: {},
-        measurementSnapshot: {},
-        sourceHash: 'hash-v2',
-        outputFileId,
-        status: 'ISSUED',
-        issuedBy: adminId,
-        issuedAt: new Date(Date.now() + 120_000),
-      },
-    });
-    tasks = await getTasks('REPRINT_NEEDED');
     expect(tasks.find((t) => t.entityId === orderItemId)).toBeUndefined();
   });
 
@@ -383,7 +350,7 @@ describe('대시보드 (dashboard)', () => {
     expect(data.week.reduce((sum: number, w: { count: number }) => sum + w.count, 0)).toBe(1);
 
     expect(Object.keys(data.taskCounts).sort()).toEqual(
-      ['INBOUND_DELAY', 'LATE_RETURN', 'REPRINT_NEEDED', 'UNORDERED'].sort(),
+      ['INBOUND_DELAY', 'LATE_RETURN', 'UNORDERED'].sort(),
     );
     // 앞선 테스트에서 모든 판정이 해소된 상태
     expect(data.taskCounts.UNORDERED).toBe(0);

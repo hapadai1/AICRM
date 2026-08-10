@@ -48,22 +48,6 @@ export class ContractLineDto {
   @Min(0)
   lineAmount?: number;
 
-  /**
-   * 베스트(3피스) 포함 — 맞춤 정장(CUSTOM×SUIT) 라인만 허용 (현업 확정 2026-07-30).
-   * 맞춤 정장의 기본은 포함(3피스)이라 값을 주지 않으면 true로 채운다 (현업 확정 2026-07-31).
-   * 계약서 화면의 [베스트 제외] 체크박스를 켜면 false(2피스)로 온다.
-   */
-  @IsOptional()
-  @IsBoolean()
-  vestIncluded?: boolean;
-
-  /** 베스트 포함 시 벌당 베스트 단가(수기). 금액 = 수량 × (단가 + 베스트 단가). */
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  @Min(0)
-  vestUnitPrice?: number;
-
   @IsOptional()
   @IsString()
   notes?: string;

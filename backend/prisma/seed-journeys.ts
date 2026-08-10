@@ -13,13 +13,35 @@
  */
 import { PrismaClient } from '@prisma/client';
 import { randomUUID as uuid } from 'crypto';
+import { ITEM_STATUS_FLOW } from '../src/modules/production/production-status';
 
 const prisma = new PrismaClient();
 
-/** IN_PROGRESS일 때 멈출 단계 순번 (트랙별) */
-const ACTIVE_TARGET_SEQ: Record<string, number> = {
-  RENTAL: 6, // 렌탈 출고
-  CUSTOM: 8, // 완성복 입고
+/** 품목 제작 상태의 흐름 순위. COMPLETED는 종단(모든 단계 통과), 흐름 밖(CANCELLED 등)은 -1. */
+const rankOf = (s: string): number =>
+  s === 'COMPLETED' ? ITEM_STATUS_FLOW.length : (ITEM_STATUS_FLOW as readonly string[]).indexOf(s);
+
+/**
+ * 진행 단계 → 그 단계를 지난 것으로 보는 품목 상태(reachedAt). 프론트 production-stages.ts와 같은 표다.
+ * 여기 없는 단계(상담예약·계약확정·렌탈반납)는 품목 상태와 무관해 진행 위치 게이트로 쓰지 않는다.
+ */
+const REACHED_AT: Record<string, string> = {
+  ORDER_REQUESTED: 'PRODUCTION_REQUESTED',
+  BASTING_RECEIVED: 'BASTING_RECEIVED',
+  FITTING_DONE: 'FITTING_COMPLETED',
+  PRODUCT_RECEIVED: 'RECEIVED',
+  RELEASED: 'RELEASED',
+  RENTAL_REPAIR_REQUESTED: 'PRODUCTION_REQUESTED',
+  RENTAL_REPAIR_RECEIVED: 'RECEIVED',
+  RENTAL_REPAIR_CHECKED_OUT: 'RELEASED',
+};
+/**
+ * 완료 기록을 남기는 단계 = 위 제작 단계 + 준비(스타일 컨설팅).
+ * 준비는 첫 발주 때 함께 완료로 찍히므로(발주 임계) 완료 기록에만 넣고 진행 위치 계산에선 뺀다.
+ */
+const COMPLETION_REACHED_AT: Record<string, string> = {
+  STYLE_CONSULTING: 'PRODUCTION_REQUESTED',
+  ...REACHED_AT,
 };
 
 async function main(): Promise<void> {
@@ -67,12 +89,32 @@ async function main(): Promise<void> {
       continue;
     }
 
-    const isCompleted = order.status === 'COMPLETED';
-    const targetSeq = isCompleted
-      ? stages.length
-      : Math.min(ACTIVE_TARGET_SEQ[track] ?? Math.ceil(stages.length / 2), stages.length);
+    // 진행 위치·완료 기록은 주문 상태가 아니라 **품목 제작 상태**에서 정한다 —
+    // 그래야 상단 진행률(itemStatus)과 제작 카드(단계 완료 기록)가 같은 사실을 가리킨다.
+    // (예전엔 주문이 COMPLETED면 무조건 마지막 단계로 밀어, 품목은 제작 중인데 진행은
+    //  출고완료로 서고 완료 기록은 0건인 데이터가 만들어졌다.)
+    const items = await prisma.orderItem.findMany({
+      where: { orderId: order.id, status: { not: 'CANCELLED' } },
+      select: { id: true, status: true },
+    });
+    const ranks = items.map((i) => rankOf(i.status)).filter((r) => r >= 0);
 
-    const currentStage = stages.find((s) => s.sequenceNo === targetSeq)!;
+    // 계약 확정된 주문이면 준비(스타일 컨설팅)를 바닥으로 두고,
+    // 제작 단계부터는 "전 품목이 지난 마지막 단계 다음"에 진행을 세운다.
+    const styleIdx = stages.findIndex((s) => s.code === 'STYLE_CONSULTING');
+    let curIdx = styleIdx >= 0 ? styleIdx : 0;
+    for (let i = 0; i < stages.length; i += 1) {
+      const rq = REACHED_AT[stages[i].code];
+      if (!rq) continue;
+      const need = rankOf(rq);
+      if (ranks.some((r) => r >= need)) curIdx = i;
+      if (!ranks.every((r) => r >= need)) break;
+    }
+    // 전 품목이 출고(또는 완료)까지 갔으면 진행을 마지막 단계(출고/반납 완료)로 닫는다.
+    const allDone = ranks.length > 0 && ranks.every((r) => r >= rankOf('RELEASED'));
+    if (allDone) curIdx = stages.length - 1;
+
+    const currentStage = stages[curIdx];
     const base = new Date(order.createdAt);
     const at = (dayOffset: number) => new Date(base.getTime() + dayOffset * 24 * 3600 * 1000);
 
@@ -84,29 +126,49 @@ async function main(): Promise<void> {
         orderId: order.id,
         trackType: track,
         currentStageCode: currentStage.code,
-        status: isCompleted ? 'COMPLETED' : 'ACTIVE',
+        status: allDone ? 'COMPLETED' : 'ACTIVE',
         startedAt: at(0),
-        completedAt: isCompleted ? at(targetSeq) : null,
-        rowVersion: isCompleted ? targetSeq : targetSeq - 1,
+        completedAt: allDone ? at(curIdx) : null,
+        rowVersion: curIdx,
       },
     });
 
-    // 단계 1 → targetSeq 까지 전진 이벤트(각 단계의 완료 기록)를 남긴다.
-    for (let seq = 2; seq <= targetSeq; seq += 1) {
-      const from = stages.find((s) => s.sequenceNo === seq - 1)!;
-      const to = stages.find((s) => s.sequenceNo === seq)!;
+    // 1단계 시작 → 현재 단계까지 밟아 온 전진 이벤트.
+    for (let i = 1; i <= curIdx; i += 1) {
       await prisma.journeyEvent.create({
         data: {
           id: uuid(),
           journeyId,
-          stageId: to.id,
-          fromStageCode: from.code,
-          toStageCode: to.code,
+          stageId: stages[i].id,
+          fromStageCode: stages[i - 1].code,
+          toStageCode: stages[i].code,
           notificationOutcome: 'NONE',
           actorId: admin.id,
-          changedAt: at(seq - 1),
+          changedAt: at(i),
         },
       });
+    }
+
+    // 단계별 품목 완료 기록 — 제작 카드가 "몇 개 끝났나"를 읽는 유일한 근거다.
+    // 각 품목이 제작 상태로 지난 단계마다 완료를 찍는다(취소 품목은 대상이 아니다).
+    for (const it of items) {
+      const r = rankOf(it.status);
+      if (r < 0) continue;
+      for (const st of stages) {
+        const rq = COMPLETION_REACHED_AT[st.code];
+        if (!rq || r < rankOf(rq)) continue;
+        await prisma.journeyStageItemCompletion.create({
+          data: {
+            id: uuid(),
+            journeyId,
+            stageCode: st.code,
+            targetType: 'ORDER_ITEM',
+            targetId: it.id,
+            completedAt: at(curIdx),
+            completedBy: admin.id,
+          },
+        });
+      }
     }
 
     created += 1;

@@ -34,9 +34,9 @@ const ITEMS_PROGRESS_INCLUDE = {
   },
   measurementLinks: {
     where: { isCurrent: true },
-    select: { measurementSessionId: true, measurementSession: { select: { versionNo: true, completedAt: true } } },
+    select: { measurementSessionId: true, measurementSession: { select: { versionNo: true } } },
   },
-  workOrder: { select: { versions: { select: { id: true } }, currentVersionId: true } },
+  workOrder: { select: { status: true, outputFileId: true } },
 } satisfies Prisma.OrderItemInclude;
 
 /**
@@ -104,15 +104,13 @@ export class OrdersService {
         optionProgress: session
           ? { status: session.status, current: completedStages, total: totalStages }
           : { status: 'NOT_STARTED', current: 0, total: 0 },
+        // 채촌은 '완료' 상태를 두지 않는다 (2026-08-05) — 붙었는지만 본다.
         measurement: link
-          ? {
-              linked: true,
-              versionNo: link.measurementSession.versionNo,
-              completed: link.measurementSession.completedAt !== null,
-            }
-          : { linked: false, versionNo: null, completed: false },
-        workOrderVersionCount: workOrder?.versions.length ?? 0,
-        workOrderIssued: !!workOrder?.currentVersionId,
+          ? { linked: true, versionNo: link.measurementSession.versionNo }
+          : { linked: false, versionNo: null },
+        // 작업지시서는 품목당 하나다 — 뽑았는지와 상태만 본다 (2026-08-05).
+        workOrderIssued: !!workOrder?.outputFileId,
+        workOrderStatus: workOrder?.status ?? 'DRAFT',
       };
     });
   }
@@ -128,6 +126,15 @@ export class OrdersService {
       throw new BusinessException('INVALID_STATUS_TRANSITION', '취소된 품목에는 구성품을 추가할 수 없습니다.', undefined, {
         status: item.status,
       });
+    // 입출고가 시작된 품목에 CREATED 구성품이 붙으면 집계 상태(전체/부분 입·출고)가 뒤로
+    // 뒤집힌다 — 품목 상태와 실물이 어긋난 채 방치되던 구멍을 막는다 (2026-08-05).
+    if (['PARTIALLY_RECEIVED', 'RECEIVED', 'PARTIALLY_RELEASED', 'RELEASED'].includes(item.status))
+      throw new BusinessException(
+        'INVALID_STATUS_TRANSITION',
+        '입고·출고가 시작된 품목에는 구성품을 추가할 수 없습니다. 구성 변경은 계약 [수정하기]로 진행해 주세요.',
+        undefined,
+        { status: item.status },
+      );
 
     const nextSeq =
       item.components

@@ -75,7 +75,7 @@ export function ReauthModal({ open, onCancel, onSuccess, onLocked }: Props) {
       okText="확인"
       cancelText="취소"
       confirmLoading={loading}
-      destroyOnClose
+      destroyOnHidden
       afterOpenChange={(o) => {
         if (o) form.getFieldInstance?.('password')?.focus?.();
       }}

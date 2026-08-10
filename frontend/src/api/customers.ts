@@ -76,6 +76,7 @@ export interface CustomerContractRow {
 export interface CustomerOrderItemRow {
   id: string;
   displayName: string;
+  productCategory: string;
   status: string;
   optionStatus: 'NOT_STARTED' | 'IN_PROGRESS' | 'REVIEW' | 'CONFIRMED';
   measurementLinked: boolean;

@@ -19,7 +19,8 @@ async function seedOrderItem(
     },
   });
   const contract = await prisma.contract.create({
-    data: { id: randomUUID(), contractNo: `CTR-${suffix}`, customerId: customer.id, status: 'CONFIRMED' },
+    // 'CONFIRMED'는 계약 흐름 4상태 재정의(2026-07-30)로 없어진 값이다 — 계약완료로 맞춘다.
+    data: { id: randomUUID(), contractNo: `CTR-${suffix}`, customerId: customer.id, status: 'COMPLETED' },
   });
   const version = await prisma.contractVersion.create({
     data: { id: randomUUID(), contractId: contract.id, versionNo: 1, createdBy: admin.id },
@@ -77,6 +78,20 @@ async function seedOrderItem(
       }),
     );
   }
+  /*
+    제작 관리 목록은 진행(journey)이 있는 주문만 내려보낸다 — 진행이 없으면 단계를 세울 수 없어
+    화면이 빈 껍데기가 된다(2026-08-04). 정상 경로에서는 계약완료가 주문과 함께 만들어 준다.
+  */
+  await prisma.customerJourney.create({
+    data: {
+      id: randomUUID(),
+      customerId: customer.id,
+      orderId: order.id,
+      trackType: 'CUSTOM',
+      currentStageCode: 'ORDER_REQUESTED',
+      startedAt: new Date(),
+    },
+  });
   return { admin, customer, contract, order, item, components };
 }
 
@@ -276,10 +291,10 @@ describe('제작 상태·부분 입출고·가봉 (ProductionModule)', () => {
       expect(found.order.contract.customer.name).toBeTruthy();
       // 작업지시서 통합: 제작 목록 행에 작업지시서 뷰가 함께 온다 (제작 관리 코크핏용)
       expect(found.workOrder).toBeDefined();
-      expect(['WAITING', 'UNORDERED', 'REPRINT_NEEDED', 'CURRENT']).toContain(found.workOrder.status);
+      expect(['WAITING', 'UNORDERED', 'CURRENT']).toContain(found.workOrder.status);
       expect(typeof found.workOrder.canIssue).toBe('boolean');
       // 목록에서 최신 Excel을 바로 내려받으려면 버전 id·파일명이 함께 와야 한다.
-      expect(found.workOrder).toHaveProperty('currentVersionId');
+      expect(found.workOrder).toHaveProperty('docStatus');
       expect(found.workOrder).toHaveProperty('currentFileName');
     });
   });

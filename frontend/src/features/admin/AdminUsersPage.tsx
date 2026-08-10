@@ -268,7 +268,7 @@ export function AdminUsersPage() {
         cancelText="취소"
         confirmLoading={createMutation.isPending}
         onOk={() => void createForm.validateFields().then((values) => createMutation.mutate(values))}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form<CreateUserValues> form={createForm} layout="vertical">
           <Form.Item

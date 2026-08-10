@@ -14,7 +14,6 @@ import { ContractTypeAdminPage } from '../features/contracts/ContractTypeAdminPa
 import { CustomerDetailPage } from '../features/customers/CustomerDetailPage';
 import { CustomersPage } from '../features/customers/CustomersPage';
 import { DashboardPage } from '../features/dashboard/DashboardPage';
-import { JourneyBoardPage } from '../features/journeys/JourneyBoardPage';
 import { MeasurementComparePage } from '../features/measurements/MeasurementComparePage';
 import { MeasurementEditPage } from '../features/measurements/MeasurementEditPage';
 import { MeasurementListPage } from '../features/measurements/MeasurementListPage';
@@ -33,7 +32,6 @@ import { RentalSelectionPage } from '../features/rentals/RentalSelectionPage';
 import { RentalInventoryPage } from '../features/rentals/RentalInventoryPage';
 import { RepairsPage } from '../features/repairs/RepairsPage';
 import { StatsPage } from '../features/stats/StatsPage';
-import { WorkOrderPreviewPage } from '../features/workorders/WorkOrderPreviewPage';
 import { CustomerModeConsultingPage } from '../features/customer-mode/CustomerModeConsultingPage';
 import { CustomerModeContractPage } from '../features/customer-mode/CustomerModeContractPage';
 import { CustomerModeHomePage } from '../features/customer-mode/CustomerModeHomePage';
@@ -68,8 +66,6 @@ export const router = createBrowserRouter([
       { path: 'appointments/:id', element: <AppointmentDetailPage /> },
       { path: 'customers', element: <CustomersPage /> },
       { path: 'customers/:id', element: <CustomerDetailPage /> },
-      // 진행 현황 — 단계별 칸반 (개발설계서 05 G-11)
-      { path: 'journeys', element: <JourneyBoardPage /> },
       // 계약·주문 (new가 :id보다 먼저)
       { path: 'contracts', element: <ContractListPage /> },
       { path: 'contracts/new', element: <ContractFormPage /> },
@@ -89,8 +85,12 @@ export const router = createBrowserRouter([
       { path: 'options/:contractItemId', element: <OptionStagePage /> },
       { path: 'options/:contractItemId/review', element: <OptionReviewPage /> },
       // 작업지시서 목록은 제작 관리로 통합됨 — 구 링크는 리다이렉트. 미리보기/출력 화면은 유지.
+      /*
+        작업지시서 전용 화면은 없앴다 (현업 확정 2026-08-05) — 확인·출력·업로드를 모두
+        제작 발주 창에서 하므로 따로 갈 곳이 없다.
+      */
       { path: 'work-orders', element: <Navigate to="/production" replace /> },
-      { path: 'work-orders/:orderItemId', element: <WorkOrderPreviewPage /> },
+      { path: 'work-orders/:orderItemId', element: <Navigate to="/production" replace /> },
       // 제작·렌탈·수선
       { path: 'production', element: <ProductionPage /> },
       { path: 'rentals', element: <RentalInventoryPage /> },

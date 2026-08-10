@@ -123,8 +123,9 @@ export function RentalHandoverPage() {
         notes: v.notes?.trim() || undefined,
         version: checkoutTarget!.version,
       }),
-    onSuccess: (alloc) => {
-      message.success(`${allocLabel(alloc)} 출고 처리되었습니다.`);
+    onSuccess: () => {
+      // 응답은 평탄화 뷰가 아니라 customerName이 없다 — 목록에서 온 대상 행으로 라벨을 만든다.
+      message.success(`${allocLabel(checkoutTarget!)} 출고 처리되었습니다.`);
       setCheckoutTarget(null);
       void invalidate();
     },
@@ -156,8 +157,9 @@ export function RentalHandoverPage() {
         nextStatus: v.nextStatus,
         version: returnTarget!.version,
       }),
-    onSuccess: (alloc) => {
-      message.success(`${allocLabel(alloc)} 반납 처리되었습니다.`);
+    onSuccess: () => {
+      // 응답은 평탄화 뷰가 아니라 customerName이 없다 — 목록에서 온 대상 행으로 라벨을 만든다.
+      message.success(`${allocLabel(returnTarget!)} 반납 처리되었습니다.`);
       setReturnTarget(null);
       void invalidate();
     },
@@ -520,7 +522,7 @@ export function RentalHandoverPage() {
         okText="출고"
         cancelText="취소"
         confirmLoading={checkoutMutation.isPending}
-        destroyOnClose
+        destroyOnHidden
       >
         {checkoutTarget && (
           <Space direction="vertical" size="middle" style={{ width: '100%' }}>
@@ -588,7 +590,7 @@ export function RentalHandoverPage() {
         okText="교체"
         cancelText="취소"
         confirmLoading={changeMutation.isPending}
-        destroyOnClose
+        destroyOnHidden
       >
         <Alert
           type="info"
@@ -625,7 +627,7 @@ export function RentalHandoverPage() {
         okText="반납 처리"
         cancelText="취소"
         confirmLoading={returnMutation.isPending}
-        destroyOnClose
+        destroyOnHidden
       >
         <Alert
           type="info"

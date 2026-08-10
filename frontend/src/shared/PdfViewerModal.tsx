@@ -23,7 +23,7 @@ export function PdfViewerModal({ open, url, title = 'PDF 미리보기', onClose 
       width="80vw"
       style={{ top: 24 }}
       styles={{ body: { padding: 0, height: '80vh' } }}
-      destroyOnClose
+      destroyOnHidden
     >
       <iframe
         src={url}

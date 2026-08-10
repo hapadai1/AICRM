@@ -186,7 +186,8 @@ export class FilesService {
           select: {
             entityFiles: true,
             optionChoices: true,
-            workOrderVersionOutputs: true,
+            workOrderOutputs: true,
+            workOrderUploads: true,
             contractVersionSignatures: true,
           },
         },
@@ -196,13 +197,14 @@ export class FilesService {
     const referenced =
       record._count.entityFiles +
       record._count.optionChoices +
-      record._count.workOrderVersionOutputs +
+      record._count.workOrderOutputs +
+      record._count.workOrderUploads +
       record._count.contractVersionSignatures;
     if (referenced > 0)
       throw new BusinessException('VALIDATION_ERROR', '참조 중인 파일은 삭제할 수 없습니다.', undefined, {
         entityFiles: record._count.entityFiles,
         optionChoices: record._count.optionChoices,
-        workOrderVersions: record._count.workOrderVersionOutputs,
+        workOrders: record._count.workOrderOutputs + record._count.workOrderUploads,
       });
 
     await this.prisma.file.delete({ where: { id } });

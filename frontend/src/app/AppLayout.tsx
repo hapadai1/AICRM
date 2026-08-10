@@ -22,6 +22,7 @@ import { useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { useHydrateCodeLabels } from '../api/code-labels';
+import { useHydrateStatusCatalog } from '../api/status-catalog';
 import { usePageTitleStore } from '../shared/page-title-store';
 import { ReauthModal } from '../shared/ReauthModal';
 import { useAuthStore } from './auth-store';
@@ -51,6 +52,8 @@ export function AppLayout() {
 
   // 코드 상수 기준정보(품목·구성품·수선구분) 표시명을 받아 공유 맵에 반영한다.
   useHydrateCodeLabels();
+  // 상태 코드 사전(표시명·색·흐름 순서)도 같은 방식으로 반영한다.
+  useHydrateStatusCatalog();
 
   const permissions = user?.permissions ?? [];
   const canSeeAdmin =
@@ -84,7 +87,6 @@ export function AppLayout() {
 
   const adminMenuItems: MenuItem[] = [
     { key: '/', icon: <DashboardOutlined />, label: '대시보드' },
-    { key: '/journeys', icon: <SwapOutlined />, label: '진행 현황' },
     { key: '/appointments', icon: <CalendarOutlined />, label: '예약' },
     { key: '/customers', icon: <TeamOutlined />, label: '고객' },
     { key: '/contracts', icon: <FileTextOutlined />, label: '계약 관리' },
@@ -209,17 +211,22 @@ export function AppLayout() {
         >
           <div
             style={{
-              height: 64,
+              height: 88,
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center',
+              justifyContent: 'flex-start',
+              paddingLeft: 24,
               color: '#fff',
               fontSize: 18,
               fontWeight: 700,
               letterSpacing: 1,
             }}
           >
-            <SkinOutlined style={{ marginRight: 8 }} />
+            <img
+              src="/suit-agency-logo.png"
+              alt=""
+              style={{ height: 68, marginRight: 8 }}
+            />
             AICRM
           </div>
           <div style={{ flex: 1, overflowY: 'auto' }}>

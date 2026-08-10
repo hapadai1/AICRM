@@ -193,7 +193,7 @@ export function CustomerSearchPage() {
         okText="등록"
         cancelText="취소"
         confirmLoading={registerLoading}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form<NewCustomerForm> form={form} layout="vertical" requiredMark={false}>
           <Form.Item

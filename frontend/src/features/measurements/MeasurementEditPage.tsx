@@ -2,13 +2,15 @@
  * MEAS-002 채촌 입력·수정 (설계서 09 §4.2).
  * 신규는 고객·채촌일·구분을 먼저 입력해 저장할 때 생성한다(유령 세션 방지).
  * 태블릿 가상 숫자 키패드로 치수를 입력하며, 현재 필드를 강조한다.
+ *
+ * 2026-08-05 분해: 폼 모델(measurement-form) · 항목 그리드(MeasurementFieldGrid) ·
+ * 사진 갤러리(MeasurementPhotoGallery) · 하단 키패드(MeasurementKeypadSheet).
  */
 import {
   CopyOutlined,
   DeleteOutlined,
   DiffOutlined,
   PlusOutlined,
-  PrinterOutlined,
   RightOutlined,
   SaveOutlined,
   UploadOutlined,
@@ -19,10 +21,8 @@ import {
   App,
   Button,
   Card,
-  Checkbox,
   Col,
   DatePicker,
-  Empty,
   Input,
   Row,
   Segmented,
@@ -30,108 +30,45 @@ import {
   Space,
   Spin,
   Tag,
-  Tooltip,
   Typography,
   Upload,
 } from 'antd';
 import type { RcFile } from 'antd/es/upload';
 import dayjs from 'dayjs';
-import type { CSSProperties } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ApiError, fetchFileObjectUrl } from '../../api/client';
+import { ApiError } from '../../api/client';
 import { fetchCustomer, fetchCustomers } from '../../api/customers';
-import type {
-  MeasurementFieldDef,
-  MeasurementImage,
-  MeasurementType,
-  MeasurementValues,
-} from '../../api/measurements';
+import type { MeasurementType } from '../../api/measurements';
 import {
   MEASUREMENT_FIELDS,
-  MEASUREMENT_GROUP_LABELS,
   MEASUREMENT_TYPE_LABELS,
-  completeMeasurement,
   createMeasurement,
   deleteMeasurement,
   deleteMeasurementImage,
   fetchMeasurement,
   fetchMeasurementImages,
   fetchMeasurements,
-  formatInch,
-  linkMeasurementToOrder,
-  reopenMeasurement,
   updateMeasurement,
   uploadMeasurementImage,
 } from '../../api/measurements';
 import { BackButton } from '../../shared/BackButton';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
-import { labelOf, metaOf } from '../../shared/status-meta';
-import { MEASUREMENT_STATUS_META } from './meas-meta';
+import { labelOf } from '../../shared/status-meta';
+import {
+  emptyForm,
+  FIELD_LABELS,
+  FormState,
+  toPayloadValues,
+  TYPE_OPTIONS,
+  Unit,
+} from './measurement-form';
+import { MeasurementFieldGroup } from './MeasurementFieldGrid';
+import { MeasurementKeypadSheet } from './MeasurementKeypadSheet';
+import { MeasurementPhotoGallery } from './MeasurementPhotoGallery';
 import { MeasurementRecordStrip } from './MeasurementRecordStrip';
 import { NumericKeypad } from './NumericKeypad';
-
-interface FormState {
-  measurementDate: string;
-  measurementType: MeasurementType;
-  /** 화면 입력은 문자열로 다루고 저장 시 숫자/문자로 나눈다 */
-  values: Record<string, string>;
-  fitPreference: string;
-  bodyNotes: string;
-  notes: string;
-}
-
-/** 채촌 구분 = 채촌을 하게 된 업무 단계 */
-const TYPE_OPTIONS: { label: string; value: MeasurementType }[] = [
-  { label: '스타일 컨설팅', value: 'INITIAL' },
-  { label: '가봉', value: 'FITTING' },
-  { label: '수선', value: 'REMEASURE' },
-  { label: '기타', value: 'OTHER' },
-];
-
-const FIELD_LABELS: Record<string, string> = Object.fromEntries(
-  MEASUREMENT_FIELDS.map((f) => [f.key, f.label]),
-);
-
-/**
- * 화면 표시 단위. 입력·저장은 항상 CM이고 INCH는 보기 전용이다 (설계서 v2 05 §3.2).
- * 매장 확인(2026-07-29): 인치는 소수가 아니라 1/8 단위 분수로 읽으므로 되돌려 입력받지 않는다.
- */
-type Unit = 'CM' | 'INCH';
-
-/**
- * 저장 payload: 빈 값은 null로 보내 해당 항목을 삭제한다 (설계서 09 §3.3).
- * 폼 값은 언제나 CM이므로 단위 환산은 없다.
- */
-function toPayloadValues(values: Record<string, string>): MeasurementValues {
-  const out: MeasurementValues = {};
-  MEASUREMENT_FIELDS.forEach((f) => {
-    const raw = (values[f.key] ?? '').trim();
-    if (raw === '' || raw === '.') {
-      out[f.key] = null;
-      return;
-    }
-    if (f.kind !== 'number') {
-      out[f.key] = raw;
-      return;
-    }
-    const n = Number(raw);
-    out[f.key] = Number.isFinite(n) ? n : null;
-  });
-  return out;
-}
-
-function emptyForm(): FormState {
-  return {
-    measurementDate: dayjs().format('YYYY-MM-DD'),
-    measurementType: 'INITIAL',
-    values: {},
-    fitPreference: '',
-    bodyNotes: '',
-    notes: '',
-  };
-}
 
 export function MeasurementEditPage() {
   const { id } = useParams<{ id: string }>();
@@ -352,44 +289,6 @@ export function MeasurementEditPage() {
     onError: (e) => message.error(e instanceof ApiError ? e.message : '저장에 실패했습니다.'),
   });
 
-  const completeMutation = useMutation({
-    mutationFn: async () => {
-      const saved = await saveMutation.mutateAsync();
-      return completeMeasurement(saved.id);
-    },
-    onSuccess: (completed) => {
-      message.success('채촌이 완료 처리되었습니다.');
-      queryClient.setQueryData(['measurements', 'detail', id], completed);
-      void invalidate();
-      void queryClient.invalidateQueries({ queryKey: ['workorders'] });
-      void queryClient.invalidateQueries({ queryKey: ['production'] });
-    },
-    onError: (e) => message.error(e instanceof ApiError ? e.message : '완료 처리에 실패했습니다.'),
-  });
-
-  // 재체촌 스왑·연결 누락 복구 — 이 채촌을 계약의 맞춤 품목에 (재)연결한다.
-  const linkOrderMutation = useMutation({
-    mutationFn: () => linkMeasurementToOrder(session?.id ?? ''),
-    onSuccess: (updated) => {
-      message.success('이 채촌을 계약 품목에 연결했습니다.');
-      queryClient.setQueryData(['measurements', 'detail', id], updated);
-      void invalidate();
-      void queryClient.invalidateQueries({ queryKey: ['workorders'] });
-      void queryClient.invalidateQueries({ queryKey: ['production'] });
-    },
-    onError: (e) => message.error(e instanceof ApiError ? e.message : '품목 연결에 실패했습니다.'),
-  });
-
-  const reopenMutation = useMutation({
-    mutationFn: () => reopenMeasurement(session?.id ?? ''),
-    onSuccess: (reopened) => {
-      message.success('완료를 해제했습니다. 값을 수정할 수 있습니다.');
-      queryClient.setQueryData(['measurements', 'detail', id], reopened);
-      void invalidate();
-    },
-    onError: (e) => message.error(e instanceof ApiError ? e.message : '완료 해제에 실패했습니다.'),
-  });
-
   const deleteMutation = useMutation({
     mutationFn: () => deleteMeasurement(session?.id ?? ''),
     onSuccess: () => {
@@ -400,14 +299,13 @@ export function MeasurementEditPage() {
     onError: (e) => message.error(e instanceof ApiError ? e.message : '삭제에 실패했습니다.'),
   });
 
-  /** 작업지시서 출력에 쓰인 채촌 — 지시서와 어긋나므로 잠긴다 (설계서 09 §2.1) */
-  const locked = session?.locked ?? false;
   /**
-   * 완료한 채촌도 읽기 전용이다 (현업 확정 2026-08-05).
-   * 완료는 "이 치수로 옷을 만들어도 된다"는 확정이므로, 그 뒤에 값이 바뀌면 무엇을 보고 만들었는지
-   * 알 수 없게 된다. 완료 해제는 두지 않는다 — 다시 재야 하면 [새 채촌]으로 기록을 새로 남긴다.
+   * 채촌은 '완료' 상태를 두지 않는다 (현업 확정 2026-08-05) — 작성·수정만 한다.
+   * 잠기는 자리는 **그 치수로 일이 시작된 뒤**뿐이다: 계약완료, 발주, 작업지시서 출력.
+   * 서버가 그 판정을 `locked`로 내려 준다.
    */
-  const readOnly = locked || (session?.completed ?? false);
+  const locked = session?.locked ?? false;
+  const readOnly = locked;
   const fieldOrder = MEASUREMENT_FIELDS.map((f) => f.key);
 
   const moveActive = (delta: number) => {
@@ -514,89 +412,20 @@ export function MeasurementEditPage() {
     });
   };
 
-  /**
-   * 완료는 되돌릴 수 없다 (현업 확정 2026-08-05) — 누르는 순간 이 기록은 보기 전용이 된다.
-   * 한 번 더 묻지 않으면 손이 미끄러진 것과 확정한 것을 구별할 방법이 없다.
-   * 다시 재는 길을 함께 적어 준다 — 처음부터 넣는 것이 아니라 값을 끌어와 고치는 일이다.
-   */
-  const confirmComplete = () => {
-    modal.confirm({
-      title: '이 채촌을 완료할까요?',
-      content:
-        '완료하면 값을 수정할 수 없습니다. 다시 재야 하면 [새 채촌]에서 [직전 채촌 값 불러오기]로 값을 가져와 주세요.',
-      okText: '완료',
-      cancelText: '취소',
-      onOk: () => completeMutation.mutateAsync(),
-    });
+  // 항목 카드 4장(상의/하의/셔츠/구두)이 같은 상태를 공유한다 — props 한 벌로 묶는다.
+  const fieldGroupProps = {
+    values: form.values,
+    activeKey,
+    readOnly,
+    unit,
+    onActivate: setActiveKey,
+    onChangeText: setValue,
+    registerRef: (key: string, el: HTMLDivElement | null) => {
+      if (el) fieldRefs.current.set(key, el);
+      else fieldRefs.current.delete(key);
+    },
   };
 
-  const renderField = (def: MeasurementFieldDef) => {
-    const value = form.values[def.key] ?? '';
-    const active = activeKey === def.key;
-    // 인치 보기는 파생 표시 전용 — 값은 cm로만 입력받는다 (설계서 v2 05 §3.2).
-    const viewOnly = readOnly || unit === 'INCH';
-    const style: CSSProperties = {
-      border: active ? '2px solid #1677ff' : '1px solid #d9d9d9',
-      background: viewOnly ? '#fafafa' : active ? '#e6f4ff' : '#fff',
-      borderRadius: 8,
-      padding: '8px 12px',
-      minHeight: 56,
-      cursor: viewOnly ? 'default' : 'pointer',
-      display: 'flex',
-      flexDirection: 'column',
-      justifyContent: 'center',
-    };
-    // 문자 항목(사이즈)은 키패드가 아니라 직접 입력한다.
-    const textInput = def.kind === 'text' && !viewOnly;
-    // 숫자 항목은 폼에 cm로 들어 있으므로 인치 보기에서만 분수로 환산해 렌더한다.
-    const numeric = def.kind === 'number' ? Number(value) : NaN;
-    const display =
-      def.kind === 'number' && unit === 'INCH' && Number.isFinite(numeric) ? formatInch(numeric) : value;
-    return (
-      <div
-        key={def.key}
-        ref={(el) => {
-          if (el) fieldRefs.current.set(def.key, el);
-          else fieldRefs.current.delete(def.key);
-        }}
-        style={style}
-        onClick={() => !viewOnly && !textInput && setActiveKey(def.key)}
-      >
-        <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-          {def.label}
-        </Typography.Text>
-        {textInput ? (
-          <Input
-            variant="borderless"
-            style={{ fontSize: 17, padding: 0 }}
-            value={value}
-            placeholder="입력"
-            onFocus={() => setActiveKey(null)}
-            onChange={(e) => setValue(def.key, e.target.value)}
-          />
-        ) : value ? (
-          <Typography.Text strong style={{ fontSize: 20 }}>
-            {display}
-            {def.kind === 'number' ? (unit === 'INCH' ? ' in' : ' cm') : ''}
-          </Typography.Text>
-        ) : (
-          <Typography.Text style={{ fontSize: 18, color: '#bfbfbf' }}>
-            {viewOnly ? '-' : '입력'}
-          </Typography.Text>
-        )}
-      </div>
-    );
-  };
-
-  const renderGroup = (group: MeasurementFieldDef['group']) => (
-    <Card key={group} title={MEASUREMENT_GROUP_LABELS[group]} size="small" style={{ marginBottom: 16 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 8 }}>
-        {MEASUREMENT_FIELDS.filter((f) => f.group === group).map(renderField)}
-      </div>
-    </Card>
-  );
-
-  const statusMeta = metaOf(MEASUREMENT_STATUS_META, session?.status);
   // 저장한 채촌 목록은 최신 순으로 온다 — 현재 기록 바로 다음 항목이 직전 채촌이다.
   const records = recordsQuery.data ?? [];
   const currentIndex = records.findIndex((r) => r.id === session?.id);
@@ -702,7 +531,8 @@ export function MeasurementEditPage() {
                           {it.displayName}
                         </Tag>
                       ))}
-                      <StatusBadge label={statusMeta.label} color={statusMeta.color} />
+                      {/* 채촌은 상태를 두지 않는다 (2026-08-05) — 잠긴 것만 알린다. */}
+                      {locked && <StatusBadge label="진행 시작" color="default" />}
                     </>
                   )}
                 </Space>
@@ -825,36 +655,6 @@ export function MeasurementEditPage() {
                 }
               />
             )}
-            {!readOnly && session?.completed && (
-              <Alert
-                type="info"
-                showIcon
-                message="완료된 채촌입니다. 수정 후 [저장]하면 그대로 반영됩니다."
-                description="완료는 작업지시서에 쓸 수 있다는 표시로, 수정을 막지 않습니다. 완료 표시를 되돌리려면 [완료 해제]를 누르세요."
-                action={
-                  <Can permission="MEASUREMENT_EDIT">
-                    <Space size={8}>
-                      <Tooltip title="이 채촌을 계약의 맞춤 품목에 연결(교체)합니다. 재체촌 후 이 버전으로 바꿀 때 사용하세요.">
-                        <Button
-                          size="small"
-                          loading={linkOrderMutation.isPending}
-                          onClick={() => linkOrderMutation.mutate()}
-                        >
-                          품목에 연결
-                        </Button>
-                      </Tooltip>
-                      <Button
-                        size="small"
-                        loading={reopenMutation.isPending}
-                        onClick={() => reopenMutation.mutate()}
-                      >
-                        완료 해제
-                      </Button>
-                    </Space>
-                  </Can>
-                }
-              />
-            )}
 
             {/* cm 입력 안내는 늘 같은 말이라 지웠다 — 인치 보기에서 값이 안 바뀌는 이유만 남긴다. */}
             {unit === 'INCH' && (
@@ -865,10 +665,10 @@ export function MeasurementEditPage() {
           </Space>
         </Card>
 
-        {renderGroup('UPPER')}
-        {renderGroup('LOWER')}
-        {renderGroup('SHIRT')}
-        {renderGroup('SHOES')}
+        <MeasurementFieldGroup group="UPPER" {...fieldGroupProps} />
+        <MeasurementFieldGroup group="LOWER" {...fieldGroupProps} />
+        <MeasurementFieldGroup group="SHIRT" {...fieldGroupProps} />
+        <MeasurementFieldGroup group="SHOES" {...fieldGroupProps} />
 
         <Card title="기타" size="small" style={{ marginBottom: 16 }}>
           <Space direction="vertical" size="middle" style={{ width: '100%' }}>
@@ -908,74 +708,29 @@ export function MeasurementEditPage() {
 
         {/* 최하단 사진 갤러리 (설계서 v2 05 §4.3·§5) — 썸네일·선택·삭제·A4 인쇄 */}
         {!isNew && (
-          <Card
-            size="small"
-            title={`사진 (${images.length}/50)`}
-            style={{ marginBottom: 16 }}
-            extra={
-              images.length > 0 && (
-                <Space wrap>
-                  <Checkbox
-                    checked={selectedImages.size === images.length}
-                    indeterminate={selectedImages.size > 0 && selectedImages.size < images.length}
-                    onChange={(e) =>
-                      setSelectedImages(
-                        e.target.checked ? new Set(images.map((im) => im.fileId)) : new Set(),
-                      )
-                    }
-                  >
-                    전체 선택
-                  </Checkbox>
-                  <Button
-                    icon={<PrinterOutlined />}
-                    disabled={selectedImages.size === 0}
-                    onClick={() =>
-                      navigate(
-                        `/measurements/${session?.id}/print?ids=${[...selectedImages].join(',')}`,
-                      )
-                    }
-                  >
-                    선택 인쇄 ({selectedImages.size})
-                  </Button>
-                </Space>
-              )
+          <MeasurementPhotoGallery
+            images={images}
+            loading={imagesQuery.isLoading}
+            selected={selectedImages}
+            deletingFileId={
+              deleteImageMutation.isPending ? (deleteImageMutation.variables ?? null) : null
             }
-          >
-            {imagesQuery.isLoading ? (
-              <Spin />
-            ) : images.length === 0 ? (
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="첨부된 사진이 없습니다." />
-            ) : (
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
-                  gap: 12,
-                }}
-              >
-                {images.map((im) => (
-                  <MeasurementImageThumb
-                    key={im.fileId}
-                    image={im}
-                    checked={selectedImages.has(im.fileId)}
-                    onToggle={() =>
-                      setSelectedImages((s) => {
-                        const n = new Set(s);
-                        if (n.has(im.fileId)) n.delete(im.fileId);
-                        else n.add(im.fileId);
-                        return n;
-                      })
-                    }
-                    onDelete={() => deleteImageMutation.mutate(im.fileId)}
-                    deleting={deleteImageMutation.isPending && deleteImageMutation.variables === im.fileId}
-                  />
-                ))}
-              </div>
-            )}
-            <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
-              최대 50장까지 첨부할 수 있습니다. 인쇄할 사진을 선택해 A4 한 장으로 출력하세요.
-            </Typography.Text>
-          </Card>
+            onSelectAll={(checked) =>
+              setSelectedImages(checked ? new Set(images.map((im) => im.fileId)) : new Set())
+            }
+            onToggle={(fileId) =>
+              setSelectedImages((s) => {
+                const n = new Set(s);
+                if (n.has(fileId)) n.delete(fileId);
+                else n.add(fileId);
+                return n;
+              })
+            }
+            onDelete={(fileId) => deleteImageMutation.mutate(fileId)}
+            onPrint={() =>
+              navigate(`/measurements/${session?.id}/print?ids=${[...selectedImages].join(',')}`)
+            }
+          />
         )}
 
         {/* 하단은 화면 이동 전용 — 왼쪽은 온 곳으로, 오른쪽은 다음 목적지(제작 관리). */}
@@ -1006,7 +761,7 @@ export function MeasurementEditPage() {
           <Card
             title={
               readOnly
-                ? `${locked ? '출력된' : '완료한'} 채촌 — 보기 전용`
+                ? '진행이 시작된 채촌 — 보기 전용'
                 : isNarrow
                   ? '저장'
                   : unit === 'INCH'
@@ -1074,16 +829,17 @@ export function MeasurementEditPage() {
                   )}
                 </Space>
               ) : (
-                /* 주요 동작(저장·완료)은 위 한 줄, 보조 동작(비교·삭제)은 아래 한 줄로 묶는다. */
+                /* 주요 동작(저장)은 위 한 줄, 보조 동작(비교·삭제)은 아래 한 줄로 묶는다. */
                 <Can permission="MEASUREMENT_EDIT">
                   <Space direction="vertical" size="small" style={{ width: '100%' }}>
                     <div style={{ display: 'flex', gap: 8 }}>
-                      {/* 작성 중인 채촌만 이 자리에 온다 — 완료하면 위 readOnly 분기로 넘어간다. */}
+                      {/* 채촌은 저장이 전부다 — 완료라는 단계를 두지 않는다 (2026-08-05). */}
                       <Button
+                        type="primary"
                         size="large"
                         style={{ flex: 1, height: 56, fontSize: 18 }}
                         icon={<SaveOutlined />}
-                        loading={saveMutation.isPending && !completeMutation.isPending}
+                        loading={saveMutation.isPending}
                         onClick={() =>
                           saveMutation.mutate(undefined, {
                             onSuccess: () => message.success('저장되었습니다.'),
@@ -1091,15 +847,6 @@ export function MeasurementEditPage() {
                         }
                       >
                         저장
-                      </Button>
-                      <Button
-                        type="primary"
-                        size="large"
-                        style={{ flex: 1, height: 56, fontSize: 18 }}
-                        loading={completeMutation.isPending}
-                        onClick={confirmComplete}
-                      >
-                        완료
                       </Button>
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
@@ -1135,107 +882,15 @@ export function MeasurementEditPage() {
 
       {/* 폰·세로 태블릿용 하단 고정 키패드 — 이 폭에서는 오른쪽 키패드가 화면 밖으로 밀린다. */}
       {keypadSheetOpen && activeKey && (
-        <div
-          style={{
-            position: 'fixed',
-            left: 0,
-            right: 0,
-            bottom: 0,
-            zIndex: 1000,
-            background: '#fff',
-            borderTop: '1px solid #d9d9d9',
-            boxShadow: '0 -4px 16px rgba(0, 0, 0, 0.12)',
-            padding: '8px 12px calc(8px + env(safe-area-inset-bottom))',
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              marginBottom: 6,
-            }}
-          >
-            <Typography.Text strong style={{ fontSize: 16 }}>
-              입력 중: {labelOf(FIELD_LABELS, activeKey)}
-            </Typography.Text>
-            <Button size="small" onClick={() => setActiveKey(null)}>
-              닫기
-            </Button>
-          </div>
-          <NumericKeypad
-            onPress={handleKeypadPress}
-            onDelete={handleKeypadDelete}
-            onPrev={() => moveActive(-1)}
-            onNext={() => moveActive(1)}
-            onDone={() => setActiveKey(null)}
-          />
-        </div>
+        <MeasurementKeypadSheet
+          activeKey={activeKey}
+          onPress={handleKeypadPress}
+          onDelete={handleKeypadDelete}
+          onPrev={() => moveActive(-1)}
+          onNext={() => moveActive(1)}
+          onClose={() => setActiveKey(null)}
+        />
       )}
     </Row>
-  );
-}
-
-/**
- * 갤러리 썸네일 — 선택 체크박스·삭제 버튼.
- * 인증이 필요한 파일이라 <img>가 헤더를 못 보내므로 blob(objectURL)로 로드한다.
- */
-function MeasurementImageThumb({
-  image,
-  checked,
-  onToggle,
-  onDelete,
-  deleting,
-}: {
-  image: MeasurementImage;
-  checked: boolean;
-  onToggle: () => void;
-  onDelete: () => void;
-  deleting: boolean;
-}) {
-  const { data: src } = useQuery({
-    queryKey: ['file-object-url', image.fileId],
-    queryFn: () => fetchFileObjectUrl(`/files/${image.fileId}`),
-    staleTime: Infinity,
-    gcTime: 30 * 60 * 1000,
-  });
-  return (
-    <div
-      style={{
-        position: 'relative',
-        border: checked ? '2px solid #1677ff' : '1px solid #d9d9d9',
-        borderRadius: 8,
-        height: 120,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: '#fafafa',
-        overflow: 'hidden',
-      }}
-    >
-      <Checkbox
-        checked={checked}
-        onChange={onToggle}
-        style={{ position: 'absolute', top: 6, left: 6, zIndex: 1 }}
-      />
-      <Button
-        size="small"
-        danger
-        icon={<DeleteOutlined />}
-        loading={deleting}
-        onClick={onDelete}
-        style={{ position: 'absolute', top: 4, right: 4, zIndex: 1 }}
-      />
-      {src ? (
-        <img
-          src={src}
-          alt={image.originalName}
-          onClick={onToggle}
-          style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', cursor: 'pointer' }}
-        />
-      ) : (
-        <Spin size="small" />
-      )}
-    </div>
   );
 }

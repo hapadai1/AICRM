@@ -118,7 +118,7 @@ export function AppointmentFormModal({ open, appointment, defaultDate, onClose }
       onOk={() => {
         void form.validateFields().then((values) => saveMutation.mutate(values));
       }}
-      destroyOnClose
+      destroyOnHidden
     >
       <Form form={form} layout="vertical" requiredMark>
         <Form.Item

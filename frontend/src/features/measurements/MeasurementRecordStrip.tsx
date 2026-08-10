@@ -66,13 +66,10 @@ export function MeasurementRecordStrip({
                   <Typography.Text style={{ color: 'inherit', fontSize: 12, opacity: 0.75 }}>
                     {record.measurementDate}
                   </Typography.Text>
-                  {record.locked ? (
+                  {/* 채촌은 '완료' 상태를 두지 않는다 (2026-08-05) — 잠긴 것만 표시한다. */}
+                  {record.locked && (
                     <Tag color="default" icon={<LockOutlined />} style={{ marginInlineEnd: 0 }}>
-                      출력됨
-                    </Tag>
-                  ) : (
-                    <Tag color={record.completed ? 'green' : 'orange'} style={{ marginInlineEnd: 0 }}>
-                      {record.completed ? '완료' : '작성중'}
+                      진행 시작
                     </Tag>
                   )}
                 </Space>

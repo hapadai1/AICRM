@@ -7,10 +7,12 @@ import { createReadStream, existsSync } from 'fs';
 import { mkdir, unlink, writeFile } from 'fs/promises';
 import { dirname, resolve } from 'path';
 import { BusinessException } from '../../common/business.exception';
+import { toDateOnlyString as toDateString } from '../../common/date';
 import { AuthUser } from '../../common/decorators';
 import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { FilesService, UploadedMulterFile } from '../files/files.service';
 import { MEASUREMENT_ITEM_MAP } from '../measurements/measurement-catalog';
 import { syncPrepStatuses } from '../production/prep-status';
 import {
@@ -65,7 +67,7 @@ const orderItemInclude = Prisma.validator<Prisma.OrderItemInclude>()({
       },
     },
   },
-  workOrder: { include: { currentVersion: true } },
+  workOrder: { include: { outputFile: true, uploadedFile: true, issuedByUser: true } },
   // 작업지시서 양식의 상의/하의/조끼 벌수·가봉일 칸을 채우는 원본.
   // 베스트 제외로 취소된 구성품이 조끼 벌수에 섞이면 안 된다 (2026-07-30).
   components: { where: { active: true, status: { not: 'CANCELLED' } } },
@@ -78,13 +80,7 @@ type ConfirmedOptionSession =
 type MeasurementSessionWithValues =
   OrderItemWithSources['measurementLinks'][number]['measurementSession'];
 
-type VersionWithFile = Prisma.WorkOrderVersionGetPayload<{
-  include: { outputFile: true; issuedByUser: true };
-}>;
-
-function toDateString(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
+// toDateString은 common/date.ts의 toDateOnlyString을 쓴다.
 
 /** 작업지시서 양식의 상의/하의/조끼 '벌' 칸 (구성품 타입별 개수) */
 function countComponents(components: Array<{ componentType: string }>): {
@@ -102,6 +98,7 @@ export class WorkOrdersService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly audit: AuditService,
+    private readonly files: FilesService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -151,7 +148,9 @@ export class WorkOrdersService {
     const workOrder = await this.prisma.workOrder.findUnique({
       where: { id: workOrderId },
       include: {
-        currentVersion: { include: { outputFile: true, issuedByUser: true } },
+        outputFile: true,
+        uploadedFile: true,
+        issuedByUser: true,
         orderItem: { include: orderItemInclude },
       },
     });
@@ -162,23 +161,18 @@ export class WorkOrdersService {
       ...this.toListRow(workOrder.orderItem),
       workOrderId: workOrder.id,
       createdAt: workOrder.createdAt.toISOString(),
-      currentVersion: workOrder.currentVersion ? this.toVersionRow(workOrder.currentVersion) : null,
+      docStatus: workOrder.status,
+      issuedAt: workOrder.issuedAt?.toISOString() ?? null,
+      issuedByName: workOrder.issuedByUser?.displayName ?? null,
+      fileName: workOrder.uploadedFile?.originalName ?? workOrder.outputFile?.originalName ?? null,
+      uploadedFileName: workOrder.uploadedFile?.originalName ?? null,
     };
   }
 
-  /** WO-002: 출력 이력 (최신 버전부터) */
-  async versions(workOrderId: string) {
-    const workOrder = await this.prisma.workOrder.findUnique({ where: { id: workOrderId } });
-    if (!workOrder) {
-      throw new BusinessException('NOT_FOUND', '작업지시서를 찾을 수 없습니다.');
-    }
-    const versions = await this.prisma.workOrderVersion.findMany({
-      where: { workOrderId },
-      include: { outputFile: true, issuedByUser: true },
-      orderBy: { versionNo: 'desc' },
-    });
-    return versions.map((v) => this.toVersionRow(v));
-  }
+  /*
+    출력 이력(버전 목록)은 없앴다 (현업 확정 2026-08-05) — 작업지시서는 품목당 파일 하나이고
+    다시 뽑으면 덮어쓴다. 누가 언제 뽑았는지는 감사로그(EXPORT)에 남는다.
+  */
 
   // ---------------------------------------------------------------------------
   // 미리보기
@@ -203,7 +197,7 @@ export class WorkOrdersService {
       linkedSession,
       measurementSessionId,
     );
-    const currentVersion = item.workOrder?.currentVersion ?? null;
+    const wo = item.workOrder ?? null;
 
     // 채촌 교체 후보: 같은 고객의 모든 채촌 (최근 채촌일부터)
     const candidates = await this.prisma.measurementSession.findMany({
@@ -214,7 +208,7 @@ export class WorkOrdersService {
         versionNo: true,
         measurementDate: true,
         measurementType: true,
-        completedAt: true,
+        _count: { select: { values: true } },
       },
     });
 
@@ -246,23 +240,27 @@ export class WorkOrdersService {
         versionNo: c.versionNo,
         measurementDate: toDateString(c.measurementDate),
         measurementType: c.measurementType,
-        completed: c.completedAt != null,
+        completed: c._count.values > 0,
         isLinked: !!link && c.id === link.measurementSessionId,
       })),
       // 연결 없이 최신 채촌으로 자동 선택된 상태인지 — 화면 문구를 가르는 값이다.
       measurementAutoSelected: !link && measurementSession != null,
       // 작업요청(제작 착수) 뒤에는 채촌을 바꿀 수 없다 (현업 확정 2026-08-03).
       canChangeMeasurement: canChangeWorkOrderMeasurement(item.status),
-      currentVersionNo: currentVersion?.versionNo ?? null,
-      // 미리보기 화면에서 최신 출력본을 바로 내려받게 하려면 버전 id가 필요하다.
-      currentVersionId: currentVersion?.id ?? null,
-      lastIssuedAt: currentVersion?.issuedAt.toISOString() ?? null,
-      status: resolveWorkOrderStatus(session, link, currentVersion),
-      // 정식 출력 가능 판정 (docs/dev/08 §4): 옵션 확정 + 채촌 연결·완료
+      docStatus: wo?.status ?? 'DRAFT',
+      fileName: wo?.uploadedFile?.originalName ?? wo?.outputFile?.originalName ?? null,
+      uploadedFileName: wo?.uploadedFile?.originalName ?? null,
+      lastIssuedAt: wo?.issuedAt?.toISOString() ?? null,
+      status: resolveWorkOrderStatus(session, link, !!wo?.outputFile),
+      /*
+        정식 출력 가능 판정 — 옵션 확정 + **값이 든 채촌**.
+        채촌의 '완료' 표시는 걷어냈다(2026-08-05). 상태 대신 내용으로 가른다:
+        값이 하나도 없는 빈 채촌이 최신이라고 그대로 공장에 나가면 안 된다.
+      */
       optionConfirmed: session.status === 'CONFIRMED',
-      measurementCompleted: !!measurementSession && measurementSession.completedAt != null,
+      measurementCompleted: !!measurementSession && measurementSession.values.length > 0,
       printable:
-        session.status === 'CONFIRMED' && !!measurementSession && measurementSession.completedAt != null,
+        session.status === 'CONFIRMED' && !!measurementSession && measurementSession.values.length > 0,
     };
   }
 
@@ -277,7 +275,7 @@ export class WorkOrdersService {
   async formPreview(
     orderItemId: string,
     measurementSessionId?: string,
-  ): Promise<{ orderItemId: string; versionNo: number; html: string }> {
+  ): Promise<{ orderItemId: string; html: string }> {
     const item = await this.loadOrderItem(orderItemId);
     const { session, measurementSession: linkedSession } = this.requirePrerequisites(item, {
       measurementOptional: measurementSessionId != null,
@@ -287,38 +285,21 @@ export class WorkOrdersService {
       linkedSession,
       measurementSessionId,
     );
-    // 아직 출력 전이므로 "다음에 붙을 버전 번호"를 보여준다.
-    const nextVersionNo = (item.workOrder?.currentVersion?.versionNo ?? 0) + 1;
     const html = await buildWorkOrderPreviewHtml(
       this.buildExcelData(
         item,
         this.buildOptionSnapshot(session),
         this.buildMeasurementSnapshot(measurementSession),
-        { fabricName: session.fabricName, versionNo: nextVersionNo, issuedAt: new Date(), note: null },
+        { fabricName: session.fabricName, issuedAt: new Date(), note: null },
       ),
     );
-    return { orderItemId: item.id, versionNo: nextVersionNo, html };
+    return { orderItemId: item.id, html };
   }
 
-  /** WO-002: 저장된 출력본을 그대로 화면에서 본다 (출력 이력 보기) */
-  async versionFormPreview(versionId: string): Promise<{ versionId: string; versionNo: number; html: string }> {
-    const version = await this.prisma.workOrderVersion.findUnique({
-      where: { id: versionId },
-      include: { outputFile: true },
-    });
-    if (!version) {
-      throw new BusinessException('NOT_FOUND', '작업지시서 버전을 찾을 수 없습니다.');
-    }
-    const filePath = resolve(this.storageRoot(), version.outputFile.storageKey);
-    if (!existsSync(filePath)) {
-      throw new BusinessException('NOT_FOUND', '출력 파일이 저장소에 존재하지 않습니다.');
-    }
-    return {
-      versionId,
-      versionNo: version.versionNo,
-      html: await renderStoredWorkOrderHtml(filePath),
-    };
-  }
+  /*
+    저장된 출력본을 화면에서 다시 그리는 기능은 없앴다 (2026-08-05) — 파일이 곧 결과물이므로
+    받아서 열면 된다. 미리보기는 '지금 값으로 그리기'(formPreview) 하나만 남는다.
+  */
 
   // ---------------------------------------------------------------------------
   // Excel 출력 (버전 생성)
@@ -363,16 +344,10 @@ export class WorkOrdersService {
       });
     }
 
-    // 출력 당시 표시값 스냅샷 + 원본 조합 해시 (데이터모델 §10.2)
     const optionSnapshot = this.buildOptionSnapshot(session);
     const measurementSnapshot = this.buildMeasurementSnapshot(measurementSession);
-    const sourceHash = createHash('sha256')
-      .update(JSON.stringify({ option: optionSnapshot, measurement: measurementSnapshot }))
-      .digest('hex');
 
     const issuedAt = new Date();
-    const versionId = randomUUID();
-    const fileId = randomUUID();
     let writtenPath: string | null = null;
 
     try {
@@ -382,20 +357,14 @@ export class WorkOrdersService {
           where: { orderItemId },
           update: {},
           create: { id: randomUUID(), orderItemId },
+          select: { id: true, outputFileId: true },
         });
-        const last = await tx.workOrderVersion.findFirst({
-          where: { workOrderId: workOrder.id },
-          orderBy: { versionNo: 'desc' },
-          select: { versionNo: true },
-        });
-        const versionNo = (last?.versionNo ?? 0) + 1;
-        const fileName = `${item.order.orderNo}_${item.productCategory}-${String(item.sequenceNo).padStart(2, '0')}_V${versionNo}.xlsx`;
+        const fileName = `${item.order.orderNo}_${item.productCategory}-${String(item.sequenceNo).padStart(2, '0')}.xlsx`;
 
         // Excel 생성 — 정장/셔츠는 실물 공장 양식(송파) 템플릿, 구두는 간이 메모형 시트로 분기
-        // (설계서 06 §5-a). 버전관리·파일저장·감사(EXPORT) 흐름은 카테고리와 무관하게 동일하다.
+        // (설계서 06 §5-a).
         const excelData = this.buildExcelData(item, optionSnapshot, measurementSnapshot, {
           fabricName: session.fabricName,
-          versionNo,
           issuedAt,
           note: dto.note ?? null,
         });
@@ -404,54 +373,45 @@ export class WorkOrdersService {
             ? await buildShoesWorkOrderExcel(excelData)
             : await buildWorkOrderExcel(excelData);
 
-        const storageKey = `work-orders/${versionId}.xlsx`;
+        /*
+          품목당 파일 하나다 (현업 확정 2026-08-05) — 저장 위치도 품목마다 고정해 두고
+          다시 뽑으면 그 자리를 덮어쓴다. 버전을 쌓지 않으므로 옛 파일이 남지 않는다.
+        */
+        const storageKey = `work-orders/${workOrder.id}.xlsx`;
         const filePath = resolve(this.storageRoot(), storageKey);
         await mkdir(dirname(filePath), { recursive: true });
         await writeFile(filePath, buffer);
         writtenPath = filePath;
 
-        await tx.file.create({
-          data: {
-            id: fileId,
-            storageKey,
-            originalName: fileName,
-            mimeType: XLSX_MIME,
-            sizeBytes: BigInt(buffer.length),
-            checksumSha256: createHash('sha256').update(buffer).digest('hex'),
-          },
-        });
+        const fileData = {
+          storageKey,
+          originalName: fileName,
+          mimeType: XLSX_MIME,
+          sizeBytes: BigInt(buffer.length),
+          checksumSha256: createHash('sha256').update(buffer).digest('hex'),
+        };
+        const fileId = workOrder.outputFileId ?? randomUUID();
+        if (workOrder.outputFileId) {
+          await tx.file.update({ where: { id: workOrder.outputFileId }, data: fileData });
+        } else {
+          await tx.file.create({ data: { id: fileId, ...fileData } });
+        }
 
-        // 이전 유효 버전은 SUPERSEDED로 보존 (데이터모델 §10.2)
-        await tx.workOrderVersion.updateMany({
-          where: { workOrderId: workOrder.id, status: { in: ['ISSUED', 'SENT'] } },
-          data: { status: 'SUPERSEDED' },
-        });
-        await tx.workOrderVersion.create({
-          data: {
-            id: versionId,
-            workOrderId: workOrder.id,
-            versionNo,
-            sourceOptionSessionId: session.id,
-            sourceMeasurementSessionId: measurementSession.id,
-            optionSnapshot: optionSnapshot as unknown as Prisma.InputJsonValue,
-            measurementSnapshot: measurementSnapshot as unknown as Prisma.InputJsonValue,
-            sourceHash,
-            changeReason: dto.note ?? null,
-            outputFileId: fileId,
-            status: 'ISSUED',
-            issuedBy: actor.id,
-            issuedAt,
-          },
-        });
+        // 출력하면 작업지시서가 선다 — 발주가 이 창을 거치므로 여기서 완료로 굳힌다.
         await tx.workOrder.update({
           where: { id: workOrder.id },
-          data: { currentVersionId: versionId },
+          data: {
+            outputFileId: fileId,
+            issuedAt,
+            issuedBy: actor.id,
+            status: 'COMPLETED',
+          },
         });
 
         // 출력에 실제로 쓴 채촌으로 품목 연결을 확정한다 (현업 확정 2026-08-03).
         // 출력 시점에 쓴 것이 곧 기준이며, 뒤에 더 최근 채촌이 생겨도 저절로 바뀌지 않는다.
-        // 미완료 채촌은 연결 규칙상 기준이 될 수 없으므로 그대로 둔다.
-        if (measurementSession.completedAt != null && link?.measurementSessionId !== measurementSession.id) {
+        // 빈 채촌은 기준이 될 수 없으므로 그대로 둔다.
+        if (measurementSession.values.length > 0 && link?.measurementSessionId !== measurementSession.id) {
           await tx.orderItemMeasurement.updateMany({
             where: { orderItemId, isCurrent: true, NOT: { measurementSessionId: measurementSession.id } },
             data: { isCurrent: false },
@@ -500,8 +460,6 @@ export class WorkOrdersService {
 
         const response = {
           workOrderId: workOrder.id,
-          workOrderVersionId: versionId,
-          versionNo,
           issuedAt: issuedAt.toISOString(),
           file: { id: fileId, fileName, downloadUrl: `/api/v1/files/${fileId}` },
         };
@@ -510,9 +468,9 @@ export class WorkOrdersService {
           {
             userId: actor.id,
             action: 'EXPORT',
-            entityType: 'WORK_ORDER_VERSION',
-            entityId: versionId,
-            after: { orderItemId, workOrderId: workOrder.id, versionNo, fileId, sourceHash },
+            entityType: 'WORK_ORDER',
+            entityId: workOrder.id,
+            after: { orderItemId, fileId, fileName },
             reason: dto.note,
           },
           tx,
@@ -523,7 +481,7 @@ export class WorkOrdersService {
               id: randomUUID(),
               key: idemKey,
               userId: actor.id,
-              endpoint: `POST /order-items/${orderItemId}/work-order-versions`,
+              endpoint: `POST /order-items/${orderItemId}/work-order`,
               responseJson: response,
             },
           });
@@ -541,27 +499,84 @@ export class WorkOrdersService {
   // 파일 다운로드
   // ---------------------------------------------------------------------------
 
-  /** 저장된 Excel 스트리밍 (파일 모듈과 독립 구현) */
-  async streamFile(versionId: string, res: Response): Promise<void> {
-    const version = await this.prisma.workOrderVersion.findUnique({
-      where: { id: versionId },
-      include: { outputFile: true },
+  /**
+   * 저장된 Excel 스트리밍 — 작업지시서 id로 받는다 (2026-08-05, 버전 제거).
+   * 수기 최종본이 있으면 그것을 내려 준다. 실제로 공장에 나간 서류가 최종이다.
+   */
+  async streamFile(workOrderId: string, res: Response): Promise<void> {
+    const wo = await this.prisma.workOrder.findUnique({
+      where: { id: workOrderId },
+      include: { outputFile: true, uploadedFile: true },
     });
-    if (!version) {
-      throw new BusinessException('NOT_FOUND', '작업지시서 버전을 찾을 수 없습니다.');
-    }
-    const filePath = resolve(this.storageRoot(), version.outputFile.storageKey);
+    if (!wo) throw new BusinessException('NOT_FOUND', '작업지시서를 찾을 수 없습니다.');
+    const file = wo.uploadedFile ?? wo.outputFile;
+    if (!file) throw new BusinessException('NOT_FOUND', '아직 출력한 작업지시서가 없습니다.');
+
+    const filePath = resolve(this.storageRoot(), file.storageKey);
     if (!existsSync(filePath)) {
       throw new BusinessException('NOT_FOUND', '출력 파일이 저장소에 존재하지 않습니다.');
     }
-    const encodedName = encodeURIComponent(version.outputFile.originalName);
-    res.setHeader('Content-Type', version.outputFile.mimeType);
-    res.setHeader('Content-Length', String(version.outputFile.sizeBytes));
+    const encodedName = encodeURIComponent(file.originalName);
+    res.setHeader('Content-Type', file.mimeType);
+    res.setHeader('Content-Length', String(file.sizeBytes));
     res.setHeader(
       'Content-Disposition',
       `attachment; filename="${encodedName}"; filename*=UTF-8''${encodedName}`,
     );
     createReadStream(filePath).pipe(res);
+  }
+
+  /**
+   * 수기 최종본 올리기 (현업 확정 2026-08-05).
+   * 시스템 출력본을 손으로 고쳐 공장에 보낸 파일을 **보관만** 한다 — 열어서 값을 꺼내지 않는다.
+   */
+  async uploadFinalFile(workOrderId: string, file: UploadedMulterFile | undefined, actor: AuthUser) {
+    const wo = await this.prisma.workOrder.findUnique({
+      where: { id: workOrderId },
+      select: { id: true, uploadedFileId: true },
+    });
+    if (!wo) throw new BusinessException('NOT_FOUND', '작업지시서를 찾을 수 없습니다.');
+
+    const uploaded = await this.files.upload(file, actor);
+    await this.prisma.workOrder.update({
+      where: { id: workOrderId },
+      data: { uploadedFileId: uploaded.id, uploadedBy: actor.id, uploadedAt: new Date() },
+    });
+    await this.audit.log({
+      userId: actor.id,
+      action: 'UPLOAD',
+      entityType: 'WORK_ORDER',
+      entityId: workOrderId,
+      before: { uploadedFileId: wo.uploadedFileId },
+      after: { uploadedFileId: uploaded.id, fileName: uploaded.originalName },
+      reason: '수기 최종본 업로드',
+    });
+    return { workOrderId, file: { id: uploaded.id, fileName: uploaded.originalName } };
+  }
+
+  /** 잘못 올린 최종본 내리기 — 파일 자체는 남기고 연결만 끊는다(업로드 이력 보존). */
+  async removeFinalFile(workOrderId: string, actor: AuthUser) {
+    const wo = await this.prisma.workOrder.findUnique({
+      where: { id: workOrderId },
+      select: { id: true, uploadedFileId: true },
+    });
+    if (!wo) throw new BusinessException('NOT_FOUND', '작업지시서를 찾을 수 없습니다.');
+    if (!wo.uploadedFileId)
+      throw new BusinessException('VALIDATION_ERROR', '올려 둔 최종본이 없습니다.');
+
+    await this.prisma.workOrder.update({
+      where: { id: workOrderId },
+      data: { uploadedFileId: null, uploadedBy: null, uploadedAt: null },
+    });
+    await this.audit.log({
+      userId: actor.id,
+      action: 'DELETE',
+      entityType: 'WORK_ORDER',
+      entityId: workOrderId,
+      before: { uploadedFileId: wo.uploadedFileId },
+      reason: '수기 최종본 내림',
+    });
+    return { workOrderId, removed: true };
   }
 
   // ---------------------------------------------------------------------------
@@ -625,10 +640,10 @@ export class WorkOrdersService {
     measurementSessionId: string | undefined,
   ): Promise<boolean> {
     if (measurementSessionId) return true;
-    const completed = await this.prisma.measurementSession.count({
-      where: { customerId: item.order.contract.customer.id, completedAt: { not: null } },
+    const usable = await this.prisma.measurementSession.count({
+      where: { customerId: item.order.contract.customer.id, values: { some: {} } },
     });
-    return completed > 0;
+    return usable > 0;
   }
 
   /**
@@ -636,9 +651,10 @@ export class WorkOrdersService {
    *
    * 1) 요청이 특정 채촌을 지목하면 그것,
    * 2) 품목에 연결된 채촌이 있으면 그것,
-   * 3) 둘 다 없으면 그 고객의 **가장 최근 완료 채촌**.
+   * 3) 둘 다 없으면 **스타일 컨설팅 구분의, 값이 든 가장 최근 채촌** (현업 확정 2026-08-05).
    *
-   * 셋 다 없으면(완료 채촌 0건) 출력 전제 미충족이다.
+   * 구분을 가리는 이유: 가봉·수선 채촌은 그 옷을 고치려고 잰 것이라 새 옷의 기준이 아니다.
+   * 값 유무를 보는 이유: '완료' 표시를 걷어냈으므로, 방금 열어 둔 빈 채촌이 최신일 수 있다.
    */
   private async resolveWorkOrderMeasurement(
     item: OrderItemWithSources,
@@ -650,14 +666,18 @@ export class WorkOrdersService {
     if (linkedSession) return linkedSession;
 
     const latest = await this.prisma.measurementSession.findFirst({
-      where: { customerId: item.order.contract.customer.id, completedAt: { not: null } },
+      where: {
+        customerId: item.order.contract.customer.id,
+        measurementType: 'INITIAL',
+        values: { some: {} },
+      },
       orderBy: [{ measurementDate: 'desc' }, { versionNo: 'desc' }],
       include: { values: { orderBy: [{ sortOrder: 'asc' }, { measurementCode: 'asc' }] } },
     });
     if (!latest) {
       throw new BusinessException(
         'WORK_ORDER_PREREQUISITE_MISSING',
-        '완료된 채촌이 없습니다. 채촌을 먼저 완료해 주세요.',
+        '쓸 수 있는 채촌이 없습니다. 스타일 컨설팅 채촌을 먼저 기록해 주세요.',
         undefined,
         { orderItemId: item.id, missing: ['MEASUREMENT_LINKED'] },
       );
@@ -702,7 +722,7 @@ export class WorkOrdersService {
     item: OrderItemWithSources,
     optionSnapshot: ReturnType<WorkOrdersService['buildOptionSnapshot']>,
     measurementSnapshot: ReturnType<WorkOrdersService['buildMeasurementSnapshot']>,
-    meta: { fabricName: string | null; versionNo: number; issuedAt: Date; note: string | null },
+    meta: { fabricName: string | null; issuedAt: Date; note: string | null },
   ): WorkOrderExcelData {
     return {
       customerName: item.order.contract.customer.name,
@@ -719,7 +739,6 @@ export class WorkOrdersService {
       productCategory: item.productCategory,
       sequenceNo: item.sequenceNo,
       fabricName: meta.fabricName,
-      versionNo: meta.versionNo,
       issuedAt: meta.issuedAt,
       note: meta.note,
       orderDate: toDateString(item.order.contract.contractedAt ?? item.order.createdAt),
@@ -802,9 +821,9 @@ export class WorkOrdersService {
   private toListRow(item: OrderItemWithSources) {
     const session = item.sourceContractItem.optionSelectionSessions[0] ?? null;
     const link = item.measurementLinks[0] ?? null;
-    const currentVersion = item.workOrder?.currentVersion ?? null;
+    const wo = item.workOrder ?? null;
     return {
-      workOrderId: item.workOrder?.id ?? null,
+      workOrderId: wo?.id ?? null,
       orderItemId: item.id,
       contractId: item.order.contract.id,
       contractNo: item.order.contract.contractNo,
@@ -816,33 +835,14 @@ export class WorkOrdersService {
       productCategory: item.productCategory,
       sequenceNo: item.sequenceNo,
       fabricName: session?.fabricName ?? null,
-      status: resolveWorkOrderStatus(session, link, currentVersion),
-      currentVersionNo: currentVersion?.versionNo ?? null,
-      lastIssuedAt: currentVersion?.issuedAt.toISOString() ?? null,
+      status: resolveWorkOrderStatus(session, link, !!wo?.outputFile),
+      docStatus: wo?.status ?? 'DRAFT',
+      fileName: wo?.uploadedFile?.originalName ?? wo?.outputFile?.originalName ?? null,
+      uploadedFileName: wo?.uploadedFile?.originalName ?? null,
+      lastIssuedAt: wo?.issuedAt?.toISOString() ?? null,
       optionConfirmedAt: session?.confirmedAt?.toISOString() ?? null,
       measurementLinkedAt: link?.linkedAt.toISOString() ?? null,
     };
   }
 
-  private toVersionRow(version: VersionWithFile) {
-    return {
-      id: version.id,
-      versionNo: version.versionNo,
-      status: version.status,
-      changeReason: version.changeReason,
-      sourceOptionSessionId: version.sourceOptionSessionId,
-      sourceMeasurementSessionId: version.sourceMeasurementSessionId,
-      sourceHash: version.sourceHash,
-      optionSnapshot: version.optionSnapshot,
-      measurementSnapshot: version.measurementSnapshot,
-      issuedBy: { id: version.issuedByUser.id, displayName: version.issuedByUser.displayName },
-      issuedAt: version.issuedAt.toISOString(),
-      sentAt: version.sentAt?.toISOString() ?? null,
-      file: {
-        id: version.outputFile.id,
-        fileName: version.outputFile.originalName,
-        downloadUrl: `/api/v1/files/${version.outputFile.id}`,
-      },
-    };
-  }
 }

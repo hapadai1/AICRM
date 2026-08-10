@@ -17,14 +17,12 @@ const TASK_META: Record<DashboardTaskType, { label: string; color: string }> = {
   LATE_RETURN: { label: '반납 지연', color: '#cf1322' },
   INBOUND_DELAY: { label: '입고 지연', color: '#d46b08' },
   UNORDERED: { label: '미주문', color: '#1d39c4' },
-  REPRINT_NEEDED: { label: '재출력 필요', color: '#531dab' },
 };
 
 const TASK_TYPES: DashboardTaskType[] = [
   'LATE_RETURN',
   'INBOUND_DELAY',
   'UNORDERED',
-  'REPRINT_NEEDED',
 ];
 
 /** 확인사항 행 클릭 시 이동할 상세 화면 경로 (id 없으면 목록으로 폴백) */
@@ -37,7 +35,6 @@ function taskTargetPath(task: DashboardTask): string {
         ? `/rentals/handover?q=${encodeURIComponent(task.orderNo)}`
         : '/rentals/handover';
     case 'UNORDERED':
-    case 'REPRINT_NEEDED':
     case 'INBOUND_DELAY':
       return task.orderId ? `/orders/${task.orderId}` : '/production';
   }

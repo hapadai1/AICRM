@@ -87,6 +87,27 @@ export function validateTransition(
 }
 
 /**
+ * 아직 발주하지 않은 품목인가 (현업 확정 2026-08-05).
+ *
+ * "제작이 시작됐는가"를 가르는 **단일 기준**이다. 전에는 곳곳에서 `status !== 'CREATED'`로
+ * 판정했는데, 계약완료가 준비 상태(옵션대기·채촌대기·발주가능)를 자동으로 올리기 시작하면서
+ * 준비 중인 품목까지 "제작 중"으로 읽혔다 — 계약을 [수정하기]로 되돌려도 컨설팅·베스트·채촌이
+ * 영영 잠기는 버그였다. 공장이 일을 시작하는 시점은 발주(PRODUCTION_REQUESTED)다.
+ */
+export function isBeforeProductionRequest(status: string): boolean {
+  const frozenFrom = ITEM_STATUS_FLOW.indexOf('PRODUCTION_REQUESTED');
+  const current = ITEM_STATUS_FLOW.indexOf(status as (typeof ITEM_STATUS_FLOW)[number]);
+  // 흐름 밖 상태(취소·집계 전용)는 되돌릴 자리가 아니다.
+  if (current < 0) return false;
+  return current < frozenFrom;
+}
+
+/** 그 품목들 중 하나라도 발주가 나갔는가 — 취소 품목은 세지 않는다. */
+export function anyInProduction(orderItems: { status: string }[]): boolean {
+  return orderItems.some((o) => o.status !== CANCELLED && !isBeforeProductionRequest(o.status));
+}
+
+/**
  * 구성품 상태에서 품목 집계 상태를 계산한다 (통합설계서 §10.6).
  * - 전체 출고 → RELEASED, 일부 출고 → PARTIALLY_RELEASED
  * - 전체 입고 → RECEIVED, 일부 입고 → PARTIALLY_RECEIVED

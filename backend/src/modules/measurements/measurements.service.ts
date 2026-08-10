@@ -2,14 +2,17 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { BusinessException } from '../../common/business.exception';
+import { toDateOnlyString as toDateString } from '../../common/date';
 import { AuthUser } from '../../common/decorators';
 import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FilesService, UploadedMulterFile } from '../files/files.service';
 import { syncPrepStatuses } from '../production/prep-status';
+import { isBeforeProductionRequest } from '../production/production-status';
 import { canChangeWorkOrderMeasurement } from '../work-orders/work-order-status';
 import { MEASUREMENT_ITEM_MAP } from './measurement-catalog';
+import { autoLinkMeasurements } from './measurement-link';
 import {
   CloneMeasurementSessionDto,
   CreateMeasurementSessionDto,
@@ -35,6 +38,30 @@ const IMAGE_PURPOSE = 'PHOTO';
 /** 세션당 첨부 사진 최대 장수 (설계서 05 §4.2, plan_v2). */
 const MAX_IMAGES = 50;
 
+/** 잠금 판정에 필요한 최소 모양 — 목록·상세 쿼리가 모두 이 모양을 만족한다. */
+interface LockSource {
+  orderItemLinks: { orderItem: { status: string; order: { contract: { status: string } } } }[];
+}
+
+/**
+ * 채촌 편집 잠금 판정 (현업 확정 2026-08-05).
+ *
+ * 채촌은 독립 축이라 언제든 고친다 — 다만 **그 치수로 일이 시작된 뒤**에는 못 고친다.
+ * 두 시점이 그것을 가른다:
+ *  - **계약완료**: 치수가 주문으로 넘어갔다. 계약서를 [수정하기]로 되돌리면 다시 열린다.
+ *  - **발주 이후**: 공장이 이미 그 치수로 만들고 있다.
+ *
+ * 예전에는 '완료' 표시가 편집을 막았고, 작업지시서 출력본 수도 함께 봤다. 완료는 걷어냈고,
+ * 출력은 발주와 같은 시점이라 위 두 조건에 이미 들어 있다 (2026-08-05).
+ */
+function isMeasurementLocked(session: LockSource): boolean {
+  return session.orderItemLinks.some(
+    (l) =>
+      l.orderItem.order.contract.status === 'COMPLETED' ||
+      !isBeforeProductionRequest(l.orderItem.status),
+  );
+}
+
 const SESSION_INCLUDE = {
   createdByUser: { select: { id: true, displayName: true } },
   customer: { select: { id: true, name: true, phone: true } },
@@ -51,19 +78,23 @@ const SESSION_INCLUDE = {
           id: true,
           displayName: true,
           productCategory: true,
-          order: { select: { contractId: true, contract: { select: { contractNo: true } } } },
+          // 잠금 판정 근거 — 계약완료 또는 발주 이후면 이 채촌은 못 고친다 (2026-08-05).
+          status: true,
+          order: {
+            select: {
+              contractId: true,
+              contract: { select: { contractNo: true, status: true } },
+            },
+          },
         },
       },
     },
   },
-  _count: { select: { workOrderVersions: true } },
 } satisfies Prisma.MeasurementSessionInclude;
 
 type SessionWithValues = Prisma.MeasurementSessionGetPayload<{ include: typeof SESSION_INCLUDE }>;
 
-function toDateString(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
+// toDateString은 common/date.ts의 toDateOnlyString을 쓴다.
 
 function toNumberOrNull(value: Prisma.Decimal | null): number | null {
   return value === null ? null : Number(value);
@@ -89,7 +120,6 @@ export class MeasurementsService {
     const where: Prisma.MeasurementSessionWhereInput = {};
     if (query.customerId) where.customerId = query.customerId;
     if (query.type) where.measurementType = query.type;
-    if (query.status) where.completedAt = query.status === 'COMPLETED' ? { not: null } : null;
 
     // @db.Date 컬럼이라 종료일은 그날 00:00(UTC)까지 포함하면 하루 전체가 들어온다.
     if (query.dateFrom || query.dateTo) {
@@ -119,10 +149,21 @@ export class MeasurementsService {
         include: {
           createdByUser: { select: { id: true, displayName: true } },
           customer: { select: { id: true, name: true, phone: true } },
-          _count: { select: { values: true, workOrderVersions: true } },
+          _count: { select: { values: true } },
           orderItemLinks: {
             where: { isCurrent: true },
-            select: { orderItem: { select: { id: true, displayName: true, productCategory: true } } },
+            select: {
+              orderItem: {
+                select: {
+                  id: true,
+                  displayName: true,
+                  productCategory: true,
+                  // 잠금 판정 근거 — 계약완료 또는 발주 이후면 못 고친다 (2026-08-05).
+                  status: true,
+                  order: { select: { contract: { select: { status: true } } } },
+                },
+              },
+            },
           },
         },
       }),
@@ -137,15 +178,12 @@ export class MeasurementsService {
       versionNo: s.versionNo,
       measurementDate: toDateString(s.measurementDate),
       measurementType: s.measurementType,
-      completed: s.completedAt !== null,
-      completedAt: s.completedAt,
       staffName: s.createdByUser.displayName,
       createdBy: s.createdByUser,
       valueCount: s._count.values,
       linkedOrderItems: s.orderItemLinks.map((l) => l.orderItem),
       linkedOrderItemCount: s.orderItemLinks.length,
-      workOrderVersionCount: s._count.workOrderVersions,
-      locked: s._count.workOrderVersions > 0,
+      locked: isMeasurementLocked(s),
       fitPreference: s.fitPreference,
       previousSessionId: s.previousSessionId,
       createdAt: s.createdAt,
@@ -222,13 +260,10 @@ export class MeasurementsService {
       dueDate: string | null;
       /** 이 계약에 연결된 채촌 건수 */
       measurementCount: number;
-      /** 그중 완료 처리된 건수 */
-      measurementCompletedCount: number;
       lastSessionId: string | null;
       lastMeasurementDate: string | null;
       lastVersionNo: number | null;
       lastMeasurementType: string | null;
-      lastCompleted: boolean | null;
     }
 
     const rows = new Map<string, Row>();
@@ -254,12 +289,10 @@ export class MeasurementsService {
           ? toDateString(order.contract.currentVersion.completionDueDate)
           : null,
         measurementCount: 0,
-        measurementCompletedCount: 0,
         lastSessionId: null,
         lastMeasurementDate: null,
         lastVersionNo: null,
         lastMeasurementType: null,
-        lastCompleted: null,
       };
       row.itemCount += 1;
       row.categoryCounts[item.productCategory] = (row.categoryCounts[item.productCategory] ?? 0) + 1;
@@ -281,7 +314,6 @@ export class MeasurementsService {
           measurementDate: true,
           versionNo: true,
           measurementType: true,
-          completedAt: true,
           relatedOrder: { select: { contractId: true } },
           orderItemLinks: {
             where: { isCurrent: true },
@@ -298,13 +330,11 @@ export class MeasurementsService {
           const row = rows.get(contractId);
           if (!row) continue;
           row.measurementCount += 1;
-          if (s.completedAt !== null) row.measurementCompletedCount += 1;
           if (row.lastSessionId === null) {
             row.lastSessionId = s.id;
             row.lastMeasurementDate = toDateString(s.measurementDate);
             row.lastVersionNo = s.versionNo;
             row.lastMeasurementType = s.measurementType;
-            row.lastCompleted = s.completedAt !== null;
           }
         }
       }
@@ -333,10 +363,21 @@ export class MeasurementsService {
       orderBy: [{ measurementDate: 'desc' }, { versionNo: 'desc' }],
       include: {
         createdByUser: { select: { id: true, displayName: true } },
-        _count: { select: { values: true, workOrderVersions: true } },
+        _count: { select: { values: true } },
         orderItemLinks: {
           where: { isCurrent: true },
-          select: { orderItem: { select: { id: true, displayName: true, productCategory: true } } },
+          select: {
+            orderItem: {
+              select: {
+                id: true,
+                displayName: true,
+                productCategory: true,
+                // 잠금 판정 근거 (2026-08-05)
+                status: true,
+                order: { select: { contract: { select: { status: true } } } },
+              },
+            },
+          },
         },
       },
     });
@@ -351,10 +392,8 @@ export class MeasurementsService {
       measurementType: s.measurementType,
       previousSessionId: s.previousSessionId,
       fitPreference: s.fitPreference,
-      completed: s.completedAt !== null,
-      completedAt: s.completedAt,
       // 작업지시서 출력 근거로 쓰여 수정·삭제가 막힌 기록 (목록에서 바로 구분해야 한다)
-      locked: s._count.workOrderVersions > 0,
+      locked: isMeasurementLocked(s),
       createdBy: s.createdByUser,
       createdAt: s.createdAt,
       valueCount: s._count.values,
@@ -466,6 +505,7 @@ export class MeasurementsService {
       });
     });
 
+    await this.autoLink(session, actor);
     const detail = this.toDetail(session);
     await this.audit.log({
       userId: actor.id,
@@ -479,7 +519,7 @@ export class MeasurementsService {
 
   /**
    * 저장: 메타 수정 + 값 UPSERT/삭제 (설계서 09 §3.3).
-   * 완료 여부는 편집을 막지 않는다. 작업지시서 출력 근거로 쓰인 세션만 잠근다.
+   * 채촌은 '완료' 상태를 두지 않는다 — 계약완료·발주로 잠기기 전까지는 언제든 고친다.
    */
   async update(id: string, dto: UpdateMeasurementSessionDto, actor: AuthUser) {
     const before = await this.prisma.measurementSession.findUnique({
@@ -530,6 +570,7 @@ export class MeasurementsService {
       });
     });
 
+    await this.autoLink(session, actor);
     const detail = this.toDetail(session);
     await this.audit.log({
       userId: actor.id,
@@ -538,37 +579,8 @@ export class MeasurementsService {
       entityId: id,
       before: this.toDetail(before),
       after: detail,
-      ...(before.completedAt !== null ? { reason: '완료 후 수정' } : {}),
     });
     return detail;
-  }
-
-  /** 완료 해제: 완료 → 수정 → 재완료 흐름용 (설계서 09 §3.5) */
-  async reopen(id: string, actor: AuthUser) {
-    const session = await this.prisma.measurementSession.findUnique({
-      where: { id },
-      include: SESSION_INCLUDE,
-    });
-    if (!session) throw new NotFoundException('채촌 세션이 없습니다.');
-    if (session.completedAt === null)
-      throw new BusinessException('INVALID_STATUS_TRANSITION', '완료 상태가 아닌 채촌 세션입니다.');
-    this.assertNotLocked(session, '완료 해제');
-
-    const reopened = await this.prisma.measurementSession.update({
-      where: { id },
-      data: { completedAt: null },
-      include: SESSION_INCLUDE,
-    });
-    await this.audit.log({
-      userId: actor.id,
-      action: 'UPDATE',
-      entityType: 'MEASUREMENT_SESSION',
-      entityId: id,
-      before: { completedAt: session.completedAt },
-      after: { completedAt: null },
-      reason: '채촌 완료 해제',
-    });
-    return this.toDetail(reopened);
   }
 
   /**
@@ -602,76 +614,6 @@ export class MeasurementsService {
       before,
     });
     return { id, deleted: true };
-  }
-
-  /**
-   * 완료 처리: completed_at 컬럼에 완료 시각을 기록한다 (연동정합화 계약 §9).
-   * 완료 판정·편집 차단·품목 연결 선행조건은 모두 이 컬럼 기준이며,
-   * 감사로그(action=COMPLETE)는 이력 기록 용도로만 남긴다.
-   */
-  async complete(id: string, actor: AuthUser) {
-    const session = await this.prisma.measurementSession.findUnique({
-      where: { id },
-      include: SESSION_INCLUDE,
-    });
-    if (!session) throw new NotFoundException('채촌 세션이 없습니다.');
-    if (session.completedAt !== null)
-      throw new BusinessException('INVALID_STATUS_TRANSITION', '이미 완료된 채촌 세션입니다.');
-    if (session.values.length === 0)
-      throw new BusinessException('MEASUREMENT_NOT_COMPLETE', '채촌값이 1개 이상 입력되어야 완료할 수 있습니다.');
-
-    // 완료와 동시에 관련 주문의 맞춤 품목에 자동 연결한다 — 별도 연결 UI 없이 준비를 끝낸다.
-    // 이미 현재 연결이 있는 품목은 건드리지 않아, 재체촌이 기존 선택을 덮지 않고 누락분만 채운다.
-    const { completed, autoLinked } = await this.prisma.$transaction(async (tx) => {
-      const completed = await tx.measurementSession.update({
-        where: { id },
-        data: { completedAt: new Date() },
-        include: SESSION_INCLUDE,
-      });
-      const autoLinked = await this.linkSessionToOrderItems(tx, session, actor.id, {
-        override: false,
-      });
-      return { completed, autoLinked };
-    });
-    await this.autoLinkOrderItems(completed.id, completed.customerId, completed.relatedOrderId, actor);
-    await this.audit.log({
-      userId: actor.id,
-      action: 'COMPLETE',
-      entityType: 'MEASUREMENT_SESSION',
-      entityId: id,
-      before: {
-        versionNo: session.versionNo,
-        valueCount: session.values.length,
-        completedAt: session.completedAt,
-      },
-      after: {
-        versionNo: completed.versionNo,
-        valueCount: completed.values.length,
-        completedAt: completed.completedAt,
-        autoLinkedItemCount: autoLinked.length,
-      },
-    });
-    for (const link of autoLinked) {
-      await this.audit.log({
-        userId: actor.id,
-        action: 'LINK',
-        entityType: 'ORDER_ITEM_MEASUREMENT',
-        entityId: link.id,
-        after: {
-          orderItemId: link.orderItemId,
-          measurementSessionId: id,
-          isCurrent: true,
-          auto: true,
-        },
-      });
-    }
-    // 자동 연결이 있었으면 linkedOrderItems가 바뀌므로 최신 상태를 다시 읽어 반환한다.
-    if (autoLinked.length === 0) return this.toDetail(completed);
-    const fresh = await this.prisma.measurementSession.findUnique({
-      where: { id },
-      include: SESSION_INCLUDE,
-    });
-    return this.toDetail(fresh ?? completed);
   }
 
   /** 기존 버전 복사: 새 날짜·구분으로 값 전체 복사, previous_session_id 연결 */
@@ -731,61 +673,24 @@ export class MeasurementsService {
   // ---------------------------------------------------------------------------
 
   /**
-   * 채촌 완료 시 그 고객의 품목에 자동으로 붙인다 (2026-08-04 현업 확정).
-   *
-   * 한 계약에 채촌 한 번이면 그 계약 품목이 다 같은 치수를 쓴다. 전에는 담당자가 품목마다
-   * 채촌을 골라야 했고(작업지시서 화면), 고르기 전까지는 채촌을 다 재고도 작업지시서가
-   * 잠겨 제작 화면에 `미연결`로 남았다 — 실무에 없는 일이라 완료 시점에 여기서 붙인다.
-   *
-   * 건드리지 않는 품목:
-   *  - 이미 다른 채촌이 붙은 품목 — 출력했거나 담당자가 직접 고른 것이 기준이다.
-   *  - 발주(PRODUCTION_REQUESTED) 이후 품목 — 공장이 이미 그 치수로 일을 시작했다.
-   * 세션에 주문이 지정돼 있으면 그 주문 안에서만 붙인다.
+   * 채촌을 저장하면 아직 채촌이 없던 품목에 붙인다 (현업 확정 2026-08-05).
+   * 규칙은 measurement-link 에 한 벌로 있다 — 계약완료 경로와 같은 규칙을 쓴다.
    */
-  private async autoLinkOrderItems(
-    sessionId: string,
-    customerId: string,
-    relatedOrderId: string | null,
-    actor: AuthUser,
-  ): Promise<void> {
-    const candidates = await this.prisma.orderItem.findMany({
-      where: {
-        order: {
-          ...(relatedOrderId ? { id: relatedOrderId } : {}),
-          // 렌탈은 우리 재고를 고쳐 내주는 것이라 치수를 새로 재지 않는다 — 채촌을 붙이지 않는다.
-          transactionType: { not: 'RENTAL' },
-          contract: { customerId, status: 'COMPLETED' },
-        },
-        // 이미 붙은 품목은 그대로 둔다.
-        measurementLinks: { none: { isCurrent: true } },
-      },
-      select: { id: true, status: true },
-    });
-    const targets = candidates.filter((i) => canChangeWorkOrderMeasurement(i.status));
-    if (targets.length === 0) return;
-
-    await this.prisma.$transaction(async (tx) => {
-      for (const item of targets) {
-        await tx.orderItemMeasurement.create({
-          data: {
-            id: randomUUID(),
-            orderItemId: item.id,
-            measurementSessionId: sessionId,
-            isCurrent: true,
-            linkedBy: actor.id,
-          },
-        });
-      }
-      // 채촌이 붙으면 준비가 끝난다 — 품목 상태에 반영한다.
-      await syncPrepStatuses(tx, targets.map((t) => t.id), actor.id);
-    });
+  private async autoLink(session: { id: string; customerId: string; relatedOrderId: string | null }, actor: AuthUser) {
+    const linked = await this.prisma.$transaction((tx) =>
+      autoLinkMeasurements(tx, session.customerId, actor.id, {
+        sessionId: session.id,
+        ...(session.relatedOrderId ? { orderId: session.relatedOrderId } : {}),
+      }),
+    );
+    if (!linked) return;
     await this.audit.log({
       userId: actor.id,
       action: 'LINK',
       entityType: 'MEASUREMENT_SESSION',
-      entityId: sessionId,
-      after: { orderItemIds: targets.map((t) => t.id) },
-      reason: '채촌 완료 시 미연결 품목 자동 연결',
+      entityId: session.id,
+      after: { orderItemIds: linked.orderItemIds },
+      reason: '채촌 저장 시 미연결 품목 자동 연결',
     });
   }
 
@@ -805,8 +710,12 @@ export class MeasurementsService {
     if (!session) throw new NotFoundException('채촌 세션이 없습니다.');
     if (session.customerId !== orderItem.order.contract.customerId)
       throw new BusinessException('VALIDATION_ERROR', '다른 고객의 채촌 세션은 연결할 수 없습니다.');
-    if (session.completedAt === null)
-      throw new BusinessException('MEASUREMENT_NOT_COMPLETE', '완료된 채촌 세션만 품목에 연결할 수 있습니다.');
+    // 완료 표시를 걷어냈으므로(2026-08-05) 붙일 수 있는 채촌은 **값이 든 채촌**이다.
+    const valueCount = await this.prisma.measurementValue.count({
+      where: { measurementSessionId: dto.measurementSessionId },
+    });
+    if (valueCount === 0)
+      throw new BusinessException('MEASUREMENT_NOT_COMPLETE', '채촌값이 입력된 채촌만 품목에 연결할 수 있습니다.');
 
     const previousCurrent = await this.prisma.orderItemMeasurement.findFirst({
       where: { orderItemId, isCurrent: true },
@@ -860,97 +769,6 @@ export class MeasurementsService {
       linkedBy: link.linkedBy,
       linkedAt: link.linkedAt,
     };
-  }
-
-  /**
-   * 완료된 세션을 관련 주문(relatedOrder)의 맞춤 품목에 연결한다.
-   * - override=false: 현재 연결이 없는 품목만 채운다 (완료 시 자동 연결 — 기존 선택을 덮지 않는다).
-   * - override=true: 취소 아닌 맞춤 품목 전체를 이 세션으로 교체한다 (재체촌 스왑·수동 연결).
-   * relatedOrder가 없거나 렌탈 주문이면 아무 것도 하지 않는다.
-   * 반환: 이번에 현재 연결로 만든 품목 목록.
-   */
-  private async linkSessionToOrderItems(
-    tx: Prisma.TransactionClient,
-    session: { id: string; relatedOrderId: string | null },
-    actorId: string,
-    opts: { override: boolean },
-  ): Promise<Array<{ id: string; orderItemId: string }>> {
-    if (!session.relatedOrderId) return [];
-    const items = await tx.orderItem.findMany({
-      where: {
-        orderId: session.relatedOrderId,
-        status: { not: 'CANCELLED' },
-        order: { transactionType: 'CUSTOM' },
-        ...(opts.override ? {} : { measurementLinks: { none: { isCurrent: true } } }),
-      },
-      select: { id: true },
-    });
-    const linked: Array<{ id: string; orderItemId: string }> = [];
-    for (const item of items) {
-      if (opts.override)
-        await tx.orderItemMeasurement.updateMany({
-          where: {
-            orderItemId: item.id,
-            isCurrent: true,
-            NOT: { measurementSessionId: session.id },
-          },
-          data: { isCurrent: false },
-        });
-      const existing = await tx.orderItemMeasurement.findFirst({
-        where: { orderItemId: item.id, measurementSessionId: session.id },
-      });
-      const link = existing
-        ? await tx.orderItemMeasurement.update({
-            where: { id: existing.id },
-            data: { isCurrent: true, linkedBy: actorId, linkedAt: new Date() },
-          })
-        : await tx.orderItemMeasurement.create({
-            data: {
-              id: randomUUID(),
-              orderItemId: item.id,
-              measurementSessionId: session.id,
-              isCurrent: true,
-              linkedBy: actorId,
-            },
-          });
-      linked.push({ id: link.id, orderItemId: item.id });
-    }
-    return linked;
-  }
-
-  /**
-   * 완료된 채촌을 관련 주문의 맞춤 품목 전체에 (재)연결한다 — 재체촌 스왑·연결 누락 복구용.
-   * 완료 시 자동 연결과 달리 기존 연결을 이 세션으로 교체한다(override).
-   */
-  async linkToRelatedOrder(id: string, actor: AuthUser) {
-    const session = await this.prisma.measurementSession.findUnique({
-      where: { id },
-      select: { id: true, relatedOrderId: true, completedAt: true },
-    });
-    if (!session) throw new NotFoundException('채촌 세션이 없습니다.');
-    if (session.completedAt === null)
-      throw new BusinessException('MEASUREMENT_NOT_COMPLETE', '완료된 채촌만 품목에 연결할 수 있습니다.');
-    if (!session.relatedOrderId)
-      throw new BusinessException('VALIDATION_ERROR', '연결할 계약(주문)이 지정되지 않은 채촌입니다.');
-
-    const linked = await this.prisma.$transaction((tx) =>
-      this.linkSessionToOrderItems(tx, session, actor.id, { override: true }),
-    );
-    for (const link of linked) {
-      await this.audit.log({
-        userId: actor.id,
-        action: 'LINK',
-        entityType: 'ORDER_ITEM_MEASUREMENT',
-        entityId: link.id,
-        after: { orderItemId: link.orderItemId, measurementSessionId: id, isCurrent: true },
-      });
-    }
-    const fresh = await this.prisma.measurementSession.findUnique({
-      where: { id },
-      include: SESSION_INCLUDE,
-    });
-    if (!fresh) throw new NotFoundException('채촌 세션이 없습니다.');
-    return this.toDetail(fresh);
   }
 
   // ---------------------------------------------------------------------------
@@ -1121,14 +939,13 @@ export class MeasurementsService {
   }
 
   /**
-   * 편집 잠금 판정 (설계서 09 §2.1): 작업지시서가 이 채촌을 근거로 출력된 뒤에는
-   * 수정·삭제·완료해제를 막는다. 완료 여부 자체는 편집을 막지 않는다.
+   * 편집 잠금 판정 — 규칙은 isMeasurementLocked 에 있다.
    */
-  private assertNotLocked(session: { _count: { workOrderVersions: number } }, action: string): void {
-    if (session._count.workOrderVersions > 0)
+  private assertNotLocked(session: LockSource, action: string): void {
+    if (isMeasurementLocked(session))
       throw new BusinessException(
         'MEASUREMENT_LOCKED',
-        `작업지시서 출력에 사용된 채촌은 ${action}할 수 없습니다. 복사(POST /measurements/{id}/clone)로 새 버전을 만들어 주세요.`,
+        `계약이 완료됐거나 발주가 나간 채촌은 ${action}할 수 없습니다. 복사(POST /measurements/{id}/clone)로 새로 등록해 주세요.`,
       );
   }
 
@@ -1176,8 +993,7 @@ export class MeasurementsService {
         displayName: l.orderItem.displayName,
         productCategory: l.orderItem.productCategory,
       })),
-      workOrderVersionCount: session._count.workOrderVersions,
-      locked: session._count.workOrderVersions > 0,
+      locked: isMeasurementLocked(session),
       relatedOrderId: session.relatedOrderId,
       versionNo: session.versionNo,
       measurementDate: toDateString(session.measurementDate),
@@ -1186,8 +1002,6 @@ export class MeasurementsService {
       fitPreference: session.fitPreference,
       bodyNotes: session.bodyNotes,
       notes: session.notes,
-      completed: session.completedAt !== null,
-      completedAt: session.completedAt,
       createdBy: session.createdByUser,
       createdAt: session.createdAt,
       values: session.values.map((v) => ({

@@ -94,7 +94,7 @@ export function RentalAllocationNotesModal({
         title={`연락·비고 — ${allocation.customerName}`}
         width={720}
         footer={<Button onClick={onClose}>닫기</Button>}
-        destroyOnClose
+        destroyOnHidden
       >
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
           <Descriptions size="small" column={2} bordered>
@@ -156,7 +156,7 @@ export function RentalAllocationNotesModal({
             body: changeReason,
           })
         }
-        destroyOnClose
+        destroyOnHidden
       >
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
           <Typography.Text type="secondary">

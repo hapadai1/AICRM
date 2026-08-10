@@ -1,5 +1,7 @@
 import { Prisma } from '@prisma/client';
-import { randomUUID } from 'crypto';
+import { todayAsDbDate } from '../../common/date';
+import { consultingSessionSelect, pickConsultingSession } from '../work-orders/work-order-status';
+import { applyItemStatus } from './item-status';
 import { CANCELLED, ITEM_STATUS_FLOW } from './production-status';
 
 /**
@@ -25,21 +27,8 @@ const PREP_SELECT = Prisma.validator<Prisma.OrderItemSelect>()({
   id: true,
   status: true,
   order: { select: { transactionType: true } },
-  sourceContractItem: {
-    select: {
-      optionSelectionSessions: {
-        where: { isCurrent: true, status: 'CONFIRMED' },
-        take: 1,
-        select: { id: true },
-      },
-      // 렌탈의 스타일 컨설팅은 렌탈 선택 세션이다 — 옵션 세션만 보면 렌탈은 영영 옵션대기다.
-      rentalSelectionSessions: {
-        where: { isCurrent: true, status: 'CONFIRMED' },
-        take: 1,
-        select: { id: true },
-      },
-    },
-  },
+  // 컨설팅 확정 판정은 작업지시서 판정과 같은 정의를 쓴다 (work-order-status 단일 출처).
+  sourceContractItem: { select: consultingSessionSelect },
   measurementLinks: { where: { isCurrent: true }, take: 1, select: { id: true } },
 });
 
@@ -48,10 +37,8 @@ type PrepItem = Prisma.OrderItemGetPayload<{ select: typeof PREP_SELECT }>;
 /** 그 품목이 서 있어야 할 준비 상태 */
 function prepStatusOf(item: PrepItem): string {
   const rental = item.order.transactionType === 'RENTAL';
-  const consultingConfirmed = rental
-    ? item.sourceContractItem.rentalSelectionSessions.length > 0
-    : item.sourceContractItem.optionSelectionSessions.length > 0;
-  if (!consultingConfirmed) return 'OPTION_PENDING';
+  if (!pickConsultingSession(item.sourceContractItem)) return 'OPTION_PENDING';
+  // 렌탈은 채촌을 재지 않는다 — 컨설팅 확정이 곧 발주 가능이다.
   if (rental || item.measurementLinks.length > 0) return READY;
   return 'MEASUREMENT_PENDING';
 }
@@ -81,20 +68,14 @@ export async function syncPrepStatuses(
     const next = ITEM_STATUS_FLOW.indexOf(target as (typeof ITEM_STATUS_FLOW)[number]);
     if (next <= current) continue;
 
-    await tx.orderItem.update({ where: { id: item.id }, data: { status: target } });
     // 상태가 왜 바뀌었는지는 제작 이력에서 읽는다 — 사람이 누른 것과 구분되게 사유를 적는다.
-    await tx.productionEvent.create({
-      data: {
-        id: randomUUID(),
-        orderItemId: item.id,
-        componentId: null,
-        eventType: target,
-        previousStatus: item.status,
-        newStatus: target,
-        eventDate: new Date(new Date().toISOString().slice(0, 10)),
-        notes: '준비 진행 자동 반영(옵션 확정·채촌 연결)',
-        actorId,
-      },
+    await applyItemStatus(tx, {
+      orderItemId: item.id,
+      from: item.status,
+      to: target,
+      eventDate: todayAsDbDate(),
+      notes: '준비 진행 자동 반영(옵션 확정·채촌 연결)',
+      actorId,
     });
   }
 }

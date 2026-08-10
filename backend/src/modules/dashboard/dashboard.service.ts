@@ -1,10 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { BusinessException } from '../../common/business.exception';
+import { toDateOnlyStringOrNull as toDateString, todayAsDbDate } from '../../common/date';
 import { AuthUser } from '../../common/decorators';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { toAppointmentView } from '../appointments/appointment-view';
+import { buildWorkOrderView, workOrderStatusSelect } from '../work-orders/work-order-status';
 import {
   AcknowledgeTaskDto,
   DASHBOARD_TASK_TYPES,
@@ -17,20 +19,9 @@ const TASK_ENTITY_TYPE: Record<DashboardTaskType, string> = {
   LATE_RETURN: 'RENTAL_ALLOCATION',
   INBOUND_DELAY: 'ORDER_ITEM_COMPONENT',
   UNORDERED: 'ORDER_ITEM',
-  REPRINT_NEEDED: 'ORDER_ITEM',
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** 로컬 달력 기준 오늘 날짜를 UTC 자정 Date로 반환 (@db.Date 비교용). */
-function todayAsDbDate(): Date {
-  const now = new Date();
-  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
-}
-
-function toDateString(value: Date | null | undefined): string | null {
-  return value ? value.toISOString().slice(0, 10) : null;
-}
 
 /** 로컬 달력 기준 YYYY-MM-DD 문자열 */
 function localDateKey(d: Date): string {
@@ -169,8 +160,6 @@ export class DashboardService {
         return this.findInboundDelays();
       case 'UNORDERED':
         return this.findUnordered();
-      case 'REPRINT_NEEDED':
-        return this.findReprintNeeded();
     }
   }
 
@@ -240,24 +229,33 @@ export class DashboardService {
     );
   }
 
-  /** 미주문: 옵션 세션 CONFIRMED + 현재 채촌 연결 + 작업지시서 버전 0건. */
+  /**
+   * 미주문: 준비(컨설팅 확정+채촌 연결)는 끝났는데 작업지시서를 안 낸 품목.
+   *
+   * 판정은 work-orders의 단일 출처(buildWorkOrderView)를 그대로 쓴다 — 전에는 여기서
+   * 옵션 세션·채촌 연결을 따로 조회해 제작 목록과 판정 사본이 두 벌이었고, 렌탈 선택
+   * 세션 반영(2026-08-04) 같은 규칙 변경이 이쪽만 비껴갔다. 진행(journey) 없는 주문을
+   * 빼는 것도 제작 목록과 같다 — 화면에 없는 품목이 대시보드에만 잡히면 처리할 곳이 없다.
+   */
   private async findUnordered(): Promise<DashboardTaskRow[]> {
     const items = await this.prisma.orderItem.findMany({
       where: {
         status: { not: 'CANCELLED' },
-        // 옵션 세션은 ContractItem에 붙는다 → sourceContractItem 경유(REACH-BACK).
-        sourceContractItem: {
-          optionSelectionSessions: { some: { isCurrent: true, status: 'CONFIRMED' } },
-        },
-        measurementLinks: { some: { isCurrent: true } },
-        OR: [{ workOrder: null }, { workOrder: { versions: { none: {} } } }],
+        order: { journeys: { some: { status: { not: 'CANCELLED' } } } },
       },
-      include: { order: { include: { contract: { include: { customer: true } } } } },
+      select: {
+        id: true,
+        orderId: true,
+        displayName: true,
+        order: { select: { orderNo: true, contract: { select: { customer: true } } } },
+        ...workOrderStatusSelect,
+      },
       orderBy: { createdAt: 'asc' },
     });
+    const unordered = items.filter((item) => buildWorkOrderView(item).status === 'UNORDERED');
     return this.withAcknowledged(
       'UNORDERED',
-      items.map((item) =>
+      unordered.map((item) =>
         this.row('UNORDERED', item.id, item.order.contract.customer, {
           orderId: item.orderId,
           orderNo: item.order.orderNo,
@@ -270,58 +268,6 @@ export class DashboardService {
     );
   }
 
-  /** 재출력 필요: 최신 옵션 확정/채촌 연결 시각 > 마지막 작업지시서 출력 시각. */
-  private async findReprintNeeded(): Promise<DashboardTaskRow[]> {
-    const items = await this.prisma.orderItem.findMany({
-      where: {
-        status: { not: 'CANCELLED' },
-        workOrder: { versions: { some: {} } },
-        sourceContractItem: {
-          optionSelectionSessions: { some: { isCurrent: true, status: 'CONFIRMED' } },
-        },
-        measurementLinks: { some: { isCurrent: true } },
-      },
-      include: {
-        order: { include: { contract: { include: { customer: true } } } },
-        // 옵션 세션은 ContractItem에 붙는다 → sourceContractItem 경유(REACH-BACK).
-        sourceContractItem: {
-          select: {
-            optionSelectionSessions: {
-              where: { isCurrent: true, status: 'CONFIRMED' },
-              select: { confirmedAt: true },
-            },
-          },
-        },
-        measurementLinks: { where: { isCurrent: true }, select: { linkedAt: true } },
-        workOrder: {
-          include: { versions: { orderBy: { issuedAt: 'desc' }, take: 1, select: { issuedAt: true } } },
-        },
-      },
-    });
-
-    const rows: DashboardTaskRow[] = [];
-    for (const item of items) {
-      const lastIssuedAt = item.workOrder?.versions[0]?.issuedAt;
-      if (!lastIssuedAt) continue;
-      const sourceTimes = [
-        ...item.sourceContractItem.optionSelectionSessions.map((s) => s.confirmedAt?.getTime() ?? 0),
-        ...item.measurementLinks.map((l) => l.linkedAt.getTime()),
-      ];
-      const latestSourceAt = Math.max(0, ...sourceTimes);
-      if (latestSourceAt <= lastIssuedAt.getTime()) continue;
-      rows.push(
-        this.row('REPRINT_NEEDED', item.id, item.order.contract.customer, {
-          orderId: item.orderId,
-          orderNo: item.order.orderNo,
-          orderItemId: item.id,
-          itemLabel: item.displayName,
-          reason: '마지막 출력 이후 옵션·채촌 원본이 변경됨',
-          dueDate: toDateString(todayAsDbDate()),
-        }),
-      );
-    }
-    return this.withAcknowledged('REPRINT_NEEDED', rows);
-  }
 
   // ---------------------------------------------------------------------------
   // 공통

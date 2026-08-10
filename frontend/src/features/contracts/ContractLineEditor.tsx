@@ -86,10 +86,9 @@ export function ContractLineEditor({ value, onChange, disabled }: ContractLineEd
     );
   };
 
-  // 옵션 추가금액 롤업 라인은 컨설팅 결과라 항상 맨 아래에 고정한다 — 새 품목 행을 추가해도 밑에 남는다.
-  const rows: EditorRow[] = [...value]
-    .sort((a, b) => Number(!!a.isOptionRollup) - Number(!!b.isOptionRollup))
-    .map((l) => ({ ...l, rowKey: l.key }));
+  // 옵션(추가금액) 롤업 라인은 백엔드가 각 맞춤 라인 바로 아래로 끼워 넣어 내려주므로
+  // (소스 라인과 같은 sortOrder) 여기서는 받은 순서를 그대로 렌더한다.
+  const rows: EditorRow[] = value.map((l) => ({ ...l, rowKey: l.key }));
 
   const columns: ColumnsType<EditorRow> = [
     {
@@ -194,10 +193,16 @@ export function ContractLineEditor({ value, onChange, disabled }: ContractLineEd
     {
       title: '비고',
       dataIndex: 'note',
-      render: (_, l) =>
-        l.isOptionRollup ? (
-          <span style={{ color: 'rgba(0,0,0,0.45)' }}>스타일 컨설팅에서 자동 반영</span>
-        ) : (
+      render: (_, l) => {
+        // 옵션 롤업 라인: 부위별 유료 옵션 목록(백엔드 notes). 비어 있으면 안내 문구.
+        if (l.isOptionRollup)
+          return (
+            <span style={{ color: 'rgba(0,0,0,0.45)', whiteSpace: 'pre-line' }}>
+              {l.note?.trim() || '스타일 컨설팅에서 자동 반영'}
+            </span>
+          );
+        // 일반 품목 라인은 수기 비고 입력.
+        return (
           <Input
             value={l.note}
             variant="filled"
@@ -205,7 +210,8 @@ export function ContractLineEditor({ value, onChange, disabled }: ContractLineEd
             disabled={disabled}
             onChange={(e) => update(l.key, { note: e.target.value })}
           />
-        ),
+        );
+      },
     },
     {
       title: '',

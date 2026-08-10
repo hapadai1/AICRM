@@ -391,7 +391,7 @@ export function RentalAllocatePage() {
         okText="예약"
         cancelText="취소"
         confirmLoading={allocateMutation.isPending}
-        destroyOnClose
+        destroyOnHidden
       >
         {allocateSku && (
           <Space direction="vertical" size="middle" style={{ width: '100%' }}>

@@ -11,7 +11,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
  * - 펜 두께 고정, `toDataURL('image/png')` 로 캡처.
  *
  * 버튼: [다시](로컬 초기화) · [취소] · [서명 저장]. 획이 있는데 저장 없이 [취소]하면 이탈 경고.
- * 부모는 이 컴포넌트를 Modal 안에 `destroyOnClose` 로 렌더해 열 때마다 새로 마운트하는 것을 권장한다.
+ * 부모는 이 컴포넌트를 Modal 안에 `destroyOnHidden` 로 렌더해 열 때마다 새로 마운트하는 것을 권장한다.
  */
 
 const CANVAS_HEIGHT = 240;

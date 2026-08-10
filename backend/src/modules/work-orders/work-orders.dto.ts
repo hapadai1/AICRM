@@ -3,11 +3,11 @@ import { IsInt, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-valid
 import { PageQueryDto } from '../../common/pagination';
 
 /** 작업지시서 목록 판정 상태 (조회 조건으로 계산, 별도 테이블 없음 — 데이터모델 §10.5) */
-export const WORK_ORDER_LIST_STATUSES = ['UNORDERED', 'REPRINT_NEEDED', 'CURRENT'] as const;
+export const WORK_ORDER_LIST_STATUSES = ['UNORDERED', 'CURRENT'] as const;
 export type WorkOrderListStatus = (typeof WORK_ORDER_LIST_STATUSES)[number];
 
 export class WorkOrderListQueryDto extends PageQueryDto {
-  /** 콤마 구분 다중선택: UNORDERED,REPRINT_NEEDED,CURRENT */
+  /** 콤마 구분 다중선택: UNORDERED,CURRENT */
   @IsOptional()
   @IsString()
   status?: string;

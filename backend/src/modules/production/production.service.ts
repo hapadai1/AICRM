@@ -2,12 +2,14 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { BusinessException } from '../../common/business.exception';
+import { toDateOrUndefined as toDate, todayAsDbDate as today } from '../../common/date';
 import { AuthUser } from '../../common/decorators';
 import { Paginated } from '../../common/pagination';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FilesService, UploadedMulterFile } from '../files/files.service';
 import { buildWorkOrderView, workOrderStatusSelect } from '../work-orders/work-order-status';
+import { applyComponentStatus, applyItemStatus } from './item-status';
 import {
   AGGREGATE_ONLY_STATUSES,
   CANCELLED,
@@ -54,13 +56,7 @@ const COMPONENT_SELECT = {
   active: true,
 } as const;
 
-function toDate(value?: string): Date | undefined {
-  return value ? new Date(value) : undefined;
-}
-
-function today(): Date {
-  return new Date(new Date().toISOString().slice(0, 10));
-}
+// 날짜 헬퍼는 common/date.ts가 단일 출처다 — '오늘'은 매장(로컬) 달력 기준이다.
 
 /**
  * 구성품 단계 처리를 되돌릴 때 쓰는 표 — `그 단계가 남긴 상태 → 직전 상태`.
@@ -120,29 +116,15 @@ export class ProductionService {
     validateTransition(ITEM_STATUS_FLOW, item.status, dto.newStatus, dto.reason, '품목');
 
     const event = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.productionEvent.create({
-        data: {
-          id: randomUUID(),
-          orderItemId,
-          componentId: null,
-          eventType: dto.newStatus,
-          previousStatus: item.status,
-          newStatus: dto.newStatus,
-          expectedDate: toDate(dto.expectedDate),
-          eventDate: toDate(dto.eventDate) ?? today(),
-          notes: mergeNotes(dto.notes, dto.reason),
-          actorId: actor.id,
-        },
-        select: EVENT_SELECT,
-      });
-      await tx.orderItem.update({
-        where: { id: orderItemId },
-        data: {
-          status: dto.newStatus,
-          ...(dto.newStatus === CANCELLED
-            ? { cancelledReason: dto.reason ?? dto.notes, cancelledAt: new Date() }
-            : {}),
-        },
+      // 상태 갱신·이력 생성은 단일 기록자(applyItemStatus)로 — CANCELLED 진입은 검증이 이미 거부했다.
+      const written = await applyItemStatus(tx, {
+        orderItemId,
+        from: item.status,
+        to: dto.newStatus,
+        eventDate: toDate(dto.eventDate) ?? today(),
+        expectedDate: toDate(dto.expectedDate),
+        notes: mergeNotes(dto.notes, dto.reason),
+        actorId: actor.id,
       });
       await this.audit.log(
         {
@@ -156,7 +138,11 @@ export class ProductionService {
         },
         tx,
       );
-      return created;
+      // 응답은 기존과 같은 이벤트 뷰 모양을 유지한다 (written은 동일 상태 재설정이 아니므로 항상 있다).
+      return tx.productionEvent.findUniqueOrThrow({
+        where: { id: written!.eventId },
+        select: EVENT_SELECT,
+      });
     });
     return event;
   }
@@ -241,24 +227,26 @@ export class ProductionService {
     },
   ) {
     const result = await this.prisma.$transaction(async (tx) => {
-      const event = await tx.productionEvent.create({
-        data: {
-          id: randomUUID(),
-          orderItemId: component.orderItemId,
-          componentId: component.id,
-          eventType: change.eventType,
-          previousStatus: component.status,
-          newStatus: change.newStatus,
-          expectedDate: change.expectedDate,
-          eventDate: change.eventDate,
-          notes: change.notes,
-          actorId: actor.id,
-        },
+      // 상태 갱신·이력 생성은 단일 기록자(applyComponentStatus)로.
+      const written = await applyComponentStatus(tx, {
+        componentId: component.id,
+        orderItemId: component.orderItemId,
+        from: component.status,
+        to: change.newStatus,
+        eventType: change.eventType,
+        eventDate: change.eventDate,
+        expectedDate: change.expectedDate,
+        notes: change.notes,
+        data: change.componentData,
+        actorId: actor.id,
+      });
+      // 검증이 동일 상태 재설정을 이미 거부하므로 written은 항상 있다.
+      const event = await tx.productionEvent.findUniqueOrThrow({
+        where: { id: written!.eventId },
         select: EVENT_SELECT,
       });
-      const updated = await tx.orderItemComponent.update({
+      const updated = await tx.orderItemComponent.findUniqueOrThrow({
         where: { id: component.id },
-        data: { status: change.newStatus, ...(change.componentData ?? {}) },
         select: COMPONENT_SELECT,
       });
       await this.audit.log(
@@ -297,19 +285,14 @@ export class ProductionService {
     const computed = computeAggregateStatus(item.components);
     if (!computed || computed === item.status || item.status === CANCELLED) return item.status;
 
-    await tx.orderItem.update({ where: { id: orderItemId }, data: { status: computed } });
-    await tx.productionEvent.create({
-      data: {
-        id: randomUUID(),
-        orderItemId,
-        componentId: null,
-        eventType: 'ITEM_STATUS_AGGREGATED',
-        previousStatus: item.status,
-        newStatus: computed,
-        eventDate,
-        notes: '구성품 상태 집계에 따른 품목 상태 갱신',
-        actorId: actor.id,
-      },
+    await applyItemStatus(tx, {
+      orderItemId,
+      from: item.status,
+      to: computed,
+      eventType: 'ITEM_STATUS_AGGREGATED',
+      eventDate,
+      notes: '구성품 상태 집계에 따른 품목 상태 갱신',
+      actorId: actor.id,
     });
     await this.audit.log(
       {
@@ -369,26 +352,18 @@ export class ProductionService {
           undo.from.includes(c.status),
       );
       for (const c of targets) {
-        await tx.orderItemComponent.update({
-          where: { id: c.id },
+        await applyComponentStatus(tx, {
+          componentId: c.id,
+          orderItemId,
+          from: c.status,
+          to: undo.to,
+          eventDate,
+          notes: '단계 처리 취소(잘못 누름)',
           data: {
-            status: undo.to,
             ...(undo.clear === 'IN' ? { actualInboundAt: null } : {}),
             ...(undo.clear === 'OUT' ? { actualOutboundAt: null } : {}),
           },
-        });
-        await tx.productionEvent.create({
-          data: {
-            id: randomUUID(),
-            orderItemId,
-            componentId: c.id,
-            eventType: undo.to,
-            previousStatus: c.status,
-            newStatus: undo.to,
-            eventDate,
-            notes: '단계 처리 취소(잘못 누름)',
-            actorId: actor.id,
-          },
+          actorId: actor.id,
         });
       }
       if (targets.length === 0) return;
@@ -418,19 +393,13 @@ export class ProductionService {
     actor: AuthUser,
   ): Promise<void> {
     if (from === to) return;
-    await tx.orderItem.update({ where: { id: orderItemId }, data: { status: to } });
-    await tx.productionEvent.create({
-      data: {
-        id: randomUUID(),
-        orderItemId,
-        componentId: null,
-        eventType: to,
-        previousStatus: from,
-        newStatus: to,
-        eventDate,
-        notes: '단계 처리 취소(잘못 누름)',
-        actorId: actor.id,
-      },
+    await applyItemStatus(tx, {
+      orderItemId,
+      from,
+      to,
+      eventDate,
+      notes: '단계 처리 취소(잘못 누름)',
+      actorId: actor.id,
     });
     await this.audit.log(
       {
@@ -473,16 +442,22 @@ export class ProductionService {
   /** 제작 현황 목록: 품목 + 구성품 + 집계 상태 */
   async listProductionItems(query: ProductionItemsQueryDto) {
     /*
-      제작 관리는 계약완료된 건만 다룬다 (2026-08-04 현업 확정).
-      정상 경로에서는 계약완료(syncOrders)가 주문을, 그 직후 ensureJourneysForOrders가 진행을 만든다.
-      둘 중 하나라도 없는 주문은 진행 단계를 세울 수 없어 화면에서 빈 껍데기로 보였다 —
-      그런 주문은 목록에도 상세에도 내려보내지 않는다.
+      제작 관리에 뜨는 품목 (2026-08-05 현업 확정).
+
+      1) **주문이 있으면 뜬다.** 전에는 `계약 상태 = 계약완료`로 걸렀는데, 계약을 [수정하기]로
+         되돌리면 작성중이 되어 **제작 중인 옷이 화면에서 통째로 사라졌다.** 계약서를 고치는 것과
+         공장 일은 따로 돈다 — 되돌려도 입고·출고는 그대로 찍어야 한다. 주문은 계약완료로만
+         생기므로, 주문이 있다는 것 자체가 "한 번은 계약이 성립했다"는 뜻이다.
+      2) **준비가 끝난 것만 뜬다.** 준비 중(옵션대기·채촌대기)인 품목은 제작이 할 일이 없다.
+         준비 진행은 이미 품목 상태에 반영되므로(prep-status) 따로 계산하지 않고 상태로 거른다.
+      3) 진행(journey)이 없는 주문은 단계를 세울 수 없어 빈 껍데기로 보인다 — 계속 제외한다.
     */
+    const READY_FROM = ITEM_STATUS_FLOW.indexOf('READY_TO_ORDER');
+    const preparedStatuses = ITEM_STATUS_FLOW.slice(READY_FROM) as unknown as string[];
     const where: Prisma.OrderItemWhereInput = {
-      ...(query.status ? { status: query.status } : {}),
+      ...(query.status ? { status: query.status } : { status: { in: preparedStatuses } }),
       order: {
         ...(query.contractId ? { contractId: query.contractId } : {}),
-        contract: { status: 'COMPLETED' },
         journeys: { some: { status: { not: 'CANCELLED' } } },
       },
     };

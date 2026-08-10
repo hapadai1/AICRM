@@ -8,11 +8,7 @@
 import { DownloadOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import { Alert, Button, Modal, Space, Spin, Typography } from 'antd';
-import {
-  fetchWorkOrderFormPreview,
-  fetchWorkOrderVersionFormPreview,
-  type WorkOrderFormPreview,
-} from '../../api/workorders';
+import { fetchWorkOrderFormPreview, type WorkOrderFormPreview } from '../../api/workorders';
 
 interface Props {
   open: boolean;
@@ -21,8 +17,6 @@ interface Props {
   orderItemId?: string;
   /** 미리볼 채촌 버전 (미지정 시 품목에 연결된 채촌) */
   measurementSessionId?: string;
-  /** 저장된 출력본 미리보기 — 주면 orderItemId보다 우선한다 */
-  versionId?: string;
   title?: string;
   /** 모달 안에서 바로 받게 하려면 넘긴다 */
   onDownload?: () => void;
@@ -34,18 +28,14 @@ export function WorkOrderFormPreviewModal({
   onClose,
   orderItemId,
   measurementSessionId,
-  versionId,
   title,
   onDownload,
   downloading,
 }: Props) {
   const query = useQuery<WorkOrderFormPreview>({
-    queryKey: ['workorders', 'form-preview', versionId ?? orderItemId, measurementSessionId ?? null],
-    queryFn: () =>
-      versionId
-        ? fetchWorkOrderVersionFormPreview(versionId)
-        : fetchWorkOrderFormPreview(orderItemId ?? '', measurementSessionId),
-    enabled: open && !!(versionId || orderItemId),
+    queryKey: ['workorders', 'form-preview', orderItemId, measurementSessionId ?? null],
+    queryFn: () => fetchWorkOrderFormPreview(orderItemId ?? '', measurementSessionId),
+    enabled: open && !!orderItemId,
   });
 
   return (
@@ -86,9 +76,7 @@ export function WorkOrderFormPreviewModal({
       ) : (
         <Space direction="vertical" size={8} style={{ width: '100%' }}>
           <Typography.Text type="secondary">
-            {versionId
-              ? `저장된 출력본 V${query.data?.versionNo}`
-              : `출력 시 V${query.data?.versionNo}로 생성됩니다`}
+            지금 값으로 그린 미리보기입니다 — 출력하면 이 모양으로 파일이 만들어집니다.
           </Typography.Text>
           <iframe
             title="작업지시서 양식"

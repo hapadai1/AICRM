@@ -2,6 +2,7 @@ import { api, downloadFile, request, type ListResult } from './client';
 import { labelOf } from '../shared/status-meta';
 // 구성품 표시명은 중앙(api/code-labels) 공유 맵을 재노출한다(관리자 편집 전 화면 반영).
 import { COMPONENT_TYPE_LABELS } from './code-labels';
+import { ITEM_STATUS_RANK } from './status-catalog';
 import { toDateOnly, toDateTime } from './transform';
 
 /**
@@ -80,24 +81,10 @@ export function isBackwardTransition(from: string, to: string): boolean {
 }
 
 /**
- * 품목 상태 진행 순서 — 백엔드 `production-status.ts ITEM_STATUS_FLOW`와 같은 순서다.
- * 구성품 흐름과 달리 옵션·채촌 대기와 집계 상태(부분 입고/출고)가 섞여 있다.
+ * 품목 상태의 흐름 순위·표시명은 중앙 사전(api/status-catalog)이 정본이다 (2026-08-05).
+ * 여기서는 기존 소비처의 import 경로를 지키기 위해 재노출만 한다.
  */
-export const ITEM_STATUS_RANK: Record<string, number> = {
-  CREATED: 0,
-  OPTION_PENDING: 1,
-  MEASUREMENT_PENDING: 2,
-  READY_TO_ORDER: 3,
-  PRODUCTION_REQUESTED: 4,
-  PRODUCTION_IN_PROGRESS: 5,
-  BASTING_RECEIVED: 6,
-  FITTING_COMPLETED: 7,
-  PRODUCTION_COMPLETED: 8,
-  PARTIALLY_RECEIVED: 9,
-  RECEIVED: 10,
-  PARTIALLY_RELEASED: 11,
-  RELEASED: 12,
-};
+export { ITEM_STATUS_RANK, ORDER_ITEM_STATUS_META as PRODUCTION_STATUS_META } from './status-catalog';
 
 /**
  * [제작요청 완료]를 누를 수 있는가 (설계서 11 §9 — 작업지시서 출력과 커플링하지 않는 독립 버튼).
@@ -108,26 +95,6 @@ export function canRequestProduction(itemStatus: string): boolean {
   const rank = ITEM_STATUS_RANK[itemStatus];
   return rank !== undefined && rank < ITEM_STATUS_RANK.PRODUCTION_REQUESTED;
 }
-
-/** 품목·구성품 상태 표시명/색상 (품목 집계 상태 포함) */
-export const PRODUCTION_STATUS_META: Record<string, { label: string; color: string }> = {
-  RESERVED: { label: '예약', color: 'cyan' },
-  CREATED: { label: '생성', color: 'default' },
-  OPTION_PENDING: { label: '옵션 대기', color: 'default' },
-  MEASUREMENT_PENDING: { label: '채촌 대기', color: 'default' },
-  READY_TO_ORDER: { label: '발주 가능', color: 'cyan' },
-  PRODUCTION_REQUESTED: { label: '제작 요청', color: 'blue' },
-  PRODUCTION_IN_PROGRESS: { label: '제작 중', color: 'geekblue' },
-  BASTING_RECEIVED: { label: '가봉 입고', color: 'purple' },
-  FITTING_COMPLETED: { label: '가봉 완료', color: 'purple' },
-  PRODUCTION_COMPLETED: { label: '제작 완료', color: 'volcano' },
-  PARTIALLY_RECEIVED: { label: '부분 입고', color: 'orange' },
-  RECEIVED: { label: '전체 입고', color: 'gold' },
-  PARTIALLY_RELEASED: { label: '부분 출고', color: 'lime' },
-  RELEASED: { label: '전체 출고', color: 'green' },
-  COMPLETED: { label: '완료', color: 'green' },
-  CANCELLED: { label: '취소', color: 'red' },
-};
 
 export { COMPONENT_TYPE_LABELS };
 
@@ -170,9 +137,10 @@ interface ProductionItemApiRow {
   workOrder: {
     workOrderId: string | null;
     status: string;
-    currentVersionNo: number | null;
-    currentVersionId: string | null;
+    docStatus: string;
+    workOrderFileKey: string | null;
     currentFileName: string | null;
+    uploadedFileName: string | null;
     lastIssuedAt: string | null;
     canIssue: boolean;
     optionConfirmedAt: string | null;
@@ -199,13 +167,16 @@ export interface ProductionComponent {
 /** 작업지시서 뷰 (제작 품목 행에 얹혀 오는 출력 게이트 상태) */
 export interface ProductionWorkOrderView {
   workOrderId?: string;
-  /** WAITING | UNORDERED | REPRINT_NEEDED | CURRENT */
+  /** WAITING | UNORDERED | CURRENT */
   status: string;
-  currentVersionNo?: number;
-  /** 최신 출력본 버전 id — 목록에서 바로 내려받을 때 쓴다 */
-  currentVersionId?: string;
-  /** 최신 출력본 파일명 */
+  /** 작성중 | 완료 — 발주가 완료로 만든다 (2026-08-05) */
+  docStatus: string;
+  /** 파일이 있으면 작업지시서 id — 없으면 아직 뽑지 않았다 */
+  workOrderFileKey?: string;
+  /** 최신 파일명 (수기 최종본이 있으면 그 이름) */
   currentFileName?: string;
+  /** 수기 최종본 파일명 — 있으면 다운로드가 이 파일을 준다 (2026-08-05) */
+  uploadedFileName?: string;
   /** YYYY-MM-DD HH:mm */
   lastIssuedAt?: string;
   /** 출력 가능 여부 (준비 미완이면 false) */
@@ -274,9 +245,10 @@ function toProductionItem(row: ProductionItemApiRow): ProductionItem {
     workOrder: {
       workOrderId: row.workOrder.workOrderId ?? undefined,
       status: row.workOrder.status,
-      currentVersionNo: row.workOrder.currentVersionNo ?? undefined,
-      currentVersionId: row.workOrder.currentVersionId ?? undefined,
+      docStatus: row.workOrder.docStatus,
+      workOrderFileKey: row.workOrder.workOrderFileKey ?? undefined,
       currentFileName: row.workOrder.currentFileName ?? undefined,
+      uploadedFileName: row.workOrder.uploadedFileName ?? undefined,
       lastIssuedAt: toDateTime(row.workOrder.lastIssuedAt),
       canIssue: row.workOrder.canIssue,
       optionConfirmedAt: toDateTime(row.workOrder.optionConfirmedAt),

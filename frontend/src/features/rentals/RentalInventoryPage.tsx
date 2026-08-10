@@ -457,7 +457,7 @@ export function RentalInventoryPage() {
           okText="등록"
           cancelText="취소"
           confirmLoading={registerMutation.isPending}
-          destroyOnClose
+          destroyOnHidden
         >
           <Form<RegisterValues>
             form={registerForm}
@@ -516,7 +516,7 @@ export function RentalInventoryPage() {
           okButtonProps={{ danger: adjustTarget?.mode === 'RETIRE' }}
           cancelText="취소"
           confirmLoading={adjustMutation.isPending}
-          destroyOnClose
+          destroyOnHidden
         >
           {adjustTarget && adjustMeta && (
             <Space direction="vertical" size="middle" style={{ width: '100%' }}>

@@ -6,6 +6,7 @@ import { AuthUser } from '../../common/decorators';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { syncPrepStatuses } from '../production/prep-status';
+import { anyInProduction } from '../production/production-status';
 import { ASSIGNABLE_ITEM_STATUSES } from './rentals.constants';
 import {
   ConfirmRentalSelectionDto,
@@ -643,8 +644,7 @@ export class RentalSelectionService {
 
   /** 진행 중(제작요청·수선요청 이후) 품목의 렌탈 선택 편집을 막는다 (현업 확정 2026-07-31). */
   private ensureItemNotInProduction(orderItems: Array<{ status: string }>): void {
-    const inProduction = orderItems.some((o) => o.status !== 'CREATED' && o.status !== 'CANCELLED');
-    if (inProduction)
+    if (anyInProduction(orderItems))
       throw new BusinessException(
         'INVALID_STATUS_TRANSITION',
         '진행 중인 품목은 렌탈 선택을 변경할 수 없습니다. 제작·입출고 화면에서 상태를 되돌린 뒤 진행해 주세요.',

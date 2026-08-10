@@ -68,7 +68,7 @@ export function CustomerPickerModal({
   ];
 
   return (
-    <Modal title={title} open={open} onCancel={onCancel} footer={null} width={880} destroyOnClose>
+    <Modal title={title} open={open} onCancel={onCancel} footer={null} width={880} destroyOnHidden>
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
         <Input
           allowClear

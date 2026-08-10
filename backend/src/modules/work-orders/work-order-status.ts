@@ -3,33 +3,45 @@ import { ITEM_STATUS_FLOW } from '../production/production-status';
 import { WorkOrderListStatus } from './work-orders.dto';
 
 /**
+ * 스타일 컨설팅 확정 세션 서브셀렉트 — 맞춤은 옵션 세션, 렌탈은 렌탈 선택 세션이다.
+ * 준비 판정(prep-status)과 작업지시서 판정이 **같은 정의**를 쓴다. 렌탈 선택 세션을
+ * 한쪽만 읽던 동안 렌탈 품목이 준비 미완으로 남는 버그가 있었다(2026-08-04).
+ */
+export const consultingSessionSelect = Prisma.validator<Prisma.ContractItemSelect>()({
+  optionSelectionSessions: {
+    where: { isCurrent: true, status: 'CONFIRMED' },
+    orderBy: { selectionVersionNo: Prisma.SortOrder.desc },
+    take: 1,
+    select: { confirmedAt: true },
+  },
+  rentalSelectionSessions: {
+    where: { isCurrent: true, status: 'CONFIRMED' },
+    orderBy: { selectionVersionNo: Prisma.SortOrder.desc },
+    take: 1,
+    select: { confirmedAt: true },
+  },
+});
+
+/** 그 품목의 확정된 컨설팅 세션 — 맞춤·렌탈 어느 쪽이든 하나만 있다. 없으면 null. */
+export function pickConsultingSession<T>(sourceContractItem: {
+  optionSelectionSessions: T[];
+  rentalSelectionSessions: T[];
+}): T | null {
+  return (
+    sourceContractItem.optionSelectionSessions[0] ??
+    sourceContractItem.rentalSelectionSessions[0] ??
+    null
+  );
+}
+
+/**
  * 작업지시서 상태 계산에 필요한 OrderItem 서브셀렉트.
  * 옵션 확정 시각·현재 채촌 연결 시각·최신 출력 버전만 뽑는다(Excel용 값은 미포함).
  * work-orders 목록과 production 목록이 같은 판정을 공유하기 위한 단일 출처.
  */
 export const workOrderStatusSelect = Prisma.validator<Prisma.OrderItemSelect>()({
   // 옵션 세션은 이제 ContractItem에 붙는다 → 확정 후 되짚기(REACH-BACK): sourceContractItem 경유.
-  sourceContractItem: {
-    select: {
-      optionSelectionSessions: {
-        where: { isCurrent: true, status: 'CONFIRMED' },
-        orderBy: { selectionVersionNo: Prisma.SortOrder.desc },
-        take: 1,
-        select: { confirmedAt: true },
-      },
-      /*
-        렌탈 품목의 스타일 컨설팅은 옵션 세션이 아니라 렌탈 선택 세션이다.
-        이것을 안 읽던 동안 렌탈 품목은 컨설팅을 확정해도 준비 미완료로 남아
-        제작 화면의 렌탈 흐름 첫 단계가 영영 잠겨 있었다(2026-08-04).
-      */
-      rentalSelectionSessions: {
-        where: { isCurrent: true, status: 'CONFIRMED' },
-        orderBy: { selectionVersionNo: Prisma.SortOrder.desc },
-        take: 1,
-        select: { confirmedAt: true },
-      },
-    },
-  },
+  sourceContractItem: { select: consultingSessionSelect },
   measurementLinks: {
     where: { isCurrent: true },
     orderBy: { linkedAt: Prisma.SortOrder.desc },
@@ -39,15 +51,12 @@ export const workOrderStatusSelect = Prisma.validator<Prisma.OrderItemSelect>()(
   workOrder: {
     select: {
       id: true,
-      // 파일명까지 뽑는 이유: 목록에서 미리보기 화면을 거치지 않고 최신 Excel을 바로 내려받는다.
-      currentVersion: {
-        select: {
-          id: true,
-          versionNo: true,
-          issuedAt: true,
-          outputFile: { select: { originalName: true } },
-        },
-      },
+      status: true,
+      issuedAt: true,
+      // 파일명까지 뽑는 이유: 목록에서 화면을 거치지 않고 Excel을 바로 내려받는다.
+      outputFile: { select: { originalName: true } },
+      // 수기 최종본이 있으면 그것이 최종이다 — 목록·창에 그 사실이 보여야 한다 (2026-08-05).
+      uploadedFile: { select: { originalName: true } },
     },
   },
 });
@@ -57,21 +66,21 @@ type OrderItemWithWorkOrderStatus = Prisma.OrderItemGetPayload<{
 }>;
 
 /**
- * 미주문·재출력 필요 판정 (통합설계서 §10.4, 데이터모델 §10.5).
- * 별도 업무 테이블 없이 조회 시점에 계산한다.
+ * 미주문 판정 (통합설계서 §10.4). 별도 업무 테이블 없이 조회 시점에 계산한다.
+ *
+ * `재출력 필요`는 없앴다 (현업 확정 2026-08-05). v1 설계에서 온 자동 판정이었는데,
+ * 출력은 발주와 같은 시점이고 **발주하면 옵션·채촌이 모두 잠기므로** 출력 뒤에 근거가
+ * 바뀔 길이 자체가 없다 — 뜰 수 없는 상태를 화면과 대시보드가 계속 이고 있었다.
  */
 export function resolveWorkOrderStatus(
   session: { confirmedAt: Date | null } | null,
   link: { linkedAt: Date } | null,
-  currentVersion: { issuedAt: Date } | null,
+  issued: boolean,
 ): WorkOrderListStatus | 'WAITING' {
-  if (!currentVersion) {
+  if (!issued) {
     return session && link ? 'UNORDERED' : 'WAITING';
   }
-  const changedAfterIssue = [session?.confirmedAt, link?.linkedAt].some(
-    (t) => t != null && t.getTime() > currentVersion.issuedAt.getTime(),
-  );
-  return changedAfterIssue ? 'REPRINT_NEEDED' : 'CURRENT';
+  return 'CURRENT';
 }
 
 /**
@@ -90,11 +99,14 @@ export function canChangeWorkOrderMeasurement(itemStatus: string): boolean {
 export interface WorkOrderView {
   workOrderId: string | null;
   status: WorkOrderListStatus | 'WAITING';
-  currentVersionNo: number | null;
-  /** 최신 출력본 버전 id — 목록에서 바로 내려받을 때 쓴다 */
-  currentVersionId: string | null;
-  /** 최신 출력본 파일명 */
+  /** 작성중 | 완료 — 발주가 완료로 만든다 (2026-08-05) */
+  docStatus: string;
+  /** 작업지시서 id — 파일을 내려받을 때 쓴다. 아직 뽑지 않았으면 null */
+  workOrderFileKey: string | null;
+  /** 최신 출력본 파일명. 수기 최종본이 올라와 있으면 그 이름이다(다운로드도 그 파일이 나간다). */
   currentFileName: string | null;
+  /** 수기 최종본 파일명 — 없으면 null. 시스템 출력본만 있다는 뜻이다. */
+  uploadedFileName: string | null;
   /** ISO. 화면에서 표시 형식으로 정규화 */
   lastIssuedAt: string | null;
   /** 출력 가능 여부 (준비 미완이면 false) */
@@ -110,20 +122,18 @@ export interface WorkOrderView {
 /** 위 workOrderStatusSelect를 포함한 OrderItem에서 작업지시서 뷰를 만든다 */
 export function buildWorkOrderView(item: OrderItemWithWorkOrderStatus): WorkOrderView {
   // 컨설팅 확정 시각 — 맞춤은 옵션 세션, 렌탈은 렌탈 선택 세션에서 온다(둘 다 '스타일 컨설팅'이다).
-  const session =
-    item.sourceContractItem.optionSelectionSessions[0] ??
-    item.sourceContractItem.rentalSelectionSessions[0] ??
-    null;
+  const session = pickConsultingSession(item.sourceContractItem);
   const link = item.measurementLinks[0] ?? null;
-  const currentVersion = item.workOrder?.currentVersion ?? null;
-  const status = resolveWorkOrderStatus(session, link, currentVersion);
+  const wo = item.workOrder ?? null;
+  const status = resolveWorkOrderStatus(session, link, !!wo?.outputFile);
   return {
-    workOrderId: item.workOrder?.id ?? null,
+    workOrderId: wo?.id ?? null,
     status,
-    currentVersionNo: currentVersion?.versionNo ?? null,
-    currentVersionId: currentVersion?.id ?? null,
-    currentFileName: currentVersion?.outputFile?.originalName ?? null,
-    lastIssuedAt: currentVersion?.issuedAt.toISOString() ?? null,
+    docStatus: wo?.status ?? 'DRAFT',
+    workOrderFileKey: wo?.outputFile ? (wo.id ?? null) : null,
+    currentFileName: wo?.uploadedFile?.originalName ?? wo?.outputFile?.originalName ?? null,
+    uploadedFileName: wo?.uploadedFile?.originalName ?? null,
+    lastIssuedAt: wo?.issuedAt?.toISOString() ?? null,
     canIssue: status !== 'WAITING',
     optionConfirmedAt: session?.confirmedAt?.toISOString() ?? null,
     measurementLinkedAt: link?.linkedAt.toISOString() ?? null,

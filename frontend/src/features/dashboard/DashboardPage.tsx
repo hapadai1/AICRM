@@ -1,17 +1,19 @@
 /**
  * DASH-001 대시보드
- * - 오늘 일정 타임테이블(10:00~20:00, 목적별 색 배지, 클릭 → 예약 상세)
- * - 주간 미니 캘린더 (오늘 ±3일)
+ * - 주간 미니 캘린더 (오늘 ±3일) — 날짜 선택 내비게이션, 전체 폭 상단
+ * - 오늘 일정 타임테이블(10:00~20:00, 목적별 색 배지, 클릭 → 예약 상세) — 전체 폭
  * - 확인사항 카드 5종 + 목록 패널 (TaskBoard)
  * - 공유 메모 (SharedMemoCard)
  */
+import { LeftOutlined, RightOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Badge, Button, Card, Col, Empty, Row, Select, Space, Spin, Tag, Typography, theme } from 'antd';
+import { Button, Card, Col, Empty, Row, Select, Space, Spin, Tag, Typography, theme } from 'antd';
 import dayjs from 'dayjs';
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { fetchDashboardSummary } from '../../api/dashboard';
 import type { DashboardAppointment } from '../../api/dashboard';
+import { fetchAppointmentPurposes } from '../../api/appointments';
 import { SharedMemoCard } from './SharedMemoCard';
 import { TaskBoard } from './TaskBoard';
 import { SEMANTIC_COLOR } from '../../app/theme';
@@ -146,13 +148,18 @@ export function DashboardPage() {
   });
   const summary = summaryQuery.data;
 
-  const purposeOptions = useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const apt of summary?.appointments ?? []) {
-      seen.set(apt.purposeCode, apt.purposeName);
-    }
-    return Array.from(seen, ([value, label]) => ({ value, label }));
-  }, [summary]);
+  // 목적 필터 옵션 — 기준정보 관리의 예약 목적 마스터와 동일하게(active만, sortOrder 순).
+  // 그날 예약에 등장한 목적만 뽑던 방식은 예약 없는 목적이 필터에서 누락돼 목록을 마스터와 맞춘다.
+  const purposesQuery = useQuery({
+    queryKey: ['appointment-purposes'],
+    queryFn: fetchAppointmentPurposes,
+    staleTime: 5 * 60_000,
+  });
+
+  const purposeOptions = useMemo(
+    () => (purposesQuery.data ?? []).map((p) => ({ value: p.code, label: p.name })),
+    [purposesQuery.data],
+  );
 
   const filteredAppointments = useMemo(() => {
     const list = summary?.appointments ?? [];
@@ -160,13 +167,11 @@ export function DashboardPage() {
     return list.filter((a) => purposeFilter.includes(a.purposeCode));
   }, [summary, purposeFilter]);
 
-  // 업무시간(10~20시) 밖 예약은 격자에 그리지 않는다. 예전에는 조용히 사라져
-  // 대시보드에서 아예 안 보였으므로, 예약 화면처럼 건수를 아래에 알린다.
+  // 업무시간(10~20시) 밖 예약은 격자에 그리지 않는다.
   const gridAppointments = useMemo(
     () => filteredAppointments.filter(inBusinessHours),
     [filteredAppointments],
   );
-  const outOfHoursCount = filteredAppointments.length - gridAppointments.length;
 
   // 예약이 있는 구간만 그린다 — 빈 격자로 카드 높이를 늘리지 않는다.
   const range = useMemo(() => visibleRange(gridAppointments), [gridAppointments]);
@@ -182,163 +187,208 @@ export function DashboardPage() {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Row gutter={[16, 16]}>
-        <Col xs={24} lg={14}>
-          <Card
-            title={`${isTodaySelected ? '오늘 일정' : '일정'} (${dayjs(selectedDate).format('YYYY-MM-DD dddd')})`}
+      {/*
+        주간 일정 → 일정 순서로 전체 폭 상하 배치.
+        좌우 2컬럼일 때는 주간 카드 내용이 한 줄뿐이라 아래가 비어 높이가 어긋났다.
+        주간 스트립은 날짜 내비게이션이므로 위, 선택한 날의 상세는 아래 — 주 선택 → 일 상세 흐름.
+      */}
+      <Card
+        title={
+          <Space size={4}>
+            주간 일정
+            {/* 월간 보기는 예약 화면의 '월' 모드 — 딥링크로 이동 */}
+            <Button
+              type="link"
+              size="small"
+              onClick={() => navigate('/appointments?view=month')}
+            >
+              월간 일정 <RightOutlined style={{ fontSize: 10 }} />
+            </Button>
+          </Space>
+        }
+        size="small"
+        extra={
+          <Space size={4}>
+            <Button
+              size="small"
+              icon={<LeftOutlined />}
+              aria-label="이전 주"
+              onClick={() => setSelectedDate(dayjs(selectedDate).subtract(7, 'day').format('YYYY-MM-DD'))}
+            />
+            <Button
+              size="small"
+              icon={<RightOutlined />}
+              aria-label="다음 주"
+              onClick={() => setSelectedDate(dayjs(selectedDate).add(7, 'day').format('YYYY-MM-DD'))}
+            />
+            <Button
+              size="small"
+              onClick={() => setSelectedDate(todayStr)}
+              disabled={isTodaySelected}
+            >
+              오늘
+            </Button>
+          </Space>
+        }
+      >
+        <Row gutter={12}>
+          {(summary?.week ?? []).map((day) => {
+            const d = dayjs(day.date);
+            const isToday = day.date === todayStr;
+            // 선택일 강조는 오늘(파란색)과 구분되도록 별도 색상(골드)으로 표기. 오늘은 항상 파란색 유지.
+            const isSelected = day.date === selectedDate && !isToday;
+            const dow = d.day(); // 0=일, 6=토
+            const dowColor =
+              dow === 0 ? token.colorError : dow === 6 ? token.colorPrimary : token.colorTextSecondary;
+            const hasCount = day.count > 0;
+            return (
+              <Col key={day.date} flex="1 1 0">
+                <Card
+                  size="small"
+                  hoverable
+                  onClick={() => setSelectedDate(day.date)}
+                  style={{
+                    cursor: 'pointer',
+                    background: isToday ? SEMANTIC_COLOR.todayBg : isSelected ? SEMANTIC_COLOR.selectedBg : undefined,
+                    borderColor: isToday ? token.colorPrimary : isSelected ? SEMANTIC_COLOR.selectedBorder : undefined,
+                    boxShadow: isSelected ? '0 0 0 2px rgba(250,173,20,0.2)' : undefined,
+                  }}
+                  styles={{ body: { padding: '8px 12px' } }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: 12,
+                    }}
+                  >
+                    {/* 윗줄: 요일 */}
+                    <span style={{ fontSize: 14, fontWeight: 600, color: dowColor, lineHeight: 1 }}>
+                      {d.format('dd')}
+                      {isToday ? ' · 오늘' : ''}
+                    </span>
+                    {/* 아랫줄: 날짜 + 예약 건수 */}
+                    <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 30 }}>
+                      <span
+                        style={{
+                          fontSize: 22,
+                          fontWeight: 700,
+                          lineHeight: 1.2,
+                          color: isToday ? token.colorPrimary : token.colorText,
+                        }}
+                      >
+                        {/* 월이 바뀌는 1일은 몇 월인지 함께 표기 */}
+                        {d.date() === 1 ? d.format('M/D') : d.format('D')}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 16,
+                          fontWeight: hasCount ? 700 : 400,
+                          lineHeight: '22px',
+                          padding: '0 10px',
+                          borderRadius: 11,
+                          whiteSpace: 'nowrap',
+                          color: hasCount ? '#fff' : token.colorTextQuaternary,
+                          background: hasCount ? token.colorPrimary : undefined,
+                        }}
+                      >
+                        {day.count}건
+                      </span>
+                    </div>
+                  </div>
+                </Card>
+              </Col>
+            );
+          })}
+        </Row>
+      </Card>
+
+      <Card
+        title={`${isTodaySelected ? '오늘 일정' : '일정'} (${dayjs(selectedDate).format('YYYY-MM-DD dddd')})`}
+        size="small"
+        extra={
+          <Select
+            mode="multiple"
             size="small"
-            extra={
-              <Select
-                mode="multiple"
-                size="small"
-                allowClear
-                placeholder="목적 필터"
-                style={{ minWidth: 200 }}
-                value={purposeFilter}
-                onChange={setPurposeFilter}
-                options={purposeOptions}
-                maxTagCount="responsive"
-              />
-            }
-          >
-            {summaryQuery.isLoading ? (
-              <div style={{ textAlign: 'center', padding: 32 }}>
-                <Spin />
-              </div>
-            ) : filteredAppointments.length === 0 ? (
-              <Empty description={`${isTodaySelected ? '오늘' : '해당 날짜'} 예약이 없습니다.`} />
-            ) : (
-              <div style={{ position: 'relative', height: range.count * SLOT_HEIGHT }}>
-                {/* 1시간 단위 눈금 + 좌측 시간 라벨 (배경) */}
-                {timetableSlots.map((min, i) => (
-                  <div
-                    key={min}
-                    style={{
-                      position: 'absolute',
-                      top: i * SLOT_HEIGHT,
-                      left: 0,
-                      right: 0,
-                      height: SLOT_HEIGHT,
-                      // 1시간 단위 정시 눈금 실선
-                      borderTop: '1px solid #f0f0f0',
-                    }}
-                  >
-                    <Typography.Text
-                      type="secondary"
-                      style={{ fontSize: 12, paddingLeft: 4, lineHeight: '16px' }}
-                    >
-                      {fmtMin(min)}
-                    </Typography.Text>
-                  </div>
-                ))}
-                {/* 예약 블록 (전경) — 시작 슬롯 한 칸 균일 크기, 같은 슬롯은 레인 분할 */}
-                {laidOutAppointments.map(({ apt, top, lane }) => (
-                  <div
-                    key={apt.id}
-                    style={{
-                      position: 'absolute',
-                      top: top + 1,
-                      height: SLOT_HEIGHT - 2,
-                      left: TIME_GUTTER + lane * (BOX_WIDTH + BOX_GAP),
-                      width: BOX_WIDTH,
-                    }}
-                  >
-                    <Tag
-                      color={PURPOSE_COLOR[apt.purposeCode] ?? 'default'}
-                      style={{
-                        margin: 0,
-                        width: '100%',
-                        height: '100%',
-                        display: 'flex',
-                        alignItems: 'center',
-                        cursor: 'pointer',
-                        overflow: 'hidden',
-                        whiteSpace: 'nowrap',
-                        textOverflow: 'ellipsis',
-                        padding: '2px 6px',
-                        fontSize: 12,
-                      }}
-                      onClick={() => navigate(`/appointments/${apt.id}`)}
-                    >
-                      {apt.customerName} · {apt.purposeName} · {STATUS_LABEL[apt.status]}
-                      {apt.source === 'NAVER' ? ' · 네이버' : ''}
-                    </Tag>
-                  </div>
-                ))}
-              </div>
-            )}
-            {outOfHoursCount > 0 && (
-              <div style={{ marginTop: 8 }}>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  표시 구간(10:00~20:00) 외 예약 {outOfHoursCount}건 — 예약 화면에서 확인하세요.
+            allowClear
+            placeholder="목적 필터"
+            style={{ minWidth: 200 }}
+            value={purposeFilter}
+            onChange={setPurposeFilter}
+            options={purposeOptions}
+            maxTagCount="responsive"
+          />
+        }
+      >
+        {summaryQuery.isLoading ? (
+          <div style={{ textAlign: 'center', padding: 32 }}>
+            <Spin />
+          </div>
+        ) : filteredAppointments.length === 0 ? (
+          <Empty description={`${isTodaySelected ? '오늘' : '해당 날짜'} 예약이 없습니다.`} />
+        ) : (
+          <div style={{ position: 'relative', height: range.count * SLOT_HEIGHT }}>
+            {/* 1시간 단위 눈금 + 좌측 시간 라벨 (배경) */}
+            {timetableSlots.map((min, i) => (
+              <div
+                key={min}
+                style={{
+                  position: 'absolute',
+                  top: i * SLOT_HEIGHT,
+                  left: 0,
+                  right: 0,
+                  height: SLOT_HEIGHT,
+                  // 1시간 단위 정시 눈금 실선
+                  borderTop: '1px solid #f0f0f0',
+                }}
+              >
+                <Typography.Text
+                  type="secondary"
+                  style={{ fontSize: 12, paddingLeft: 4, lineHeight: '16px' }}
+                >
+                  {fmtMin(min)}
                 </Typography.Text>
               </div>
-            )}
-          </Card>
-        </Col>
-
-        <Col xs={24} lg={10}>
-            <Card
-              title="주간 일정"
-              size="small"
-              extra={
-                <Button
-                  size="small"
-                  onClick={() => setSelectedDate(todayStr)}
-                  disabled={isTodaySelected}
+            ))}
+            {/* 예약 블록 (전경) — 시작 슬롯 한 칸 균일 크기, 같은 슬롯은 레인 분할 */}
+            {laidOutAppointments.map(({ apt, top, lane }) => (
+              <div
+                key={apt.id}
+                style={{
+                  position: 'absolute',
+                  top: top + 1,
+                  height: SLOT_HEIGHT - 2,
+                  left: TIME_GUTTER + lane * (BOX_WIDTH + BOX_GAP),
+                  width: BOX_WIDTH,
+                }}
+              >
+                <Tag
+                  color={PURPOSE_COLOR[apt.purposeCode] ?? 'default'}
+                  style={{
+                    margin: 0,
+                    width: '100%',
+                    height: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    cursor: 'pointer',
+                    overflow: 'hidden',
+                    whiteSpace: 'nowrap',
+                    textOverflow: 'ellipsis',
+                    padding: '2px 6px',
+                    fontSize: 12,
+                  }}
+                  onClick={() => navigate(`/appointments/${apt.id}`)}
                 >
-                  오늘
-                </Button>
-              }
-            >
-              <Row gutter={8}>
-                {(summary?.week ?? []).map((day) => {
-                  const d = dayjs(day.date);
-                  const isToday = day.date === todayStr;
-                  // 선택일 강조는 오늘(파란색)과 구분되도록 별도 색상(골드)으로 표기. 오늘은 항상 파란색 유지.
-                  const isSelected = day.date === selectedDate && !isToday;
-                  return (
-                    <Col key={day.date} flex="1 1 0">
-                      <Card
-                        size="small"
-                        hoverable
-                        onClick={() => setSelectedDate(day.date)}
-                        style={{
-                          textAlign: 'center',
-                          cursor: 'pointer',
-                          background: isToday ? SEMANTIC_COLOR.todayBg : isSelected ? SEMANTIC_COLOR.selectedBg : undefined,
-                          borderColor: isToday ? token.colorPrimary : isSelected ? SEMANTIC_COLOR.selectedBorder : undefined,
-                          boxShadow: isSelected ? '0 0 0 2px rgba(250,173,20,0.2)' : undefined,
-                        }}
-                        styles={{ body: { padding: '8px 4px' } }}
-                      >
-                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                          {d.format('dd')}
-                        </Typography.Text>
-                        <div>
-                          <Typography.Text strong={isToday || isSelected}>
-                            {d.format('D')}
-                          </Typography.Text>
-                        </div>
-                        <Badge
-                          count={day.count}
-                          showZero
-                          color={day.count > 0 ? token.colorPrimary : token.colorBorder}
-                        />
-                      </Card>
-                    </Col>
-                  );
-                })}
-              </Row>
-            </Card>
-        </Col>
-      </Row>
+                  {apt.customerName} · {apt.purposeName} · {STATUS_LABEL[apt.status]}
+                  {apt.source === 'NAVER' ? ' · 네이버' : ''}
+                </Tag>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
 
-      {/*
-        공유 메모는 우측 컬럼 안에 있었다. 타임테이블이 예약 있는 구간만 그리도록 바뀌어
-        좌측 카드가 짧아지자 이번엔 우측이 훨씬 길어져 좌우가 다시 어긋났다.
-        메모는 가로로 넓을 때 더 읽기 좋은 목록이라 전체 폭으로 내린다.
-      */}
       <SharedMemoCard />
 
       <TaskBoard taskCounts={summary?.taskCounts} />

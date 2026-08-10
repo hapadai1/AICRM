@@ -24,6 +24,9 @@ export const RENTAL_ITEM_STATUSES = [
 /** 신규 배정 가능 실물 상태 (통합설계서 11.5 — 기간 미중복이면 예약 중 실물도 다른 기간에 배정 가능) */
 export const ASSIGNABLE_ITEM_STATUSES = ['AVAILABLE', 'RESERVED'];
 
+/** 실물이 살아 있지만 지금은 빌려줄 수 없는 상태 (세탁·수선 대기 등) — 집계·수량 선택 공용 */
+export const HOLD_ITEM_STATUSES = ['RETURNED_HOLD', 'ALTERATION', 'UNAVAILABLE'];
+
 /** 배정 상태 (실물 상태와 같은 이유로 PREPARING 제거) */
 export const RENTAL_ALLOCATION_STATUSES = ['RESERVED', 'CHECKED_OUT', 'RETURNED', 'CANCELLED'];
 
@@ -72,29 +75,18 @@ export const ALLOCATION_EVENT_TYPES = {
   CANCELLED: 'CANCELLED',
 } as const;
 
-export const DATE_ONLY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
-
-/** 'YYYY-MM-DD' → UTC 자정 Date (@db.Date 컬럼 저장용) */
-export function parseDateOnly(value: string): Date {
-  return new Date(`${value}T00:00:00.000Z`);
-}
-
-/** Date → 'YYYY-MM-DD' */
-export function toDateOnlyString(value: Date): string {
-  return value.toISOString().slice(0, 10);
-}
-
-/** 'YYYY-MM-DD' + n일 → 'YYYY-MM-DD'. 날짜 컬럼이 UTC 자정이라 시간대 보정이 필요 없다. */
-export function addDaysToDateOnly(value: string, days: number): string {
-  const date = parseDateOnly(value);
-  date.setUTCDate(date.getUTCDate() + days);
-  return toDateOnlyString(date);
-}
-
-/** 오늘 'YYYY-MM-DD' */
-export function todayDateOnly(): string {
-  return toDateOnlyString(new Date());
-}
+/*
+  날짜 헬퍼는 common/date.ts가 단일 출처다 (2026-08-05). 기존 소비처의 import 경로를
+  지키기 위해 재노출한다. 이 이동으로 todayDateOnly의 '오늘' 기준이 UTC 달력에서
+  로컬(매장) 달력으로 바뀌었다 — KST 자정~오전 9시에 하루 어긋나던 것이 맞는 값이 된다.
+*/
+export {
+  DATE_ONLY_REGEX,
+  addDaysToDateOnly,
+  parseDateOnly,
+  toDateOnlyString,
+  todayDateOnly,
+} from '../../common/date';
 
 /**
  * rental_allocation_no_overlap EXCLUDE 제약(23P01) 위반 감지.

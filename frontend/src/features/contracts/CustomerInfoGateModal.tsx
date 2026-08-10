@@ -77,7 +77,7 @@ export function CustomerInfoGateModal({ open, customer, onDone, onPickAgain }: P
       confirmLoading={saveMutation.isPending}
       onOk={() => void form.validateFields().then((values) => saveMutation.mutate(values))}
       maskClosable={false}
-      destroyOnClose
+      destroyOnHidden
       width={480}
     >
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
