@@ -1166,6 +1166,9 @@ model RepairRequest {
   pickupAddress   String?   @map("pickup_address") @db.VarChar(300)
   deliveryAddress String?   @map("delivery_address") @db.VarChar(300)
   notes           String?   @map("notes")
+  // 고객 연락(수선 입고 안내) 마지막 발송 시각. 고객 연락은 상태가 아니라 발송 액션이라
+  // 상태로 남기지 않고 여기에 시각만 찍는다 — 값이 있으면 화면 버튼이 [재발송]으로 뜬다.
+  lastNotifiedAt  DateTime? @map("last_notified_at") @db.Timestamptz(6)
   createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 

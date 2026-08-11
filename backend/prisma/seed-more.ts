@@ -570,6 +570,8 @@ async function main(): Promise<void> {
         /** 벌마다 다른 진행을 만들 때 — 부분 입고·부분 출고 데모용 */
         unitStatuses?: string[];
         notes?: string;
+        /** 고객 연락(수선 입고 안내) 마지막 발송 시각 — 있으면 화면 버튼이 [재발송]으로 뜬다. */
+        lastNotifiedAt?: Date;
         events: Array<{ previousStatus?: string; newStatus: string; eventDate: Date }>;
       }): Promise<void> => {
         const id = uuid();
@@ -597,6 +599,7 @@ async function main(): Promise<void> {
             status: args.status,
             description: args.description,
             notes: args.notes ?? null,
+            lastNotifiedAt: args.lastNotifiedAt ?? null,
           },
         });
         for (const e of args.events) {
@@ -1059,12 +1062,12 @@ async function main(): Promise<void> {
         customerId: 서지우, repairType: 'GENERAL', requestDate: dateOnly(-42), dueDate: dateOnly(-38),
         status: 'RELEASED', description: 'TRS-BLACK-96-001 반납 턱시도 바지 밑단 풀림 수선',
         targetProduct: 'TROUSERS', notes: '검수 시 발견, 수선 후 재고 복귀 예정',
+        lastNotifiedAt: dateOnly(-39),
         events: [
           { newStatus: 'RECEIVED', eventDate: dateOnly(-42) },
           { previousStatus: 'RECEIVED', newStatus: 'REQUESTED', eventDate: dateOnly(-42) },
           { previousStatus: 'REQUESTED', newStatus: 'RETURNED_TO_SHOP', eventDate: dateOnly(-39) },
-          { previousStatus: 'RETURNED_TO_SHOP', newStatus: 'CUSTOMER_NOTIFIED', eventDate: dateOnly(-39) },
-          { previousStatus: 'CUSTOMER_NOTIFIED', newStatus: 'RELEASED', eventDate: dateOnly(-38) },
+          { previousStatus: 'RETURNED_TO_SHOP', newStatus: 'RELEASED', eventDate: dateOnly(-38) },
         ],
       });
       await repair({
@@ -1102,12 +1105,12 @@ async function main(): Promise<void> {
           customerId: 정우성.id, repairType: 'AFTER_SALE', requestDate: dateOnly(-20), dueDate: dateOnly(-14),
           status: 'RELEASED', description: '자켓 어깨 패드 조정',
           targetProduct: 'JACKET',
+          lastNotifiedAt: dateOnly(-15),
           events: [
             { newStatus: 'RECEIVED', eventDate: dateOnly(-20) },
             { previousStatus: 'RECEIVED', newStatus: 'REQUESTED', eventDate: dateOnly(-20) },
             { previousStatus: 'REQUESTED', newStatus: 'RETURNED_TO_SHOP', eventDate: dateOnly(-16) },
-            { previousStatus: 'RETURNED_TO_SHOP', newStatus: 'CUSTOMER_NOTIFIED', eventDate: dateOnly(-15) },
-            { previousStatus: 'CUSTOMER_NOTIFIED', newStatus: 'RELEASED', eventDate: dateOnly(-14) },
+            { previousStatus: 'RETURNED_TO_SHOP', newStatus: 'RELEASED', eventDate: dateOnly(-14) },
           ],
         });
       }

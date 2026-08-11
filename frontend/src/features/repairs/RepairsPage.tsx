@@ -32,7 +32,8 @@ import {
   createRepair,
   fetchRepair,
   fetchRepairs,
-  postRepairStatusEvent,
+  notifyRepair,
+  markRepairNotified,
   repairStatusMeta,
   repairTypeLabel,
   REPAIR_METHOD_LABELS,
@@ -72,11 +73,6 @@ interface ReceiptValues {
   releaseMethod?: RepairReleaseMethod;
   pickupAddress?: string;
   deliveryAddress?: string;
-}
-
-interface StatusChangeState {
-  repair: Repair;
-  toStatus: RepairStatus;
 }
 
 /** 두 상태 셀렉트 모두 맨 앞이 '전체'다 — 지우기(X) 대신 고를 수 있는 항목으로 둔다. */
@@ -157,14 +153,13 @@ export function RepairsPage() {
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(30);
   const [receiptOpen, setReceiptOpen] = useState(false);
-  const [statusTarget, setStatusTarget] = useState<StatusChangeState | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  // 상태 변경 후 뜨는 고객 연락 확인창 (개발설계서 05 G-06)
+  // 고객 연락 확인창 (개발설계서 05 G-06). notifyRepairId = 발송 성공 시 시각을 찍을 수선 건.
   const [suggestion, setSuggestion] = useState<RepairNotificationSuggestion | null>(null);
   const [suggestionTitle, setSuggestionTitle] = useState('');
+  const [notifyRepairId, setNotifyRepairId] = useState<string | null>(null);
 
   const [receiptForm] = Form.useForm<ReceiptValues>();
-  const [noteForm] = Form.useForm<{ notes?: string }>();
 
   const listQuery = useQuery({
     queryKey: ['repairs', 'list', { statusFilter, customerFilter, phaseFilter, page, size }],
@@ -226,22 +221,30 @@ export function RepairsPage() {
     onError: (e) => message.error(e instanceof ApiError ? e.message : '수선 접수에 실패했습니다.'),
   });
 
-  const statusMutation = useMutation({
-    mutationFn: (v: { repair: Repair; toStatus: RepairStatus; notes?: string }) =>
-      postRepairStatusEvent(v.repair.id, { newStatus: v.toStatus, notes: v.notes }),
-    onSuccess: (result, v) => {
-      // destroyOnHidden가 폼을 언마운트하므로 resetFields 불필요(경고 방지).
-      setStatusTarget(null);
-      invalidate();
-      // 연락 대상 상태면 문구를 확인하고 보낼 수 있게 확인창을 띄운다.
-      if (result.suggestedNotification) {
-        setSuggestionTitle(`상태를 '${repairStatusMeta(v.toStatus).label}'(으)로 변경했습니다`);
-        setSuggestion(result.suggestedNotification);
+  // 고객 연락 문구 준비 — 버튼을 누르면 상태를 바꾸지 않고 발송 확인창만 띄운다.
+  // 실제 발송(확인창의 [발송]) 성공 뒤 markNotified로 마지막 연락 시각을 찍어 [재발송]으로 바꾼다.
+  const notifyMutation = useMutation({
+    mutationFn: (repair: Repair) => notifyRepair(repair.id),
+    onSuccess: (res, repair) => {
+      if (res.suggestedNotification) {
+        setSuggestionTitle(`${repair.customerName} 고객에게 연락`);
+        setNotifyRepairId(repair.id);
+        setSuggestion(res.suggestedNotification);
       } else {
-        message.success(`상태가 '${repairStatusMeta(v.toStatus).label}'(으)로 변경되었습니다.`);
+        message.info('보낼 연락 문구가 설정되어 있지 않습니다.');
       }
     },
-    onError: (e) => message.error(e instanceof ApiError ? e.message : '상태 변경에 실패했습니다.'),
+    onError: (e) => message.error(e instanceof ApiError ? e.message : '고객 연락 준비에 실패했습니다.'),
+  });
+
+  // 발송 성공 표시 — 마지막 연락 시각을 찍고 목록·발송 이력을 갱신한다.
+  const markNotifiedMutation = useMutation({
+    mutationFn: markRepairNotified,
+    onSuccess: () => {
+      invalidate();
+      void queryClient.invalidateQueries({ queryKey: ['notifications'] });
+    },
+    onError: (e) => message.error(e instanceof ApiError ? e.message : '연락 기록에 실패했습니다.'),
   });
 
   // 전체 상태를 고르면 세부 상태 선택지도 그 묶음 안으로 좁힌다 —
@@ -264,11 +267,6 @@ export function RepairsPage() {
     value: code,
     label: REPAIR_COMPONENT_TYPE_LABELS[code] ?? code,
   }));
-
-  const openStatusChange = (repair: Repair, toStatus: RepairStatus) => {
-    // 모달이 열리며 Form이 새로 마운트되므로(초기값 적용) 별도 resetFields 불필요.
-    setStatusTarget({ repair, toStatus });
-  };
 
   const columns: ColumnsType<Repair> = [
     {
@@ -317,8 +315,7 @@ export function RepairsPage() {
       // 이 표에서 가운데 정렬은 상태 하나뿐이었다. 자기 몫 여백이 좌우로 갈려
       // 배지가 옆 열에 붙어 보이므로 나머지 열과 같은 왼쪽 정렬로 맞춘다.
       render: (s: string) => {
-        // 고객 연락은 수선 입고의 하위 단계라 목록 상태 열에서는 수선 입고로 묶어 보여 준다.
-        const meta = repairStatusMeta(s === 'CUSTOMER_NOTIFIED' ? 'RETURNED_TO_SHOP' : s);
+        const meta = repairStatusMeta(s);
         return <StatusBadge label={meta.label} color={meta.color} />;
       },
     },
@@ -338,12 +335,6 @@ export function RepairsPage() {
       render: (m: string | undefined, r) => methodCell(m, r.deliveryAddress),
     },
   ];
-
-  // 되돌리기 = 목표 상태가 현재 상태보다 앞 단계(진행 확인창과 같은 모달을 공유한다)
-  const isRevert =
-    !!statusTarget &&
-    REPAIR_STATUS_FLOW.indexOf(statusTarget.toStatus) <
-      REPAIR_STATUS_FLOW.indexOf(statusTarget.repair.status as RepairStatus);
 
   return (
     <PageShell>
@@ -436,18 +427,16 @@ export function RepairsPage() {
               const cancelled = r.status === 'CANCELLED';
               const cancelEvent = eventByStatus.get('CANCELLED');
               // 현재 상태 = 그 단계를 "끝낸" 상태다(접수 등록 = 접수 완료). 그래서 진행중 표시는
-              // 다음 단계로 한 칸 민다 — 출고 완료면 flow 길이가 되어 전 단계가 완료로 찍힌다.
-              // 고객 연락 단계는 화면에서 빼고 수선 입고 안으로 합쳤다(2026-08-10) — 그 자리(인덱스 3)부터는
-              // 표시 단계가 한 칸 앞당겨진다. 입고 완료(연락 전)는 아직 수선 입고 칸에 머문다.
+              // 다음 단계로 한 칸 민다 — 출고 완료면 flow 길이가 되어 전 단계가 모두 완료로 찍힌다.
               const statusIdx = REPAIR_STATUS_FLOW.indexOf(r.status as RepairStatus);
-              const currentIndex = statusIdx <= 1 ? statusIdx + 1 : statusIdx;
+              const currentIndex = statusIdx + 1;
 
-              // 건 상태는 품목 진행에서 계산된다 — 손으로 누르는 건 고객 연락뿐이다.
-              // 연락은 전 벌이 들어온 뒤(수선 입고)에 열리고, 되돌리기는 연락 직후에만 가능하다.
+              // 고객 연락은 상태가 아니라 발송 액션이다 — 전 벌이 들어온 뒤(수선 입고)에 열리고,
+              // 한 번 보냈으면(last_notified_at) [재발송]으로 뜬다. 되돌리기 개념은 없다.
               const notifiable = !cancelled && r.status === 'RETURNED_TO_SHOP';
-              const revertNotify = !cancelled && r.status === 'CUSTOMER_NOTIFIED';
+              const alreadyNotified = !!r.lastNotifiedAt;
               const pending =
-                statusMutation.isPending && statusMutation.variables?.repair.id === r.id;
+                notifyMutation.isPending && notifyMutation.variables?.id === r.id;
 
               /**
                * 단계 한 줄 — 단계명 옆에 날짜·담당자·그 단계 전체 상태를 이어 붙인다.
@@ -463,13 +452,7 @@ export function RepairsPage() {
                 const label = repairStatusMeta(status).label;
                 const ev = eventByStatus.get(status);
                 const stage = STAGE_BY_STATUS[status];
-                let summary = stage ? repairStageSummary(detail.items, stage) : undefined;
-                // 고객 연락 단계를 수선 입고에 합쳤다 — 입고가 다 됐어도 고객 연락 전이면
-                // 아직 진행중이고, 고객 연락까지 끝나야 수선 입고를 완료로 본다.
-                if (status === 'RETURNED_TO_SHOP' && summary) {
-                  const notified = statusIdx >= REPAIR_STATUS_FLOW.indexOf('CUSTOMER_NOTIFIED');
-                  summary = { text: notified ? summary.text : '진행중', done: notified };
-                }
+                const summary = stage ? repairStageSummary(detail.items, stage) : undefined;
                 // 꼬리 공백·개행만 턴다 — 그대로 두면 단계 밑에 빈 줄이 하나 생긴다.
                 // 가운데 띄어쓰기는 칸을 맞춰 적은 것이라 건드리지 않는다.
                 const notes = r.notes?.trimEnd();
@@ -513,26 +496,23 @@ export function RepairsPage() {
               // 어느 단계인지 한눈에 보인다(2026-08-01 현업 요청).
               // 접수는 글자뿐이라 단계 줄에 실었다 — stepTitle 참고.
               // 고객 연락 버튼 — 전 벌이 들어온 뒤(수선 입고) 입고 표 바로 뒤에 붙인다.
-              const notifyAction = (notifiable || revertNotify) && (
+              // 한 번 보냈으면 [재발송]으로 뜬다(상태는 그대로 수선 입고).
+              const notifyAction = notifiable && (
                 <Can permission="REPAIR_EDIT">
-                  {notifiable ? (
+                  {alreadyNotified ? (
+                    <Button size="small" loading={pending} onClick={() => notifyMutation.mutate(r)}>
+                      재발송
+                    </Button>
+                  ) : (
                     <Button
                       size="small"
                       type="primary"
                       ghost
                       icon={<NotificationOutlined />}
                       loading={pending}
-                      onClick={() => openStatusChange(r, 'CUSTOMER_NOTIFIED')}
+                      onClick={() => notifyMutation.mutate(r)}
                     >
                       고객 연락
-                    </Button>
-                  ) : (
-                    <Button
-                      size="small"
-                      loading={pending}
-                      onClick={() => openStatusChange(r, 'RETURNED_TO_SHOP')}
-                    >
-                      고객 연락 재발송
                     </Button>
                   )}
                 </Can>
@@ -551,10 +531,7 @@ export function RepairsPage() {
                 RELEASED: <RepairItemProgress repair={detail} stage="RELEASE" showSummary={false} />,
               };
 
-              // 고객 연락은 별도 단계로 두지 않고 수선 입고에 합쳤다 — 화면 단계에서 뺀다.
-              const stepItems = REPAIR_STATUS_FLOW.filter(
-                (status) => status !== 'CUSTOMER_NOTIFIED',
-              ).map((status) => {
+              const stepItems = REPAIR_STATUS_FLOW.map((status) => {
                 const body = stepBody[status];
                 return {
                   title: stepTitle(status),
@@ -774,56 +751,22 @@ export function RepairsPage() {
         </Form>
       </Modal>
 
-      {/* 상태 변경 확인 — 진행/되돌리기 공용, 사유는 선택 */}
-      <Modal
-        title={
-          statusTarget
-            ? `${repairStatusMeta(statusTarget.repair.status).label} → ${repairStatusMeta(statusTarget.toStatus).label}`
-            : '상태 변경'
-        }
-        open={!!statusTarget}
-        onCancel={() => setStatusTarget(null)}
-        onOk={() => noteForm.submit()}
-        okText={isRevert ? '되돌리기' : '변경'}
-        cancelText="닫기"
-        confirmLoading={statusMutation.isPending}
-        destroyOnHidden
-      >
-        <Form
-          form={noteForm}
-          layout="vertical"
-          onFinish={(values: { notes?: string }) => {
-            if (!statusTarget) return;
-            statusMutation.mutate({
-              repair: statusTarget.repair,
-              toStatus: statusTarget.toStatus,
-              notes: values.notes,
-            });
-          }}
-        >
-          <Typography.Paragraph type="secondary">
-            {statusTarget?.repair.customerName} · {statusTarget?.repair.targetLabel}
-          </Typography.Paragraph>
-          <Form.Item
-            name="notes"
-            label={isRevert ? '되돌리기 사유' : '메모 (선택)'}
-            rules={isRevert ? [{ required: true, message: '되돌리기 사유를 입력해 주세요.' }] : []}
-          >
-            <Input.TextArea
-              rows={2}
-              placeholder={isRevert ? '되돌리기 사유 (필수)' : '상태 변경 메모'}
-            />
-          </Form.Item>
-        </Form>
-      </Modal>
-
       {/* 수선은 진행 단계와 같은 확인창을 공유한다. 자동 발송은 하지 않는다. */}
       <NotificationConfirmModal
         open={suggestion != null}
         title={suggestionTitle}
         suggestion={suggestion}
-        onDone={() => setSuggestion(null)}
-        onCancel={() => setSuggestion(null)}
+        onDone={(outcome) => {
+          setSuggestion(null);
+          // 실제로 보냈을 때만 마지막 연락 시각을 찍는다(버튼이 [재발송]으로 바뀐다).
+          // markNotified가 목록·발송 이력 캐시까지 갱신한다.
+          if (outcome === 'SENT' && notifyRepairId) markNotifiedMutation.mutate(notifyRepairId);
+          setNotifyRepairId(null);
+        }}
+        onCancel={() => {
+          setSuggestion(null);
+          setNotifyRepairId(null);
+        }}
       />
     </PageShell>
   );

@@ -70,6 +70,7 @@ describe('수선 (RepairsModule)', () => {
     const res = await api(ctx).get(`/api/v1/repairs/${repairId}`).set(auth(ctx)).expect(200);
     return res.body.data as {
       status: string;
+      lastNotifiedAt: string | null;
       items: RepairItemBody[];
       statusEvents: {
         newStatus: string;
@@ -354,10 +355,6 @@ describe('수선 (RepairsModule)', () => {
         .expect(201);
       const done = await detailOf(repairId);
       expect(done.status).toBe('RELEASED');
-      // 연락 없이 전량 출고되면 건너뛴 단계를 자동으로 채워 순서를 지킨다.
-      expect(
-        done.statusEvents.find((e) => e.newStatus === 'CUSTOMER_NOTIFIED')?.notes,
-      ).toBe('연락 전 출고로 자동 정리');
     });
 
     it('벌 진행을 한 칸 되돌리면 건 상태도 따라 내려온다', async () => {
@@ -390,33 +387,6 @@ describe('수선 (RepairsModule)', () => {
       expect(res.body.error.code).toBe('INVALID_STATUS_TRANSITION');
     });
 
-    it('한 번 연락한 건은 출고를 되돌려도 고객 연락에 머문다', async () => {
-      const { customer } = await seedRepairCustomer(ctx.prisma);
-      const repairId = await createGeneralRepair(customer.id);
-      await requestAndReturnAll(repairId);
-      await api(ctx)
-        .post(`/api/v1/repairs/${repairId}/status-events`)
-        .set(auth(ctx))
-        .send({ newStatus: 'CUSTOMER_NOTIFIED' })
-        .expect(201);
-
-      const detail = await detailOf(repairId);
-      const unitId = detail.items[0].units[0].id;
-      await api(ctx)
-        .post(`/api/v1/repairs/${repairId}/units/${unitId}/release`)
-        .set(auth(ctx))
-        .send({})
-        .expect(201);
-      expect((await detailOf(repairId)).status).toBe('RELEASED');
-
-      await api(ctx)
-        .delete(`/api/v1/repairs/${repairId}/units/${unitId}/status`)
-        .set(auth(ctx))
-        .expect(200);
-      // 연락은 이미 나간 사실이라 '수선 입고'로 내려가지 않는다(연락 버튼이 다시 뜨면 안 된다).
-      expect((await detailOf(repairId)).status).toBe('CUSTOMER_NOTIFIED');
-    });
-
     it('진행 이력은 건·줄·벌을 구분해 남고 감사로그도 쌓인다', async () => {
       const { customer } = await seedRepairCustomer(ctx.prisma);
       const repairId = await createGeneralRepair(customer.id);
@@ -436,62 +406,49 @@ describe('수선 (RepairsModule)', () => {
     });
   });
 
-  describe('건 단위 상태 변경은 고객 연락만 허용한다', () => {
-    it.each(['REQUESTED', 'RELEASED'])('%s로 직접 전이할 수 없다', async (newStatus) => {
-      const { customer } = await seedRepairCustomer(ctx.prisma);
-      const repairId = await createGeneralRepair(customer.id);
-      const res = await api(ctx)
-        .post(`/api/v1/repairs/${repairId}/status-events`)
-        .set(auth(ctx))
-        .send({ newStatus })
-        .expect(400);
-      expect(res.body.error.code).toBe('VALIDATION_ERROR');
-      expect(res.body.error.fieldErrors?.[0]).toMatchObject({
-        field: 'newStatus',
-        reason: 'NOT_MANUAL',
-      });
-    });
-
-    it('수선 입고는 품목별 입고로만 정해진다 (연락 되돌리기 경로만 허용)', async () => {
-      const { customer } = await seedRepairCustomer(ctx.prisma);
-      const repairId = await createGeneralRepair(customer.id);
-      const res = await api(ctx)
-        .post(`/api/v1/repairs/${repairId}/status-events`)
-        .set(auth(ctx))
-        .send({ newStatus: 'RETURNED_TO_SHOP' })
-        .expect(409);
-      expect(res.body.error.code).toBe('INVALID_STATUS_TRANSITION');
-    });
-
-    it('취소(CANCELLED)로는 전이할 수 없다', async () => {
-      const { customer } = await seedRepairCustomer(ctx.prisma);
-      const repairId = await createGeneralRepair(customer.id);
-      const res = await api(ctx)
-        .post(`/api/v1/repairs/${repairId}/status-events`)
-        .set(auth(ctx))
-        .send({ newStatus: 'CANCELLED', notes: '고객 취소' })
-        .expect(400);
-      expect(res.body.error.code).toBe('VALIDATION_ERROR');
-    });
-
-    it('전 벌 입고 후 고객 연락하고, 되돌릴 수 있다', async () => {
+  describe('고객 연락 (상태가 아니라 발송 액션)', () => {
+    it('/notify는 발송 문구만 주고 상태를 바꾸지 않는다', async () => {
       const { customer } = await seedRepairCustomer(ctx.prisma);
       const repairId = await createGeneralRepair(customer.id);
       await requestAndReturnAll(repairId);
 
-      await api(ctx)
-        .post(`/api/v1/repairs/${repairId}/status-events`)
+      const prep = await api(ctx)
+        .post(`/api/v1/repairs/${repairId}/notify`)
         .set(auth(ctx))
-        .send({ newStatus: 'CUSTOMER_NOTIFIED' })
         .expect(201);
-      expect((await detailOf(repairId)).status).toBe('CUSTOMER_NOTIFIED');
-
-      await api(ctx)
-        .post(`/api/v1/repairs/${repairId}/status-events`)
-        .set(auth(ctx))
-        .send({ newStatus: 'RETURNED_TO_SHOP', notes: '잘못 눌러 되돌림' })
-        .expect(201);
+      expect(prep.body.data.suggestedNotification).toMatchObject({
+        templateCode: 'JOURNEY_REPAIR_CHECKED_IN',
+        // 알림톡 미승인 템플릿이라 실제로는 SMS로 나간다.
+        channel: 'SMS',
+        recipientPhone: customer.phone,
+        customerId: customer.id,
+      });
+      // 고객명이 치환돼 본문에 들어간다.
+      expect(prep.body.data.suggestedNotification.renderedBody).toContain(customer.name);
+      // 상태는 그대로 수선 입고 — 고객 연락은 단계가 아니다.
       expect((await detailOf(repairId)).status).toBe('RETURNED_TO_SHOP');
+    });
+
+    it('/notified는 마지막 연락 시각을 찍고, 벌을 되돌려도 시각은 남는다', async () => {
+      const { customer } = await seedRepairCustomer(ctx.prisma);
+      const repairId = await createGeneralRepair(customer.id);
+      await requestAndReturnAll(repairId);
+      expect((await detailOf(repairId)).lastNotifiedAt).toBeFalsy();
+
+      const marked = await api(ctx)
+        .post(`/api/v1/repairs/${repairId}/notified`)
+        .set(auth(ctx))
+        .expect(201);
+      expect(marked.body.data.status).toBe('RETURNED_TO_SHOP');
+      expect(marked.body.data.lastNotifiedAt).toBeTruthy();
+
+      // 벌을 한 칸 되돌려 상태가 내려가도 연락 시각은 남는다(버튼은 계속 [재발송]).
+      const detail = await detailOf(repairId);
+      await api(ctx)
+        .delete(`/api/v1/repairs/${repairId}/units/${detail.items[0].units[0].id}/status`)
+        .set(auth(ctx))
+        .expect(200);
+      expect((await detailOf(repairId)).lastNotifiedAt).toBeTruthy();
     });
   });
 
@@ -607,46 +564,6 @@ describe('수선 (RepairsModule)', () => {
     it('없는 수선 요청 조회는 404', async () => {
       const res = await api(ctx).get(`/api/v1/repairs/${randomUUID()}`).set(auth(ctx)).expect(404);
       expect(res.body.error.code).toBe('NOT_FOUND');
-    });
-  });
-
-  /**
-   * 개발설계서 05 G-06 — 상태를 바꾸면 문구를 준비해 확인창 재료로 돌려준다.
-   *
-   * 수선 메뉴에서 '고객 연락'(CUSTOMER_NOTIFIED)으로 전이할 때만 연락 제안이 실린다
-   * (2026-07-30 현업 요청으로 복원). 문구는 REPAIR_CHECKED_IN 진행 단계의 고정 문구를
-   * 공유하고, 실제 발송·이력은 화면 확인창의 POST /notifications/send에서 남는다.
-   */
-  describe('고객 연락 제안', () => {
-    it("'고객 연락' 전이에만 연락 제안이 실린다", async () => {
-      const { customer } = await seedRepairCustomer(ctx.prisma);
-      const repairId = await createGeneralRepair(customer.id);
-      await requestAndReturnAll(repairId);
-
-      const notified = await api(ctx)
-        .post(`/api/v1/repairs/${repairId}/status-events`)
-        .set(auth(ctx))
-        .send({ newStatus: 'CUSTOMER_NOTIFIED' })
-        .expect(201);
-      expect(notified.body.data.newStatus).toBe('CUSTOMER_NOTIFIED');
-      expect(notified.body.data.suggestedNotification).toMatchObject({
-        templateCode: 'JOURNEY_REPAIR_CHECKED_IN',
-        // 알림톡 미승인 템플릿이라 실제로는 SMS로 나간다.
-        channel: 'SMS',
-        recipientPhone: customer.phone,
-        customerId: customer.id,
-        triggerKey: `repair:${repairId}:CUSTOMER_NOTIFIED`,
-      });
-      // 고객명이 치환돼 본문에 들어간다.
-      expect(notified.body.data.suggestedNotification.renderedBody).toContain(customer.name);
-
-      // 연락을 되돌리는 전이에는 제안이 실리지 않는다.
-      const back = await api(ctx)
-        .post(`/api/v1/repairs/${repairId}/status-events`)
-        .set(auth(ctx))
-        .send({ newStatus: 'RETURNED_TO_SHOP' })
-        .expect(201);
-      expect(back.body.data.suggestedNotification).toBeNull();
     });
   });
 

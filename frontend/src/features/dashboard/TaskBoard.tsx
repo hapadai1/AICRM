@@ -36,7 +36,11 @@ function taskTargetPath(task: DashboardTask): string {
         : '/rentals/handover';
     case 'UNORDERED':
     case 'INBOUND_DELAY':
-      return task.orderId ? `/orders/${task.orderId}` : '/production';
+      // 주문 관리 표면은 제거되고 제작관리로 일원화됐다. 고객명으로 걸러 들어가면
+      // 해당 고객의 제작 건이 목록에 바로 뜬다. (/orders/:id 경로는 없다)
+      return task.customerName
+        ? `/production?q=${encodeURIComponent(task.customerName)}`
+        : '/production';
   }
 }
 

@@ -939,17 +939,12 @@ export class JourneysService {
   }
 
   /**
-   * 수선 입고 안내를 실제로 보냈으면 수선 건 상태도 '고객 연락'으로 옮긴다.
+   * 수선 입고 안내를 실제로 보냈으면 수선 건의 '마지막 연락 시각'을 찍는다.
    *
-   * 5단계 수선 상태(통합설계서 §12.1)와 4단계 REPAIR 진행 트랙(설계서 v2 02 §2.2)은
-   * 별개의 레이어지만 '고객 연락'은 같은 사실이다. 연락 경로가 진행 카드로 일원화된 뒤
-   * (설계서 v2 02 §8) 수선 상태의 CUSTOMER_NOTIFIED는 담당자가 손으로 한 번 더 눌러야
-   * 하는 껍데기 단계가 됐다. 발송에 맞춰 여기서 옮겨 이중 입력을 없앤다.
-   *
-   * 직전 상태가 '수선 입고'일 때만 옮긴다 — 수선 상태는 한 칸씩만 전진하므로
-   * (repairs.service.ts validateStatusTransition) 그 밖의 상태에서 밀어넣으면 순서가 깨진다.
-   * 어긋나면 조용히 건너뛴다: 연락은 이미 나갔고 되돌릴 수 없으므로 발송 결과 기록을
-   * 실패시켜서는 안 된다.
+   * 고객 연락은 더 이상 수선 상태가 아니라 발송 액션이다(수선 메뉴 버튼과 같은 사실).
+   * 연락 경로가 진행 카드로도 열려 있어, 진행 카드에서 REPAIR_CHECKED_IN 문구를 보내면
+   * 여기서 last_notified_at을 찍어 수선 메뉴 버튼도 [재발송]으로 맞춘다(상태는 건드리지 않는다).
+   * 연락은 이미 나갔으므로 어긋나도 조용히 건너뛴다 — 발송 결과 기록을 실패시키지 않는다.
    */
   private async syncRepairNotified(journeyId: string, toStageCode: string, actor: AuthUser) {
     if (toStageCode !== 'REPAIR_CHECKED_IN') return;
@@ -962,38 +957,20 @@ export class JourneysService {
 
     const repair = await this.prisma.repairRequest.findUnique({
       where: { id: repairId },
-      select: { status: true },
+      select: { id: true },
     });
-    if (repair?.status !== 'RETURNED_TO_SHOP') return;
+    if (!repair) return;
 
-    await this.prisma.$transaction(async (tx) => {
-      await tx.repairStatusEvent.create({
-        data: {
-          id: randomUUID(),
-          repairRequestId: repairId,
-          previousStatus: repair.status,
-          newStatus: 'CUSTOMER_NOTIFIED',
-          eventDate: todayAsDbDate(),
-          notes: '진행 카드에서 수선 입고 안내 발송',
-          actorId: actor.id,
-        },
-      });
-      await tx.repairRequest.update({
-        where: { id: repairId },
-        data: { status: 'CUSTOMER_NOTIFIED' },
-      });
-      await this.audit.log(
-        {
-          userId: actor.id,
-          action: 'STATUS_CHANGE',
-          entityType: 'REPAIR_REQUEST',
-          entityId: repairId,
-          before: { status: repair.status },
-          after: { status: 'CUSTOMER_NOTIFIED' },
-          reason: '수선 입고 안내 발송(진행 카드)',
-        },
-        tx,
-      );
+    await this.prisma.repairRequest.update({
+      where: { id: repairId },
+      data: { lastNotifiedAt: new Date() },
+    });
+    await this.audit.log({
+      userId: actor.id,
+      action: 'NOTIFY',
+      entityType: 'REPAIR_REQUEST',
+      entityId: repairId,
+      reason: '수선 입고 안내 발송(진행 카드)',
     });
   }
 

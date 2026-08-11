@@ -54,10 +54,10 @@ class RepairMethodDto {
  * 여기서는 그 값을 묶어 where 절로 풀기만 한다(스키마·데이터 변경 없음).
  *
  * 취소는 완료에 넣지 않는다 — 넣으면 "완료 12건"에 취소가 섞여 숫자를 못 믿게 된다.
- * 고객 연락은 아직 출고 전이라 진행중이다.
+ * 고객 연락은 상태가 아니라 발송 액션이라 여기에 없다(수선 입고 상태에 머문다).
  */
 export const REPAIR_PHASE_STATUSES = {
-  IN_PROGRESS: ['RECEIVED', 'REQUESTED', 'RETURNED_TO_SHOP', 'CUSTOMER_NOTIFIED'],
+  IN_PROGRESS: ['RECEIVED', 'REQUESTED', 'RETURNED_TO_SHOP'],
   DONE: ['RELEASED'],
   CANCELLED: ['CANCELLED'],
 } as const;
@@ -108,12 +108,6 @@ export class UpdateRepairDto extends RepairMethodDto {
   @ValidateNested({ each: true })
   @Type(() => RepairItemDto)
   items?: RepairItemDto[];
-}
-
-export class CreateRepairStatusEventDto {
-  @IsString() @IsNotEmpty() newStatus: string;
-  @IsOptional() @IsDateString() eventDate?: string;
-  @IsOptional() @IsString() notes?: string;
 }
 
 /** 품목 줄·벌 진행(수선요청·입고·출고) 공통 입력 — 날짜를 안 주면 오늘로 찍는다. */

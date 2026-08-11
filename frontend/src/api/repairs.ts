@@ -26,24 +26,23 @@ export const REPAIR_TYPE_LABELS = REPAIR_TYPE_LABELS_MAP;
  */
 export const REPAIR_TARGET_PRODUCTS = COMPONENT_TYPE_CODES;
 
-/** 수선 진행 상태 — 접수→수선 요청→수선 입고→고객 연락→출고 완료 (CANCELLED는 과거 데이터 표시용) */
+/** 수선 진행 상태 — 접수→수선 요청→수선 입고→출고 완료 (CANCELLED는 과거 데이터 표시용) */
 export type RepairStatus =
   | 'RECEIVED'
   | 'REQUESTED'
   | 'RETURNED_TO_SHOP'
-  | 'CUSTOMER_NOTIFIED'
   | 'RELEASED'
   | 'CANCELLED';
 
 /**
  * 진행 단계 순서. 상태는 "그 단계를 끝낸 시점"을 뜻한다 — 접수 등록이 곧 접수 완료다.
- * 고객 연락을 빼면 모두 품목 진행에서 계산되는 값이다(백엔드 rollupStatus).
+ * 모두 품목 진행에서 계산되는 값이다(백엔드 rollupStatus). 고객 연락은 상태가 아니라
+ * 발송 액션이라 흐름에 없다 — last_notified_at으로만 관리한다.
  */
 export const REPAIR_STATUS_FLOW: RepairStatus[] = [
   'RECEIVED',
   'REQUESTED',
   'RETURNED_TO_SHOP',
-  'CUSTOMER_NOTIFIED',
   'RELEASED',
 ];
 
@@ -62,7 +61,7 @@ export const REPAIR_PHASE_LABELS: Record<RepairPhase, string> = {
 
 /** 전체 상태에 속한 세부 상태 — 세부 상태 선택지를 좁히는 데 쓴다. */
 export const REPAIR_PHASE_STATUSES: Record<RepairPhase, RepairStatus[]> = {
-  IN_PROGRESS: ['RECEIVED', 'REQUESTED', 'RETURNED_TO_SHOP', 'CUSTOMER_NOTIFIED'],
+  IN_PROGRESS: ['RECEIVED', 'REQUESTED', 'RETURNED_TO_SHOP'],
   DONE: ['RELEASED'],
   CANCELLED: ['CANCELLED'],
 };
@@ -125,6 +124,7 @@ interface RepairApiRow {
   releaseMethod?: string | null;
   pickupAddress?: string | null;
   deliveryAddress?: string | null;
+  lastNotifiedAt?: string | null;
   createdAt: string;
   updatedAt: string;
   customer: { id: string; name: string; phone: string };
@@ -242,6 +242,8 @@ export interface Repair {
   releaseMethod?: RepairReleaseMethod;
   pickupAddress?: string;
   deliveryAddress?: string;
+  /** 고객 연락 마지막 발송 시각(ISO). 있으면 버튼이 [재발송]으로 뜬다. */
+  lastNotifiedAt?: string;
   events: RepairEvent[];
 }
 
@@ -296,6 +298,7 @@ function toRepair(row: RepairApiRow): Repair {
     releaseMethod: (row.releaseMethod as RepairReleaseMethod) ?? undefined,
     pickupAddress: row.pickupAddress ?? undefined,
     deliveryAddress: row.deliveryAddress ?? undefined,
+    lastNotifiedAt: row.lastNotifiedAt ?? undefined,
     events: (row.statusEvents ?? []).map((e) => ({
       id: e.id,
       itemId: e.repairRequestItemId ?? undefined,
@@ -359,8 +362,8 @@ export function createRepair(body: CreateRepairInput): Promise<Repair> {
 }
 
 /**
- * 상태 변경 응답에 실려 오는 고객 연락 제안 (개발설계서 05 G-06).
- * 연락 대상 상태(접수·수선 완료)이고 규칙이 켜져 있을 때만 채워진다.
+ * 고객 연락 준비 응답에 실려 오는 발송 문구 (개발설계서 05 G-06).
+ * REPAIR_CHECKED_IN 단계 문구가 설정돼 있을 때만 채워진다(없으면 null).
  */
 export interface RepairNotificationSuggestion {
   templateId: string;
@@ -375,19 +378,25 @@ export interface RepairNotificationSuggestion {
   triggerKey: string;
 }
 
-export interface RepairStatusEventResult extends RepairEventApiRow {
-  suggestedNotification: RepairNotificationSuggestion | null;
+/**
+ * 고객 연락 문구 준비 — POST /repairs/{id}/notify.
+ * 상태를 바꾸지 않고 발송할 문구만 만들어 돌려준다(확인창 재료). 실제 발송은 확인창에서
+ * /notifications/send로, 발송 성공 뒤 markRepairNotified로 시각을 찍는다.
+ */
+export function notifyRepair(
+  repairId: string,
+): Promise<{ suggestedNotification: RepairNotificationSuggestion | null }> {
+  return request({ url: `/repairs/${repairId}/notify`, method: 'POST' });
 }
 
 /**
- * 건 단위 상태 변경 — POST /repairs/{id}/status-events.
- * 이제 고객 연락(과 되돌리기)만 이 경로를 쓴다. 나머지 단계는 품목 진행에서 계산된다.
+ * 고객 연락 발송 완료 표시 — POST /repairs/{id}/notified.
+ * 마지막 발송 시각을 찍어 버튼을 [재발송]으로 바꾼다. 갱신된 수선 상세를 돌려준다.
  */
-export function postRepairStatusEvent(
-  repairId: string,
-  body: { newStatus: RepairStatus; eventDate?: string; notes?: string },
-): Promise<RepairStatusEventResult> {
-  return request({ url: `/repairs/${repairId}/status-events`, method: 'POST', data: body });
+export function markRepairNotified(repairId: string): Promise<Repair> {
+  return request<RepairApiRow>({ url: `/repairs/${repairId}/notified`, method: 'POST' }).then(
+    toRepair,
+  );
 }
 
 /** 품목 진행 입력 — 날짜를 안 주면 서버가 오늘로 찍는다 */

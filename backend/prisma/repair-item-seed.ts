@@ -14,13 +14,11 @@ export function repairItemRow(
   requestDate: Date,
   unitStatuses?: string[],
 ) {
-  const requested = ['REQUESTED', 'RETURNED_TO_SHOP', 'CUSTOMER_NOTIFIED', 'RELEASED'].includes(
-    repairStatus,
-  );
+  const requested = ['REQUESTED', 'RETURNED_TO_SHOP', 'RELEASED'].includes(repairStatus);
   const unitStatus =
     repairStatus === 'RELEASED'
       ? 'RELEASED'
-      : ['RETURNED_TO_SHOP', 'CUSTOMER_NOTIFIED'].includes(repairStatus)
+      : repairStatus === 'RETURNED_TO_SHOP'
         ? 'RETURNED'
         : 'PENDING';
   return {
