@@ -33,7 +33,6 @@ import {
   fetchRepair,
   fetchRepairs,
   postRepairStatusEvent,
-  repairProgress,
   repairStatusMeta,
   repairTypeLabel,
   REPAIR_METHOD_LABELS,
@@ -295,25 +294,7 @@ export function RepairsPage() {
       title: '대상',
       dataIndex: 'targetLabel',
       width: TARGET_WIDTH,
-      render: (label: string, r) => {
-        // 건 상태만으로는 "몇 벌이 들어왔는지"를 알 수 없다 — 진척을 한 줄 붙인다.
-        const p = repairProgress(r.items);
-        return (
-          <Space direction="vertical" size={0}>
-            <Typography.Text>{label}</Typography.Text>
-            {p.totalUnits > 0 && (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                입고 {p.returned}/{p.totalUnits} · 출고 {p.released}/{p.totalUnits}
-              </Typography.Text>
-            )}
-            {r.orderNo && (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {r.orderNo}
-              </Typography.Text>
-            )}
-          </Space>
-        );
-      },
+      render: (label: string) => <Typography.Text>{label}</Typography.Text>,
     },
     { title: '접수일', dataIndex: 'requestDate', width: COL.name },
     {
@@ -336,7 +317,8 @@ export function RepairsPage() {
       // 이 표에서 가운데 정렬은 상태 하나뿐이었다. 자기 몫 여백이 좌우로 갈려
       // 배지가 옆 열에 붙어 보이므로 나머지 열과 같은 왼쪽 정렬로 맞춘다.
       render: (s: string) => {
-        const meta = repairStatusMeta(s);
+        // 고객 연락은 수선 입고의 하위 단계라 목록 상태 열에서는 수선 입고로 묶어 보여 준다.
+        const meta = repairStatusMeta(s === 'CUSTOMER_NOTIFIED' ? 'RETURNED_TO_SHOP' : s);
         return <StatusBadge label={meta.label} color={meta.color} />;
       },
     },
@@ -455,7 +437,10 @@ export function RepairsPage() {
               const cancelEvent = eventByStatus.get('CANCELLED');
               // 현재 상태 = 그 단계를 "끝낸" 상태다(접수 등록 = 접수 완료). 그래서 진행중 표시는
               // 다음 단계로 한 칸 민다 — 출고 완료면 flow 길이가 되어 전 단계가 완료로 찍힌다.
-              const currentIndex = REPAIR_STATUS_FLOW.indexOf(r.status as RepairStatus) + 1;
+              // 고객 연락 단계는 화면에서 빼고 수선 입고 안으로 합쳤다(2026-08-10) — 그 자리(인덱스 3)부터는
+              // 표시 단계가 한 칸 앞당겨진다. 입고 완료(연락 전)는 아직 수선 입고 칸에 머문다.
+              const statusIdx = REPAIR_STATUS_FLOW.indexOf(r.status as RepairStatus);
+              const currentIndex = statusIdx <= 1 ? statusIdx + 1 : statusIdx;
 
               // 건 상태는 품목 진행에서 계산된다 — 손으로 누르는 건 고객 연락뿐이다.
               // 연락은 전 벌이 들어온 뒤(수선 입고)에 열리고, 되돌리기는 연락 직후에만 가능하다.
@@ -478,7 +463,13 @@ export function RepairsPage() {
                 const label = repairStatusMeta(status).label;
                 const ev = eventByStatus.get(status);
                 const stage = STAGE_BY_STATUS[status];
-                const summary = stage ? repairStageSummary(detail.items, stage) : undefined;
+                let summary = stage ? repairStageSummary(detail.items, stage) : undefined;
+                // 고객 연락 단계를 수선 입고에 합쳤다 — 입고가 다 됐어도 고객 연락 전이면
+                // 아직 진행중이고, 고객 연락까지 끝나야 수선 입고를 완료로 본다.
+                if (status === 'RETURNED_TO_SHOP' && summary) {
+                  const notified = statusIdx >= REPAIR_STATUS_FLOW.indexOf('CUSTOMER_NOTIFIED');
+                  summary = { text: notified ? summary.text : '진행중', done: notified };
+                }
                 // 꼬리 공백·개행만 턴다 — 그대로 두면 단계 밑에 빈 줄이 하나 생긴다.
                 // 가운데 띄어쓰기는 칸을 맞춰 적은 것이라 건드리지 않는다.
                 const notes = r.notes?.trimEnd();
@@ -521,40 +512,49 @@ export function RepairsPage() {
               // 고객 연락은 발송 버튼. 표를 따로 두지 않으니 지금 눌러야 할 칸이
               // 어느 단계인지 한눈에 보인다(2026-08-01 현업 요청).
               // 접수는 글자뿐이라 단계 줄에 실었다 — stepTitle 참고.
+              // 고객 연락 버튼 — 전 벌이 들어온 뒤(수선 입고) 입고 표 바로 뒤에 붙인다.
+              const notifyAction = (notifiable || revertNotify) && (
+                <Can permission="REPAIR_EDIT">
+                  {notifiable ? (
+                    <Button
+                      size="small"
+                      type="primary"
+                      ghost
+                      icon={<NotificationOutlined />}
+                      loading={pending}
+                      onClick={() => openStatusChange(r, 'CUSTOMER_NOTIFIED')}
+                    >
+                      고객 연락
+                    </Button>
+                  ) : (
+                    <Button
+                      size="small"
+                      loading={pending}
+                      onClick={() => openStatusChange(r, 'RETURNED_TO_SHOP')}
+                    >
+                      고객 연락 재발송
+                    </Button>
+                  )}
+                </Can>
+              );
+
               const stepBody: Partial<Record<RepairStatus, React.ReactNode>> = {
                 REQUESTED: <RepairItemProgress repair={detail} stage="REQUEST" showSummary={false} />,
                 RETURNED_TO_SHOP: (
-                  <RepairItemProgress repair={detail} stage="RETURN" showSummary={false} />
-                ),
-                CUSTOMER_NOTIFIED: (notifiable || revertNotify) && (
-                  <Can permission="REPAIR_EDIT">
-                    {notifiable ? (
-                      <Button
-                        size="small"
-                        type="primary"
-                        ghost
-                        icon={<NotificationOutlined />}
-                        loading={pending}
-                        onClick={() => openStatusChange(r, 'CUSTOMER_NOTIFIED')}
-                      >
-                        고객 연락
-                      </Button>
-                    ) : (
-                      <Button
-                        size="small"
-                        icon={<RollbackOutlined />}
-                        loading={pending}
-                        onClick={() => openStatusChange(r, 'RETURNED_TO_SHOP')}
-                      >
-                        고객 연락 되돌리기
-                      </Button>
-                    )}
-                  </Can>
+                  <RepairItemProgress
+                    repair={detail}
+                    stage="RETURN"
+                    showSummary={false}
+                    trailingAction={notifyAction}
+                  />
                 ),
                 RELEASED: <RepairItemProgress repair={detail} stage="RELEASE" showSummary={false} />,
               };
 
-              const stepItems = REPAIR_STATUS_FLOW.map((status) => {
+              // 고객 연락은 별도 단계로 두지 않고 수선 입고에 합쳤다 — 화면 단계에서 뺀다.
+              const stepItems = REPAIR_STATUS_FLOW.filter(
+                (status) => status !== 'CUSTOMER_NOTIFIED',
+              ).map((status) => {
                 const body = stepBody[status];
                 return {
                   title: stepTitle(status),

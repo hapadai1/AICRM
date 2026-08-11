@@ -11,6 +11,7 @@
  * 그래서 단계마다 그 단계의 버튼만 있는 좁은 표를 그린다.
  */
 import { RollbackOutlined } from '@ant-design/icons';
+import type { ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { App, Button, Space, Table, Tooltip, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -36,6 +37,8 @@ interface RepairItemProgressProps {
   stage: RepairProgressStage;
   /** 단계 전체 상태를 표 위에 그릴지. 단계 머리글에 붙여 쓰는 화면은 끄고 직접 그린다. */
   showSummary?: boolean;
+  /** 건 단위 버튼(예: 고객 연락) — 마지막 벌 칸 오른쪽에 붙여 벌 버튼 바로 옆에 둔다. */
+  trailingAction?: ReactNode;
 }
 
 /** 단계 안에 들어가는 표라 화면 폭을 다 쓰지 않는다 — 절반 남짓. */
@@ -95,7 +98,12 @@ function lastEvent(events: RepairEvent[], match: (event: RepairEvent) => boolean
   return found;
 }
 
-export function RepairItemProgress({ repair, stage, showSummary = true }: RepairItemProgressProps) {
+export function RepairItemProgress({
+  repair,
+  stage,
+  showSummary = true,
+  trailingAction,
+}: RepairItemProgressProps) {
   const { message } = App.useApp();
   const queryClient = useQueryClient();
 
@@ -198,17 +206,19 @@ export function RepairItemProgress({ repair, stage, showSummary = true }: Repair
       );
     }
     if (cancelled) return <Typography.Text type="secondary">-</Typography.Text>;
+    // 수선요청 전에는 물건이 아직 매장에 있고, 입고 전에는 내줄 것이 없다.
+    const actionable = returning ? !!row.item.requestedAt : unit.status === 'RETURNED';
     return (
       <Space size={8}>
-        <Typography.Text type="secondary">대기</Typography.Text>
+        {/* 지금 누를 수 있는(진행중) 대기만 본문 색으로 두고, 앞 단계를 기다리는 대기는 흐리게. */}
+        <Typography.Text type={actionable ? undefined : 'secondary'}>대기</Typography.Text>
         <Can permission="REPAIR_EDIT">
           <Button
             size="small"
             type="primary"
             ghost
             loading={pendingKey === key}
-            // 수선요청 전에는 물건이 아직 매장에 있고, 입고 전에는 내줄 것이 없다.
-            disabled={returning ? !row.item.requestedAt : unit.status !== 'RETURNED'}
+            disabled={!actionable}
             onClick={() =>
               mutation.mutate({
                 key,
@@ -229,7 +239,18 @@ export function RepairItemProgress({ repair, stage, showSummary = true }: Repair
     {
       title: stage === 'REQUEST' ? '수선요청' : stage === 'RETURN' ? '입고' : '출고',
       key: 'action',
-      render: (_, row) => (stage === 'REQUEST' ? renderRequest(row) : renderUnit(row)),
+      render: (_, row, index) => {
+        const cell = stage === 'REQUEST' ? renderRequest(row) : renderUnit(row);
+        // 건 단위 버튼은 마지막 벌 칸에만, 벌 버튼 오른쪽에 붙인다.
+        if (trailingAction && index === rows.length - 1)
+          return (
+            <Space size={8}>
+              {cell}
+              {trailingAction}
+            </Space>
+          );
+        return cell;
+      },
     },
   ];
 
