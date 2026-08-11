@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { BusinessException } from '../../common/business.exception';
 import { toDateOrNull as toDate } from '../../common/date';
@@ -246,6 +247,9 @@ export class ContractVersionsService {
 
     const signedAt = new Date();
     await this.prisma.$transaction(async (tx) => {
+      // 렌탈은 "확정"을 따로 누르지 않는다 — 실물을 다 고른(선택 완료) 세션을 서명 시점에
+      // 자동 확정한다(현업 확정 2026-08-11). 맞춤 옵션은 서명 전 확인서에서 이미 확정되어 있다.
+      await this.confirmDraftRentalSelections(tx, id, actor, signedAt);
       await tx.contractVersion.update({
         where: { id: versionId },
         data: { signatureFileId: file.id, signedAt, signerName: dto.signerName },
@@ -288,8 +292,13 @@ export class ContractVersionsService {
         where: { id: versionId },
         data: { signatureFileId: null, signedAt: null, signerName: null },
       });
-      if (contract.status === 'SIGNED')
+      if (contract.status === 'SIGNED') {
         await updateContractGuarded(tx, id, contract.rowVersion, { status: 'DRAFT' });
+        // 서명 때 자동 확정했던 렌탈 선택을 다시 작성중으로 풀어 준다 — 서명을 해제하면
+        // 렌탈 실물을 다시 고를 수 있어야 하는데, 렌탈은 맞춤과 달리 확정본 재편집 경로가
+        // 없어 CONFIRMED로 두면 잠긴다(현업 확정 2026-08-11). 자동 확정과 대칭으로 되돌린다.
+        await this.reopenRentalSelections(tx, id, actor);
+      }
       await this.audit.log(
         {
           userId: actor.id,
@@ -302,6 +311,73 @@ export class ContractVersionsService {
       );
     });
     return { versionId, signed: false };
+  }
+
+  /**
+   * 서명 시점에 아직 작성중(IN_PROGRESS)인 렌탈 선택을 자동 확정한다 (현업 확정 2026-08-11).
+   * 렌탈은 별도 확정 버튼이 없고 실물 선택 완료가 곧 컨설팅 완료다(consultingReadiness와 대칭).
+   * 서명 트랜잭션 안에서 함께 처리해 서명본과 확정 상태가 어긋나지 않게 한다.
+   * (작성중 계약에는 아직 주문이 없어 준비상태 동기화 대상이 없다.)
+   */
+  private async confirmDraftRentalSelections(
+    tx: Prisma.TransactionClient,
+    contractId: string,
+    actor: AuthUser,
+    confirmedAt: Date,
+  ) {
+    const sessions = await tx.rentalSelectionSession.findMany({
+      where: { isCurrent: true, status: { not: 'CONFIRMED' }, contractItem: { contractId } },
+      select: { id: true, status: true, rowVersion: true, contractItemId: true },
+    });
+    for (const s of sessions) {
+      await tx.rentalSelectionSession.update({
+        where: { id: s.id },
+        data: { status: 'CONFIRMED', confirmedAt, rowVersion: { increment: 1 } },
+      });
+      await this.audit.log(
+        {
+          userId: actor.id,
+          action: 'CONFIRM',
+          entityType: 'RENTAL_SELECTION_SESSION',
+          entityId: s.id,
+          before: { status: s.status, rowVersion: s.rowVersion },
+          after: { status: 'CONFIRMED', contractItemId: s.contractItemId, auto: true, trigger: 'SIGN' },
+        },
+        asAuditClient(tx),
+      );
+    }
+  }
+
+  /**
+   * 서명 해제 시 자동 확정했던 렌탈 선택을 작성중(IN_PROGRESS)으로 되돌린다.
+   * confirmDraftRentalSelections 와 대칭 — 서명을 풀면 렌탈 실물을 다시 고칠 수 있게 한다.
+   */
+  private async reopenRentalSelections(
+    tx: Prisma.TransactionClient,
+    contractId: string,
+    actor: AuthUser,
+  ) {
+    const sessions = await tx.rentalSelectionSession.findMany({
+      where: { isCurrent: true, status: 'CONFIRMED', contractItem: { contractId } },
+      select: { id: true, status: true, rowVersion: true, contractItemId: true },
+    });
+    for (const s of sessions) {
+      await tx.rentalSelectionSession.update({
+        where: { id: s.id },
+        data: { status: 'IN_PROGRESS', confirmedAt: null, rowVersion: { increment: 1 } },
+      });
+      await this.audit.log(
+        {
+          userId: actor.id,
+          action: 'UPDATE',
+          entityType: 'RENTAL_SELECTION_SESSION',
+          entityId: s.id,
+          before: { status: s.status, rowVersion: s.rowVersion },
+          after: { status: 'IN_PROGRESS', contractItemId: s.contractItemId, auto: true, trigger: 'UNSIGN' },
+        },
+        asAuditClient(tx),
+      );
+    }
   }
 
   /** 서명 메타 조회. */

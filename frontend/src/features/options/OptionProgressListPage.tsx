@@ -62,6 +62,17 @@ interface ContractRow {
 }
 
 /**
+ * 렌탈 선택 완료 판정 — 확정(CONFIRMED)이거나, 취소(베스트 제외) 안 된 모든 부위에
+ * 실물이 지정된 경우. 서버 consultingReadiness의 렌탈 판정과 같은 기준이다.
+ * (실물을 고르려면 대여 기간이 있어야 하므로 여기서는 기간을 따로 검사하지 않는다.)
+ */
+function rentalSelectionDone(it: RentalProgressItem): boolean {
+  if (it.status === 'CONFIRMED') return true;
+  const active = it.components.filter((c) => !c.excluded);
+  return active.length > 0 && active.every((c) => c.selectedInventoryItemId != null);
+}
+
+/**
  * 계약 단위로 묶는다. 행의 뼈대는 맞춤 품목이 만들고, 렌탈은 이미 만들어진 행에만 얹는다
  * — 맞춤이 없는(렌탈뿐인) 계약은 컨설팅할 것이 없으므로 목록에 올리지 않는다.
  */
@@ -103,7 +114,9 @@ function groupByContract(items: OptionProgressItem[], rentals: RentalProgressIte
     // 진행률에서는 렌탈 한 품목을 1단계로 잡는다 — 맞춤처럼 옵션 단계가 나뉘지 않고
     // 부위를 다 고른 뒤 한 번에 확정하는 작업이라, 확정 전까지는 0/1이다 (현업 확정 2026-07-31).
     row.totalStages += 1;
-    if (it.status === 'CONFIRMED') {
+    // 렌탈은 별도 확정 버튼이 없다 — 실물을 다 고르면(선택 완료) 완료로 센다. 서명 시점에
+    // 서버가 자동 확정하므로, 이미 확정된 세션도 함께 완료로 인정한다 (현업 확정 2026-08-11).
+    if (rentalSelectionDone(it)) {
       row.confirmedCount += 1;
       row.completedStages += 1;
     }
@@ -291,16 +304,14 @@ export function OptionProgressListPage({
     },
     {
       // 분모는 건수와 같은 전체 품목 수 — 맞춤은 옵션 확정, 렌탈은 실물 선정 확정을 센다.
-      title: '확정',
+      title: '스타일 확정',
       key: 'confirmed',
       width: COL.status,
       render: (_, row) =>
         row.confirmedCount === row.itemCount ? (
-          <Tag color="green">전체 확정</Tag>
+          <StatusBadge label="확정 완료" color="green" />
         ) : (
-          <Typography.Text>
-            {row.confirmedCount}/{row.itemCount}
-          </Typography.Text>
+          <StatusBadge label="진행중" color="gold" />
         ),
     },
     {

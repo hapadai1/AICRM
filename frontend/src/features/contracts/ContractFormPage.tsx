@@ -143,6 +143,9 @@ export function ContractFormPage() {
     queryKey: ['contracts', contractIdParam],
     queryFn: () => fetchContract(contractIdParam!),
     enabled: !!contractIdParam,
+    // 컨설팅에서 옵션 추가금이 계약금액·품목에 반영된 뒤 재진입하면 항상 최신값을 다시 불러온다.
+    // (전역 staleTime 30초 때문에 목록→상세 재진입 시 옛 금액이 먼저 그려지는 문제 방지)
+    refetchOnMount: 'always',
   });
 
   const customerId = customerIdParam ?? draft?.customerId;
@@ -193,6 +196,8 @@ export function ContractFormPage() {
         note: l.note,
         // 컨설팅 옵션 추가금액 롤업 라인 — 읽기 전용으로 표시하고 저장 본문에는 싣지 않는다.
         isOptionRollup: l.isOptionRollup,
+        // 품목 행별 옵션 반영 배지용 상태 (백엔드 계산값).
+        optionReflected: l.optionReflected,
       }),
     );
     setLines(loaded);
@@ -209,8 +214,6 @@ export function ContractFormPage() {
   const itemsSubtotal = lines.filter((l) => !l.isOptionRollup).reduce((s, l) => s + (l.amount || 0), 0);
   const optionsSubtotal = lines.filter((l) => l.isOptionRollup).reduce((s, l) => s + (l.amount || 0), 0);
   const totalAmount = manualTotal ? (totalWatch ?? 0) : lineTotal;
-  // 선택 옵션 추가금이 계약금액에 반영됐는지 — '반영 확인' 배지용 (컨설팅 확정으로만 바뀌므로 저장본 기준).
-  const surcharge = draft?.optionSurcharge;
   /** 직접 입력 합계 − 품목 합계. 음수면 할인, 양수면 추가. */
   const totalDiff = totalAmount - lineTotal;
 
@@ -289,6 +292,9 @@ export function ContractFormPage() {
     queryKey: ['contracts', draftId, 'flow'],
     queryFn: () => fetchContractFlow(draftId!),
     enabled: !!draftId,
+    // 스타일 컨설팅(맞춤 확인서·렌탈 실물)을 마치고 돌아오면 서명 가능 여부가 바뀌므로
+    // 재진입 때 항상 최신 판정을 다시 불러와 [서명하기] 활성화가 곧바로 반영되게 한다.
+    refetchOnMount: 'always',
   });
   const flow = flowQuery.data;
 
@@ -433,8 +439,8 @@ export function ContractFormPage() {
                     title={
                       flow && !flow.consulting.ready
                         ? flow.consulting.targetCount === 0
-                          ? '품목을 입력하고 스타일 컨설팅을 확정한 뒤 서명할 수 있습니다.'
-                          : `스타일 컨설팅 미확정 ${flow.consulting.pending.length}건: ${flow.consulting.pending
+                          ? '품목을 입력하고 스타일 컨설팅을 마친 뒤 서명할 수 있습니다.'
+                          : `스타일 컨설팅 미완료 ${flow.consulting.pending.length}건(맞춤 확인서 확정·렌탈 실물 선택): ${flow.consulting.pending
                               .map((item) => item.displayName)
                               .join(', ')}`
                         : ''
@@ -577,30 +583,9 @@ export function ContractFormPage() {
           </Form.Item>
         </Card>
 
-        <Card
-          title="품목"
-          extra={
-            // 금액은 **반영(확정)된 옵션 기준**으로만 뜬다 — 각 품목 확인서의 계약 반영 버튼을 눌러
-            // 미반영 차액(pending)이 0이 됐을 때 비로소 "반영완료 (금액)"을 보여준다.
-            // 선택만 하고 미확정인 품목이 남아 있으면(pending>0) 금액 없이 안내만 띄운다.
-            surcharge && surcharge.applied > 0 && surcharge.pending === 0 ? (
-              <Tag
-                color="green"
-                style={{ fontSize: 13, padding: '4px 12px', borderRadius: 16, marginInlineEnd: 0 }}
-              >
-                옵션 추가금 반영완료 ({formatKrw(surcharge.applied)})
-              </Tag>
-            ) : surcharge && surcharge.pending > 0 ? (
-              <Tag
-                color="orange"
-                style={{ fontSize: 13, padding: '4px 12px', borderRadius: 16, marginInlineEnd: 0 }}
-              >
-                옵션 미반영 — 확인서에서 계약 반영 필요
-              </Tag>
-            ) : null
-          }
-          style={{ marginBottom: 16 }}
-        >
+        {/* 옵션 반영 배지는 품목 헤더가 아니라 각 품목 행(삭제 버튼 옆)에 둔다 —
+            품목별로 스타일 컨설팅 반영 여부를 확인할 수 있게 한다. */}
+        <Card title="품목" style={{ marginBottom: 16 }}>
           <ContractLineEditor
             value={lines}
             onChange={(next) => {

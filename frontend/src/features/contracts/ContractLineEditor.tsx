@@ -1,5 +1,5 @@
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
-import { Button, Flex, Input, InputNumber, Select, Table } from 'antd';
+import { Button, Flex, Input, InputNumber, Select, Space, Table, Tag } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { ProductCategory, TransactionType } from '../../api/contracts';
 import { PRODUCT_CATEGORY_LABEL, TRANSACTION_TYPE_LABEL } from './labels';
@@ -22,6 +22,11 @@ export interface EditableLine {
    * 표에서는 항상 맨 아래에 '옵션(추가금액)' 한 줄로 보인다.
    */
   isOptionRollup?: boolean;
+  /**
+   * 맞춤 품목 라인의 옵션 반영 상태(상세 조회에서만 실림). true=반영완료, false=미반영,
+   * undefined=컨설팅 대상 아님. 행별 배지로만 쓰이고 저장 본문에는 싣지 않는다.
+   */
+  optionReflected?: boolean;
 }
 
 let lineKeySeq = 0;
@@ -216,19 +221,32 @@ export function ContractLineEditor({ value, onChange, disabled }: ContractLineEd
     {
       title: '',
       key: 'actions',
-      width: 44,
-      align: 'center',
+      width: 168,
+      align: 'right',
       // 옵션 롤업 라인은 백엔드 소유라 삭제 버튼을 두지 않는다.
       render: (_, l) =>
         l.isOptionRollup ? null : (
-          <Button
-            type="text"
-            danger
-            icon={<DeleteOutlined />}
-            disabled={disabled}
-            aria-label="품목 행 삭제"
-            onClick={() => onChange(value.filter((x) => x.key !== l.key))}
-          />
+          <Space size={4}>
+            {/* 옵션 반영 배지 — 추가금 옵션을 안 골라 옵션 행이 없어도 '반영완료'로 확인된다.
+                반영 상태를 모르는 라인(신규·컨설팅 대상 아님)은 배지를 두지 않는다. */}
+            {l.optionReflected === true ? (
+              <Tag color="green" style={{ marginInlineEnd: 0 }}>
+                옵션 반영완료
+              </Tag>
+            ) : l.optionReflected === false ? (
+              <Tag color="orange" style={{ marginInlineEnd: 0 }}>
+                옵션 미반영
+              </Tag>
+            ) : null}
+            <Button
+              type="text"
+              danger
+              icon={<DeleteOutlined />}
+              disabled={disabled}
+              aria-label="품목 행 삭제"
+              onClick={() => onChange(value.filter((x) => x.key !== l.key))}
+            />
+          </Space>
         ),
     },
   ];

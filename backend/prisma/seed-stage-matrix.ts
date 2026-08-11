@@ -84,7 +84,7 @@ interface StageDef {
   id: string;
   sequenceNo: number;
   componentGroup: string | null;
-  choices: Array<{ id: string; choiceCode: string; extraPrice: number }>;
+  choices: Array<{ id: string; choiceCode: string; choiceName: string; extraPrice: number }>;
 }
 
 interface SuitVersion {
@@ -110,7 +110,7 @@ async function loadSuitVersion(): Promise<SuitVersion> {
     componentGroup: s.componentGroup,
     choices: [...s.choices]
       .sort((a, b) => a.choiceCode.localeCompare(b.choiceCode))
-      .map((c) => ({ id: c.id, choiceCode: c.choiceCode, extraPrice: Number(c.extraPrice) })),
+      .map((c) => ({ id: c.id, choiceCode: c.choiceCode, choiceName: c.choiceName, extraPrice: Number(c.extraPrice) })),
   }));
   return {
     versionId: set.activeVersionId,
@@ -299,6 +299,8 @@ interface SeededContract {
   customerId: string;
   contractId: string;
   versionId: string;
+  /** 유일한 SUIT 품목 라인 id — 옵션 추가금액 롤업 라인을 이 라인 밑에 붙일 때 쓴다. */
+  lineId: string;
   items: SeededItem[];
 }
 
@@ -343,6 +345,10 @@ async function createContract(
   const unit = UNIT_PRICE + (vest ? VEST_PRICE : 0);
   const total = unit * itemCount + (args.surcharge ?? 0);
 
+  // 계약 구분은 계약서 필수값(신규 작성 폼 required) — 맞춤 정장 기본 구분을 붙인다.
+  const contractType = await tx.contractType.findUniqueOrThrow({
+    where: { code: 'BUSINESS_SUIT_CUSTOM' },
+  });
   const contractId = uuid();
   const versionId = uuid();
   await tx.contract.create({
@@ -350,8 +356,10 @@ async function createContract(
       id: contractId,
       contractNo: `CTR-260731-${seq}`,
       customerId,
+      contractTypeId: contractType.id,
       status,
-      contractedAt: signed ? at(-30, 15) : null,
+      // 계약일도 계약서 필수값 — 작성중(DRAFT) 포함 모든 계약에 채운다.
+      contractedAt: at(-30, 15),
     },
   });
   await tx.contractVersion.create({
@@ -432,7 +440,7 @@ async function createContract(
     items.push({ id: itemId, sequenceNo: i, displayName, vest });
   }
 
-  return { customerId, contractId, versionId, items };
+  return { customerId, contractId, versionId, lineId, items };
 }
 
 // -----------------------------------------------------------------------------
@@ -461,11 +469,15 @@ async function createOptionSession(
     adminId: string;
     times: { started: Date; saved: Date; reviewed?: Date; confirmed?: Date };
   },
-): Promise<{ sessionId: string; surchargeTotal: number }> {
+): Promise<{ sessionId: string; surchargeTotal: number; paidPicks: PaidPick[] }> {
   const sessionId = uuid();
   const mode = args.mode ?? 'cheap';
   const picks = args.stages.slice(0, args.pickCount).map((s) => ({ stage: s, choice: pick(s, mode) }));
   const surchargeTotal = picks.reduce((sum, p) => sum + p.choice.extraPrice, 0);
+  // 추가금액이 붙은 선택만 — 롤업 라인 비고(부위별 옵션 나열)에 쓴다.
+  const paidPicks: PaidPick[] = picks
+    .filter((p) => p.choice.extraPrice > 0)
+    .map((p) => ({ group: p.stage.componentGroup, name: p.choice.choiceName }));
   const confirmed = args.status === 'CONFIRMED';
   const nextStage = args.stages[args.pickCount] ?? null;
 
@@ -503,7 +515,71 @@ async function createOptionSession(
       },
     });
   }
-  return { sessionId, surchargeTotal };
+  return { sessionId, surchargeTotal, paidPicks };
+}
+
+// -----------------------------------------------------------------------------
+// 옵션 추가금액 롤업 라인 — 실제 앱의 ContractItemsService.syncOptionRollupLine 과
+// 같은 모양을 시드에서 재현한다. 확정(반영)된 계약은 품목 맨 아래(소스 라인 바로 밑)에
+// '옵션(추가금액)' 라인을 둬, 계약금액(totalAmount) = 품목 합계가 정확히 맞게 한다.
+// -----------------------------------------------------------------------------
+
+interface PaidPick {
+  group: string | null;
+  name: string;
+}
+
+const COMPONENT_LABEL: Record<string, string> = {
+  JACKET: '상의',
+  TROUSERS: '하의',
+  VEST: '베스트',
+  SHIRT: '셔츠',
+  SHOES: '슈즈',
+};
+const GROUP_ORDER: Record<string, number> = { JACKET: 0, TROUSERS: 1, VEST: 2, SHIRT: 3, SHOES: 4 };
+
+/** 유료 옵션을 부위별 한 줄로 묶어 비고 문자열을 만든다 (상의 → 하의 → 베스트 순). */
+function rollupNote(picks: PaidPick[]): string {
+  const byGroup = new Map<string, string[]>();
+  for (const p of picks) {
+    const key = p.group ?? '';
+    const names = byGroup.get(key) ?? [];
+    names.push(p.name);
+    byGroup.set(key, names);
+  }
+  return [...byGroup.entries()]
+    .sort((a, b) => (GROUP_ORDER[a[0]] ?? 99) - (GROUP_ORDER[b[0]] ?? 99))
+    .map(([g, names]) => (g ? `${COMPONENT_LABEL[g] ?? g}: ${names.join(', ')}` : names.join(', ')))
+    .join('\n');
+}
+
+/** 소스 SUIT 라인 바로 밑에 옵션 추가금액 롤업 라인을 만든다. 유료 옵션이 없으면 두지 않는다. */
+async function createOptionRollupLine(
+  tx: Tx,
+  args: { versionId: string; sourceLineId: string; surcharge: number; picks: PaidPick[] },
+): Promise<void> {
+  if (args.surcharge <= 0 || args.picks.length === 0) return;
+  const src = await tx.contractLine.findUniqueOrThrow({
+    where: { id: args.sourceLineId },
+    select: { sortOrder: true },
+  });
+  await tx.contractLine.create({
+    data: {
+      id: uuid(),
+      contractVersionId: args.versionId,
+      transactionType: 'OPTION',
+      productCategory: 'OPTION',
+      itemDescription: '옵션(추가금액)',
+      quantity: 1,
+      unitPrice: args.surcharge,
+      lineAmount: args.surcharge,
+      vestIncluded: false,
+      notes: rollupNote(args.picks),
+      // 소스 라인과 같은 sortOrder → 조회 정렬(sortOrder→isOptionRollup)에서 그 라인 바로 뒤에 온다.
+      sortOrder: src.sortOrder,
+      isOptionRollup: true,
+    },
+  });
 }
 
 // -----------------------------------------------------------------------------
@@ -953,6 +1029,10 @@ async function main(): Promise<void> {
         where: { id: k4.versionId },
         data: { totalAmount: UNIT_PRICE + k4opt.surchargeTotal },
       });
+      await createOptionRollupLine(tx, {
+        versionId: k4.versionId, sourceLineId: k4.lineId,
+        surcharge: k4opt.surchargeTotal, picks: k4opt.paidPicks,
+      });
 
       // 재선택 — 1회차 확정본은 이력으로 남고, 2회차가 현재 세션이다.
       const k5 = await createContract(tx, {
@@ -978,6 +1058,11 @@ async function main(): Promise<void> {
         where: { id: k5.versionId },
         data: { totalAmount: UNIT_PRICE + k5first.surchargeTotal },
       });
+      // 재선택중이라도 계약금액에 반영된 건 1회차 확정분이다 — 롤업 라인도 그 금액·선택을 반영한다.
+      await createOptionRollupLine(tx, {
+        versionId: k5.versionId, sourceLineId: k5.lineId,
+        surcharge: k5first.surchargeTotal, picks: k5first.paidPicks,
+      });
 
       // 3피스 — 베스트 단계까지 포함된 확정본
       const k6 = await createContract(tx, {
@@ -991,6 +1076,10 @@ async function main(): Promise<void> {
       await tx.contractVersion.update({
         where: { id: k6.versionId },
         data: { totalAmount: UNIT_PRICE + VEST_PRICE + k6opt.surchargeTotal },
+      });
+      await createOptionRollupLine(tx, {
+        versionId: k6.versionId, sourceLineId: k6.lineId,
+        surcharge: k6opt.surchargeTotal, picks: k6opt.paidPicks,
       });
 
       // ---------------------------------------------------------------------

@@ -465,8 +465,16 @@ export class OptionSessionsService {
         },
         tx,
       );
-      if (state.pending !== 0 && state.contract)
-        await this.applyPendingTx(tx, session, state, actor);
+      if (state.contract) {
+        if (state.pending !== 0) {
+          await this.applyPendingTx(tx, session, state, actor);
+        } else {
+          // 차액이 없어도(재선택에서 같은 금액을 다시 확정 등) 롤업 라인은 재정합한다.
+          // surchargeApplied 만 있고 품목에 롤업 라인이 없는 불일치가 남지 않게 한다.
+          const contract = contractOf(session)!;
+          await this.contracts.syncOptionRollupLine(tx, contract.id, contract.currentVersionId!);
+        }
+      }
       // 옵션 확정은 준비가 한 칸 나아간 것이다 — 그 품목의 상태에 반영한다.
       const orderItems = await tx.orderItem.findMany({
         where: { sourceContractItemId: session.contractItemId },
