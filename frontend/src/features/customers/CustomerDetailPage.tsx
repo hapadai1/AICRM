@@ -37,7 +37,6 @@ import {
   type CustomerComponentRow,
   type CustomerContractRow,
   type CustomerMeasurementRow,
-  type CustomerOrderRow,
   type CustomerRepairRow,
   type CustomerSaveBody,
 } from '../../api/customers';
@@ -47,14 +46,12 @@ import {
   CONTRACT_STATUS_META,
   COMPONENT_STATUS_META,
   MEASUREMENT_TYPE_META,
-  ORDER_STATUS_META,
   OPTION_STATUS_META,
 } from '../../api/status-catalog';
 import { BackButton } from '../../shared/BackButton';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { APPT_STATUS_META, SOURCE_META } from '../appointments/appointment-constants';
-import { ItemCompositionCell } from '../contracts/ItemCompositionCell';
 import { CUSTOMER_STATUS_META, formatAmount } from './customer-constants';
 import { metaOf } from '../../shared/status-meta';
 import { usePageTitle } from '../../shared/page-title-store';
@@ -312,36 +309,6 @@ export function CustomerDetailPage() {
     { title: '계약일', dataIndex: 'contractedAt', width: 110, render: (v?: string) => v ?? '-' },
     { title: '완료예정일', dataIndex: 'completionDueDate', width: 110, render: (v?: string) => v ?? '-' },
     { title: '계약금액', dataIndex: 'totalAmount', align: 'right', width: 120, render: money },
-  ];
-
-  const orderColumns: ColumnsType<CustomerOrderRow> = [
-    {
-      title: '주문번호',
-      dataIndex: 'orderNo',
-      width: 160,
-      render: (v: string, r) => <Link to={`/orders/${r.id}`}>{v}</Link>,
-    },
-    { title: '계약번호', dataIndex: 'contractNo', width: 150 },
-    { title: '상태', dataIndex: 'status', width: 100, render: (v: string) => metaOf(ORDER_STATUS_META, v).label },
-    { title: '완료예정일', dataIndex: 'completionDueDate', width: 110, render: (v?: string) => v ?? '-' },
-    {
-      // 계약관리 목록의 '품목 구성'과 같은 규칙 — 거래구분 태그 + "정장 1 · 구두 1".
-      // 주문은 행마다 거래방식이 하나라, 해당 방식 쪽 counts에만 채워 한 줄로 낸다.
-      title: '품목',
-      dataIndex: 'items',
-      render: (_, r) => {
-        const counts = (r.items ?? []).reduce<Partial<Record<string, number>>>((acc, i) => {
-          acc[i.productCategory] = (acc[i.productCategory] ?? 0) + 1;
-          return acc;
-        }, {});
-        return (
-          <ItemCompositionCell
-            customCounts={r.transactionType === 'CUSTOM' ? counts : {}}
-            rentalCounts={r.transactionType === 'RENTAL' ? counts : {}}
-          />
-        );
-      },
-    },
   ];
 
   const optionRows = data.orders
@@ -618,23 +585,6 @@ export function CustomerDetailPage() {
                     dataSource={data.contracts}
                     scroll={{ x: 'max-content' }}
                     locale={{ emptyText: <Empty description="계약 이력이 없습니다." /> }}
-                  />
-                </>
-              ),
-            },
-            {
-              key: 'orders',
-              label: `주문 (${data.orders.length})`,
-              children: (
-                <>
-                  <GoToScreen path="/contracts" label="계약·주문" />
-                  <Table<CustomerOrderRow>
-                    {...tableCommon}
-                    rowKey="id"
-                    columns={orderColumns}
-                    dataSource={data.orders}
-                    scroll={{ x: 'max-content' }}
-                    locale={{ emptyText: <Empty description="주문 이력이 없습니다." /> }}
                   />
                 </>
               ),

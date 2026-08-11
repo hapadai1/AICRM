@@ -33,8 +33,6 @@ const PERMISSIONS: Array<{ code: string; name: string; description: string }> = 
   { code: 'CONTRACT_REVISE', name: '계약 변경', description: '변경계약 버전 작성·확정' },
   { code: 'CONTRACT_CANCEL', name: '계약 취소', description: '계약 취소 처리' },
   { code: 'CONTRACT_DELETE', name: '계약 삭제', description: '임시저장·취소 계약 삭제 (진행 이력 없을 때)' },
-  { code: 'ORDER_VIEW', name: '주문 조회', description: '주문·품목·구성품 조회' },
-  { code: 'ORDER_EDIT', name: '주문 편집', description: '주문·품목·구성품 관리' },
   { code: 'OPTION_SELECT', name: '옵션 선택', description: '고객 옵션 선택·임시저장·확인서 확정' },
   { code: 'OPTION_MASTER_EDIT', name: '옵션 마스터 편집', description: '옵션 세트·버전·단계·선택지 관리' },
   { code: 'MEASUREMENT_VIEW', name: '채촌 조회', description: '채촌 세션·치수 조회·비교' },

@@ -23,7 +23,6 @@ import { ContractOptionsPage } from '../features/options/ContractOptionsPage';
 import { OptionProgressListPage } from '../features/options/OptionProgressListPage';
 import { OptionReviewPage } from '../features/options/OptionReviewPage';
 import { OptionStagePage } from '../features/options/OptionStagePage';
-import { OrderDetailPage } from '../features/orders/OrderDetailPage';
 import { ContractProductionPage } from '../features/production/ContractProductionPage';
 import { ProductionPage } from '../features/production/ProductionPage';
 import { RentalAllocatePage } from '../features/rentals/RentalAllocatePage';
@@ -72,7 +71,6 @@ export const router = createBrowserRouter([
       { path: 'contracts/:id/options', element: <ContractOptionsPage /> },
       { path: 'contracts/:id/production', element: <ContractProductionPage /> },
       { path: 'contracts/:id', element: <ContractDetailPage /> },
-      { path: 'orders/:id', element: <OrderDetailPage /> },
       // 채촌 (독립 화면 — new/compare가 :id보다 먼저)
       { path: 'measurements', element: <MeasurementListPage /> },
       { path: 'measurements/new', element: <MeasurementEditPage /> },

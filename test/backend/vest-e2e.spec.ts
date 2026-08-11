@@ -1,7 +1,6 @@
 import { randomUUID } from 'crypto';
 import { ContractsModule } from '../../backend/src/modules/contracts/contracts.module';
 import { OptionsModule } from '../../backend/src/modules/options/options.module';
-import { OrdersModule } from '../../backend/src/modules/orders/orders.module';
 import { api, auth, createTestContext, SIGN_PNG, TestContext, truncateBusinessData } from './helpers';
 
 /**
@@ -30,7 +29,7 @@ describe('베스트 E2E — 계약 → 컨설팅 → 서명 → 계약완료 →
   let itemId: string;
 
   beforeAll(async () => {
-    ctx = await createTestContext([ContractsModule, OptionsModule, OrdersModule]);
+    ctx = await createTestContext([ContractsModule, OptionsModule]);
     await truncateBusinessData(ctx.prisma);
 
     // 정장 옵션세트: 상의 1단계 + 하의 1단계 + 베스트 2단계 (선택지 추가금 0원 — 금액 검증 단순화)

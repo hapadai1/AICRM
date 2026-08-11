@@ -1,6 +1,5 @@
 import { randomUUID } from 'crypto';
 import { ContractsModule } from '../../backend/src/modules/contracts/contracts.module';
-import { OrdersModule } from '../../backend/src/modules/orders/orders.module';
 import {
   api,
   auth,
@@ -15,7 +14,7 @@ describe('계약 구분·계약·확정·변경 (Phase 2)', () => {
   let ctx: TestContext;
 
   beforeAll(async () => {
-    ctx = await createTestContext([ContractsModule, OrdersModule]);
+    ctx = await createTestContext([ContractsModule]);
     await truncateBusinessData(ctx.prisma);
     // contract_types는 시드 보존 대상이므로 이 스위트가 만든 비시드 항목만 정리한다 (재실행 안전)
     const seedCodes = [
@@ -678,7 +677,7 @@ describe('계약 흐름 — 작성중→컨설팅→서명완료→계약완료 
   let optionSetVersionId: string;
 
   beforeAll(async () => {
-    ctx = await createTestContext([ContractsModule, OrdersModule]);
+    ctx = await createTestContext([ContractsModule]);
     await truncateBusinessData(ctx.prisma);
     const admin = await ctx.prisma.user.findUniqueOrThrow({ where: { loginId: 'admin' } });
     adminId = admin.id;
@@ -1158,7 +1157,7 @@ describe('베스트 — 계약서 추가·컨설팅 중 제외', () => {
   let ctx: TestContext;
 
   beforeAll(async () => {
-    ctx = await createTestContext([ContractsModule, OrdersModule]);
+    ctx = await createTestContext([ContractsModule]);
     await truncateBusinessData(ctx.prisma);
   });
   afterAll(async () => {
