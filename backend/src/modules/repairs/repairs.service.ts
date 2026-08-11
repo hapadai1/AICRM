@@ -11,7 +11,6 @@ import { JourneysService } from '../journeys/journeys.service';
 import { NotificationSuggestionService } from '../notifications/notification-suggestion.service';
 import {
   CreateRepairDto,
-  CreateRepairStatusEventDto,
   ListRepairsQueryDto,
   REPAIR_PHASE_STATUSES,
   RepairItemDto,
@@ -29,7 +28,6 @@ export const REPAIR_STATUS_FLOW = [
   'RECEIVED',
   'REQUESTED',
   'RETURNED_TO_SHOP',
-  'CUSTOMER_NOTIFIED',
   'RELEASED',
 ] as const;
 
@@ -41,12 +39,6 @@ const CANCELLED = 'CANCELLED';
  */
 export const REPAIR_UNIT_STATUS_FLOW = ['PENDING', 'RETURNED', 'RELEASED'] as const;
 export type RepairUnitStatus = (typeof REPAIR_UNIT_STATUS_FLOW)[number];
-
-/**
- * 담당자가 손으로 누르는 건 단위 전이는 고객 연락뿐이다(되돌리기 포함).
- * 나머지 단계는 줄·유닛 진행에서 계산된다 — rollupStatus 참고.
- */
-const MANUAL_STATUSES = ['CUSTOMER_NOTIFIED', 'RETURNED_TO_SHOP'];
 
 const REPAIR_SUMMARY_SELECT = {
   id: true,
@@ -74,6 +66,7 @@ const REPAIR_SUMMARY_SELECT = {
   releaseMethod: true,
   pickupAddress: true,
   deliveryAddress: true,
+  lastNotifiedAt: true,
   createdAt: true,
   updatedAt: true,
   customer: { select: { id: true, name: true, phone: true } },
@@ -524,9 +517,9 @@ export class RepairsService {
   /**
    * 건 상태를 줄·유닛 진행에서 다시 계산해 맞춘다.
    *
-   * 담당자는 품목 버튼만 누르고 건 상태는 여기서 따라간다. 백엔드가 한 칸 전이만 허용하므로
-   * (validateStatusTransition) 두 칸 이상 움직여야 하면 중간 단계도 순서대로 기록한다 —
-   * 연락 없이 전량 출고된 경우가 그렇다.
+   * 담당자는 품목 버튼만 누르고 건 상태는 여기서 따라간다. 상태는 한 칸씩만 오가므로
+   * 두 칸 이상 움직여야 하면 중간 단계도 순서대로 기록한다(전량 출고로 접수→출고가 그렇다).
+   * 고객 연락은 상태가 아니라 발송 액션이라 이 계산에 끼지 않는다.
    */
   private async rollup(
     tx: Prisma.TransactionClient,
@@ -543,16 +536,7 @@ export class RepairsService {
     });
     if (repair.status === CANCELLED) return;
 
-    let target = this.rollupStatus(repair.items);
-    // 고객 연락은 이미 일어난 사실이라 되돌리지 않는다 — 한 번 연락한 건은 전 벌 입고 자리에
-    // 내려와도 '고객 연락'에 머문다(출고를 되돌려도 연락 버튼이 다시 뜨지 않게).
-    if (target === 'RETURNED_TO_SHOP') {
-      const notified = await tx.repairStatusEvent.findFirst({
-        where: { repairRequestId: repairId, newStatus: 'CUSTOMER_NOTIFIED' },
-        select: { id: true },
-      });
-      if (notified) target = 'CUSTOMER_NOTIFIED';
-    }
+    const target = this.rollupStatus(repair.items);
 
     const flow: readonly string[] = REPAIR_STATUS_FLOW;
     let index = flow.indexOf(repair.status);
@@ -566,10 +550,7 @@ export class RepairsService {
         previousStatus: flow[index],
         newStatus: flow[index + step],
         eventDate,
-        notes:
-          step > 0 && flow[index + step] === 'CUSTOMER_NOTIFIED' && targetIndex > index + step
-            ? '연락 전 출고로 자동 정리'
-            : '품목 진행에 따라 자동 정리',
+        notes: '품목 진행에 따라 자동 정리',
         actor,
       });
       index += step;
@@ -604,88 +585,48 @@ export class RepairsService {
   }
 
   /**
-   * 건 단위 상태 변경 — 이제 고객 연락(과 그 되돌리기)만 여기로 온다.
-   * 수선요청·입고·출고는 품목 줄·벌에서 처리하고 건 상태는 rollup이 따라간다.
+   * 고객 연락(수선 입고 안내) 문구 준비 — 상태를 바꾸지 않는 순수 발송 준비 액션이다.
+   *
+   * 고객 연락은 더 이상 상태(단계)가 아니다 — REPAIR_CHECKED_IN 진행 단계의 고정 문구를
+   * 치환해 확인창 재료로 돌려줄 뿐이고, 실제 발송은 화면 확인창에서 POST /notifications/send로
+   * 이뤄진다(그때 발송 이력 NotificationHistory가 남는다). 발송에 성공하면 화면이 markNotified를
+   * 불러 last_notified_at을 찍고, 그때부터 버튼이 [재발송]으로 바뀐다. 단계에 문구가 없으면
+   * (관리자가 지웠으면) null이라 확인창이 뜨지 않는다.
    */
-  async createStatusEvent(id: string, dto: CreateRepairStatusEventDto, actor: AuthUser) {
-    const repair = await this.prisma.repairRequest.findUnique({ where: { id } });
-    if (!repair) throw new NotFoundException('수선 요청이 없습니다.');
-
-    if (!MANUAL_STATUSES.includes(dto.newStatus))
-      throw new BusinessException('VALIDATION_ERROR', '이 단계는 품목별로 처리합니다.', [
-        { field: 'newStatus', reason: 'NOT_MANUAL' },
-      ]);
-    // 수선 입고는 전 벌이 들어와야 붙는 계산값이다 — 여기로는 연락 되돌리기로만 갈 수 있다.
-    if (dto.newStatus === 'RETURNED_TO_SHOP' && repair.status !== 'CUSTOMER_NOTIFIED')
-      throw new BusinessException(
-        'INVALID_STATUS_TRANSITION',
-        '수선 입고는 품목별 입고 처리로 정해집니다.',
-        undefined,
-        { current: repair.status, next: dto.newStatus },
-      );
-    this.validateStatusTransition(repair.status, dto.newStatus);
-
-    const result = await this.prisma.$transaction(async (tx) => {
-      const event = await tx.repairStatusEvent.create({
-        data: {
-          id: randomUUID(),
-          repairRequestId: id,
-          previousStatus: repair.status,
-          newStatus: dto.newStatus,
-          eventDate: toDate(dto.eventDate) ?? today(),
-          notes: dto.notes,
-          actorId: actor.id,
-        },
-        select: {
-          id: true,
-          repairRequestId: true,
-          previousStatus: true,
-          newStatus: true,
-          eventDate: true,
-          notes: true,
-          createdAt: true,
-          actor: { select: { id: true, displayName: true } },
-        },
-      });
-      await tx.repairRequest.update({ where: { id }, data: { status: dto.newStatus } });
-      await this.audit.log(
-        {
-          userId: actor.id,
-          action: 'STATUS_CHANGE',
-          entityType: 'REPAIR_REQUEST',
-          entityId: id,
-          before: { status: repair.status },
-          after: { status: dto.newStatus },
-        },
-        tx,
-      );
-      return event;
+  async notify(id: string) {
+    const repair = await this.prisma.repairRequest.findUnique({
+      where: { id },
+      select: { id: true, customerId: true, orderId: true },
     });
-
-    // '고객 연락'(CUSTOMER_NOTIFIED) 전이 시 연락 문구를 준비해 확인창 재료로 돌려준다.
-    // 수선 메뉴에서 직접 연락할 수 있게 복원한 경로다(2026-07-30 현업 요청) — 담당자가
-    // 확인창에서 [발송]을 눌러야 실제로 나가며, 카카오톡 연동이 없어도 CRM 연락 이력은 남는다.
-    // 진행 카드(REPAIR_CHECKED_IN)와 같은 고정 문구를 공유하고, triggerKey로 중복 발송을 막는다.
-    return {
-      ...result,
-      suggestedNotification: await this.buildNotifiedSuggestion(repair, dto.newStatus),
-    };
+    if (!repair) throw new NotFoundException('수선 요청이 없습니다.');
+    return { suggestedNotification: await this.buildNotifiedSuggestion(repair) };
   }
 
-  /**
-   * 수선 입고 안내(고객 연락) 문구 준비 (개발설계서 05 G-06).
-   *
-   * '고객 연락'(CUSTOMER_NOTIFIED)으로 전이할 때만 REPAIR_CHECKED_IN 진행 단계의 고정 문구를
-   * 치환해 확인창 재료로 돌려준다. 실제 발송은 화면 확인창에서 별도 요청(POST /notifications/send)
-   * 으로 이뤄지며, 그때 발송 이력(NotificationHistory)이 남는다 — 외부 알림톡 연동이 없어도
-   * SMS 스텁으로 발송·이력이 기록된다. 단계에 문구가 없으면(관리자가 지웠으면) null이라
-   * 확인창이 뜨지 않는다(기존 동작과 동일).
-   */
-  private async buildNotifiedSuggestion(
-    repair: { id: string; customerId: string; orderId: string | null },
-    newStatus: string,
-  ) {
-    if (newStatus !== 'CUSTOMER_NOTIFIED') return null;
+  /** 고객 연락 발송 완료 표시 — 마지막 발송 시각만 찍는다(상태는 그대로 수선 입고). */
+  async markNotified(id: string, actor: AuthUser) {
+    const repair = await this.prisma.repairRequest.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!repair) throw new NotFoundException('수선 요청이 없습니다.');
+    await this.prisma.repairRequest.update({
+      where: { id },
+      data: { lastNotifiedAt: new Date() },
+    });
+    await this.audit.log({
+      userId: actor.id,
+      action: 'NOTIFY',
+      entityType: 'REPAIR_REQUEST',
+      entityId: id,
+    });
+    return this.get(id);
+  }
+
+  private async buildNotifiedSuggestion(repair: {
+    id: string;
+    customerId: string;
+    orderId: string | null;
+  }) {
     const stage = await this.prisma.journeyStage.findUnique({
       where: { trackType_code: { trackType: 'REPAIR', code: 'REPAIR_CHECKED_IN' } },
       select: { templateId: true },
@@ -695,8 +636,9 @@ export class RepairsService {
       templateId: stage.templateId,
       customerId: repair.customerId,
       orderId: repair.orderId,
-      // 같은 수선의 고객 연락은 한 번만 나간다(되돌렸다 다시 전진해도 재발송하지 않는다).
-      triggerKey: `repair:${repair.id}:CUSTOMER_NOTIFIED`,
+      // 확인창을 열 때마다 고유 키 — 매번 새 발송·이력이 되도록(재발송 허용).
+      // 같은 확인창 안의 이중 클릭은 화면(버튼 로딩)에서 막는다.
+      triggerKey: `repair:${repair.id}:NOTIFY:${randomUUID()}`,
     });
   }
 
@@ -731,32 +673,6 @@ export class RepairsService {
       ...(dto.pickupAddress !== undefined ? { pickupAddress: dto.pickupAddress } : {}),
       ...(dto.deliveryAddress !== undefined ? { deliveryAddress: dto.deliveryAddress } : {}),
     };
-  }
-
-  private validateStatusTransition(current: string, next: string): void {
-    const flow: readonly string[] = REPAIR_STATUS_FLOW;
-    // CANCELLED는 더 이상 진입 대상이 아니다 — 흐름 밖 코드는 모두 거절한다.
-    // (과거에 취소된 건은 CANCELLED로 남지만, 어떤 상태로도 다시 전이할 수 없다.)
-    if (!flow.includes(next))
-      throw new BusinessException('VALIDATION_ERROR', `허용되지 않은 수선 상태 코드입니다: ${next}`, [
-        { field: 'newStatus', reason: 'UNKNOWN_STATUS' },
-      ]);
-    if (current === CANCELLED)
-      throw new BusinessException(
-        'INVALID_STATUS_TRANSITION',
-        '취소된 수선 요청의 상태는 변경할 수 없습니다.',
-        undefined,
-        { current, next },
-      );
-    // 바로 다음 단계로 진행하거나 바로 이전 단계로 되돌리는 것만 허용한다.
-    const delta = flow.indexOf(next) - flow.indexOf(current);
-    if (delta !== 1 && delta !== -1)
-      throw new BusinessException(
-        'INVALID_STATUS_TRANSITION',
-        `수선 상태를 ${current}에서 ${next}(으)로 변경할 수 없습니다.`,
-        undefined,
-        { current, next },
-      );
   }
 
   /**

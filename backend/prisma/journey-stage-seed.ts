@@ -188,7 +188,7 @@ export const JOURNEY_STAGES: Array<{
     name: '수선 입고',
     completionMode: 'GATED',
     targetScope: 'REPAIR_ITEMS',
-    // 수선 입고 = 고객 연락 시점. 수선 메뉴의 '고객연락'(CUSTOMER_NOTIFIED)과 같은 문구를 공유한다.
+    // 수선 입고 = 고객 연락 시점. 수선 메뉴의 '고객 연락' 발송 버튼과 같은 문구를 공유한다.
     templateCode: 'JOURNEY_REPAIR_CHECKED_IN',
   },
   { trackType: 'REPAIR', code: 'REPAIR_RELEASED', name: '수선 출고/완료', completionMode: 'GATED', targetScope: 'REPAIR_ITEMS' },

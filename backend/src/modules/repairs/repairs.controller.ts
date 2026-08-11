@@ -2,7 +2,6 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestj
 import { AuthUser, CurrentUser, RequirePermission } from '../../common/decorators';
 import {
   CreateRepairDto,
-  CreateRepairStatusEventDto,
   ListRepairsQueryDto,
   RepairProgressDto,
   UpdateRepairDto,
@@ -38,15 +37,21 @@ export class RepairsController {
     return this.repairsService.update(id, dto, actor);
   }
 
-  /** 건 단위 상태 변경 — 고객 연락(과 되돌리기)만 여기로 온다. */
-  @Post(':id/status-events')
+  /**
+   * 고객 연락 문구 준비 — 상태를 바꾸지 않고 발송할 문구(suggestion)만 만들어 돌려준다.
+   * 실제 발송은 확인창에서 POST /notifications/send로, 발송 성공 뒤 아래 /notified로 시각을 찍는다.
+   */
+  @Post(':id/notify')
   @RequirePermission('REPAIR_EDIT')
-  createStatusEvent(
-    @Param('id') id: string,
-    @Body() dto: CreateRepairStatusEventDto,
-    @CurrentUser() actor: AuthUser,
-  ) {
-    return this.repairsService.createStatusEvent(id, dto, actor);
+  notify(@Param('id') id: string) {
+    return this.repairsService.notify(id);
+  }
+
+  /** 고객 연락 발송 완료 표시 — 마지막 발송 시각을 찍어 버튼을 [재발송]으로 바꾼다. */
+  @Post(':id/notified')
+  @RequirePermission('REPAIR_EDIT')
+  markNotified(@Param('id') id: string, @CurrentUser() actor: AuthUser) {
+    return this.repairsService.markNotified(id, actor);
   }
 
   /** 수선요청 완료 (접수 줄 단위) */

@@ -736,9 +736,9 @@ describe('진행 단계 (JOURNEY) — v2 재정의', () => {
       }
     }
 
-    it('수선 입고 안내를 발송하면 수선 상태가 고객 연락으로 함께 넘어간다', async () => {
+    it('수선 입고 안내를 발송하면 수선 건의 마지막 연락 시각이 찍힌다(상태는 그대로)', async () => {
       const { repairId, journeyId, eventId, suggestion } = await advanceToCheckedIn();
-      // 진행과 별개로 수선 건은 5단계 흐름을 따라 '수선 입고'까지 와 있다.
+      // 진행과 별개로 수선 건은 품목 진행을 따라 '수선 입고'까지 와 있다.
       await pushRepairStatus(repairId, 'RETURNED_TO_SHOP');
 
       const sent = await api(ctx)
@@ -758,22 +758,14 @@ describe('진행 단계 (JOURNEY) — v2 재정의', () => {
         .send({ outcome: 'SENT', notificationHistoryId: sent.body.data.id })
         .expect(201);
 
-      // 담당자가 수선 화면에서 '고객 연락'을 또 누르지 않아도 상태가 옮겨진다.
+      // 고객 연락은 상태가 아니라 발송 액션 — 상태는 그대로 수선 입고, 마지막 연락 시각만 찍힌다.
+      // (수선 화면 버튼도 이 값으로 [재발송]이 된다.)
       const repair = await api(ctx).get(`/api/v1/repairs/${repairId}`).set(auth(ctx)).expect(200);
-      expect(repair.body.data.status).toBe('CUSTOMER_NOTIFIED');
-      // 이력에도 남는다 — 누가·언제 옮겼는지 추적 가능해야 한다.
-      expect(repair.body.data.statusEvents).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            previousStatus: 'RETURNED_TO_SHOP',
-            newStatus: 'CUSTOMER_NOTIFIED',
-          }),
-        ]),
-      );
+      expect(repair.body.data.status).toBe('RETURNED_TO_SHOP');
+      expect(repair.body.data.lastNotifiedAt).toBeTruthy();
     });
 
-    it('수선 입고 전이거나 발송하지 않았으면 수선 상태를 건드리지 않는다', async () => {
-      // (1) 발송하지 않고 보류 → 상태 유지
+    it('발송하지 않고 보류하면 마지막 연락 시각을 찍지 않는다', async () => {
       const deferredCase = await advanceToCheckedIn();
       await pushRepairStatus(deferredCase.repairId, 'RETURNED_TO_SHOP');
       await api(ctx)
@@ -786,30 +778,7 @@ describe('진행 단계 (JOURNEY) — v2 재정의', () => {
         .set(auth(ctx))
         .expect(200);
       expect(deferred.body.data.status).toBe('RETURNED_TO_SHOP');
-
-      // (2) 보냈지만 수선 건이 아직 '수선 요청' → 한 칸씩 전진 규칙을 깨지 않도록 건너뛴다
-      const earlyCase = await advanceToCheckedIn();
-      await pushRepairStatus(earlyCase.repairId, 'REQUESTED');
-      const sent = await api(ctx)
-        .post('/api/v1/notifications/send')
-        .set(auth(ctx))
-        .send({
-          templateId: earlyCase.suggestion.templateId,
-          customerId: earlyCase.suggestion.customerId,
-          variables: earlyCase.suggestion.variables,
-          triggerKey: earlyCase.suggestion.triggerKey,
-        })
-        .expect(201);
-      await api(ctx)
-        .post(`/api/v1/journeys/${earlyCase.journeyId}/events/${earlyCase.eventId}/notification-outcome`)
-        .set(auth(ctx))
-        .send({ outcome: 'SENT', notificationHistoryId: sent.body.data.id })
-        .expect(201);
-      const early = await api(ctx)
-        .get(`/api/v1/repairs/${earlyCase.repairId}`)
-        .set(auth(ctx))
-        .expect(200);
-      expect(early.body.data.status).toBe('REQUESTED');
+      expect(deferred.body.data.lastNotifiedAt).toBeFalsy();
     });
 
     it('상세 응답의 REPAIR_ITEMS 단계에도 게이팅 대상이 해석된다 (4단계)', async () => {
