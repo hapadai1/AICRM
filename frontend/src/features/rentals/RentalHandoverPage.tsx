@@ -47,6 +47,25 @@ import { useRentalCodeNames } from './rental-codes';
 /** 지난 내역 기본 조회 기간 — 최근 3개월 (현업 확정 2026-08-03) */
 const defaultHistoryRange = (): [Dayjs, Dayjs] => [dayjs().subtract(3, 'month'), dayjs()];
 
+/** 한 벌(정장)의 구성품 표시 순서 — 자켓·바지·조끼·셔츠·구두 순으로 묶어 보이게 한다. */
+const COMPONENT_ORDER: Record<string, number> = {
+  JACKET: 0,
+  TROUSERS: 1,
+  VEST: 2,
+  SHIRT: 3,
+  SHOES: 4,
+};
+
+/**
+ * 목록 정렬 — 같은 고객·같은 주문의 행이 흩어지지 않도록 주문번호로 모은다(현업 요청 2026-08-11).
+ * 한 주문 안에서는 품목("렌탈 정장 #1")끼리, 그 안에서는 구성품 순서로 정렬해 한 덩어리로 붙인다.
+ */
+const byOrder = (a: RentalAllocation, b: RentalAllocation) =>
+  a.orderNo.localeCompare(b.orderNo) ||
+  (a.displayName ?? '').localeCompare(b.displayName ?? '', 'ko') ||
+  (COMPONENT_ORDER[a.componentType ?? ''] ?? 99) - (COMPONENT_ORDER[b.componentType ?? ''] ?? 99) ||
+  (a.componentSequenceNo ?? 0) - (b.componentSequenceNo ?? 0);
+
 /** RENT-004 렌탈 출고·반납 */
 export function RentalHandoverPage() {
   const { message } = App.useApp();
@@ -102,9 +121,10 @@ export function RentalHandoverPage() {
       }),
   });
 
-  const pickups = pickupsQuery.data ?? [];
-  const returns = returnsQuery.data ?? [];
-  const history = historyQuery.data ?? [];
+  // 주문번호 기준으로 모아서 같은 주문의 구성품이 흩어지지 않게 한다.
+  const pickups = [...(pickupsQuery.data ?? [])].sort(byOrder);
+  const returns = [...(returnsQuery.data ?? [])].sort(byOrder);
+  const history = [...(historyQuery.data ?? [])].sort(byOrder);
 
   // q로 진입했을 때는 실제 매칭 행이 있는 탭을 자동 선택한다.
   // (이미 출고된 건은 '반납 대상'에만 있고, 픽업 탭만 열려 "데이터 없음"으로 보이던 문제 해결)
