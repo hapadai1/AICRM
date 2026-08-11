@@ -126,6 +126,8 @@ export function ContractDetailPage() {
     queryKey: ['contracts', id],
     queryFn: () => fetchContract(id),
     enabled: !!id,
+    // 컨설팅 옵션 반영 후 상세 재진입 시 항상 최신값을 다시 불러온다 (전역 staleTime 30초 우회).
+    refetchOnMount: 'always',
   });
 
   const { data: versions } = useQuery({

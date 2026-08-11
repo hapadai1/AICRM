@@ -129,7 +129,7 @@ export class ContractItemsService {
         id: true,
         displayName: true,
         transactionType: true,
-        components: { select: { componentType: true, status: true } },
+        components: { select: { id: true, componentType: true, status: true } },
         optionSelectionSessions: {
           where: { isCurrent: true },
           select: {
@@ -142,7 +142,15 @@ export class ContractItemsService {
             },
           },
         },
-        rentalSelectionSessions: { where: { isCurrent: true }, select: { status: true } },
+        rentalSelectionSessions: {
+          where: { isCurrent: true },
+          select: {
+            status: true,
+            pickupDate: true,
+            returnDueDate: true,
+            lines: { select: { contractItemComponentId: true, selectedInventoryItemId: true } },
+          },
+        },
       },
     });
 
@@ -152,7 +160,23 @@ export class ContractItemsService {
       targetCount += 1;
       let done = false;
       if (item.transactionType === 'RENTAL') {
-        done = item.rentalSelectionSessions.some((x) => x.status === 'CONFIRMED');
+        // 렌탈은 "확정"을 따로 누르지 않는다 — 취소 안 된 모든 부위에 실물이 지정되고
+        // 대여 기간이 있으면 선택 완료로 본다(서명 시점에 서버가 자동 확정한다, 현업 확정 2026-08-11).
+        // 이미 확정된 세션(과거 수동 확정·재서명 등)도 그대로 완료로 인정한다.
+        const session = item.rentalSelectionSessions[0];
+        if (session) {
+          if (session.status === 'CONFIRMED') {
+            done = true;
+          } else {
+            const activeComponents = item.components.filter((c) => c.status !== 'CANCELLED');
+            const picked = new Set(
+              session.lines.filter((l) => l.selectedInventoryItemId).map((l) => l.contractItemComponentId),
+            );
+            const allPicked =
+              activeComponents.length > 0 && activeComponents.every((c) => picked.has(c.id));
+            done = allPicked && !!session.pickupDate && !!session.returnDueDate;
+          }
+        }
       } else {
         // 확정 상태만으로는 모자란 경우가 하나 있다 — 2피스로 확정한 뒤 베스트를 추가하면
         // 베스트 단계가 미선택인 채 확정으로 남는다. 확정 시점 검증(confirm)이 보장하는
@@ -308,6 +332,40 @@ export class ContractItemsService {
       applied += Number(s.surchargeApplied);
     }
     return { total, applied, pending: total - applied };
+  }
+
+  /**
+   * 계약 품목 라인별 옵션 반영 상태 — 계약서 작성 화면의 품목 행 배지용.
+   * 맞춤(CUSTOM) 라인마다 그 라인에 속한 벌(ContractItem)의 현재 세션을 본다:
+   * 그 라인의 활성 벌이 모두 컨설팅 확정(CONFIRMED)이고 미반영 차액이 0이면 true(반영완료).
+   * 추가금 옵션을 안 고른 벌도 확정만 됐으면 true라, 옵션 롤업 라인이 없어도 '반영완료'로 확인된다.
+   * 결과 맵에 없는 라인(렌탈·컨설팅 대상 아님)은 화면에서 배지를 띄우지 않는다.
+   */
+  async contractLineOptionStatus(contractId: string): Promise<Record<string, boolean>> {
+    const items = await this.prisma.contractItem.findMany({
+      where: { contractId, transactionType: 'CUSTOM', status: { not: 'CANCELLED' } },
+      select: { id: true, sourceContractLineId: true },
+    });
+    const sessions = await this.prisma.optionSelectionSession.findMany({
+      where: { contractItem: { contractId }, isCurrent: true },
+      include: SESSION_INCLUDE,
+    });
+    const sessionByItem = new Map(sessions.map((s) => [s.contractItemId, s]));
+
+    const byLine = new Map<string, { total: number; reflected: number }>();
+    for (const item of items) {
+      if (!item.sourceContractLineId) continue;
+      const s = sessionByItem.get(item.id);
+      // 확정 + 미반영 차액 0 → 이 벌은 옵션 반영 완료.
+      const ok = !!s && s.status === 'CONFIRMED' && surchargeTotalOf(s) - Number(s.surchargeApplied) === 0;
+      const agg = byLine.get(item.sourceContractLineId) ?? { total: 0, reflected: 0 };
+      agg.total += 1;
+      if (ok) agg.reflected += 1;
+      byLine.set(item.sourceContractLineId, agg);
+    }
+    const result: Record<string, boolean> = {};
+    for (const [lineId, agg] of byLine) result[lineId] = agg.total > 0 && agg.reflected === agg.total;
+    return result;
   }
 
   /**

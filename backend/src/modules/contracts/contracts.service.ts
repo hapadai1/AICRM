@@ -278,6 +278,12 @@ export class ContractsService {
     (contract as typeof contract & {
       optionSurcharge?: { total: number; applied: number; pending: number };
     }).optionSurcharge = await this.items.contractSurchargeSummary(contract.id);
+    // 품목 행별 옵션 반영 배지 — 라인마다 그 라인 벌들의 컨설팅 확정·반영 여부를 붙인다.
+    const lineStatus = await this.items.contractLineOptionStatus(contract.id);
+    for (const line of contract.currentVersion?.lines ?? []) {
+      if (line.id in lineStatus)
+        (line as typeof line & { optionReflected?: boolean }).optionReflected = lineStatus[line.id];
+    }
     return contract;
   }
 

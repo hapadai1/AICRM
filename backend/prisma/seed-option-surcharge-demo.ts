@@ -144,12 +144,17 @@ async function main() {
     });
 
     // 2) 계약 + 확정 버전(v1) + 라인 2개(맞춤 정장 2벌)
+    // 계약 구분은 계약서 필수값(신규 작성 폼 required) — 맞춤 정장 기본 구분을 붙인다.
+    const contractType = await tx.contractType.findUniqueOrThrow({
+      where: { code: 'BUSINESS_SUIT_CUSTOM' },
+    });
     const contractId = uuid();
     await tx.contract.create({
       data: {
         id: contractId,
         contractNo: CONTRACT_NO,
         customerId,
+        contractTypeId: contractType.id,
         status: 'COMPLETED',
         contractedAt: daysAgo(10),
       },
