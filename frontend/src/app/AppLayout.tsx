@@ -142,7 +142,6 @@ export function AppLayout() {
     { test: /^\/contracts\/[^/]+\/options/, key: '/options' },
     { test: /^\/contracts\/[^/]+\/production/, key: '/production' },
     { test: /^\/work-orders/, key: '/production' },
-    { test: /^\/orders\//, key: '/contracts' },
   ];
   const overrideKey = pathToMenu.find((o) => o.test.test(location.pathname))?.key;
   const selectedKey =

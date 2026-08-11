@@ -41,9 +41,6 @@ async function apiGet(token, path) {
 
 const token = await apiLogin();
 const completedContract = (await apiGet(token, '/contracts?status=COMPLETED&size=1'))?.[0]?.id ?? null;
-const orderId = completedContract
-  ? ((await apiGet(token, `/contracts/${completedContract}`))?.orders?.[0]?.id ?? null)
-  : null;
 const measurementId = (await apiGet(token, '/measurements?size=1'))?.[0]?.id ?? null;
 const workorderItem = (await apiGet(token, '/work-orders?size=1'))?.[0]?.orderItemId ?? null;
 
@@ -186,16 +183,6 @@ await step(
     await contentOk();
   },
   { skip: workorderItem ? undefined : '작업지시서 대상 없음' },
-);
-
-await step(
-  '주문 상세',
-  'order-detail',
-  async () => {
-    await page.goto(`${BASE}/orders/${orderId}`);
-    await contentOk();
-  },
-  { skip: orderId ? undefined : '주문 없음' },
 );
 
 await step('수선 목록·신규 접수 모달', 'repairs', async () => {
