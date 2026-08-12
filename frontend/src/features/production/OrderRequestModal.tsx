@@ -10,7 +10,7 @@
  * 골라 두므로(measurementAutoSelected) 다른 것을 쓸 때만 [변경]을 편다.
  */
 import { useState } from 'react';
-import { DeleteOutlined, DownloadOutlined, EyeOutlined, FileExcelOutlined, UploadOutlined } from '@ant-design/icons';
+import { DownloadOutlined, EyeOutlined, FileExcelOutlined, UploadOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, App, Button, Modal, Radio, Space, Spin, Tag, Tooltip, Typography, Upload } from 'antd';
 import type { RcFile } from 'antd/es/upload';
@@ -24,7 +24,6 @@ import {
   fetchWorkOrderPreview,
   issueWorkOrder,
   openWorkOrderFile,
-  removeWorkOrderFinalFile,
   uploadWorkOrderFinalFile,
   type WorkOrderMeasurementCandidate,
 } from '../../api/workorders';
@@ -132,15 +131,6 @@ export function OrderRequestModal({
       await queryClient.invalidateQueries({ queryKey: ['workorders'] });
     },
     onError: (e) => message.error(e instanceof ApiError ? e.message : '출력에 실패했습니다.'),
-  });
-
-  const removeUploadMutation = useMutation({
-    mutationFn: () => removeWorkOrderFinalFile(wo.workOrderId as string),
-    onSuccess: async () => {
-      message.success('최종본을 내렸습니다.');
-      await queryClient.invalidateQueries({ queryKey: ['production'] });
-    },
-    onError: (e) => message.error(e instanceof ApiError ? e.message : '내리지 못했습니다.'),
   });
 
   const current = preview?.measurement;
@@ -339,6 +329,21 @@ export function OrderRequestModal({
               {wo.uploadedFileName ?? '올린 파일 없음 — 시스템 출력본이 최종입니다'}
             </Typography.Text>
             <Space size={6} wrap>
+              <Upload
+                accept=".xlsx,.pdf"
+                showUploadList={false}
+                beforeUpload={(file: RcFile) => {
+                  uploadMutation.mutate(file);
+                  return false;
+                }}
+              >
+                <Button
+                  icon={<UploadOutlined />}
+                  loading={uploadMutation.isPending}
+                >
+                  {wo.uploadedFileName ? '교체' : '업로드'}
+                </Button>
+              </Upload>
               {/*
                 업로드본은 시스템이 만든 워크북이 아니라 담당자가 올린 파일이라 창 안에 그릴 수 없다
                 — 새 탭에서 연다(PDF는 보이고 엑셀은 브라우저가 받는다). 2026-08-05.
@@ -350,25 +355,6 @@ export function OrderRequestModal({
               >
                 보기
               </Button>
-              <Tooltip title={wo.workOrderFileKey ? '' : '작업지시서를 먼저 출력해야 붙일 자리가 생깁니다.'}>
-                <Upload
-                  accept=".xlsx,.pdf"
-                  showUploadList={false}
-                  disabled={!wo.workOrderFileKey}
-                  beforeUpload={(file: RcFile) => {
-                    uploadMutation.mutate(file);
-                    return false;
-                  }}
-                >
-                  <Button
-                    icon={<UploadOutlined />}
-                    disabled={!wo.workOrderFileKey}
-                    loading={uploadMutation.isPending}
-                  >
-                    {wo.uploadedFileName ? '교체' : '업로드'}
-                  </Button>
-                </Upload>
-              </Tooltip>
               <Button
                 icon={<DownloadOutlined />}
                 disabled={!wo.uploadedFileName}
@@ -381,16 +367,6 @@ export function OrderRequestModal({
               >
                 다운로드
               </Button>
-              <Tooltip title="올린 파일을 내립니다. 시스템 출력본이 다시 최종이 됩니다.">
-                <Button
-                  icon={<DeleteOutlined />}
-                  disabled={!wo.uploadedFileName}
-                  loading={removeUploadMutation.isPending}
-                  onClick={() => removeUploadMutation.mutate()}
-                >
-                  내리기
-                </Button>
-              </Tooltip>
             </Space>
           </div>
 

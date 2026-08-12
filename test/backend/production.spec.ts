@@ -297,6 +297,34 @@ describe('제작 상태·부분 입출고·가봉 (ProductionModule)', () => {
       expect(found.workOrder).toHaveProperty('docStatus');
       expect(found.workOrder).toHaveProperty('currentFileName');
     });
+
+    it('준비 중 품목은 전역 목록에서 빠지지만 includePrep이면 계약 상세용으로 포함된다', async () => {
+      // 옵션 대기(발주 이전) 품목 — 전역 목록은 준비 끝난 것만 다루므로 기본 조회에선 안 보인다.
+      const { item, contract } = await seedOrderItem(ctx.prisma, { itemStatus: 'OPTION_PENDING' });
+
+      const base = await api(ctx)
+        .get(`/api/v1/production/items?contractId=${contract.id}&size=50`)
+        .set(auth(ctx))
+        .expect(200);
+      expect(base.body.data.find((i: { id: string }) => i.id === item.id)).toBeUndefined();
+
+      // 계약 상세 화면은 진행 단계 대상과 짝을 맞춰 준비 중 품목까지 받아야 한다.
+      const withPrep = await api(ctx)
+        .get(`/api/v1/production/items?contractId=${contract.id}&size=50&includePrep=true`)
+        .set(auth(ctx))
+        .expect(200);
+      const found = withPrep.body.data.find((i: { id: string }) => i.id === item.id);
+      expect(found).toBeDefined();
+      expect(found.status).toBe('OPTION_PENDING');
+
+      // 취소 품목은 includePrep이어도 계속 제외된다.
+      const cancelled = await seedOrderItem(ctx.prisma, { itemStatus: 'CANCELLED' });
+      const withPrep2 = await api(ctx)
+        .get(`/api/v1/production/items?contractId=${cancelled.contract.id}&size=50&includePrep=true`)
+        .set(auth(ctx))
+        .expect(200);
+      expect(withPrep2.body.data.find((i: { id: string }) => i.id === cancelled.item.id)).toBeUndefined();
+    });
   });
 
   describe('가봉', () => {

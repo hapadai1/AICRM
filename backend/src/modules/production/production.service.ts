@@ -453,9 +453,20 @@ export class ProductionService {
       3) 진행(journey)이 없는 주문은 단계를 세울 수 없어 빈 껍데기로 보인다 — 계속 제외한다.
     */
     const READY_FROM = ITEM_STATUS_FLOW.indexOf('READY_TO_ORDER');
-    const preparedStatuses = ITEM_STATUS_FLOW.slice(READY_FROM) as unknown as string[];
+    // 흐름 밖 종결 상태 COMPLETED(렌탈 반납 완료)도 목록에 남긴다 — 반납이 끝난 계약이
+    // 목록에서 사라지지 않고 '완료'로 보이게 한다 (방안 A, 2026-08-12).
+    const preparedStatuses = [...ITEM_STATUS_FLOW.slice(READY_FROM), 'COMPLETED'] as string[];
+    /*
+      계약 상세(includePrep)는 준비 중인 품목까지 내려준다 — 진행 단계 대상(취소만 제외)과
+      짝을 맞춰 준비 카드가 미완 품목을 빠뜨리지 않게 한다. 전역 목록은 종전대로 준비 끝난 것만.
+    */
+    const statusWhere: Prisma.OrderItemWhereInput = query.status
+      ? { status: query.status }
+      : query.includePrep
+        ? { status: { not: CANCELLED } }
+        : { status: { in: preparedStatuses } };
     const where: Prisma.OrderItemWhereInput = {
-      ...(query.status ? { status: query.status } : { status: { in: preparedStatuses } }),
+      ...statusWhere,
       order: {
         ...(query.contractId ? { contractId: query.contractId } : {}),
         journeys: { some: { status: { not: 'CANCELLED' } } },

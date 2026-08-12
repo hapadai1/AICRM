@@ -450,11 +450,21 @@ function toFitting(row: FittingApiRow): FittingRecord {
   };
 }
 
-/** PROD-001 목록 — GET /production/items (페이지 응답 `{ data, page }`). contractId 지정 시 해당 계약 품목만. */
-export function fetchProductionItems(contractId?: string): Promise<ProductionItem[]> {
+/**
+ * PROD-001 목록 — GET /production/items (페이지 응답 `{ data, page }`). contractId 지정 시 해당 계약 품목만.
+ * includePrep: 준비 중(발주 이전) 품목까지 포함 — 계약 상세 화면이 진행 단계 대상과 짝을 맞추기 위함.
+ */
+export function fetchProductionItems(
+  contractId?: string,
+  opts?: { includePrep?: boolean },
+): Promise<ProductionItem[]> {
   return request<ListResult<ProductionItemApiRow>>({
     url: '/production/items',
-    params: { size: 100, ...(contractId ? { contractId } : {}) },
+    params: {
+      size: 100,
+      ...(contractId ? { contractId } : {}),
+      ...(opts?.includePrep ? { includePrep: true } : {}),
+    },
   }).then((res) => res.data.map(toProductionItem));
 }
 

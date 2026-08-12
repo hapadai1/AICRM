@@ -212,6 +212,8 @@ export interface CompleteItemResult {
  */
 export interface SuggestedNotification {
   eventId: string;
+  /** 이 문구가 어느 단계의 완료를 알리는지 — 확인창 제목용 (예: '가봉 입고') */
+  stageName: string;
   templateId: string;
   templateCode: string;
   templateName: string;

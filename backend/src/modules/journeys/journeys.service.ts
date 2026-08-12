@@ -9,6 +9,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { defaultLabelsOf } from '../admin-master/code-labels.constants';
 import { AuditService } from '../audit/audit.service';
 import { NotificationSuggestionService } from '../notifications/notification-suggestion.service';
+import { applyItemStatus } from '../production/item-status';
 import { repairItemsLabel } from '../repairs/repair-item-label';
 import { CONSULT_RESERVED_EXPIRE_DAYS, DEFAULT_STALLED_DAYS } from './journeys.constants';
 import { computeGating, type GatingResult } from './journey-gating';
@@ -523,11 +524,61 @@ export class JourneysService {
       after: { stageCode, targetId, completed: true, notes: dto.notes ?? null },
     });
 
+    // 렌탈 반납 완료를 품목 상태에 반영한다 (방안 A) — 반납은 진행 기록에만 남아
+    // 출고(RELEASED)가 완료로 오인됐다. 반납이 끝난 품목만 COMPLETED로 승격한다.
+    if (stageCode === 'RENTAL_RETURNED' && targetType === 'ORDER_ITEM')
+      await this.syncRentalReturnStatus(targetId, true, actor.id);
+
     const gating = await this.gatingOf(journey, stage);
     return {
       completion: { targetId, targetType, completedAt: now, completedBy: actor.id },
       gating,
     };
+  }
+
+  /**
+   * 렌탈 반납(RENTAL_RETURNED) 완료/취소를 품목 상태에 반영한다 (2026-08-12, 방안 A).
+   * 반납은 진행 단계 기록에만 남고 품목 상태를 바꾸지 않아, 목록·진행률이 출고(RELEASED)를
+   * 완료로 오인했다. 반납 완료 시 RELEASED→COMPLETED, 취소 시 COMPLETED→RELEASED로 되돌린다.
+   * 품목 상태 단일 기록자(applyItemStatus)를 거쳐 제작 이력과 짝으로 남긴다.
+   */
+  private async syncRentalReturnStatus(
+    orderItemId: string,
+    done: boolean,
+    actorId: string,
+  ): Promise<void> {
+    const item = await this.prisma.orderItem.findUnique({
+      where: { id: orderItemId },
+      select: { status: true },
+    });
+    if (!item) return;
+    const from = item.status;
+    // 반납 완료는 출고까지 끝난 품목만, 취소는 반납으로 완료된 품목만 되돌린다(그 외 상태는 건드리지 않는다).
+    if (done && from !== 'RELEASED') return;
+    if (!done && from !== 'COMPLETED') return;
+    const to = done ? 'COMPLETED' : 'RELEASED';
+    await this.prisma.$transaction(async (tx) => {
+      await applyItemStatus(tx, {
+        orderItemId,
+        from,
+        to,
+        eventDate: new Date(),
+        actorId,
+        notes: done ? '렌탈 반납 완료' : '렌탈 반납 취소',
+      });
+      await this.audit.log(
+        {
+          userId: actorId,
+          action: 'STATUS_CHANGE',
+          entityType: 'ORDER_ITEM',
+          entityId: orderItemId,
+          before: { status: from },
+          after: { status: to },
+          reason: done ? '렌탈 반납 완료' : '렌탈 반납 취소',
+        },
+        tx,
+      );
+    });
   }
 
   /** 품목 완료 취소(revokedAt 세팅, 물리삭제 금지). */
@@ -567,6 +618,9 @@ export class JourneysService {
         before: { stageCode, targetId, completed: true, completedAt: existing.completedAt },
         after: { stageCode, targetId, completed: false },
       });
+      // 반납 완료를 되돌리면 품목도 완료 전(RELEASED)으로 강등한다 (방안 A).
+      if (stageCode === 'RENTAL_RETURNED' && targetType === 'ORDER_ITEM')
+        await this.syncRentalReturnStatus(targetId, false, actor.id);
     }
     return { gating: await this.gatingOf(journey, stage) };
   }
@@ -699,16 +753,19 @@ export class JourneysService {
       select: EVENT_SELECT,
     });
 
-    // 현재 단계가 연락 단계이고 아직 발송 전이면, 화면이 [고객 연락] 버튼을 상시 띄울 수 있게
-    // 치환된 문구를 함께 내려준다. (발송 자체는 여전히 담당자가 확인창에서 눌러야 나간다)
-    const currentStage = stages.find((s) => s.code === row.currentStageCode);
+    // 연락은 "방금 끝낸 단계"의 문구다 (2026-08-12) — 현재 단계로 들어오게 만든 이벤트의
+    // 출발 단계(=끝난 단계)를 본다. 가봉 입고를 끝내 가봉 피팅에 와 있으면, 아직 안 보냈을 때
+    // [고객 연락] 버튼을 상시 띄운다. (발송 자체는 여전히 담당자가 확인창에서 눌러야 나간다)
     const enteringEvent = events.find((e) => e.toStageCode === row.currentStageCode);
+    const completedStage = enteringEvent
+      ? stages.find((s) => s.code === enteringEvent.fromStageCode)
+      : undefined;
     const currentSuggestion =
       row.status === 'ACTIVE' &&
-      currentStage?.templateId &&
+      completedStage?.templateId &&
       enteringEvent &&
       enteringEvent.notificationOutcome !== 'SENT'
-        ? await this.buildSuggestion(row, currentStage, enteringEvent.id)
+        ? await this.buildSuggestion(row, completedStage, enteringEvent.id)
         : null;
 
     // 게이팅: 대상 품목은 트랙 내 GATED 단계가 공유하므로 한 번만 해석한다.
@@ -882,13 +939,23 @@ export class JourneysService {
     return {
       journey: toJourneyView(result.updated, stages),
       event: result.event,
-      // 발송은 별도 요청이다. 발송 실패가 단계 변경을 롤백해서는 안 되고,
-      // 담당자가 문구를 보고 취소할 수 있어야 하기 때문이다.
-      suggestedNotification: await this.buildSuggestion(result.updated, target, result.event.id),
+      /*
+        고객 연락은 "그 단계가 **끝났을 때**" 나간다 (현업 확정 2026-08-12). 가봉·완성복 '입고 안내'는
+        실제 입고가 끝나야 보내는 문구인데, 전에는 들어가는 단계(target)의 템플릿을 제안해서
+        발주를 끝내고 가봉 입고 단계에 **진입만 해도** 가봉 입고 안내가 떴다(입고 전인데도).
+        전진은 지금 단계를 끝내고 다음으로 넘어가는 것이므로, 방금 끝낸 단계(currentMeta)의 문구를
+        제안한다. 후진·건너뛰기는 완료가 아니므로 제안하지 않는다.
+        발송은 별도 요청이다 — 발송 실패가 단계 변경을 롤백해서는 안 되고, 담당자가 문구를 보고
+        취소할 수 있어야 하기 때문이다.
+      */
+      suggestedNotification:
+        isForward && currentMeta
+          ? await this.buildSuggestion(result.updated, currentMeta, result.event.id)
+          : null,
     };
   }
 
-  /** 단계에 연결된 템플릿이 있으면 치환된 문구를 만들어 확인창 재료로 돌려준다. */
+  /** 그 단계 완료 시 보낼 템플릿이 있으면 치환된 문구를 만들어 확인창 재료로 돌려준다. */
   private async buildSuggestion(journey: JourneyRow, stage: StageRow, eventId: string) {
     if (!stage.templateId) return null;
     const suggestion = await this.suggestions.build({
@@ -898,8 +965,8 @@ export class JourneysService {
       // 같은 진행의 같은 단계는 한 번만 발송된다.
       triggerKey: `journey:${journey.id}:${stage.code}`,
     });
-    // 발송 결과를 어느 이력에 봉합할지 화면이 알아야 한다.
-    return suggestion ? { eventId, ...suggestion } : null;
+    // 발송 결과를 어느 이력에 봉합할지, 확인창 제목에 어느 단계인지 화면이 알아야 한다.
+    return suggestion ? { eventId, stageName: stage.name, ...suggestion } : null;
   }
 
   /** 발송 확인창의 처리 결과를 이력에 봉합한다. */
@@ -934,7 +1001,8 @@ export class JourneysService {
       after: { notificationOutcome: dto.outcome },
     });
     if (dto.outcome === 'SENT')
-      await this.syncRepairNotified(journeyId, event.toStageCode, actor);
+      // 연락 문구는 방금 **끝낸** 단계의 것이다 — 완료 이벤트의 출발 단계(fromStageCode)로 판정한다.
+      await this.syncRepairNotified(journeyId, event.fromStageCode, actor);
     return updated;
   }
 
@@ -942,12 +1010,12 @@ export class JourneysService {
    * 수선 입고 안내를 실제로 보냈으면 수선 건의 '마지막 연락 시각'을 찍는다.
    *
    * 고객 연락은 더 이상 수선 상태가 아니라 발송 액션이다(수선 메뉴 버튼과 같은 사실).
-   * 연락 경로가 진행 카드로도 열려 있어, 진행 카드에서 REPAIR_CHECKED_IN 문구를 보내면
-   * 여기서 last_notified_at을 찍어 수선 메뉴 버튼도 [재발송]으로 맞춘다(상태는 건드리지 않는다).
+   * 연락 경로가 진행 카드로도 열려 있어, 진행 카드에서 REPAIR_CHECKED_IN(수선 입고) 완료 문구를
+   * 보내면 여기서 last_notified_at을 찍어 수선 메뉴 버튼도 [재발송]으로 맞춘다(상태는 건드리지 않는다).
    * 연락은 이미 나갔으므로 어긋나도 조용히 건너뛴다 — 발송 결과 기록을 실패시키지 않는다.
    */
-  private async syncRepairNotified(journeyId: string, toStageCode: string, actor: AuthUser) {
-    if (toStageCode !== 'REPAIR_CHECKED_IN') return;
+  private async syncRepairNotified(journeyId: string, completedStageCode: string | null, actor: AuthUser) {
+    if (completedStageCode !== 'REPAIR_CHECKED_IN') return;
     const journey = await this.prisma.customerJourney.findUnique({
       where: { id: journeyId },
       select: { trackType: true, sourceRepairRequestId: true },
