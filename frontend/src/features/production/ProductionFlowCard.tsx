@@ -238,7 +238,8 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
           version: d.version,
         });
         if (result.suggestedNotification) {
-          setSuggestionTitle(`‘${result.journey.currentStageName}’ 단계로 이동했습니다`);
+          // 문구는 방금 끝낸 단계(가봉 입고·완성복 입고)의 것이다 — 제목도 그 단계로 맞춘다.
+          setSuggestionTitle(`‘${result.suggestedNotification.stageName}’ 완료 — 고객 연락`);
           setSuggestion(result.suggestedNotification);
           break;
         }
@@ -461,7 +462,12 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
         전체 {stage.action} ({ready.length})
       </Button>
     );
-    const bulk = stage.action ? (
+    /*
+      발주 단계에는 [전체 발주]를 두지 않는다 (현업 요청 2026-08-11) — 발주는 품목마다
+      어떤 채촌으로 나가는지 확인하고 내야 하는데, 전체 발주는 그 확인창을 건너뛴다.
+      나머지 단계(입고·출고 등)는 볼 것이 없어 전체 버튼을 그대로 둔다.
+    */
+    const bulk = stage.action && stage.effect !== 'ITEM_REQUEST' ? (
       <Can permission="JOURNEY_EDIT">
         {bulkReason ? (
           <Tooltip title={bulkReason}>{bulkButton}</Tooltip>
@@ -478,7 +484,7 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
       </Can>
     ) : null;
 
-    // 연락 문구는 그 단계에 들어와 있을 때만 제안된다(같은 단계는 한 번만 나간다).
+    // 연락 문구는 방금 끝낸 단계의 것이다 — 현재 단계 줄에 상시 버튼으로 띄운다(같은 단계 한 번만).
     const contact =
       isCurrent && detail?.currentSuggestion ? (
         <Can permission="NOTIFICATION_SEND">
@@ -488,7 +494,7 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
             ghost
             icon={<NotificationOutlined />}
             onClick={() => {
-              setSuggestionTitle(`‘${view?.name ?? stage.label}’ 단계 고객 연락`);
+              setSuggestionTitle(`‘${detail.currentSuggestion!.stageName}’ 완료 — 고객 연락`);
               setSuggestion(detail.currentSuggestion);
             }}
           >

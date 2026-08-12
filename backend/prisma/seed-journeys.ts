@@ -44,6 +44,92 @@ const COMPLETION_REACHED_AT: Record<string, string> = {
   ...REACHED_AT,
 };
 
+/**
+ * 렌탈 반납(진행 RENTAL_RETURNED 기록) ↔ 품목 상태(COMPLETED)를 일치시킨다 (방안 A 정합화, 2026-08-12).
+ *
+ * 반납은 진행 단계 기록에만 남고 품목 상태를 바꾸지 않던 모델이라, 시드/구데이터에서 두 계층이 어긋났다:
+ *  - 품목은 COMPLETED인데 반납 기록이 없음(데모가 완료 렌탈을 품목 상태로만 세팅 — 예: 서지우)
+ *  - 반납 기록은 있는데 품목이 RELEASED에 머묾(방안 A 이전 코드로 반납을 눌러 승격 안 됨 — 예: 윤도현)
+ * 반납 기록을 사실의 기준으로 삼아 양방향으로 맞춘다(멱등).
+ */
+async function reconcileRentalReturns(adminId: string): Promise<void> {
+  const items = await prisma.orderItem.findMany({
+    where: {
+      status: { in: ['RELEASED', 'COMPLETED'] },
+      order: { transactionType: 'RENTAL', status: { not: 'CANCELLED' } },
+    },
+    select: {
+      id: true,
+      status: true,
+      order: {
+        select: {
+          journeys: { where: { status: { not: 'CANCELLED' } }, select: { id: true }, take: 1 },
+        },
+      },
+    },
+  });
+
+  let promoted = 0;
+  let recorded = 0;
+  for (const it of items) {
+    const journeyId = it.order.journeys[0]?.id;
+    if (!journeyId) continue;
+    const existing = await prisma.journeyStageItemCompletion.findUnique({
+      where: {
+        journeyId_stageCode_targetType_targetId: {
+          journeyId,
+          stageCode: 'RENTAL_RETURNED',
+          targetType: 'ORDER_ITEM',
+          targetId: it.id,
+        },
+      },
+      select: { id: true, revokedAt: true },
+    });
+    const returned = existing != null && existing.revokedAt === null;
+
+    if (returned && it.status === 'RELEASED') {
+      // 반납은 됐는데 품목이 출고에 머묾 → 완료로 승격(제작 이력 남김).
+      await prisma.orderItem.update({ where: { id: it.id }, data: { status: 'COMPLETED' } });
+      await prisma.productionEvent.create({
+        data: {
+          id: uuid(),
+          orderItemId: it.id,
+          componentId: null,
+          eventType: 'COMPLETED',
+          previousStatus: 'RELEASED',
+          newStatus: 'COMPLETED',
+          eventDate: new Date(),
+          actorId: adminId,
+          notes: '렌탈 반납 완료 — 진행 기록과 정합화',
+        },
+      });
+      promoted += 1;
+    } else if (!returned && it.status === 'COMPLETED') {
+      // 품목은 완료인데 반납 기록이 없음 → 반납 완료 기록을 보정(취소된 기록이 있으면 되살린다).
+      if (existing) {
+        await prisma.journeyStageItemCompletion.update({
+          where: { id: existing.id },
+          data: { revokedAt: null, completedAt: new Date(), completedBy: adminId },
+        });
+      } else {
+        await prisma.journeyStageItemCompletion.create({
+          data: {
+            id: uuid(),
+            journeyId,
+            stageCode: 'RENTAL_RETURNED',
+            targetType: 'ORDER_ITEM',
+            targetId: it.id,
+            completedAt: new Date(),
+            completedBy: adminId,
+          },
+        });
+      }
+      recorded += 1;
+    }
+  }
+  console.log(`렌탈 반납 정합화 — 품목 승격 ${promoted}건 / 반납 기록 보정 ${recorded}건`);
+}
+
 async function main(): Promise<void> {
   const admin = await prisma.user.findUnique({ where: { loginId: 'admin' } });
   if (!admin) throw new Error('admin 사용자가 없습니다. 기본 시드를 먼저 실행하세요.');
@@ -173,6 +259,9 @@ async function main(): Promise<void> {
 
     created += 1;
   }
+
+  // 새로 만든 진행이든 기존 진행이든, 렌탈 반납 기록과 품목 상태를 마지막에 한 번 맞춘다.
+  await reconcileRentalReturns(admin.id);
 
   console.log(`진행 시드 완료 — 생성 ${created}건 / 기존 유지 ${skipped}건`);
 }

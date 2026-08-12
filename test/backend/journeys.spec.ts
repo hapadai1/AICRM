@@ -29,7 +29,10 @@ async function createOrderWithItems(
   customerId: string,
   adminId: string,
   itemCount = 1,
+  opts: { trackType?: 'CUSTOM' | 'RENTAL'; status?: string } = {},
 ) {
+  const trackType = opts.trackType ?? 'CUSTOM';
+  const status = opts.status ?? 'CREATED';
   const suffix = randomUUID().slice(0, 8);
   const contract = await prisma.contract.create({
     data: {
@@ -46,7 +49,7 @@ async function createOrderWithItems(
     data: {
       id: randomUUID(),
       contractVersionId: version.id,
-      transactionType: 'CUSTOM',
+      transactionType: trackType,
       productCategory: 'SUIT',
       quantity: itemCount,
     },
@@ -56,7 +59,7 @@ async function createOrderWithItems(
       id: randomUUID(),
       orderNo: `ORD-J-${suffix}`,
       contractId: contract.id,
-      transactionType: 'CUSTOM',
+      transactionType: trackType,
     },
   });
   const items = [];
@@ -67,7 +70,7 @@ async function createOrderWithItems(
         id: randomUUID(),
         contractId: contract.id,
         sourceContractLineId: line.id,
-        transactionType: 'CUSTOM',
+        transactionType: trackType,
         productCategory: 'SUIT',
         sequenceNo: i,
         displayName: `정장 #${i}`,
@@ -82,7 +85,7 @@ async function createOrderWithItems(
           productCategory: 'SUIT',
           sequenceNo: i,
           displayName: `정장 #${i}`,
-          status: 'CREATED',
+          status,
         },
       }),
     );
@@ -462,6 +465,26 @@ describe('진행 단계 (JOURNEY) — v2 재정의', () => {
     expect(undone.body.data.gating).toMatchObject({ completedCount: 0, canComplete: false });
   });
 
+  it('렌탈 반납 완료는 품목을 COMPLETED로, 취소는 RELEASED로 되돌린다 (방안 A)', async () => {
+    // 반납은 진행 기록에만 남던 것을 품목 상태에 반영한다 — 목록·진행률이 출고를 완료로 오인하지 않게.
+    const { order, items } = await createOrderWithItems(ctx.prisma, customerId, adminId, 1, {
+      trackType: 'RENTAL',
+      status: 'RELEASED',
+    });
+    const created = await createJourney({ trackType: 'RENTAL', orderId: order.id });
+    const id = created.body.data.id;
+    const t = items[0].id;
+    const url = `/api/v1/journeys/${id}/stages/RENTAL_RETURNED/items/${t}`;
+
+    await api(ctx).post(`${url}/complete`).set(auth(ctx)).send({}).expect(201);
+    const done = await ctx.prisma.orderItem.findUnique({ where: { id: t } });
+    expect(done?.status).toBe('COMPLETED');
+
+    await api(ctx).post(`${url}/uncomplete`).set(auth(ctx)).send({}).expect(201);
+    const reverted = await ctx.prisma.orderItem.findUnique({ where: { id: t } });
+    expect(reverted?.status).toBe('RELEASED');
+  });
+
   it('[전체 완료] 비고가 진행상태 출력(상태·완료일·비고)에 노출된다', async () => {
     const { order } = await createOrderWithItems(ctx.prisma, customerId, adminId, 1);
     const created = await createJourney({ orderId: order.id });
@@ -493,29 +516,54 @@ describe('진행 단계 (JOURNEY) — v2 재정의', () => {
   // 연락 제안 (회귀)
   // ---------------------------------------------------------------------------
 
-  it('연락 대상 단계에서는 치환된 문구와 멱등키를 제안한다', async () => {
+  it('연락 대상 단계를 끝내면 치환된 문구와 멱등키를 제안한다', async () => {
+    // '입고 안내'는 실제 입고가 **끝났을 때** 나간다 — 완성복 입고 단계에 올려 그 단계 품목을
+    // 완료한 뒤 다음(완성복 출고)으로 넘기는 순간 안내 문구가 제안된다(단계 진입만으로는 뜨지 않는다).
     const { order } = await createOrderWithItems(ctx.prisma, customerId, adminId, 1);
     const created = await createJourney({ orderId: order.id });
-    const res = await changeStage(created.body.data.id, {
-      toStageCode: 'PRODUCT_RECEIVED',
-      version: 0,
-    }).expect(201);
+    const id = created.body.data.id;
+    await changeStage(id, { toStageCode: 'PRODUCT_RECEIVED', version: 0 }).expect(201);
+    const items = await api(ctx)
+      .get(`/api/v1/journeys/${id}/stages/PRODUCT_RECEIVED/items`)
+      .set(auth(ctx))
+      .expect(200);
+    for (const it of items.body.data.items) {
+      await api(ctx)
+        .post(`/api/v1/journeys/${id}/stages/PRODUCT_RECEIVED/items/${it.targetId}/complete`)
+        .set(auth(ctx))
+        .send({})
+        .expect(201);
+    }
+    const res = await changeStage(id, { toStageCode: 'RELEASED', version: 1 }).expect(201);
 
     const s = res.body.data.suggestedNotification;
     expect(s).toMatchObject({
       templateCode: 'JOURNEY_PRODUCT_RECEIVED',
+      // 확인창 제목은 방금 끝낸 단계를 가리킨다(진입한 단계가 아니라).
+      stageName: '완성복 입고',
       // 단계 연락 템플릿은 벤더 승인 전(PENDING)이라 알림톡이 아닌 SMS로 나간다.
       channel: 'SMS',
       recipientPhone: '010-1111-2222',
       customerId,
       orderId: order.id,
-      triggerKey: `journey:${created.body.data.id}:PRODUCT_RECEIVED`,
+      triggerKey: `journey:${id}:PRODUCT_RECEIVED`,
     });
     // 매장 확정 고정메시지 원문 + 첫 인사의 #{고객명}만 치환된다.
     expect(s.renderedBody).toContain(`안녕하세요, ${customerName} 고객님`);
     expect(s.renderedBody).toContain('드디어 완성 되어 본점에 입고되었습니다.');
     expect(s.renderedBody).not.toContain('#{');
     expect(s.eventId).toBe(res.body.data.event.id);
+  });
+
+  it('단계에 진입만 하면(입고 전) 그 단계 안내를 제안하지 않는다', async () => {
+    // 발주를 끝내고 가봉 입고 단계에 들어가도, 가봉이 실제로 입고되기 전에는 안내가 뜨면 안 된다.
+    const { order } = await createOrderWithItems(ctx.prisma, customerId, adminId, 1);
+    const created = await createJourney({ orderId: order.id });
+    const entered = await changeStage(created.body.data.id, {
+      toStageCode: 'BASTING_RECEIVED',
+      version: 0,
+    }).expect(201);
+    expect(entered.body.data.suggestedNotification).toBeNull();
   });
 
   it('발송 확인창의 처리 결과를 이력에 봉합한다', async () => {
@@ -682,16 +730,16 @@ describe('진행 단계 (JOURNEY) — v2 재정의', () => {
         version: 1,
       }).expect(201);
       expect(advanced.body.data.journey.currentStageCode).toBe('REPAIR_CHECKED_IN');
-      // D8 일원화(설계서 02 §8·§10.3 #5): 수선 고객 연락 제안은 이 진행(journey) 경로에서만 만든다.
-      // repairs 상태변경 경로의 자동 제안은 제거됐다(repairs.spec.ts 참조).
-      const s = advanced.body.data.suggestedNotification;
-      expect(s).toMatchObject({
-        templateCode: 'TEST_REPAIR_CHECKED_IN',
-        triggerKey: `journey:${journeyId}:REPAIR_CHECKED_IN`,
-      });
+      // 수선 입고 단계에 **진입**만 한 상태 — 아직 입고 전이므로 안내를 제안하지 않는다.
+      // (수선 입고 안내는 이 단계를 끝냈을 때 나간다 — 아래 별도 테스트에서 검증)
+      expect(advanced.body.data.suggestedNotification).toBeNull();
     });
 
-    /** 수선 입고 단계까지 전진시키고 그 단계의 연락 제안을 돌려준다. */
+    /**
+     * 수선 입고 단계를 **끝내고** 그 완료 시점의 연락 제안을 돌려준다.
+     * 입고 안내는 단계 진입이 아니라 완료(다음 단계로 전진) 시점에 나간다 — 요청 완료 → 입고 진입 →
+     * 입고 완료 → 출고로 전진하는 순간 '수선 입고 안내'가 제안된다.
+     */
     async function advanceToCheckedIn() {
       const { repairId, journeyId } = await createRepairJourney();
       await changeStage(journeyId, { toStageCode: 'REPAIR_REQUESTED', version: 0 }).expect(201);
@@ -700,9 +748,15 @@ describe('진행 단계 (JOURNEY) — v2 재정의', () => {
         .set(auth(ctx))
         .send({})
         .expect(201);
+      await changeStage(journeyId, { toStageCode: 'REPAIR_CHECKED_IN', version: 1 }).expect(201);
+      await api(ctx)
+        .post(`/api/v1/journeys/${journeyId}/stages/REPAIR_CHECKED_IN/items/${repairId}/complete`)
+        .set(auth(ctx))
+        .send({})
+        .expect(201);
       const advanced = await changeStage(journeyId, {
-        toStageCode: 'REPAIR_CHECKED_IN',
-        version: 1,
+        toStageCode: 'REPAIR_RELEASED',
+        version: 2,
       }).expect(201);
       return {
         repairId,

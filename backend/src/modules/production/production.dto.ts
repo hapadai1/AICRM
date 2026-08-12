@@ -1,6 +1,7 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsDateString,
   IsIn,
   IsNotEmpty,
@@ -53,6 +54,15 @@ export class ProductionItemsQueryDto extends PageQueryDto {
   @IsOptional() @IsString() status?: string;
   /** 계약 단위 조회 — 지정 시 해당 계약의 품목만 반환 */
   @IsOptional() @IsUUID() contractId?: string;
+  /**
+   * 준비 중(발주 이전) 품목까지 포함할지 — 계약 상세(제작 관리) 화면 전용.
+   * 전역 목록은 준비 끝난 품목만 다루지만, 계약 상세는 진행(journey) 단계 대상과 짝이 맞아야
+   * 준비 카드가 미완 품목을 빠뜨리지 않고 정직하게 센다.
+   */
+  @IsOptional()
+  @Transform(({ value }) => (value === 'true' ? true : value === 'false' ? false : value))
+  @IsBoolean()
+  includePrep?: boolean;
 }
 
 export class FittingAdjustmentDto {

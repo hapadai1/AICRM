@@ -11,6 +11,13 @@ import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { COL } from '../../shared/table-width';
 import { ItemCompositionCell } from '../contracts/ItemCompositionCell';
 import { DdayTag, summarizeContract, type ContractSummary } from './production-summary';
+import {
+  contractProductionStages,
+  contractTrackProgress,
+  type ContractProductionStages,
+  type ContractTrackProgress,
+} from './production-stages';
+import { StatusBadge } from '../../shared/StatusBadge';
 
 /** 목록 한 행 = 계약 하나. 요약 계산은 상세 화면과 공유한다(production-summary). */
 interface ContractRow extends ContractSummary {
@@ -20,6 +27,10 @@ interface ContractRow extends ContractSummary {
   contractTypeName: string | null;
   customerName: string;
   customerPhone: string;
+  /** 맞춤/렌탈 상태 — 상세 화면 흐름의 현재 단계(품목 상태에서 유도). 트랙별로 나눈다. */
+  productionStages: ContractProductionStages;
+  /** 맞춤/렌탈 진행률 — 상세 흐름 카드와 같은 단계 기반. 트랙별로 나눈다. */
+  trackProgress: ContractTrackProgress;
 }
 
 type StateFilter = 'ALL' | 'ONGOING' | 'DONE';
@@ -48,6 +59,8 @@ function groupByContract(items: ProductionItem[]): ContractRow[] {
       contractTypeName: list[0].contractTypeName,
       customerName: list[0].customerName,
       customerPhone: list[0].customerPhone,
+      productionStages: contractProductionStages(list),
+      trackProgress: contractTrackProgress(list),
       ...summarizeContract(list),
     }))
     .sort((a, b) => b.contractNo.localeCompare(a.contractNo));
@@ -148,10 +161,63 @@ export function ProductionPage() {
       render: (_, r) => (r.dueDate ? <DdayTag due={r.dueDate} /> : <Typography.Text type="secondary">-</Typography.Text>),
     },
     {
+      // 상세 화면 흐름의 현재 단계를 스타일 컨설팅과 같은 상태 배지로 보여 준다(진행률 앞).
+      // 맞춤·렌탈이 함께 도는 계약은 트랙마다 나눠 두 줄로 적는다.
+      title: '맞춤/렌탈 상태',
+      key: 'productionStages',
+      width: COL.status,
+      render: (_, r) => {
+        const { custom, rental } = r.productionStages;
+        // 색은 원래 상태로 판정한다 — 트랙 접두사(맞춤·/렌탈·)가 붙어도 '완료'는 초록으로.
+        const badge = (state: string, prefix?: string) => (
+          <StatusBadge
+            label={prefix ? `${prefix} · ${state}` : state}
+            color={state === '완료' ? 'green' : 'blue'}
+          />
+        );
+        if (custom && rental) {
+          return (
+            <Space direction="vertical" size={2}>
+              {badge(custom, '맞춤')}
+              {badge(rental, '렌탈')}
+            </Space>
+          );
+        }
+        const only = custom ?? rental;
+        return only ? badge(only) : <Typography.Text type="secondary">-</Typography.Text>;
+      },
+    },
+    {
+      // 상세 흐름 카드와 같은 단계 기반 진행률 — 맞춤·렌탈이 함께 도는 계약은 트랙마다 나눠 적는다.
       title: '제작 진행률',
       key: 'progress',
       width: COL.wide,
-      render: (_, r) => <Progress percent={r.progressPct} size="small" style={{ minWidth: 120 }} />,
+      render: (_, r) => {
+        const { custom, rental } = r.trackProgress;
+        const bar = (pct: number, prefix?: string) => (
+          <Space size={6} style={{ width: '100%' }}>
+            {prefix && (
+              <Typography.Text
+                type="secondary"
+                style={{ fontSize: 12, width: 28, flex: 'none' }}
+              >
+                {prefix}
+              </Typography.Text>
+            )}
+            <Progress percent={pct} size="small" style={{ minWidth: 120 }} />
+          </Space>
+        );
+        if (custom !== null && rental !== null) {
+          return (
+            <Space direction="vertical" size={2} style={{ width: '100%' }}>
+              {bar(custom, '맞춤')}
+              {bar(rental, '렌탈')}
+            </Space>
+          );
+        }
+        const only = custom ?? rental;
+        return only !== null ? bar(only) : <Typography.Text type="secondary">-</Typography.Text>;
+      },
     },
   ];
 

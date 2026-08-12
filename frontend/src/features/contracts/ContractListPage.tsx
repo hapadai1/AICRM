@@ -15,6 +15,7 @@ import {
   Button,
   DatePicker,
   Input,
+  Progress,
   Radio,
   Select,
   Space,
@@ -44,6 +45,15 @@ import { COL } from '../../shared/table-width';
 import { CONTRACT_STATUS_META, formatKrw, metaOf } from './labels';
 
 import { ItemCompositionCell } from './ItemCompositionCell';
+import { fetchOptionProgress } from '../../api/options';
+import { fetchRentalSelectionProgress } from '../../api/rentals';
+import { fetchProductionItems, type ProductionItem } from '../../api/production';
+import { styleConfirmByContract } from '../options/style-confirm';
+import {
+  contractProductionStages,
+  type ContractProductionStages,
+} from '../production/production-stages';
+import { summarizeContract } from '../production/production-summary';
 
 const { RangePicker } = DatePicker;
 
@@ -173,6 +183,52 @@ export function ContractListPage({
     queryFn: () => fetchContractTypes(false),
   });
 
+  /*
+   * 스타일 확정·맞춤/렌탈 상태·진행률은 계약 목록 API에 없는 값이라, 컨설팅·제작 화면과
+   * 같은 소스를 전체 조회해 contractId로 맞춰 붙인다(다른 목록들도 전부 전체 조회 후
+   * 클라이언트에서 묶는다). 임베드(고객모드)에는 붙이지 않으므로 그때는 조회도 건너뛴다.
+   */
+  const derivedEnabled = !embedded;
+  const optionsQuery = useQuery({
+    queryKey: ['options', 'progress', 'all'],
+    queryFn: () => fetchOptionProgress(),
+    enabled: derivedEnabled,
+  });
+  const rentalsQuery = useQuery({
+    queryKey: ['rental-selections', 'progress', 'all'],
+    queryFn: () => fetchRentalSelectionProgress(),
+    enabled: derivedEnabled,
+  });
+  const productionQuery = useQuery({
+    queryKey: ['production', 'items', 'all'],
+    queryFn: () => fetchProductionItems(),
+    enabled: derivedEnabled,
+  });
+
+  // 계약별 스타일 확정 집계(확정 수/분모) — 스타일 컨설팅 목록의 "스타일 확정" 열과 같은 값.
+  const styleConfirmMap = useMemo(
+    () => styleConfirmByContract(optionsQuery.data ?? [], rentalsQuery.data ?? []),
+    [optionsQuery.data, rentalsQuery.data],
+  );
+
+  // 계약별 맞춤/렌탈 상태와 진행률 — 제작 목록·상세와 같은 계산(production-*)을 그대로 쓴다.
+  const productionMap = useMemo(() => {
+    const byContract = new Map<string, ProductionItem[]>();
+    for (const it of productionQuery.data ?? []) {
+      const list = byContract.get(it.contractId) ?? [];
+      list.push(it);
+      byContract.set(it.contractId, list);
+    }
+    const out = new Map<string, { stages: ContractProductionStages; progressPct: number }>();
+    for (const [contractId, list] of byContract) {
+      out.set(contractId, {
+        stages: contractProductionStages(list),
+        progressPct: summarizeContract(list).progressPct,
+      });
+    }
+    return out;
+  }, [productionQuery.data]);
+
   const resetFilters = () => {
     setKeyword('');
     const [from, to] = defaultRange();
@@ -223,9 +279,9 @@ export function ContractListPage({
    * 폭은 뜻이 같은 열끼리 같게 고정한다 — COL 참고.
    */
   const columns: ColumnsType<ContractListItem> = [
-    // 열 순서는 현업이 읽는 순서다 (현업 확정 2026-07-31):
-    // 누구의(고객) 무슨(계약 구분) 계약이 언제(계약일) 시작해 언제(완료 예정일) 끝나고
-    // 얼마(계약금액)이며 지금 어디까지(상태) 왔고 무엇을(품목 구성) 맞췄나.
+    // 열 순서는 현업이 읽는 순서다:
+    // 누구의(고객) 무슨(계약 구분) 무엇을(품목 구성) 언제(계약일) 시작해 언제(완료 예정일)
+    // 끝나고 얼마(계약금액)이며 지금 어디까지 왔나 — 계약 상태·스타일 확정·맞춤/렌탈 상태·진행률.
     // 계약번호는 참고용이라 자기 열 없이 계약 구분 아래에 붙인다.
     {
       title: '고객',
@@ -280,6 +336,19 @@ export function ContractListPage({
       ),
     },
     {
+      // 스타일 컨설팅 목록의 "품목 구성" 열과 같은 규칙:
+      // 품목이 늘면 "정장 2 · 셔츠 1 · 조끼 1"처럼 길어지는 유일한 열이라 잘라 둔다.
+      // 렌탈이 섞인 계약만 맞춤/렌탈 두 줄로 나눠 쓴다(거래구분 색은 계약 상세 품목표와 동일).
+      // 대부분의 계약은 맞춤뿐이라, 그때는 태그 없이 한 줄로 둬 목록이 시끄러워지지 않게 한다.
+      title: '품목 구성',
+      key: 'composition',
+      width: COL.wide,
+      ellipsis: true,
+      render: (_, row) => (
+        <ItemCompositionCell customCounts={row.customCounts} rentalCounts={row.rentalCounts} />
+      ),
+    },
+    {
       title: '계약일',
       dataIndex: 'contractedAt',
       width: COL.name,
@@ -298,10 +367,13 @@ export function ContractListPage({
       dataIndex: 'totalAmount',
       width: COL.name,
       align: 'right',
+      // 우측 정렬한 금액이 바로 옆 계약 상태 배지에 붙어 보여, 셀·헤더 오른쪽에 여백을 더해 띄운다.
+      onCell: () => ({ style: { paddingRight: 32 } }),
+      onHeaderCell: () => ({ style: { paddingRight: 32 } }),
       render: formatKrw,
     },
     {
-      title: '상태',
+      title: '계약 상태',
       dataIndex: 'status',
       width: COL.status,
       // 수정하기(버전업)를 거친 계약은 상태만 보면 신규 작성건과 구분되지 않는다 → 버전을 함께 보여준다.
@@ -320,17 +392,59 @@ export function ContractListPage({
       },
     },
     {
-      // 스타일 컨설팅 목록의 "품목 구성" 열과 같은 규칙:
-      // 품목이 늘면 "정장 2 · 셔츠 1 · 조끼 1"처럼 길어지는 유일한 열이라 잘라 둔다.
-      // 렌탈이 섞인 계약만 맞춤/렌탈 두 줄로 나눠 쓴다(거래구분 색은 계약 상세 품목표와 동일).
-      // 대부분의 계약은 맞춤뿐이라, 그때는 태그 없이 한 줄로 둬 목록이 시끄러워지지 않게 한다.
-      title: '품목 구성',
-      key: 'composition',
+      // 스타일 컨설팅 목록의 "스타일 확정" 열과 같은 값 — 확정 수가 분모(전체 품목)와 같으면 완료.
+      // 아직 컨설팅 대상이 없는 계약(작성중 등)은 대기로 둔다.
+      title: '스타일 확정',
+      key: 'styleConfirm',
+      width: COL.status,
+      render: (_, row) => {
+        const c = styleConfirmMap.get(row.id);
+        if (!c || c.total === 0) return <StatusBadge label="대기" color="default" />;
+        return c.confirmed === c.total ? (
+          <StatusBadge label="확정 완료" color="green" />
+        ) : (
+          <StatusBadge label="진행중" color="gold" />
+        );
+      },
+    },
+    {
+      // 제작 관리 목록의 "맞춤/렌탈 상태" 열과 같은 값 — 트랙별 현재 단계(품목 상태에서 유도).
+      // 아직 제작(주문)이 없는 계약은 미시작으로 둔다.
+      title: '맞춤/렌탈 상태',
+      key: 'productionStages',
+      width: COL.status,
+      render: (_, row) => {
+        const p = productionMap.get(row.id);
+        const badge = (state: string, prefix?: string) => (
+          <StatusBadge
+            label={prefix ? `${prefix} · ${state}` : state}
+            color={state === '완료' ? 'green' : 'blue'}
+          />
+        );
+        if (!p) return <StatusBadge label="미시작" color="default" />;
+        const { custom, rental } = p.stages;
+        if (custom && rental) {
+          return (
+            <Space direction="vertical" size={2}>
+              {badge(custom, '맞춤')}
+              {badge(rental, '렌탈')}
+            </Space>
+          );
+        }
+        const only = custom ?? rental;
+        return only ? badge(only) : <StatusBadge label="미시작" color="default" />;
+      },
+    },
+    {
+      // 제작 관리 상세 머리글의 "제작 진행률"과 같은 값(취소 품목 제외 평균).
+      title: '진행률',
+      key: 'progress',
       width: COL.wide,
-      ellipsis: true,
-      render: (_, row) => (
-        <ItemCompositionCell customCounts={row.customCounts} rentalCounts={row.rentalCounts} />
-      ),
+      render: (_, row) => {
+        const p = productionMap.get(row.id);
+        if (!p) return <Typography.Text type="secondary">미시작</Typography.Text>;
+        return <Progress percent={p.progressPct} size="small" style={{ width: 120 }} />;
+      },
     },
   ];
 
@@ -343,14 +457,18 @@ export function ContractListPage({
       ? `/contracts/new?contractId=${row.id}`
       : `/contracts/${row.id}`;
 
-  // 임베드(고객모드): 크롬 없이 표만. 고객 열은 숨긴다(단일 고객 컨텍스트).
+  // 임베드(고객모드): 크롬 없이 표만. 고객 열은 숨기고(단일 고객 컨텍스트),
+  // 컨설팅·제작에서 끌어오는 파생 열(스타일 확정·맞춤/렌탈 상태·진행률)도 붙이지 않는다.
+  const embeddedHiddenKeys = new Set(['styleConfirm', 'productionStages', 'progress']);
   if (embedded) {
     return (
       <Table<ContractListItem>
         rowKey="id"
         size="small"
         loading={isFetching}
-        columns={columns.filter((c) => c.title !== '고객')}
+        columns={columns.filter(
+          (c) => c.title !== '고객' && !(c.key != null && embeddedHiddenKeys.has(String(c.key))),
+        )}
         dataSource={data?.data ?? []}
         scroll={{ x: 'max-content' }}
         onRow={(record) => ({

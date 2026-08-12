@@ -35,9 +35,11 @@ export function ContractProductionPage() {
     enabled: !!id,
   });
 
+  // 계약 상세는 준비 중 품목까지 받아 진행 단계 대상과 짝을 맞춘다 — 준비 카드가 미완 품목을
+  // 빠뜨려 "준비 완료"로 잘못 보이거나, 발주 표에 대응 품목 없는 줄이 뜨는 것을 막는다.
   const itemsQuery = useQuery({
     queryKey: ['production', 'items', id],
-    queryFn: () => fetchProductionItems(id),
+    queryFn: () => fetchProductionItems(id, { includePrep: true }),
     enabled: !!id,
   });
   const items = itemsQuery.data ?? [];
