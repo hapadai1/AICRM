@@ -65,6 +65,8 @@ export function ProductionPrepCard({
     발주 뒤에 품목이 늘어난 경우처럼 일부만 붙은 때에만 몇 품목이 남았는지 적는다.
   */
   const customItems = items.filter((i) => i.transactionType !== 'RENTAL');
+  // 채촌은 맞춤 주문에 붙는다 — 계약의 맞춤 주문 하나가 채촌 입력 대상이다.
+  const customOrderId = customItems[0]?.orderId;
   const measureDates = customItems
     .map((i) => i.workOrder.measurementLinkedAt)
     .filter((v): v is string => !!v)
@@ -117,7 +119,10 @@ export function ProductionPrepCard({
         <Button
           size="small"
           style={actionButtonStyle}
-          onClick={() => navigate(`/measurements?customerId=${customerId}`)}
+          // 목록을 거치지 않고 이 계약의 맞춤 주문에 바로 채촌을 입력한다(채촌 목록의 [채촌] 버튼과 동일 경로).
+          onClick={() =>
+            navigate(`/measurements/new?customerId=${customerId}&orderId=${customOrderId}`)
+          }
         >
           채촌
         </Button>
