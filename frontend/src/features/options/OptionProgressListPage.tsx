@@ -63,10 +63,16 @@ interface ContractRow {
 }
 
 /**
- * 계약 단위로 묶는다. 행의 뼈대는 맞춤 품목이 만들고, 렌탈은 이미 만들어진 행에만 얹는다
- * — 맞춤이 없는(렌탈뿐인) 계약은 컨설팅할 것이 없으므로 목록에 올리지 않는다.
+ * 계약 단위로 묶는다. 맞춤 품목이 행의 뼈대를 세우고, 렌탈은 그 위에 얹되 맞춤이 없는
+ * 렌탈전용 계약도 행으로 연다(현업 확정 2026-08-13).
+ *
+ * 계약 목록의 "스타일 확정" 열도 이 함수를 그대로 재사용한다 — 두 화면이 같은 판정을
+ * 쓰도록 단일 소스로 둔다(평행 구현을 두면 한쪽만 바뀌어 어긋난다).
  */
-function groupByContract(items: OptionProgressItem[], rentals: RentalProgressItem[]): ContractRow[] {
+export function groupByContract(
+  items: OptionProgressItem[],
+  rentals: RentalProgressItem[],
+): ContractRow[] {
   const map = new Map<string, ContractRow>();
   for (const it of items) {
     const row = map.get(it.contractId) ?? {
@@ -95,8 +101,30 @@ function groupByContract(items: OptionProgressItem[], rentals: RentalProgressIte
     map.set(it.contractId, row);
   }
   for (const it of rentals) {
-    const row = map.get(it.contractId);
-    if (!row) continue;
+    // 렌탈도 실물 선정(치수·컬러)을 컨설팅해야 하므로, 맞춤이 없는 렌탈 전용 계약도 행으로 세운다
+    // — 맞춤 품목이 만든 행이 없으면 렌탈 항목의 계약 정보로 새 행을 연다 (현업 확정 2026-08-13).
+    const row =
+      map.get(it.contractId) ??
+      (() => {
+        const seeded: ContractRow = {
+          contractId: it.contractId,
+          contractNo: it.contractNo,
+          contractTypeName: it.contractTypeName,
+          contractStatus: it.contractStatus,
+          contractDate: (it.contractedAt ?? it.contractCreatedAt).slice(0, 10),
+          customerName: it.customerName,
+          customerPhone: it.customerPhone,
+          dueDate: null,
+          itemCount: 0,
+          customCounts: {},
+          rentalCounts: {},
+          confirmedCount: 0,
+          completedStages: 0,
+          totalStages: 0,
+        };
+        map.set(it.contractId, seeded);
+        return seeded;
+      })();
     const category = it.productCategory as ProductCategory;
     row.itemCount += 1;
     row.rentalCounts[category] = (row.rentalCounts[category] ?? 0) + 1;
