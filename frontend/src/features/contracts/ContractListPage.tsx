@@ -15,7 +15,6 @@ import {
   Button,
   DatePicker,
   Input,
-  Progress,
   Radio,
   Select,
   Space,
@@ -51,9 +50,11 @@ import { fetchProductionItems, type ProductionItem } from '../../api/production'
 import { styleConfirmByContract } from '../options/style-confirm';
 import {
   contractProductionStages,
+  contractTrackProgress,
   type ContractProductionStages,
+  type ContractTrackProgress,
 } from '../production/production-stages';
-import { summarizeContract } from '../production/production-summary';
+import { TrackProgressBars } from '../production/TrackProgressBars';
 
 const { RangePicker } = DatePicker;
 
@@ -219,11 +220,11 @@ export function ContractListPage({
       list.push(it);
       byContract.set(it.contractId, list);
     }
-    const out = new Map<string, { stages: ContractProductionStages; progressPct: number }>();
+    const out = new Map<string, { stages: ContractProductionStages; progress: ContractTrackProgress }>();
     for (const [contractId, list] of byContract) {
       out.set(contractId, {
         stages: contractProductionStages(list),
-        progressPct: summarizeContract(list).progressPct,
+        progress: contractTrackProgress(list),
       });
     }
     return out;
@@ -436,14 +437,14 @@ export function ContractListPage({
       },
     },
     {
-      // 제작 관리 상세 머리글의 "제작 진행률"과 같은 값(취소 품목 제외 평균).
+      // 제작 관리 목록·상세·흐름 카드와 같은 단계 기반 진행률(준비 제외, 트랙별).
       title: '진행률',
       key: 'progress',
       width: COL.wide,
       render: (_, row) => {
         const p = productionMap.get(row.id);
         if (!p) return <Typography.Text type="secondary">미시작</Typography.Text>;
-        return <Progress percent={p.progressPct} size="small" style={{ width: 120 }} />;
+        return <TrackProgressBars progress={p.progress} />;
       },
     },
   ];
