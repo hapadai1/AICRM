@@ -829,6 +829,14 @@ export interface RentalProgressItem {
   productCategory: string;
   contractId: string;
   contractNo: string;
+  /** 계약 상태(DRAFT·SIGNED·COMPLETED) — 목록의 계약 상태 열. 렌탈 전용 계약 행에도 쓴다. */
+  contractStatus: string;
+  /** 계약 구분 이름 — 계약에 구분이 없으면 null */
+  contractTypeName: string | null;
+  /** 계약일(미확정이면 null) — 목록의 기간 필터·표시가 작성일과 함께 쓴다 */
+  contractedAt: string | null;
+  /** 작성일 — 계약일 전(작성중)에는 이 값을 계약일 대신 쓴다 */
+  contractCreatedAt: string;
   customerId: string;
   customerName: string;
   customerPhone: string;

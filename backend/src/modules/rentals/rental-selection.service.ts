@@ -127,6 +127,12 @@ export class RentalSelectionService {
             select: {
               id: true,
               contractNo: true,
+              // 스타일 컨설팅 목록이 렌탈 전용 계약도 행으로 세우려면(맞춤 option-progress와 동일)
+              // 계약 상태·계약일·구분이 필요하다 (현업 확정 2026-08-13).
+              status: true,
+              contractedAt: true,
+              createdAt: true,
+              contractType: { select: { name: true } },
               customer: { select: { id: true, name: true, phone: true } },
               currentVersion: { select: { completionDueDate: true } },
             },
@@ -159,6 +165,10 @@ export class RentalSelectionService {
         productCategory: item.productCategory,
         contractId: contract?.id ?? null,
         contractNo: contract?.contractNo ?? null,
+        contractStatus: contract?.status ?? null,
+        contractTypeName: contract?.contractType?.name ?? null,
+        contractedAt: contract?.contractedAt?.toISOString() ?? null,
+        contractCreatedAt: contract?.createdAt?.toISOString() ?? null,
         customerId: contract?.customer.id ?? null,
         customerName: contract?.customer.name ?? null,
         customerPhone: contract?.customer.phone ?? null,

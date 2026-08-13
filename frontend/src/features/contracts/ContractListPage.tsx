@@ -47,7 +47,7 @@ import { ItemCompositionCell } from './ItemCompositionCell';
 import { fetchOptionProgress } from '../../api/options';
 import { fetchRentalSelectionProgress } from '../../api/rentals';
 import { fetchProductionItems, type ProductionItem } from '../../api/production';
-import { styleConfirmByContract } from '../options/style-confirm';
+import { groupByContract as groupStyleByContract } from '../options/OptionProgressListPage';
 import {
   contractProductionStages,
   contractTrackProgress,
@@ -206,11 +206,15 @@ export function ContractListPage({
     enabled: derivedEnabled,
   });
 
-  // 계약별 스타일 확정 집계(확정 수/분모) — 스타일 컨설팅 목록의 "스타일 확정" 열과 같은 값.
-  const styleConfirmMap = useMemo(
-    () => styleConfirmByContract(optionsQuery.data ?? [], rentalsQuery.data ?? []),
-    [optionsQuery.data, rentalsQuery.data],
-  );
+  // 계약별 스타일 확정 집계(확정 수/분모) — 스타일 컨설팅 목록과 같은 groupByContract를 그대로
+  // 재사용해 두 화면의 "스타일 확정"이 항상 일치하게 한다.
+  const styleConfirmMap = useMemo(() => {
+    const map = new Map<string, { confirmed: number; total: number }>();
+    for (const r of groupStyleByContract(optionsQuery.data ?? [], rentalsQuery.data ?? [])) {
+      map.set(r.contractId, { confirmed: r.confirmedCount, total: r.itemCount });
+    }
+    return map;
+  }, [optionsQuery.data, rentalsQuery.data]);
 
   // 계약별 맞춤/렌탈 상태와 진행률 — 제작 목록·상세와 같은 계산(production-*)을 그대로 쓴다.
   const productionMap = useMemo(() => {
@@ -393,14 +397,15 @@ export function ContractListPage({
       },
     },
     {
-      // 스타일 컨설팅 목록의 "스타일 확정" 열과 같은 값 — 확정 수가 분모(전체 품목)와 같으면 완료.
-      // 아직 컨설팅 대상이 없는 계약(작성중 등)은 대기로 둔다.
+      // 스타일 컨설팅 목록의 "스타일 확정" 열과 100% 같은 값 — 그 목록의 판정을 그대로 옮긴다:
+      // 확정 수가 분모(전체 품목)와 같으면 확정 완료, 아니면 진행중(2단계).
+      // 컨설팅 목록은 맞춤 옵션이 있는 계약만 세우므로, 맵에 없는 계약(렌탈전용·품목미등록)은 대기다.
       title: '스타일 확정',
       key: 'styleConfirm',
       width: COL.status,
       render: (_, row) => {
         const c = styleConfirmMap.get(row.id);
-        if (!c || c.total === 0) return <StatusBadge label="대기" color="default" />;
+        if (!c) return <StatusBadge label="대기" color="default" />;
         return c.confirmed === c.total ? (
           <StatusBadge label="확정 완료" color="green" />
         ) : (
