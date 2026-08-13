@@ -226,6 +226,8 @@ export interface ContractDetail {
   contractTypeName: string;
   status: ContractStatus;
   contractedAt?: string;
+  /** 계약 최초 작성일 — DRAFT 동안 contractedAt이 없을 때 계약일 표시 폴백에 쓴다(백엔드 목록 규칙 contractedAt ?? createdAt과 정합). */
+  createdAt?: string;
   /** 현재 적용 버전(currentVersion)에서 편 값들 */
   currentVersionNo?: number;
   totalAmount?: number;
@@ -334,6 +336,7 @@ function toContractDetail(row: ContractDetailApiRow): ContractDetail {
     contractTypeName: row.contractType?.name ?? '-',
     status: row.status,
     contractedAt: toDateOnly(row.contractedAt),
+    createdAt: toDateOnly(row.createdAt),
     currentVersionNo: current?.versionNo,
     totalAmount: toNumber(current?.totalAmount),
     completionDueDate: toDateOnly(current?.completionDueDate),

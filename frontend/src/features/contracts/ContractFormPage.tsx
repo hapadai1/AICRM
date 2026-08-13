@@ -177,7 +177,13 @@ export function ContractFormPage() {
     setDraftDetail(draft);
     form.setFieldsValue({
       contractTypeId: draft.contractTypeId,
-      contractedAt: draft.contractedAt ? dayjs(draft.contractedAt) : undefined,
+      // 계약일은 항상 작성 시점으로 표시한다 — DRAFT 동안엔 contractedAt이 비어 있으므로
+      // 최초 작성일(createdAt)로 폴백해, 컨설팅 왕복 후 재로드 때 지워지지 않게 한다.
+      contractedAt: draft.contractedAt
+        ? dayjs(draft.contractedAt)
+        : draft.createdAt
+          ? dayjs(draft.createdAt)
+          : dayjs(),
       completionDueDate: draft.completionDueDate ? dayjs(draft.completionDueDate) : undefined,
       photoDate: draft.photoDate ? dayjs(draft.photoDate) : undefined,
       weddingDate: draft.weddingDate ? dayjs(draft.weddingDate) : undefined,
