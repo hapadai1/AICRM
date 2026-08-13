@@ -29,7 +29,13 @@ const PREP_SELECT = Prisma.validator<Prisma.OrderItemSelect>()({
   order: { select: { transactionType: true } },
   // 컨설팅 확정 판정은 작업지시서 판정과 같은 정의를 쓴다 (work-order-status 단일 출처).
   sourceContractItem: { select: consultingSessionSelect },
-  measurementLinks: { where: { isCurrent: true }, take: 1, select: { id: true } },
+  // '채촌 완료' 판정은 작업지시서와 같은 정의를 쓴다 — **값이 든 채촌**의 현재 연결만 센다.
+  // 빈 채촌이 붙어 있으면 목록은 '완료', 발주 화면은 '미완료'로 갈렸다(2026-08-13 정합화).
+  measurementLinks: {
+    where: { isCurrent: true, measurementSession: { values: { some: {} } } },
+    take: 1,
+    select: { id: true },
+  },
 });
 
 type PrepItem = Prisma.OrderItemGetPayload<{ select: typeof PREP_SELECT }>;

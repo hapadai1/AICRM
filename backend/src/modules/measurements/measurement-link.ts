@@ -32,6 +32,16 @@ export async function autoLinkMeasurements(
 ): Promise<{ sessionId: string; orderItemIds: string[] } | null> {
   const sessionId = opts.sessionId ?? (await pickMeasurementSession(tx, customerId));
   if (!sessionId) return null;
+  // 지목한 채촌이라도 값이 없으면 붙이지 않는다. 규칙대로 고른 채촌(pickMeasurementSession)은
+  // 이미 값 유무로 걸러지지만, 저장 경로가 넘겨 준 sessionId는 방금 만든 빈 채촌일 수 있다.
+  // 빈 채촌이 붙으면 목록은 링크만 보고 '채촌 완료'로, 발주 화면은 값이 없어 '미완료'로 갈려
+  // 준비완료인데 발주가 막힌다(현업 확정 2026-08-05: 값이 든 채촌만 기준).
+  if (opts.sessionId) {
+    const valueCount = await tx.measurementValue.count({
+      where: { measurementSessionId: opts.sessionId },
+    });
+    if (valueCount === 0) return null;
+  }
 
   const candidates = await tx.orderItem.findMany({
     where: {
