@@ -284,11 +284,67 @@ async function main(): Promise<void> {
   });
 
   const moved = await consolidateOtherVersions(set.id, baseId);
+  const filled = await backfillConfirmedSessions(baseId);
 
   const choiceCount = STAGES.reduce((sum, s) => sum + s.choices.length, 0);
   console.log(`셔츠 옵션 V${base.versionNo} 갱신 — ${STAGES.length}단계 / ${choiceCount}선택지`);
   if (moved.sessions > 0 || moved.versions > 0)
     console.log(`다른 버전 정리 — 세션 ${moved.sessions}건 이전, 버전 ${moved.versions}개 삭제`);
+  if (filled.sessions > 0)
+    console.log(`확정 세션 백필 — ${filled.sessions}건에 누락 단계 ${filled.values}개 채움`);
+}
+
+/**
+ * 기준 버전의 확정(CONFIRMED) 세션 중 값이 빠진 활성 단계를 기본(첫) 선택지로 채운다.
+ *
+ * 왜: 확정 세션은 모든 활성 단계에 선택값이 있어야 정합적이다(서비스 confirm()이 그렇게 강제한다).
+ * 그런데 이 시드는 단계를 늘리므로(3→5), 늘어난 단계를 채우지 않으면 3/3이던 확정이 3/5로
+ * 소급 미완이 되어 목록에서 "확정 완료"인데 진행률<100%인 오염이 생긴다. 이관되어 온 세션이든
+ * 이미 기준 버전에 있던 세션이든 최종 상태를 훑어 채우므로 멱등하며, 재실행해도 안전하다.
+ * (진행중·검토 세션은 미완이 정상이라 건드리지 않는다.)
+ */
+async function backfillConfirmedSessions(
+  baseId: string,
+): Promise<{ sessions: number; values: number }> {
+  const baseStages = await prisma.optionStage.findMany({
+    where: { optionSetVersionId: baseId, active: true },
+    include: { choices: { where: { active: true } } },
+  });
+  const sessions = await prisma.optionSelectionSession.findMany({
+    where: { optionSetVersionId: baseId, status: 'CONFIRMED' },
+    include: { values: true },
+  });
+
+  let touchedSessions = 0;
+  let addedValues = 0;
+  for (const session of sessions) {
+    const have = new Set(session.values.map((v) => v.optionStageId));
+    const missing = baseStages.filter((s) => !have.has(s.id));
+    if (missing.length === 0) continue;
+    const actor = session.values[0]?.selectedBy;
+    const selectedAt = session.values[0]?.selectedAt ?? session.confirmedAt ?? session.lastSavedAt;
+    if (!actor || !selectedAt) continue; // 값이 하나도 없는 세션은 확정 상태가 아닐 것이므로 건너뛴다
+    await prisma.$transaction(async (tx) => {
+      for (const stage of missing) {
+        const choice = [...stage.choices].sort((a, b) => a.choiceCode.localeCompare(b.choiceCode))[0];
+        if (!choice) continue;
+        await tx.optionSelectionValue.create({
+          data: {
+            id: randomUUID(),
+            selectionSessionId: session.id,
+            optionStageId: stage.id,
+            optionChoiceId: choice.id,
+            extraPriceSnapshot: choice.extraPrice,
+            selectedBy: actor,
+            selectedAt,
+          },
+        });
+        addedValues += 1;
+      }
+    });
+    touchedSessions += 1;
+  }
+  return { sessions: touchedSessions, values: addedValues };
 }
 
 /**

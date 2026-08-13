@@ -356,6 +356,19 @@ async function main(): Promise<void> {
         status: 'IN_PROGRESS' | 'REVIEW' | 'CONFIRMED'; fabricName?: string;
         startedAt: Date; lastSavedAt: Date; reviewedAt?: Date; confirmedAt?: Date;
       }): Promise<string> => {
+        // 확정 세션인데 픽이 필수 단계를 못 덮으면 오염(확정=진행률 100% 불변식 위반)이므로
+        // 작성 시점에 즉시 실패시킨다. VEST는 2피스 품목에서 제외될 수 있어 하한(비VEST 활성
+        // 단계)으로 검사한다. 소스 무관한 전역 검증은 verify-option-consistency.ts가 따로 수행한다.
+        if (args.status === 'CONFIRMED') {
+          const requiredFloor = args.version.stages.filter(
+            (s) => s.active && s.componentGroup !== 'VEST',
+          ).length;
+          if (args.picks.length < requiredFloor) {
+            throw new Error(
+              `[seed] 확정 세션 단계 미충족: item ${args.orderItemId} — picks ${args.picks.length} < 필수(비VEST) ${requiredFloor}`,
+            );
+          }
+        }
         const sessionId = uuid();
         const nextStage = args.version.stages[args.picks.length] ?? null;
         await tx.optionSelectionSession.create({
