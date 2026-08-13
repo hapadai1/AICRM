@@ -1,6 +1,6 @@
 /** PROD-001 계약별 제작 관리 목록 — 고객명·전화로 식별, 행 클릭 시 계약 제작 관리 화면으로 진입 */
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Input, Progress, Segmented, Space, Typography } from 'antd';
+import { Alert, Input, Segmented, Space, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -18,6 +18,7 @@ import {
   type ContractTrackProgress,
 } from './production-stages';
 import { StatusBadge } from '../../shared/StatusBadge';
+import { TrackProgressBars } from './TrackProgressBars';
 
 /** 목록 한 행 = 계약 하나. 요약 계산은 상세 화면과 공유한다(production-summary). */
 interface ContractRow extends ContractSummary {
@@ -192,32 +193,7 @@ export function ProductionPage() {
       title: '제작 진행률',
       key: 'progress',
       width: COL.wide,
-      render: (_, r) => {
-        const { custom, rental } = r.trackProgress;
-        const bar = (pct: number, prefix?: string) => (
-          <Space size={6} style={{ width: '100%' }}>
-            {prefix && (
-              <Typography.Text
-                type="secondary"
-                style={{ fontSize: 12, width: 28, flex: 'none' }}
-              >
-                {prefix}
-              </Typography.Text>
-            )}
-            <Progress percent={pct} size="small" style={{ minWidth: 120 }} />
-          </Space>
-        );
-        if (custom !== null && rental !== null) {
-          return (
-            <Space direction="vertical" size={2} style={{ width: '100%' }}>
-              {bar(custom, '맞춤')}
-              {bar(rental, '렌탈')}
-            </Space>
-          );
-        }
-        const only = custom ?? rental;
-        return only !== null ? bar(only) : <Typography.Text type="secondary">-</Typography.Text>;
-      },
+      render: (_, r) => <TrackProgressBars progress={r.trackProgress} />,
     },
   ];
 

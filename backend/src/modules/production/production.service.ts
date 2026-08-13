@@ -458,18 +458,27 @@ export class ProductionService {
     const preparedStatuses = [...ITEM_STATUS_FLOW.slice(READY_FROM), 'COMPLETED'] as string[];
     /*
       계약 상세(includePrep)는 준비 중인 품목까지 내려준다 — 진행 단계 대상(취소만 제외)과
-      짝을 맞춰 준비 카드가 미완 품목을 빠뜨리지 않게 한다. 전역 목록은 종전대로 준비 끝난 것만.
+      짝을 맞춰 준비 카드가 미완 품목을 빠뜨리지 않게 한다.
+
+      전역 목록은 **계약 단위**로 거른다 (2026-08-13 현업 확정, 방안 A). 예전엔 품목 상태로 걸러
+      준비 지난 품목만 내려줬는데, 그러면 한 계약의 맞춤·렌탈 중 한 트랙이 아직 준비 중이면 그
+      트랙이 통째로 사라져 리스트가 계약을 반쪽만 보여줬다(한지민: 렌탈 2품목이 준비라 안 보임).
+      그래서 "준비를 지난 품목이 하나라도 있는 계약"이면 그 계약의 **전 품목(취소 제외)** 을 내려
+      상세와 같은 구성으로 보이게 한다. 어떤 계약이 뜨는지(제작 시작한 계약만)는 그대로다.
     */
+    const startedContract: Prisma.OrderItemWhereInput['order'] = {
+      contract: { orders: { some: { items: { some: { status: { in: preparedStatuses } } } } } },
+    };
     const statusWhere: Prisma.OrderItemWhereInput = query.status
       ? { status: query.status }
-      : query.includePrep
-        ? { status: { not: CANCELLED } }
-        : { status: { in: preparedStatuses } };
+      : { status: { not: CANCELLED } };
     const where: Prisma.OrderItemWhereInput = {
       ...statusWhere,
       order: {
         ...(query.contractId ? { contractId: query.contractId } : {}),
         journeys: { some: { status: { not: 'CANCELLED' } } },
+        // 전역 목록만 계약 단위 게이트를 건다. 상세(includePrep)·특정상태 조회는 그대로.
+        ...(query.includePrep || query.status ? {} : startedContract),
       },
     };
     const [totalElements, items] = await this.prisma.$transaction([
