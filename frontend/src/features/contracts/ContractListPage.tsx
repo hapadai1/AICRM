@@ -449,7 +449,7 @@ export function ContractListPage({
       render: (_, row) => {
         const p = productionMap.get(row.id);
         if (!p) return <Typography.Text type="secondary">미시작</Typography.Text>;
-        return <TrackProgressBars progress={p.progress} />;
+        return <TrackProgressBars progress={p.progress} showLabels={false} />;
       },
     },
   ];

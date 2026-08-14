@@ -20,6 +20,7 @@ import {
   changeJourneyStage,
   completeStageItem,
   fetchJourney,
+  fetchStageContact,
   getStageItems,
   setNotificationOutcome,
   uncompleteStageItem,
@@ -38,7 +39,11 @@ import {
   type ProductionItem,
 } from '../../api/production';
 import { Can } from '../../shared/Can';
-import { NotificationConfirmModal, type SendOutcome } from '../../shared/NotificationConfirmModal';
+import {
+  NotificationConfirmModal,
+  type NotificationSuggestion,
+  type SendOutcome,
+} from '../../shared/NotificationConfirmModal';
 import { issueWorkOrder } from '../../api/workorders';
 import { WorkOrderFormPreviewModal } from '../workorders/WorkOrderFormPreviewModal';
 import { FittingModal } from './FittingModal';
@@ -58,6 +63,9 @@ import {
   stagesForTrack,
   type ProductionStage,
 } from './production-stages';
+
+/** 수동 [고객 연락] 버튼을 다는 입고 단계 — 이 단계들만 발송 문구·마지막 발송일을 따로 읽는다. */
+const RECEIVE_CONTACT_STAGES = ['BASTING_RECEIVED', 'PRODUCT_RECEIVED'];
 
 interface ProductionFlowCardProps {
   title: string;
@@ -97,6 +105,11 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
   const [formPreviewItemId, setFormPreviewItemId] = useState<string | null>(null);
   const [suggestion, setSuggestion] = useState<SuggestedNotification | null>(null);
   const [suggestionTitle, setSuggestionTitle] = useState('');
+  /* 수동 [고객 연락] 발송창 — 단계 전진의 자동 제안(suggestion)과 별개로 언제든 다시 보낸다. */
+  const [manualContact, setManualContact] = useState<{
+    suggestion: NotificationSuggestion;
+    title: string;
+  } | null>(null);
   const [dateForm] = Form.useForm<{ date: Dayjs }>();
 
   const journeyId = journey?.id ?? null;
@@ -127,9 +140,24 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
     enabled: !!journeyId,
   });
 
+  /*
+    수동 [고객 연락] 재료 — 가봉/완성복 입고 단계만 발송 문구와 마지막 발송일을 읽는다.
+    (전진 흐름의 자동 제안과 달리 언제든 조회·재발송이 가능하다.)
+  */
+  const contactStages = stages.filter((s) => RECEIVE_CONTACT_STAGES.includes(s.code));
+  const contactQueries = useQueries({
+    queries: contactStages.map((stage) => ({
+      queryKey: ['journey-stage-contact', journeyId, stage.code],
+      queryFn: () => fetchStageContact(journeyId as string, stage.code),
+      enabled: !!journeyId,
+    })),
+  });
+  const contactByCode = new Map(contactStages.map((s, idx) => [s.code, contactQueries[idx]?.data]));
+
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['journeys'] });
     void queryClient.invalidateQueries({ queryKey: ['journey-stage-items'] });
+    void queryClient.invalidateQueries({ queryKey: ['journey-stage-contact'] });
     void queryClient.invalidateQueries({ queryKey: ['production'] });
   };
 
@@ -467,7 +495,7 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
       어떤 채촌으로 나가는지 확인하고 내야 하는데, 전체 발주는 그 확인창을 건너뛴다.
       나머지 단계(입고·출고 등)는 볼 것이 없어 전체 버튼을 그대로 둔다.
     */
-    const bulk = stage.action && stage.effect !== 'ITEM_REQUEST' ? (
+    const bulkAction = stage.action && stage.effect !== 'ITEM_REQUEST' ? (
       <Can permission="JOURNEY_EDIT">
         {bulkReason ? (
           <Tooltip title={bulkReason}>{bulkButton}</Tooltip>
@@ -483,6 +511,51 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
         )}
       </Can>
     ) : null;
+
+    /*
+      가봉 입고·완성복 입고에서는 [전체 입고] 옆에 [고객 연락]을 둔다 (현업 요청 2026-08-13).
+      전체 입고가 끝나면(남은 품목 0) 활성화되고, 누르면 발송 확인창을 연다. 발송 뒤에도 계속
+      활성 상태로 두어 재발송할 수 있고, 마지막 발송일을 버튼 옆에 적는다.
+    */
+    const isReceiveStage = RECEIVE_CONTACT_STAGES.includes(stage.code);
+    const contactInfo = isReceiveStage ? contactByCode.get(stage.code) : undefined;
+    const contactSuggestion = contactInfo?.suggestion ?? null;
+    const contactSentAt = contactInfo?.lastSentAt ?? null;
+    const contactBulk = isReceiveStage ? (
+      <Can permission="NOTIFICATION_SEND">
+        <Space size={6}>
+          <Tooltip title={pending.length > 0 ? '전체 입고 후 활성화됩니다.' : ''}>
+            <Button
+              size="small"
+              icon={<NotificationOutlined />}
+              disabled={pending.length > 0 || !contactSuggestion}
+              onClick={() => {
+                if (!contactSuggestion) return;
+                setManualContact({
+                  suggestion: contactSuggestion,
+                  title: `${stage.label} — 고객 연락`,
+                });
+              }}
+            >
+              고객 연락
+            </Button>
+          </Tooltip>
+          {contactSentAt && (
+            <Typography.Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>
+              {contactSentAt.slice(0, 10)} 발송
+            </Typography.Text>
+          )}
+        </Space>
+      </Can>
+    ) : null;
+
+    const bulk =
+      bulkAction || contactBulk ? (
+        <Space size={8}>
+          {bulkAction}
+          {contactBulk}
+        </Space>
+      ) : null;
 
     // 연락 문구는 방금 끝낸 단계의 것이다 — 현재 단계 줄에 상시 버튼으로 띄운다(같은 단계 한 번만).
     const contact =
@@ -728,6 +801,22 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
           invalidate();
         }}
         onCancel={() => setSuggestion(null)}
+      />
+
+      {/*
+        수동 [고객 연락] 발송창 — 입고 완료 뒤 담당자가 직접 보낸다(재발송 포함).
+        전진 흐름의 자동 제안과 달리 진행 이벤트에 봉합하지 않고, 보내면 이력만 남고
+        마지막 발송일이 갱신된다(닫을 때 contact 재조회).
+      */}
+      <NotificationConfirmModal
+        open={manualContact != null}
+        title={manualContact?.title ?? ''}
+        suggestion={manualContact?.suggestion ?? null}
+        onDone={() => {
+          setManualContact(null);
+          invalidate();
+        }}
+        onCancel={() => setManualContact(null)}
       />
     </>
   );

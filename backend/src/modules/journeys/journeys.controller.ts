@@ -91,6 +91,16 @@ export class JourneysController {
     return this.journeysService.getStageItems(id, stageCode);
   }
 
+  /**
+   * 그 단계의 고객 연락 문구 + 마지막 발송일 — 수동 [고객 연락] 버튼용.
+   * 단계 전진과 무관하게 언제든 문구를 만들어 주고(재발송 허용), 지난 발송일을 함께 돌려준다.
+   */
+  @Get('journeys/:id/stages/:stageCode/contact')
+  @RequirePermission('CUSTOMER_VIEW')
+  getStageContact(@Param('id') id: string, @Param('stageCode') stageCode: string) {
+    return this.journeysService.getStageContact(id, stageCode);
+  }
+
   /** 품목 완료(수동 버튼, 멱등) — 전 품목 완료 시 [전체 완료] 활성 (v2 D2) */
   @Post('journeys/:id/stages/:stageCode/items/:targetId/complete')
   @RequirePermission('JOURNEY_EDIT')

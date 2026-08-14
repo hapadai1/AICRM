@@ -295,6 +295,23 @@ export function getStageItems(id: string, stageCode: string): Promise<StageItems
   });
 }
 
+/**
+ * 그 단계의 수동 [고객 연락] 재료 — 발송 문구(재발송 허용, eventId 없음)와 마지막 발송일.
+ * 단계 전진과 무관하게 언제든 조회할 수 있다.
+ */
+export interface StageContact {
+  /** eventId·triggerKey 없음 — 수동 발송은 진행 이벤트에 봉합하지 않고 멱등키 없이 매번 나간다(재발송). */
+  suggestion: Omit<SuggestedNotification, 'eventId' | 'triggerKey'> | null;
+  lastSentAt: string | null;
+}
+
+/** GET /journeys/{id}/stages/{stageCode}/contact */
+export function fetchStageContact(id: string, stageCode: string): Promise<StageContact> {
+  return request<StageContact>({
+    url: `/journeys/${id}/stages/${encodeURIComponent(stageCode)}/contact`,
+  });
+}
+
 /** POST /journeys/{id}/stages/{stageCode}/items/{targetId}/complete — 품목 완료(멱등) */
 export function completeStageItem(
   id: string,

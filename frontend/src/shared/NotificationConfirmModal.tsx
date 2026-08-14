@@ -21,8 +21,11 @@ export interface NotificationSuggestion {
   orderId?: string | null;
   variables: Record<string, string>;
   renderedBody: string;
-  /** 같은 트리거는 한 번만 발송되도록 백엔드가 쓰는 멱등키 */
-  triggerKey: string;
+  /**
+   * 같은 트리거는 한 번만 발송되도록 백엔드가 쓰는 멱등키.
+   * 생략하면(수동 재발송) 멱등 차단 없이 매번 나간다.
+   */
+  triggerKey?: string;
 }
 
 interface Props {
