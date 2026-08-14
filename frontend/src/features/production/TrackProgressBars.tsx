@@ -10,13 +10,15 @@ interface TrackProgressBarsProps {
   progress: ContractTrackProgress;
   /** 진행률 바 최소 폭 */
   barWidth?: number;
+  /** 맞춤/렌탈 구분 라벨 표시 여부 — 별도 상태 열이 있는 목록에선 끈다 */
+  showLabels?: boolean;
 }
 
-export function TrackProgressBars({ progress, barWidth = 120 }: TrackProgressBarsProps) {
+export function TrackProgressBars({ progress, barWidth = 120, showLabels = true }: TrackProgressBarsProps) {
   const { custom, rental } = progress;
   const bar = (pct: number, prefix?: string) => (
     <Space size={6} style={{ width: '100%' }}>
-      {prefix && (
+      {prefix && showLabels && (
         <Typography.Text type="secondary" style={{ fontSize: 12, width: 28, flex: 'none' }}>
           {prefix}
         </Typography.Text>

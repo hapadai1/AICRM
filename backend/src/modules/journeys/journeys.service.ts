@@ -969,6 +969,56 @@ export class JourneysService {
     return suggestion ? { eventId, stageName: stage.name, ...suggestion } : null;
   }
 
+  /**
+   * 수동 [고객 연락] 버튼 재료 — 그 단계 템플릿으로 문구를 만들고 마지막 발송일을 함께 돌려준다.
+   * 단계 전진 흐름과 달리 멱등키를 걸지 않아(triggerKey 빈 값) 담당자가 필요하면 다시 보낼 수 있다.
+   */
+  async getStageContact(id: string, stageCode: string) {
+    const row = await this.prisma.customerJourney.findUnique({
+      where: { id },
+      select: JOURNEY_SELECT,
+    });
+    if (!row) throw new NotFoundException('진행이 없습니다.');
+    const stages = await this.stagesOf(row.trackType);
+    const stage = stages.find((s) => s.code === stageCode);
+    if (!stage) throw new NotFoundException('단계가 없습니다.');
+    if (!stage.templateId) return { suggestion: null, lastSentAt: null };
+
+    const built = await this.suggestions.build({
+      templateId: stage.templateId,
+      customerId: row.customerId,
+      orderId: row.orderId,
+      // build는 triggerKey를 요구하지만 수동 발송은 쓰지 않는다 — 아래에서 응답에서 뺀다.
+      triggerKey: '',
+    });
+    /*
+      수동 발송은 멱등키 없이 매번 나가야 재발송이 된다 (현업 요청 2026-08-13).
+      triggerKey를 응답에 남기면 화면이 그 값으로 발송해 서버가 중복으로 막으므로, 아예 뺀다.
+      (자동 전진 발송은 여전히 journey:{id}:{stage} 키로 한 번만 나간다.)
+    */
+    const suggestion = built
+      ? (() => {
+          const { triggerKey: _drop, ...rest } = built;
+          return { stageName: stage.name, ...rest };
+        })()
+      : null;
+
+    // 마지막 발송일 — 단계마다 템플릿이 하나씩이라(가봉 입고·완성복 입고 각각) 템플릿으로 이력을 짚는다.
+    // 같은 고객이 여러 주문을 가질 수 있으므로 주문까지 좁혀 다른 계약의 발송과 섞이지 않게 한다.
+    const last = await this.prisma.notificationHistory.findFirst({
+      where: {
+        customerId: row.customerId,
+        templateId: stage.templateId,
+        status: 'SENT',
+        ...(row.orderId ? { orderId: row.orderId } : {}),
+      },
+      orderBy: { sentAt: 'desc' },
+      select: { sentAt: true },
+    });
+
+    return { suggestion, lastSentAt: last?.sentAt ?? null };
+  }
+
   /** 발송 확인창의 처리 결과를 이력에 봉합한다. */
   async setNotificationOutcome(
     journeyId: string,
