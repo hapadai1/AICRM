@@ -51,6 +51,15 @@ export interface DataTableProps<T> extends TableProps<T> {
   skeletonRows?: number;
   /** 총 건수 뒤에 붙일 단위. 기본 '건'(고객 목록은 '명'). */
   totalUnit?: string;
+  /**
+   * 표를 컨테이너 폭에 맞춰 채우고, 남는 가로 공간을 열들에 비례 배분한다.
+   * 값(px)은 열 최소 폭의 합 — 창이 이보다 좁아지면 여기서부터 가로 스크롤로 넘긴다.
+   *
+   * 기본(미지정) 동작은 여백 열이 남는 공간을 흡수해 열 폭을 고정하는 것이다. 이 옵션을 켜면
+   * 여백 열 대신 열들이 남는 폭을 나눠 갖는다 — layout은 여전히 fixed라, 값 길이가 아니라
+   * 선언한 폭 비율대로 늘어나므로 검색 결과가 바뀌어도 열이 흔들리지 않는다.
+   */
+  fillWidth?: number;
 }
 
 /**
@@ -86,6 +95,8 @@ export function DataTable<T extends object>({
   tableLayout,
   pagination,
   totalUnit = '건',
+  fillWidth,
+  sticky,
   ...rest
 }: DataTableProps<T>) {
   // 첫 로딩(표시할 행이 아직 없음)에서는 표 대신 자리표시자를 그린다.
@@ -100,7 +111,17 @@ export function DataTable<T extends object>({
         isActionColumn(column) ? { ...column, fixed: 'right' as const } : column,
       )
     : columns;
-  const resolvedColumns = fixedColumns ? withSpacer(fixedColumns) : fixedColumns;
+  // fillWidth를 켜면 여백 열을 두지 않는다 — 남는 폭을 열들이 비례 배분해 채운다.
+  const resolvedColumns =
+    fillWidth != null || !fixedColumns ? fixedColumns : withSpacer(fixedColumns);
+  // fillWidth면 스크롤 기준 폭을 열 최소 폭 합으로 잡아, 창이 넓으면 100%로 채우고
+  // 좁아지면 그 폭부터 가로 스크롤한다. 화면이 scroll을 직접 넘기면 그 값이 이긴다.
+  const resolvedScroll =
+    scroll ?? (fillWidth != null ? { x: fillWidth } : { x: 'max-content' });
+  // fillWidth 표는 창이 좁으면 가로 스크롤이 필요하다. antd 일반 표는 모든 행이 스크롤
+  // 영역 안에 있어 가로 막대가 표 맨 아래(대개 화면 밖)에 생겨 안 보인다 — sticky를 켜면
+  // 막대가 화면 하단에 고정돼 항상 보인다(헤더도 상단 고정). 화면이 sticky를 직접 주면 그 값이 이긴다.
+  const resolvedSticky = sticky ?? (fillWidth != null ? true : undefined);
 
   // pagination={false}(상세화면 안의 보조 표)는 그대로 두고, 목록 표만 규격을 입힌다.
   const resolvedPagination =
@@ -114,7 +135,8 @@ export function DataTable<T extends object>({
       // 열 폭(COL)을 선언한 대로 쓰려면 고정 레이아웃이어야 한다. auto로 두면 width는 힌트일 뿐이라
       // 브라우저가 값 길이에 맞춰 다시 나눈다 — 검색 결과가 바뀔 때마다 열이 흔들리던 원인이다.
       tableLayout={tableLayout ?? 'fixed'}
-      scroll={scroll ?? { x: 'max-content' }}
+      scroll={resolvedScroll}
+      sticky={resolvedSticky}
       columns={resolvedColumns}
       loading={loading}
       dataSource={dataSource}

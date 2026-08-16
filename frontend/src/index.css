@@ -11,6 +11,26 @@
   white-space: nowrap;
 }
 
+/* 가로로 넓어 잘리는 표의 스크롤 막대를 항상 보이게 한다.
+ * macOS 기본값("스크롤할 때만 표시")에서는 막대가 숨어, 오른쪽에 잘린 열이 있어도
+ * 스크롤이 되는지조차 알 수 없다(트랙패드로 밀어야 나타남). 표의 가로 스크롤 영역
+ * (.ant-table-content=일반 표, .ant-table-body=고정 헤더 표)만 골라 막대를 상시 노출한다.
+ * 내용이 넘칠 때만 브라우저가 막대를 그리므로, 폭이 남는 표에는 나타나지 않는다. */
+.ant-table-content,
+.ant-table-body {
+  scrollbar-width: thin; /* Firefox */
+}
+.ant-table-content::-webkit-scrollbar,
+.ant-table-body::-webkit-scrollbar {
+  height: 8px;
+  -webkit-appearance: none; /* macOS 오버레이(자동 숨김) 막대 대신 상시 막대로 */
+}
+.ant-table-content::-webkit-scrollbar-thumb,
+.ant-table-body::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 4px;
+}
+
 /* '최근 거래 유형' 필터 아이콘을 헤더 우측 끝이 아니라 제목 글자 바로 옆(한 칸 띄움)에 배치 */
 .tx-type-filter-col .ant-table-filter-column {
   justify-content: flex-start;
