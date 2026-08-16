@@ -251,7 +251,13 @@ export function AppLayout() {
           </div>
         </div>
       </Sider>
-      <Layout>
+      {/*
+        콘텐츠 Layout은 Sider와 나란한 가로 flex 자식이다. flex 자식 기본값(min-width: auto)이면
+        표가 넓어질 때 이 영역이 줄지 않고 같이 늘어나 버려, 표 자신의 가로 스크롤(overflow-x)이
+        잡히지 않고 페이지가 통째로 밀린다. min-width: 0으로 가용 폭 안에 가두면 표가 제자리에서
+        가로 스크롤된다.
+      */}
+      <Layout style={{ minWidth: 0 }}>
         <Header
           style={{
             background: colorBgContainer,

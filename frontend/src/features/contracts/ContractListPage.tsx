@@ -579,6 +579,12 @@ export function ContractListPage({
           rowKey="id"
           loading={isFetching}
           columns={columns}
+          // 창이 넓으면 표가 오른쪽까지 채우고 남는 폭을 열들이 비례 배분한다(열 폭 합 아래로
+          // 좁아지면 가로 스크롤). 열 폭 합을 직접 세어 넘겨, 열이 바뀌어도 기준이 따라오게 한다.
+          fillWidth={columns.reduce(
+            (sum, c) => sum + (typeof c.width === 'number' ? c.width : 0),
+            0,
+          )}
           dataSource={data?.data ?? []}
           onChange={handleTableChange}
           onRow={(record) => ({
