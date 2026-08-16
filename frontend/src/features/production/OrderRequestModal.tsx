@@ -1,16 +1,26 @@
 /**
- * 제작 발주 팝업 (2026-08-05 현업 확정).
+ * 제작 발주 팝업 (2026-08-05 현업 확정, 2026-08-16 두 엑셀 분리 관리 개편).
  *
  * 전에는 [발주]가 상태만 바꾸는 버튼이었고, 작업지시서는 같은 줄의 다른 팝업, 채촌은 그 팝업
  * 안의 [바로가기] 링크였다. 발주는 "이 치수로 이 옷을 만들어 달라"고 공장에 넘기는 일인데
  * 셋이 따로 놀아, 무엇을 보고 발주했는지가 화면에 남지 않았다.
  *
  * 그래서 **작업지시서를 이 창에서 그대로 보고 발주한다.** 공장에 나갈 서류가 곧 발주 내용이라,
- * 확인과 결재를 다른 창으로 나눌 이유가 없다. 채촌은 백엔드가 최신 스타일 컨설팅 채촌을
- * 골라 두므로(measurementAutoSelected) 다른 것을 쓸 때만 [변경]을 편다.
+ * 확인과 결재를 다른 창으로 나눌 이유가 없다.
+ *
+ * 이 창은 두 엑셀을 관리한다 (2026-08-16 현업 확정):
+ * - **작업지시서**: 시스템이 만든다. 발주 전에는 그때 값으로 즉석 생성해 보여 주고, 발주하면
+ *   그 시점 엑셀을 고정한다. 이후 수정·재생성은 없다 → 미리보기·다운로드·출력(인쇄)만.
+ * - **최종 작업지시서**: 사용자가 작업지시서를 받아 손으로 고쳐 올린 파일 → 위 기능에 업로드·삭제가 는다.
  */
 import { useState } from 'react';
-import { DownloadOutlined, EyeOutlined, FileExcelOutlined, UploadOutlined } from '@ant-design/icons';
+import {
+  DeleteOutlined,
+  DownloadOutlined,
+  EyeOutlined,
+  PrinterOutlined,
+  UploadOutlined,
+} from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, App, Button, Modal, Radio, Space, Spin, Tag, Tooltip, Typography, Upload } from 'antd';
 import type { RcFile } from 'antd/es/upload';
@@ -19,11 +29,13 @@ import { ApiError } from '../../api/client';
 import { linkOrderItemMeasurement } from '../../api/measurements';
 import type { ProductionItem } from '../../api/production';
 import {
-  downloadWorkOrderFile,
+  downloadFinalWorkOrderFile,
+  downloadSystemWorkOrderFile,
+  fetchUploadedWorkOrderPreview,
   fetchWorkOrderFormPreview,
   fetchWorkOrderPreview,
-  issueWorkOrder,
-  openWorkOrderFile,
+  openFinalWorkOrderFile,
+  removeWorkOrderFinalFile,
   uploadWorkOrderFinalFile,
   type WorkOrderMeasurementCandidate,
 } from '../../api/workorders';
@@ -41,6 +53,33 @@ interface OrderRequestModalProps {
    */
   onRequest?: () => void;
   requesting?: boolean;
+}
+
+const IFRAME_STYLE = {
+  width: '100%',
+  height: '52vh',
+  border: '1px solid #d9d9d9',
+  borderRadius: 4,
+  background: '#fff',
+} as const;
+
+/** HTML을 새 창에 띄우고 인쇄 대화상자를 연다 — 도식·이미지 로딩을 기다렸다가 찍는다. */
+function printHtmlDocument(html: string) {
+  const win = window.open('', '_blank');
+  if (!win) return;
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+  let printed = false;
+  const fire = () => {
+    if (printed) return;
+    printed = true;
+    win.focus();
+    win.print();
+  };
+  win.onload = fire;
+  // onload가 이미 지났거나 뜨지 않는 경우 대비
+  setTimeout(fire, 800);
 }
 
 /** 채촌 한 줄 표기 — 구분 뱃지 + 채촌일. 현재 선택과 후보 목록이 같은 모양을 쓴다. */
@@ -69,12 +108,16 @@ export function OrderRequestModal({
   onRequest,
   requesting,
 }: OrderRequestModalProps) {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [picking, setPicking] = useState(false);
-  // 서류는 펼친 채로 연다 — 확인하고 내는 창이라 한 번 더 누르게 할 이유가 없다. [보기]로 접는다.
-  const [showForm, setShowForm] = useState(true);
+  /*
+    아래 미리보기 영역에 무엇을 그릴지. 'system' = 시스템 작업지시서(양식 HTML),
+    'final' = 올린 최종본(업로드 xlsx를 그린 HTML), null = 접음.
+    서류를 확인하고 내는 창이라 기본은 시스템 서류를 펼쳐 둔다.
+  */
+  const [preview, setPreview] = useState<'system' | 'final' | null>('system');
 
   const wo = item.workOrder;
 
@@ -83,8 +126,20 @@ export function OrderRequestModal({
     queryFn: () => fetchWorkOrderPreview(item.orderItemId),
     enabled: open,
   });
-  const preview = previewQuery.data;
-  const printable = preview?.printable ?? item.workOrder.canIssue;
+  const previewData = previewQuery.data;
+  const printable = previewData?.printable ?? item.workOrder.canIssue;
+
+  /*
+    파일 상태는 서버 최신값(previewQuery)을 신뢰한다. item prop은 팝업을 열 때의 스냅샷이라
+    업로드/삭제해도 그대로여서 화면이 안 바뀐다(파일명이 남는다). previewData가 오면 그것을
+    authoritative로 쓰고, 아직 못 받았을 때만 스냅샷으로 대체한다.
+  */
+  const workOrderId = previewData ? previewData.workOrderId : item.workOrder.workOrderId;
+  const uploadedFileName = previewData
+    ? previewData.uploadedFileName
+    : item.workOrder.uploadedFileName;
+  const docStatus = previewData ? previewData.docStatus : item.workOrder.docStatus;
+  const lastIssuedAt = previewData ? previewData.lastIssuedAt : item.workOrder.lastIssuedAt;
 
   /*
     출력물과 **같은 워크북**을 백엔드가 HTML로 그려 준다. 서식이 섞인 완결형 문서라
@@ -94,6 +149,13 @@ export function OrderRequestModal({
     queryKey: ['workorders', 'form-preview', item.orderItemId, null],
     queryFn: () => fetchWorkOrderFormPreview(item.orderItemId),
     enabled: open && printable,
+  });
+
+  /* 최종본(업로드 xlsx) 미리보기 — 펼칠 때만 불러온다. PDF 등은 renderable:false로 온다. */
+  const finalPreviewQuery = useQuery({
+    queryKey: ['workorders', 'uploaded-preview', workOrderId],
+    queryFn: () => fetchUploadedWorkOrderPreview(workOrderId as string),
+    enabled: open && preview === 'final' && !!workOrderId && !!uploadedFileName,
   });
 
   const pickMutation = useMutation({
@@ -109,43 +171,72 @@ export function OrderRequestModal({
   });
 
   /*
-    수기 최종본 — 시스템이 뽑아 준 Excel을 손으로 고쳐 공장에 보낸 파일 (현업 확정 2026-08-05).
-    시스템은 열어 보지 않고 **보관만** 한다. 올라와 있으면 [다운로드]가 이 파일을 준다.
+    수기 최종본 — 시스템이 뽑아 준 Excel을 받아 손으로 고쳐 올린 파일 (현업 확정 2026-08-05).
+    작업지시서와 별개의 엑셀로 관리한다. 올라와 있으면 최종 다운로드/미리보기/인쇄가 이 파일을 쓴다.
   */
   const uploadMutation = useMutation({
-    mutationFn: (file: File) => uploadWorkOrderFinalFile(wo.workOrderId as string, file),
+    mutationFn: (file: File) => uploadWorkOrderFinalFile(workOrderId as string, file),
     onSuccess: async () => {
       message.success('최종본을 올렸습니다.');
+      // preview(파일명 최신값)와 uploaded-preview까지 함께 갱신 — 둘 다 ['workorders'] 아래.
+      await queryClient.invalidateQueries({ queryKey: ['workorders'] });
       await queryClient.invalidateQueries({ queryKey: ['production'] });
     },
     onError: (e) => message.error(e instanceof ApiError ? e.message : '업로드에 실패했습니다.'),
   });
 
-  /* [출력] — 그 자리에서 파일을 만든다. 다시 뽑으면 덮어쓴다 (2026-08-05). */
-  const issueMutation = useMutation({
-    mutationFn: () => issueWorkOrder(item.orderItemId, {}),
-    onSuccess: async (res) => {
-      message.success('작업지시서를 출력했습니다.');
-      await downloadWorkOrderFile(res.workOrderId, res.file.fileName);
-      await queryClient.invalidateQueries({ queryKey: ['production'] });
+  /* 잘못 올린 최종본 내리기 — 되돌리면 시스템 출력본이 다시 최종이 된다. */
+  const deleteMutation = useMutation({
+    mutationFn: () => removeWorkOrderFinalFile(workOrderId as string),
+    onSuccess: async () => {
+      message.success('최종본을 삭제했습니다.');
+      setPreview((p) => (p === 'final' ? 'system' : p));
+      // preview가 파일명을 내려주므로 여기까지 무효화해야 화면의 파일명이 사라진다.
       await queryClient.invalidateQueries({ queryKey: ['workorders'] });
+      await queryClient.invalidateQueries({ queryKey: ['production'] });
     },
-    onError: (e) => message.error(e instanceof ApiError ? e.message : '출력에 실패했습니다.'),
+    onError: (e) => message.error(e instanceof ApiError ? e.message : '삭제에 실패했습니다.'),
   });
 
-  const current = preview?.measurement;
+  const confirmDeleteFinal = () =>
+    modal.confirm({
+      title: '최종 작업지시서를 삭제할까요?',
+      content: '올린 최종본을 내립니다. 시스템 출력본이 다시 최종이 됩니다.',
+      okText: '삭제',
+      okButtonProps: { danger: true },
+      cancelText: '취소',
+      onOk: () => deleteMutation.mutateAsync(),
+    });
+
+  /* 출력 = 인쇄 (2026-08-16). 미리보기와 같은 HTML을 새 창에 띄워 브라우저 인쇄를 연다. */
+  const printSystemMutation = useMutation({
+    mutationFn: () => fetchWorkOrderFormPreview(item.orderItemId),
+    onSuccess: (data) => printHtmlDocument(data.html),
+    onError: (e) => message.error(e instanceof ApiError ? e.message : '인쇄 준비에 실패했습니다.'),
+  });
+  const printFinalMutation = useMutation({
+    mutationFn: () => fetchUploadedWorkOrderPreview(workOrderId as string),
+    onSuccess: async (data) => {
+      // 그릴 수 있으면 그 HTML을 인쇄하고, PDF 등은 새 탭에서 열어 거기서 인쇄한다.
+      if (data.renderable && data.html) printHtmlDocument(data.html);
+      else await openFinalWorkOrderFile(workOrderId as string);
+    },
+    onError: (e) => message.error(e instanceof ApiError ? e.message : '인쇄 준비에 실패했습니다.'),
+  });
+
+  const current = previewData?.measurement;
   /* 값이 없는 채촌은 품목에 연결할 수 없다(서버가 거부한다) — 고를 수 없는 줄은 내지 않는다. */
-  const candidates: WorkOrderMeasurementCandidate[] = (preview?.measurementCandidates ?? []).filter(
+  const candidates: WorkOrderMeasurementCandidate[] = (previewData?.measurementCandidates ?? []).filter(
     (c) => c.completed,
   );
-  const canChange = preview?.canChangeMeasurement ?? false;
+  const canChange = previewData?.canChangeMeasurement ?? false;
 
   /** 발주를 막는 사유 — 버튼을 흐리게만 두면 왜 못 누르는지 알 수 없다. */
-  const blockedReason = !preview
+  const blockedReason = !previewData
     ? null
-    : !preview.optionConfirmed
+    : !previewData.optionConfirmed
       ? '스타일 컨설팅을 확정한 뒤 발주할 수 있습니다.'
-      : !preview.measurementCompleted
+      : !previewData.measurementCompleted
         ? '완료된 채촌이 있어야 발주할 수 있습니다.'
         : null;
 
@@ -192,7 +283,7 @@ export function OrderRequestModal({
         <>
           <PrepRow
             label="스타일 컨설팅"
-            done={!!preview?.optionConfirmed}
+            done={!!previewData?.optionConfirmed}
             detail={
               wo.optionConfirmedAt ? (
                 <Typography.Text type="secondary">{wo.optionConfirmedAt.slice(0, 10)}</Typography.Text>
@@ -205,7 +296,7 @@ export function OrderRequestModal({
 
           <PrepRow
             label="채촌"
-            done={!!preview?.measurementCompleted}
+            done={!!previewData?.measurementCompleted}
             detail={
               current ? (
                 <MeasurementLine
@@ -252,7 +343,7 @@ export function OrderRequestModal({
             )}
           </PrepRow>
 
-          {/* --- 공장에 나갈 서류 그대로 -------------------------------------- */}
+          {/* --- 작업지시서 (시스템 생성) — 미리보기·다운로드·출력(인쇄) ------------ */}
           <div
             style={{
               marginTop: 14,
@@ -265,55 +356,50 @@ export function OrderRequestModal({
           >
             <Typography.Text strong>작업지시서</Typography.Text>
             <Typography.Text type="secondary" style={{ flex: 1 }}>
-              {wo.docStatus === 'COMPLETED'
-                ? `완료${wo.lastIssuedAt ? ` · ${wo.lastIssuedAt.slice(0, 10)} 출력` : ''}`
-                : '작성중 — 발주하면 완료가 됩니다'}
-
+              {docStatus === 'COMPLETED'
+                ? `완료${lastIssuedAt ? ` · ${lastIssuedAt.slice(0, 10)} 발주 고정` : ''}`
+                : '작성중 — 발주 전이라 지금 값으로 그립니다'}
             </Typography.Text>
             <Space size={6} wrap>
               <Tooltip title={printable ? '' : blockedReason ?? ''}>
                 <Button
-                  type={showForm ? 'primary' : 'default'}
-                  ghost={showForm}
+                  type={preview === 'system' ? 'primary' : 'default'}
+                  ghost={preview === 'system'}
                   icon={<EyeOutlined />}
                   disabled={!printable}
-                  onClick={() => setShowForm((v) => !v)}
+                  onClick={() => setPreview((p) => (p === 'system' ? null : 'system'))}
                 >
-                  {showForm ? '접기' : '보기'}
+                  미리보기
                 </Button>
               </Tooltip>
-              {/*
-                준비가 끝났으면 언제든 뽑을 수 있다 — [발주하기]가 출력까지 하지만,
-                미리 뽑아 보거나 다시 뽑는 길을 막을 이유는 없다 (2026-08-05 현업 지적).
-              */}
               <Tooltip title={printable ? '' : blockedReason ?? ''}>
                 <Button
-                  icon={<FileExcelOutlined />}
-                  disabled={!printable}
-                  loading={issueMutation.isPending}
-                  onClick={() => issueMutation.mutate()}
-                >
-                  {wo.workOrderFileKey ? '재출력' : '출력'}
-                </Button>
-              </Tooltip>
-              <Tooltip title={wo.workOrderFileKey ? '' : '아직 뽑은 파일이 없습니다.'}>
-                <Button
                   icon={<DownloadOutlined />}
-                  disabled={!wo.workOrderFileKey || !wo.currentFileName}
+                  disabled={!printable}
                   onClick={() =>
-                    void downloadWorkOrderFile(
-                      wo.workOrderId as string,
-                      wo.currentFileName as string,
+                    void downloadSystemWorkOrderFile(
+                      item.orderItemId,
+                      `${item.customerName}_작업지시서.xlsx`,
                     )
                   }
                 >
                   다운로드
                 </Button>
               </Tooltip>
+              <Tooltip title={printable ? '' : blockedReason ?? ''}>
+                <Button
+                  icon={<PrinterOutlined />}
+                  disabled={!printable}
+                  loading={printSystemMutation.isPending}
+                  onClick={() => printSystemMutation.mutate()}
+                >
+                  출력
+                </Button>
+              </Tooltip>
             </Space>
           </div>
 
-          {/* --- 최종 작업지시서 — 손으로 고쳐 공장에 보낸 그 파일 -------------- */}
+          {/* --- 최종 작업지시서 — 손으로 고쳐 올린 그 파일 (업로드·삭제가 는다) ------ */}
           <div
             style={{
               marginTop: 10,
@@ -325,80 +411,122 @@ export function OrderRequestModal({
             }}
           >
             <Typography.Text strong>최종 작업지시서</Typography.Text>
-            <Typography.Text type={wo.uploadedFileName ? undefined : 'secondary'} style={{ flex: 1 }}>
-              {wo.uploadedFileName ?? '올린 파일 없음 — 시스템 출력본이 최종입니다'}
+            <Typography.Text type={uploadedFileName ? undefined : 'secondary'} style={{ flex: 1 }}>
+              {uploadedFileName ?? '올린 파일 없음 — 시스템 출력본이 최종입니다'}
             </Typography.Text>
             <Space size={6} wrap>
-              <Upload
-                accept=".xlsx,.pdf"
-                showUploadList={false}
-                beforeUpload={(file: RcFile) => {
-                  uploadMutation.mutate(file);
-                  return false;
-                }}
-              >
-                <Button
-                  icon={<UploadOutlined />}
-                  loading={uploadMutation.isPending}
-                >
-                  {wo.uploadedFileName ? '교체' : '업로드'}
-                </Button>
-              </Upload>
-              {/*
-                업로드본은 시스템이 만든 워크북이 아니라 담당자가 올린 파일이라 창 안에 그릴 수 없다
-                — 새 탭에서 연다(PDF는 보이고 엑셀은 브라우저가 받는다). 2026-08-05.
-              */}
               <Button
+                type={preview === 'final' ? 'primary' : 'default'}
+                ghost={preview === 'final'}
                 icon={<EyeOutlined />}
-                disabled={!wo.uploadedFileName}
-                onClick={() => void openWorkOrderFile(wo.workOrderId as string)}
+                disabled={!uploadedFileName}
+                onClick={() => setPreview((p) => (p === 'final' ? null : 'final'))}
               >
-                보기
+                미리보기
               </Button>
+              <Tooltip title={workOrderId ? '' : '발주 후 최종본을 올릴 수 있습니다.'}>
+                <Upload
+                  accept=".xlsx,.pdf"
+                  showUploadList={false}
+                  disabled={!workOrderId}
+                  beforeUpload={(file: RcFile) => {
+                    uploadMutation.mutate(file);
+                    return false;
+                  }}
+                >
+                  <Button
+                    icon={<UploadOutlined />}
+                    loading={uploadMutation.isPending}
+                    disabled={!workOrderId}
+                  >
+                    {uploadedFileName ? '수정' : '업로드'}
+                  </Button>
+                </Upload>
+              </Tooltip>
               <Button
                 icon={<DownloadOutlined />}
-                disabled={!wo.uploadedFileName}
+                disabled={!uploadedFileName}
                 onClick={() =>
-                  void downloadWorkOrderFile(
-                    wo.workOrderId as string,
-                    wo.currentFileName as string,
+                  void downloadFinalWorkOrderFile(
+                    workOrderId as string,
+                    uploadedFileName as string,
                   )
                 }
               >
                 다운로드
               </Button>
+              <Button
+                icon={<PrinterOutlined />}
+                disabled={!uploadedFileName}
+                loading={printFinalMutation.isPending}
+                onClick={() => printFinalMutation.mutate()}
+              >
+                출력
+              </Button>
+              <Button
+                icon={<DeleteOutlined />}
+                danger
+                disabled={!uploadedFileName}
+                loading={deleteMutation.isPending}
+                onClick={confirmDeleteFinal}
+              >
+                삭제
+              </Button>
             </Space>
           </div>
 
           <div style={{ marginTop: 8 }}>
-            {!printable ? (
-              <Alert
-                type="info"
-                showIcon
-                message={blockedReason ?? '준비가 끝나면 작업지시서를 볼 수 있습니다.'}
-              />
-            ) : !showForm ? null : formQuery.isLoading ? (
-              <Spin style={{ display: 'block', margin: '80px auto' }} size="large" />
-            ) : formQuery.error ? (
-              <Alert
-                type="error"
-                showIcon
-                message="작업지시서를 불러오지 못했습니다."
-                description={(formQuery.error as Error).message}
-              />
-            ) : (
-              <iframe
-                title="작업지시서"
-                srcDoc={formQuery.data?.html ?? ''}
-                style={{
-                  width: '100%',
-                  height: '52vh',
-                  border: '1px solid #d9d9d9',
-                  borderRadius: 4,
-                  background: '#fff',
-                }}
-              />
-            )}
+            {preview === 'final' ? (
+              finalPreviewQuery.isLoading ? (
+                <Spin style={{ display: 'block', margin: '80px auto' }} size="large" />
+              ) : finalPreviewQuery.error ? (
+                <Alert
+                  type="error"
+                  showIcon
+                  message="최종본을 불러오지 못했습니다."
+                  description={(finalPreviewQuery.error as Error).message}
+                />
+              ) : finalPreviewQuery.data?.renderable ? (
+                <iframe
+                  title="최종 작업지시서"
+                  srcDoc={finalPreviewQuery.data.html ?? ''}
+                  style={IFRAME_STYLE}
+                />
+              ) : (
+                <Alert
+                  type="info"
+                  showIcon
+                  message="이 최종본은 팝업 미리보기를 지원하지 않는 형식입니다(PDF 등)."
+                  action={
+                    <Button
+                      size="small"
+                      onClick={() => void openFinalWorkOrderFile(workOrderId as string)}
+                    >
+                      새 탭에서 열기
+                    </Button>
+                  }
+                />
+              )
+            ) : preview === 'system' ? (
+              !printable ? (
+                <Alert
+                  type="info"
+                  showIcon
+                  message={blockedReason ?? '준비가 끝나면 작업지시서를 볼 수 있습니다.'}
+                />
+              ) : formQuery.isLoading ? (
+                <Spin style={{ display: 'block', margin: '80px auto' }} size="large" />
+              ) : formQuery.error ? (
+                <Alert
+                  type="error"
+                  showIcon
+                  message="작업지시서를 불러오지 못했습니다."
+                  description={(formQuery.error as Error).message}
+                />
+              ) : (
+                <iframe title="작업지시서" srcDoc={formQuery.data?.html ?? ''} style={IFRAME_STYLE} />
+              )
+            ) : null}
           </div>
         </>
       )}

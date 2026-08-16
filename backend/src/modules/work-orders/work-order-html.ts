@@ -240,19 +240,25 @@ function renderDrawingLayer(ws: ExcelJS.Worksheet, items: DrawingItem[]): string
  * 워크시트 → HTML 문서 (iframe srcdoc로 그대로 띄울 수 있는 완결형).
  * 화면 표시 전용이며 저장·전달 대상은 어디까지나 xlsx 파일이다.
  */
-export function renderWorksheetHtml(ws: ExcelJS.Worksheet, drawing: DrawingItem[] = []): string {
+export function renderWorksheetHtml(
+  ws: ExcelJS.Worksheet,
+  drawing: DrawingItem[] = [],
+  // 그릴 범위. 기본값은 작업지시서 양식(송파) 크기 — 양식이 아닌 임의 xlsx는 실제 사용 범위를 넘긴다.
+  bounds: { lastRow: number; lastCol: number } = { lastRow: LAST_ROW, lastCol: LAST_COL },
+): string {
+  const { lastRow, lastCol } = bounds;
   const { spans, covered } = indexMerges(ws);
 
   const cols: string[] = [];
-  for (let c = 1; c <= LAST_COL; c += 1) {
+  for (let c = 1; c <= lastCol; c += 1) {
     cols.push(`<col style="width:${colWidthPx(ws.getColumn(c).width)}px">`);
   }
 
   const rows: string[] = [];
-  for (let r = 1; r <= LAST_ROW; r += 1) {
+  for (let r = 1; r <= lastRow; r += 1) {
     const row = ws.getRow(r);
     const cells: string[] = [];
-    for (let c = 1; c <= LAST_COL; c += 1) {
+    for (let c = 1; c <= lastCol; c += 1) {
       if (covered.has(`${r}:${c}`)) continue;
       const cell = row.getCell(c);
       const span = spans.get(cell.address);

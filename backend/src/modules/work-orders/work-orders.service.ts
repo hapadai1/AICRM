@@ -19,7 +19,7 @@ import {
   buildShoesWorkOrderExcel,
   buildWorkOrderExcel,
   buildWorkOrderPreviewHtml,
-  renderStoredWorkOrderHtml,
+  renderStoredXlsxHtml,
   type WorkOrderExcelData,
 } from './work-order-excel';
 import { canChangeWorkOrderMeasurement, resolveWorkOrderStatus } from './work-order-status';
@@ -500,18 +500,112 @@ export class WorkOrdersService {
   // ---------------------------------------------------------------------------
 
   /**
-   * 저장된 Excel 스트리밍 — 작업지시서 id로 받는다 (2026-08-05, 버전 제거).
-   * 수기 최종본이 있으면 그것을 내려 준다. 실제로 공장에 나간 서류가 최종이다.
+   * 작업지시서 파일 스트리밍 — 작업지시서 id로 받는다 (2026-08-05, 버전 제거).
+   *
+   * variant로 어느 파일을 줄지 명시한다 (2026-08-16 현업 확정, 두 엑셀 분리 관리):
+   * - 'output': 시스템 출력본(발주 시 고정)만
+   * - 'final' : 수기 최종본(업로드)만 — 없으면 404
+   * - 미지정   : 최종본이 있으면 그것, 없으면 출력본 (구버전 호환)
    */
-  async streamFile(workOrderId: string, res: Response): Promise<void> {
+  async streamFile(
+    workOrderId: string,
+    res: Response,
+    variant?: 'output' | 'final',
+  ): Promise<void> {
     const wo = await this.prisma.workOrder.findUnique({
       where: { id: workOrderId },
       include: { outputFile: true, uploadedFile: true },
     });
     if (!wo) throw new BusinessException('NOT_FOUND', '작업지시서를 찾을 수 없습니다.');
-    const file = wo.uploadedFile ?? wo.outputFile;
-    if (!file) throw new BusinessException('NOT_FOUND', '아직 출력한 작업지시서가 없습니다.');
+    const file =
+      variant === 'final'
+        ? wo.uploadedFile
+        : variant === 'output'
+          ? wo.outputFile
+          : (wo.uploadedFile ?? wo.outputFile);
+    if (!file) {
+      throw new BusinessException(
+        'NOT_FOUND',
+        variant === 'final' ? '올려 둔 최종본이 없습니다.' : '아직 출력한 작업지시서가 없습니다.',
+      );
+    }
+    this.streamStoredFile(file, res);
+  }
 
+  /**
+   * 시스템 작업지시서 스트리밍 — **품목 id**로 받는다 (2026-08-16 현업 확정).
+   *
+   * 발주 후에는 그때 고정한 출력본(outputFile)을 그대로 준다.
+   * 발주 전에는 옵션·채촌이 계속 바뀌므로 **그 시점 값으로 즉석 생성**해 준다 —
+   * 저장·상태변경·채촌확정은 하지 않는다(그건 발주가 하는 일이다). 매번 만드는 비용은
+   * 감수하기로 했다(현업 확정): 작업이 바뀌니 미리 굳혀 둘 수가 없다.
+   */
+  async streamSystemFile(orderItemId: string, res: Response): Promise<void> {
+    const item = await this.loadOrderItem(orderItemId);
+    if (item.workOrder?.outputFile) {
+      return this.streamStoredFile(item.workOrder.outputFile, res);
+    }
+
+    const { session, measurementSession: linkedSession } = this.requirePrerequisites(item, {
+      measurementOptional: await this.hasUsableMeasurement(item, undefined),
+    });
+    const measurementSession = await this.resolveWorkOrderMeasurement(item, linkedSession, undefined);
+    const excelData = this.buildExcelData(
+      item,
+      this.buildOptionSnapshot(session),
+      this.buildMeasurementSnapshot(measurementSession),
+      { fabricName: session.fabricName, issuedAt: new Date(), note: null },
+    );
+    const buffer =
+      item.productCategory === 'SHOES'
+        ? await buildShoesWorkOrderExcel(excelData)
+        : await buildWorkOrderExcel(excelData);
+    const fileName = `${item.order.orderNo}_${item.productCategory}-${String(item.sequenceNo).padStart(2, '0')}.xlsx`;
+    const encodedName = encodeURIComponent(fileName);
+    res.setHeader('Content-Type', XLSX_MIME);
+    res.setHeader('Content-Length', String(buffer.length));
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${encodedName}"; filename*=UTF-8''${encodedName}`,
+    );
+    res.end(buffer);
+  }
+
+  /**
+   * 최종 작업지시서(업로드본) 팝업 미리보기 — 저장된 xlsx를 HTML로 그린다.
+   * 최종본은 시스템 출력본을 손으로 고친 같은 양식이라 그대로 그릴 수 있다.
+   * xlsx가 아니거나(PDF 등) 양식이 아니어서 못 그리면 renderable:false → 화면이 새 탭으로 연다.
+   */
+  async uploadedPreview(
+    workOrderId: string,
+  ): Promise<{ renderable: boolean; html: string | null }> {
+    const wo = await this.prisma.workOrder.findUnique({
+      where: { id: workOrderId },
+      include: { uploadedFile: true },
+    });
+    if (!wo) throw new BusinessException('NOT_FOUND', '작업지시서를 찾을 수 없습니다.');
+    if (!wo.uploadedFile) throw new BusinessException('VALIDATION_ERROR', '올려 둔 최종본이 없습니다.');
+
+    const ext = wo.uploadedFile.originalName.split('.').pop()?.toLowerCase();
+    if (ext !== 'xlsx') return { renderable: false, html: null };
+
+    const filePath = resolve(this.storageRoot(), wo.uploadedFile.storageKey);
+    if (!existsSync(filePath)) {
+      throw new BusinessException('NOT_FOUND', '최종본 파일이 저장소에 존재하지 않습니다.');
+    }
+    try {
+      return { renderable: true, html: await renderStoredXlsxHtml(filePath) };
+    } catch {
+      // 열 수 없는 xlsx(깨진 파일 등)만 여기로 온다 — 그릴 수 없으니 새 탭으로 넘긴다.
+      return { renderable: false, html: null };
+    }
+  }
+
+  /** 저장소의 파일 레코드를 응답으로 흘려 보낸다 (다운로드 공통). */
+  private streamStoredFile(
+    file: { storageKey: string; originalName: string; mimeType: string; sizeBytes: bigint },
+    res: Response,
+  ): void {
     const filePath = resolve(this.storageRoot(), file.storageKey);
     if (!existsSync(filePath)) {
       throw new BusinessException('NOT_FOUND', '출력 파일이 저장소에 존재하지 않습니다.');
