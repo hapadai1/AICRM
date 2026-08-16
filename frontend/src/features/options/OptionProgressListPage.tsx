@@ -322,7 +322,7 @@ export function OptionProgressListPage({
     },
     {
       // 분모는 건수와 같은 전체 품목 수 — 맞춤은 옵션 확정, 렌탈은 실물 선정 확정을 센다.
-      title: '스타일 확정',
+      title: '스타일 컨설팅 상태',
       key: 'confirmed',
       width: COL.status,
       render: (_, row) =>

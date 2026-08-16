@@ -47,14 +47,12 @@ import { ItemCompositionCell } from './ItemCompositionCell';
 import { fetchOptionProgress } from '../../api/options';
 import { fetchRentalSelectionProgress } from '../../api/rentals';
 import { fetchProductionItems, type ProductionItem } from '../../api/production';
+import { fetchMeasurementTargets } from '../../api/measurements';
 import { groupByContract as groupStyleByContract } from '../options/OptionProgressListPage';
 import {
   contractProductionStages,
-  contractTrackProgress,
   type ContractProductionStages,
-  type ContractTrackProgress,
 } from '../production/production-stages';
-import { TrackProgressBars } from '../production/TrackProgressBars';
 
 const { RangePicker } = DatePicker;
 
@@ -185,8 +183,8 @@ export function ContractListPage({
   });
 
   /*
-   * 스타일 확정·맞춤/렌탈 상태·진행률은 계약 목록 API에 없는 값이라, 컨설팅·제작 화면과
-   * 같은 소스를 전체 조회해 contractId로 맞춰 붙인다(다른 목록들도 전부 전체 조회 후
+   * 스타일 컨설팅 상태·채촌 상태·제작 관리 상태는 계약 목록 API에 없는 값이라, 컨설팅·채촌·제작
+   * 화면과 같은 소스를 전체 조회해 contractId로 맞춰 붙인다(다른 목록들도 전부 전체 조회 후
    * 클라이언트에서 묶는다). 임베드(고객모드)에는 붙이지 않으므로 그때는 조회도 건너뛴다.
    */
   const derivedEnabled = !embedded;
@@ -205,6 +203,11 @@ export function ContractListPage({
     queryFn: () => fetchProductionItems(),
     enabled: derivedEnabled,
   });
+  const measurementsQuery = useQuery({
+    queryKey: ['measurements', 'targets'],
+    queryFn: fetchMeasurementTargets,
+    enabled: derivedEnabled,
+  });
 
   // 계약별 스타일 확정 집계(확정 수/분모) — 스타일 컨설팅 목록과 같은 groupByContract를 그대로
   // 재사용해 두 화면의 "스타일 확정"이 항상 일치하게 한다.
@@ -216,7 +219,7 @@ export function ContractListPage({
     return map;
   }, [optionsQuery.data, rentalsQuery.data]);
 
-  // 계약별 맞춤/렌탈 상태와 진행률 — 제작 목록·상세와 같은 계산(production-*)을 그대로 쓴다.
+  // 계약별 제작 관리 상태 — 제작 목록·상세와 같은 계산(production-*)을 그대로 쓴다.
   const productionMap = useMemo(() => {
     const byContract = new Map<string, ProductionItem[]>();
     for (const it of productionQuery.data ?? []) {
@@ -224,15 +227,22 @@ export function ContractListPage({
       list.push(it);
       byContract.set(it.contractId, list);
     }
-    const out = new Map<string, { stages: ContractProductionStages; progress: ContractTrackProgress }>();
+    const out = new Map<string, ContractProductionStages>();
     for (const [contractId, list] of byContract) {
-      out.set(contractId, {
-        stages: contractProductionStages(list),
-        progress: contractTrackProgress(list),
-      });
+      out.set(contractId, contractProductionStages(list));
     }
     return out;
   }, [productionQuery.data]);
+
+  // 계약별 채촌 상태 — 채촌 목록과 같은 판정을 쓴다: 계약에 연결된 채촌이 하나라도 있으면 기록됨.
+  // 채촌 대상 목록에 없는 계약(렌탈전용·맞춤품목 미등록)은 맵에 없으니 셀에서 '-'로 둔다.
+  const measurementMap = useMemo(() => {
+    const map = new Map<string, boolean>();
+    for (const r of measurementsQuery.data ?? []) {
+      map.set(r.contractId, r.measurementCount > 0);
+    }
+    return map;
+  }, [measurementsQuery.data]);
 
   const resetFilters = () => {
     setKeyword('');
@@ -400,7 +410,7 @@ export function ContractListPage({
       // 스타일 컨설팅 목록의 "스타일 확정" 열과 100% 같은 값 — 그 목록의 판정을 그대로 옮긴다:
       // 확정 수가 분모(전체 품목)와 같으면 확정 완료, 아니면 진행중(2단계).
       // 컨설팅 목록은 맞춤 옵션이 있는 계약만 세우므로, 맵에 없는 계약(렌탈전용·품목미등록)은 대기다.
-      title: '스타일 확정',
+      title: '스타일 컨설팅 상태',
       key: 'styleConfirm',
       width: COL.status,
       render: (_, row) => {
@@ -414,21 +424,37 @@ export function ContractListPage({
       },
     },
     {
+      // 채촌 목록의 "채촌 상태" 열과 같은 판정 — 계약에 연결된 채촌이 있으면 기록됨, 없으면 미채촌.
+      // 채촌 대상이 아닌 계약(렌탈전용·맞춤품목 미등록)은 맵에 없으니 '-'(대상 아님)로 둔다.
+      title: '채촌 상태',
+      key: 'measurement',
+      width: COL.status,
+      render: (_, row) => {
+        const has = measurementMap.get(row.id);
+        if (has === undefined) return <Typography.Text type="secondary">-</Typography.Text>;
+        return has ? (
+          <StatusBadge label="기록됨" color="green" />
+        ) : (
+          <StatusBadge label="미채촌" color="red" />
+        );
+      },
+    },
+    {
       // 제작 관리 목록의 "맞춤/렌탈 상태" 열과 같은 값 — 트랙별 현재 단계(품목 상태에서 유도).
       // 아직 제작(주문)이 없는 계약은 미시작으로 둔다.
-      title: '맞춤/렌탈 상태',
+      title: '제작 관리 상태',
       key: 'productionStages',
       width: COL.status,
       render: (_, row) => {
-        const p = productionMap.get(row.id);
+        const stages = productionMap.get(row.id);
         const badge = (state: string, prefix?: string) => (
           <StatusBadge
             label={prefix ? `${prefix} · ${state}` : state}
             color={state === '완료' ? 'green' : 'blue'}
           />
         );
-        if (!p) return <StatusBadge label="미시작" color="default" />;
-        const { custom, rental } = p.stages;
+        if (!stages) return <StatusBadge label="미시작" color="default" />;
+        const { custom, rental } = stages;
         if (custom && rental) {
           return (
             <Space direction="vertical" size={2}>
@@ -439,17 +465,6 @@ export function ContractListPage({
         }
         const only = custom ?? rental;
         return only ? badge(only) : <StatusBadge label="미시작" color="default" />;
-      },
-    },
-    {
-      // 제작 관리 목록·상세·흐름 카드와 같은 단계 기반 진행률(준비 제외, 트랙별).
-      title: '진행률',
-      key: 'progress',
-      width: COL.wide,
-      render: (_, row) => {
-        const p = productionMap.get(row.id);
-        if (!p) return <Typography.Text type="secondary">미시작</Typography.Text>;
-        return <TrackProgressBars progress={p.progress} showLabels={false} />;
       },
     },
   ];
@@ -464,8 +479,8 @@ export function ContractListPage({
       : `/contracts/${row.id}`;
 
   // 임베드(고객모드): 크롬 없이 표만. 고객 열은 숨기고(단일 고객 컨텍스트),
-  // 컨설팅·제작에서 끌어오는 파생 열(스타일 확정·맞춤/렌탈 상태·진행률)도 붙이지 않는다.
-  const embeddedHiddenKeys = new Set(['styleConfirm', 'productionStages', 'progress']);
+  // 컨설팅·채촌·제작에서 끌어오는 파생 열(스타일 컨설팅 상태·채촌 상태·제작 관리 상태)도 붙이지 않는다.
+  const embeddedHiddenKeys = new Set(['styleConfirm', 'measurement', 'productionStages']);
   if (embedded) {
     return (
       <Table<ContractListItem>
