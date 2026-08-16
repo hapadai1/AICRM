@@ -23,6 +23,7 @@ import {
   Row,
   Select,
   Space,
+  Spin,
   Switch,
   Tag,
   Tooltip,
@@ -214,6 +215,12 @@ export function ContractFormPage() {
     setManualByLoad(mismatched);
   }, [draft, form]);
 
+  // 서명·완료된 계약으로 이 작성 화면에 들어오면(서명 후 뒤로가기·컨설팅 재진입 등) 막다른
+  // "작성중인 계약이 아닙니다" 경고 대신 계약 상세로 곧바로 보낸다 — 서명 완료 후 동선을 매끄럽게 한다.
+  useEffect(() => {
+    if (draft && draft.status !== 'DRAFT') navigate(`/contracts/${draft.id}`, { replace: true });
+  }, [draft, navigate]);
+
   const totalWatch = Form.useWatch('totalAmount', form);
   const lineTotal = linesTotal(lines);
   // 금액 분해: 품목 합계(옵션 롤업 제외) + 옵션 추가 합계(롤업) = 총 계약금액.
@@ -385,21 +392,14 @@ export function ContractFormPage() {
     }
   };
 
-  // 작성중이 아닌 계약을 쿼리로 연 경우: 수정 불가 안내
+  // 작성중이 아닌 계약(서명·완료)은 위 useEffect가 계약 상세로 리다이렉트한다.
+  // 그 찰나에 편집 폼이 번쩍이지 않도록 스피너만 보여준다.
   if (draft && draft.status !== 'DRAFT') {
     return (
       <Card>
-        <Alert
-          type="warning"
-          showIcon
-          message="작성중인 계약이 아닙니다"
-          description="서명·완료된 계약은 계약 상세에서 [수정하기]로 새 버전을 만든 뒤 고칠 수 있습니다."
-          action={
-            <Button type="primary" onClick={() => navigate(`/contracts/${draft.id}`)}>
-              계약 상세로 이동
-            </Button>
-          }
-        />
+        <Spin style={{ display: 'block', margin: '48px auto' }} tip="계약 상세로 이동 중…">
+          <div style={{ minHeight: 48 }} />
+        </Spin>
       </Card>
     );
   }

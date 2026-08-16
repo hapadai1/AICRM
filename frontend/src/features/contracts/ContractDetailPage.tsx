@@ -1,5 +1,6 @@
 import {
   CheckOutlined,
+  ColumnHeightOutlined,
   DeleteOutlined,
   DiffOutlined,
   FileExcelOutlined,
@@ -592,6 +593,16 @@ export function ContractDetailPage() {
             <Button icon={<SkinOutlined />} onClick={() => navigate(`/contracts/${id}/options`)}>
               스타일 컨설팅으로 이동
             </Button>
+            {/* 채촌·제작 모두 계약완료 후 이어진다 → 완료 계약에서만 해당 고객 채촌 화면으로 보낸다. */}
+            {physicalized && detail?.customerId && (
+              <Button
+                type="primary"
+                icon={<ColumnHeightOutlined />}
+                onClick={() => navigate(`/measurements?customerId=${detail.customerId}`)}
+              >
+                채촌으로 이동
+              </Button>
+            )}
             {/* 주문은 계약완료 시점에 생긴다 → 그 전에는 제작·입출고로 갈 것이 없다. */}
             {physicalized && (
               <Button
