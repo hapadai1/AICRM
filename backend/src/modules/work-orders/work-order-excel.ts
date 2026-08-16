@@ -618,4 +618,23 @@ export async function renderStoredWorkOrderHtml(filePath: string): Promise<strin
   return renderWorksheetHtml(getFormSheet(wb), await loadFormDrawing(templatePath()));
 }
 
+/**
+ * 최종 작업지시서로 올린 **임의 xlsx**를 표로 그린다 (2026-08-16).
+ * 시스템 양식(송파 시트)이면 도식까지 얹어 원본 그대로, 아니면 첫 시트를 실제 사용 범위만큼
+ * 표로 그린다 — 담당자가 작업지시서를 받아 고친 파일이 아니라 다른 양식이어도 미리보기가 되게.
+ */
+export async function renderStoredXlsxHtml(filePath: string): Promise<string> {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.readFile(filePath);
+  const formSheet = wb.getWorksheet(FORM_SHEET_NAME);
+  if (formSheet) return renderWorksheetHtml(formSheet, await loadFormDrawing(templatePath()));
+
+  const ws = wb.worksheets[0];
+  if (!ws) throw new Error('시트를 찾을 수 없습니다.');
+  // 빈 셀까지 다 그리면 표가 지나치게 커지므로 실제 사용 범위로 (상한 400×64) 자른다.
+  const lastRow = Math.min(Math.max(ws.actualRowCount || ws.rowCount || 1, 1), 400);
+  const lastCol = Math.min(Math.max(ws.actualColumnCount || ws.columnCount || 1, 1), 64);
+  return renderWorksheetHtml(ws, [], { lastRow, lastCol });
+}
+
 export { NOT_FILLABLE_FIELDS, PREPRINTED_FIELDS, UPPER_MEASUREMENT_ROWS, LOWER_MEASUREMENT_ROWS };

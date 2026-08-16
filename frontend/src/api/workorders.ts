@@ -140,6 +140,8 @@ interface WorkOrderPreviewApi {
   currentVersionId: string | null;
   lastIssuedAt: string | null;
   status: string;
+  docStatus?: string;
+  uploadedFileName?: string | null;
   optionConfirmed?: boolean;
   measurementCompleted?: boolean;
   printable?: boolean;
@@ -239,6 +241,10 @@ export interface WorkOrderPreview {
   optionConfirmed: boolean;
   measurementCompleted: boolean;
   printable: boolean;
+  /** 작업지시서 문서 상태 (DRAFT/COMPLETED). 팝업이 최신값을 신뢰하도록 함께 내려받는다 */
+  docStatus?: string;
+  /** 올린 최종본 파일명 (없으면 undefined) — item prop 스냅샷 대신 이 값을 써야 삭제/업로드가 즉시 반영된다 */
+  uploadedFileName?: string;
 }
 
 export interface WorkOrderVersionRow {
@@ -357,6 +363,8 @@ function toPreview(raw: WorkOrderPreviewApi): WorkOrderPreview {
     optionConfirmed: raw.optionConfirmed ?? false,
     measurementCompleted: raw.measurementCompleted ?? false,
     printable: raw.printable ?? false,
+    docStatus: raw.docStatus,
+    uploadedFileName: raw.uploadedFileName ?? undefined,
   };
 }
 
@@ -420,14 +428,31 @@ export function fetchWorkOrderFormPreview(
   작업지시서는 품목당 파일 하나이고, 다시 뽑으면 덮어쓴다 — 파일이 곧 결과물이다.
 */
 
-/** 작업지시서 파일 내려받기 — 수기 최종본이 있으면 그것이 온다 */
-export function downloadWorkOrderFile(workOrderId: string, fileName: string): Promise<void> {
-  return downloadFile(`/work-orders/${workOrderId}/file`, fileName);
+/**
+ * 시스템 작업지시서 내려받기 — 품목 id로 받는다.
+ * 발주 전이면 그 시점 값으로 즉석 생성, 발주 후면 고정 출력본이 온다.
+ */
+export function downloadSystemWorkOrderFile(orderItemId: string, fileName: string): Promise<void> {
+  return downloadFile(`/order-items/${orderItemId}/work-order/file`, fileName);
 }
 
-/** 작업지시서 파일을 새 탭에서 연다 */
-export function openWorkOrderFile(workOrderId: string): Promise<void> {
-  return openFileInNewTab(`/work-orders/${workOrderId}/file`);
+/** 최종 작업지시서(업로드본) 내려받기 */
+export function downloadFinalWorkOrderFile(workOrderId: string, fileName: string): Promise<void> {
+  return downloadFile(`/work-orders/${workOrderId}/file?variant=final`, fileName);
+}
+
+/** 최종 작업지시서(업로드본)를 새 탭에서 연다 — 팝업에 못 그리는 PDF 등의 폴백 */
+export function openFinalWorkOrderFile(workOrderId: string): Promise<void> {
+  return openFileInNewTab(`/work-orders/${workOrderId}/file?variant=final`);
+}
+
+/** 최종 작업지시서(업로드본) 팝업 미리보기 HTML. renderable=false면 xlsx가 아니라 못 그린다. */
+export function fetchUploadedWorkOrderPreview(
+  workOrderId: string,
+): Promise<{ renderable: boolean; html: string | null }> {
+  return request<{ renderable: boolean; html: string | null }>({
+    url: `/work-orders/${workOrderId}/uploaded-preview`,
+  });
 }
 
 export function uploadWorkOrderFinalFile(

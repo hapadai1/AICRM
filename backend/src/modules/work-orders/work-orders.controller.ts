@@ -79,11 +79,36 @@ export class WorkOrdersController {
     return this.workOrdersService.issue(orderItemId, dto, idempotencyKey, actor);
   }
 
-  /** 저장된 Excel 다운로드 (스트리밍). 수기 최종본이 있으면 그것을 내려 준다. */
+  /**
+   * 작업지시서 파일 다운로드 (스트리밍). variant로 어느 파일인지 명시한다.
+   * - variant=output: 시스템 출력본, variant=final: 수기 최종본, 미지정: 최종본 우선(구버전 호환)
+   */
   @Get('work-orders/:id/file')
   @RequirePermission('WORK_ORDER_VIEW')
-  downloadFile(@Param('id') workOrderId: string, @Res() res: Response) {
-    return this.workOrdersService.streamFile(workOrderId, res);
+  downloadFile(
+    @Param('id') workOrderId: string,
+    @Res() res: Response,
+    @Query('variant') variant?: string,
+  ) {
+    const v = variant === 'output' || variant === 'final' ? variant : undefined;
+    return this.workOrdersService.streamFile(workOrderId, res, v);
+  }
+
+  /**
+   * 시스템 작업지시서 다운로드 — 품목 id로 받는다.
+   * 발주 전이면 그 시점 값으로 즉석 생성해 주고, 발주 후면 고정 출력본을 준다.
+   */
+  @Get('order-items/:id/work-order/file')
+  @RequirePermission('WORK_ORDER_VIEW')
+  downloadSystemFile(@Param('id') orderItemId: string, @Res() res: Response) {
+    return this.workOrdersService.streamSystemFile(orderItemId, res);
+  }
+
+  /** 최종 작업지시서(업로드본) 팝업 미리보기 HTML. xlsx만 그리고, 아니면 renderable:false. */
+  @Get('work-orders/:id/uploaded-preview')
+  @RequirePermission('WORK_ORDER_VIEW')
+  uploadedPreview(@Param('id') workOrderId: string) {
+    return this.workOrdersService.uploadedPreview(workOrderId);
   }
 
   /**
