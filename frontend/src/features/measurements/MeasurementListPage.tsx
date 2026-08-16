@@ -11,6 +11,7 @@ import dayjs, { type Dayjs } from 'dayjs';
 import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { fetchMeasurementTargets, type MeasurementTargetRow } from '../../api/measurements';
+import { useAuthStore } from '../../app/auth-store';
 import { LAYOUT } from '../../app/theme';
 import { Can } from '../../shared/Can';
 import { DataTable } from '../../shared/DataTable';
@@ -89,6 +90,8 @@ export function MeasurementListPage({
   embedded = false,
 }: MeasurementListProps = {}) {
   const navigate = useNavigate();
+  // 미채촌 행은 곧장 새 채촌 화면으로 보내므로, 채촌 권한이 있을 때만 그 행을 누를 수 있게 한다.
+  const canMeasure = useAuthStore((s) => s.user?.permissions.includes('MEASUREMENT_EDIT') ?? false);
   // 고객 상세·주문 화면에서 ?customerId= 로 넘어오면 그 고객의 계약만 추린다.
   const [searchParams, setSearchParams] = useSearchParams();
   const filters = useMemo(() => readFilters(searchParams), [searchParams]);
@@ -258,16 +261,9 @@ export function MeasurementListPage({
     {
       title: '액션',
       key: 'actions',
-      width: COL.action2,
+      width: COL.action1,
       render: (_, row) => (
         <Space size={4} onClick={(e) => e.stopPropagation()}>
-          <Button
-            size="small"
-            disabled={!row.lastSessionId}
-            onClick={() => navigate(`/measurements/${row.lastSessionId}`)}
-          >
-            기록 보기
-          </Button>
           <Can permission="MEASUREMENT_EDIT">
             <Button
               size="small"
@@ -297,12 +293,21 @@ export function MeasurementListPage({
           ? false
           : { current: filters.page, pageSize: filters.size, total: rows.length }
       }
-      onRow={(row) => ({
-        onClick: () => {
-          if (row.lastSessionId) navigate(`/measurements/${row.lastSessionId}`);
-        },
-        style: { cursor: row.lastSessionId ? 'pointer' : 'default' },
-      })}
+      onRow={(row) => {
+        // 기록이 있는 고객은 그 고객의 채촌 상세로, 미채촌 고객은 곧장 새 채촌 화면으로 보낸다.
+        // 미채촌 이동은 채촌 권한이 있을 때만 — 권한이 없으면 그 행은 누를 수 없다.
+        const target = row.lastSessionId
+          ? `/measurements/${row.lastSessionId}`
+          : canMeasure
+            ? `/measurements/new?customerId=${row.customerId}&orderId=${row.orderId}`
+            : null;
+        return {
+          onClick: () => {
+            if (target) navigate(target);
+          },
+          style: { cursor: target ? 'pointer' : 'default' },
+        };
+      }}
       locale={{
         emptyText: <Empty description="스타일 컨설팅 대상 맞춤 품목이 있는 계약이 없습니다." />,
       }}

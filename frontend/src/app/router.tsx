@@ -1,4 +1,4 @@
-import { createBrowserRouter, Navigate } from 'react-router-dom';
+import { createBrowserRouter, Navigate, useParams } from 'react-router-dom';
 import { AdminMasterPage } from '../features/admin/AdminMasterPage';
 import { AdminNotificationTemplatesPage } from '../features/admin/AdminNotificationTemplatesPage';
 import { AdminOptionsPage } from '../features/admin/AdminOptionsPage';
@@ -42,6 +42,16 @@ import { AuthGuard } from './AuthGuard';
 import { CustomerModeGuard } from './CustomerModeGuard';
 import { LoginPage } from './LoginPage';
 
+/**
+ * 채촌 편집 화면은 /measurements/new 과 /measurements/:id 가 같은 컴포넌트라,
+ * 라우트만 바뀌면 React가 인스턴스를 재사용해 이전 기록의 값·고객 상태가 그대로 남는다.
+ * [새 채촌]·기록 전환 때 반드시 초기화되도록 라우트 식별자로 key를 줘 새로 마운트한다.
+ */
+function MeasurementEditRoute() {
+  const { id } = useParams();
+  return <MeasurementEditPage key={id ?? 'new'} />;
+}
+
 export const router = createBrowserRouter([
   {
     path: '/login',
@@ -73,11 +83,11 @@ export const router = createBrowserRouter([
       { path: 'contracts/:id', element: <ContractDetailPage /> },
       // 채촌 (독립 화면 — new/compare가 :id보다 먼저)
       { path: 'measurements', element: <MeasurementListPage /> },
-      { path: 'measurements/new', element: <MeasurementEditPage /> },
+      { path: 'measurements/new', element: <MeasurementEditRoute /> },
       { path: 'measurements/compare', element: <MeasurementComparePage /> },
       // 채촌 사진 A4 인쇄 전용 화면 (설계서 v2 05 §5). :id보다 먼저 선언.
       { path: 'measurements/:id/print', element: <MeasurementPhotoPrint /> },
-      { path: 'measurements/:id', element: <MeasurementEditPage /> },
+      { path: 'measurements/:id', element: <MeasurementEditRoute /> },
       // 옵션·작업지시서
       { path: 'options', element: <OptionProgressListPage /> },
       { path: 'options/:contractItemId', element: <OptionStagePage /> },

@@ -10,6 +10,7 @@ import {
   CopyOutlined,
   DeleteOutlined,
   DiffOutlined,
+  LockOutlined,
   PlusOutlined,
   RightOutlined,
   SaveOutlined,
@@ -30,6 +31,7 @@ import {
   Space,
   Spin,
   Tag,
+  Tooltip,
   Typography,
   Upload,
 } from 'antd';
@@ -54,7 +56,6 @@ import {
 } from '../../api/measurements';
 import { BackButton } from '../../shared/BackButton';
 import { Can } from '../../shared/Can';
-import { StatusBadge } from '../../shared/StatusBadge';
 import { labelOf } from '../../shared/status-meta';
 import {
   emptyForm,
@@ -84,6 +85,9 @@ export function MeasurementEditPage() {
   const [customerKeyword, setCustomerKeyword] = useState('');
   const [form, setForm] = useState<FormState | null>(isNew ? emptyForm() : null);
   const [activeKey, setActiveKey] = useState<string | null>(null);
+  // 필드를 새로 고른 직후(클릭·이동) 첫 숫자는 기존 값을 지우고 새로 시작한다 (현업 확정 2026-08-16).
+  // 화면에 그릴 필요 없는 1회성 플래그라 ref로 둔다 — 물리 키보드 경로의 stale 클로저 걱정도 없다.
+  const overwriteRef = useRef(false);
   const [dirty, setDirty] = useState(false);
   // 화면 표시 단위 — 저장은 항상 CM. 단위 상태는 세션에 저장하지 않는다 (설계서 v2 05 §3.1).
   const [unit, setUnit] = useState<Unit>('CM');
@@ -308,22 +312,31 @@ export function MeasurementEditPage() {
   const readOnly = locked;
   const fieldOrder = MEASUREMENT_FIELDS.map((f) => f.key);
 
+  /** 필드 활성화 — 다음 첫 숫자가 기존 값을 밀어내도록 덮어쓰기 플래그를 세운다. */
+  const activateField = (key: string | null) => {
+    setActiveKey(key);
+    if (key) overwriteRef.current = true;
+  };
+
   const moveActive = (delta: number) => {
     if (!activeKey) {
       const first = fieldOrder[0];
-      if (first) setActiveKey(first);
+      if (first) activateField(first);
       return;
     }
     const idx = fieldOrder.indexOf(activeKey);
     const next = fieldOrder[Math.min(fieldOrder.length - 1, Math.max(0, idx + delta))];
-    if (next) setActiveKey(next);
+    if (next) activateField(next);
   };
 
   const handleKeypadPress = (key: string) => {
     if (!activeKey || readOnly || unit === 'INCH') return;
+    // 필드를 새로 고른 뒤 첫 숫자면 기존 값을 지우고 새로 시작한다.
+    const fresh = overwriteRef.current;
+    overwriteRef.current = false;
     setForm((f) => {
       if (!f) return f;
-      const cur = f.values[activeKey] ?? '';
+      const cur = fresh ? '' : (f.values[activeKey] ?? '');
       let next = cur;
       if (key === '.') {
         if (!cur.includes('.')) next = cur === '' ? '0.' : `${cur}.`;
@@ -338,6 +351,8 @@ export function MeasurementEditPage() {
 
   const handleKeypadDelete = () => {
     if (!activeKey || readOnly || unit === 'INCH') return;
+    // 지우기부터 하면 기존 값을 고치려는 것이니 덮어쓰기 대기를 푼다.
+    overwriteRef.current = false;
     setForm((f) => {
       if (!f) return f;
       const cur = f.values[activeKey] ?? '';
@@ -418,7 +433,7 @@ export function MeasurementEditPage() {
     activeKey,
     readOnly,
     unit,
-    onActivate: setActiveKey,
+    onActivate: activateField,
     onChangeText: setValue,
     registerRef: (key: string, el: HTMLDivElement | null) => {
       if (el) fieldRefs.current.set(key, el);
@@ -490,7 +505,12 @@ export function MeasurementEditPage() {
 
   return (
     <Row gutter={16}>
-      <Col xs={24} lg={15} xl={16} style={{ paddingBottom: keypadSheetOpen ? 340 : 0 }}>
+      <Col
+        xs={24}
+        lg={readOnly ? 24 : 15}
+        xl={readOnly ? 24 : 16}
+        style={{ paddingBottom: keypadSheetOpen ? 340 : 0 }}
+      >
         <Card style={{ marginBottom: 16 }}>
           <Space direction="vertical" size="middle" style={{ width: '100%' }}>
             {/* 머리말 — 이 채촌의 주인. 고객은 검색 목록에서 이미 고르고 들어오므로 여기서 갈아타지 않는다
@@ -531,13 +551,17 @@ export function MeasurementEditPage() {
                           {it.displayName}
                         </Tag>
                       ))}
-                      {/* 채촌은 상태를 두지 않는다 (2026-08-05) — 잠긴 것만 알린다. */}
-                      {locked && <StatusBadge label="진행 시작" color="default" />}
+                      {/* 채촌은 상태를 두지 않는다 (2026-08-05) — 잠긴 것만 자물쇠로 알린다. */}
+                      {locked && (
+                        <Tooltip title="진행이 시작돼 수정·삭제가 잠긴 채촌입니다.">
+                          <Tag icon={<LockOutlined />} style={{ marginInlineEnd: 0 }} />
+                        </Tooltip>
+                      )}
                     </>
                   )}
                 </Space>
               )}
-              {/* 기능 버튼은 머리말 우상단에 둔다. */}
+              {/* 기능 버튼은 머리말 우상단에 둔다. 사진 업로드는 [새 채촌] 왼쪽에 붙인다. */}
               <Space>
                 {isNew && records.length > 0 && (
                   <Button
@@ -556,9 +580,28 @@ export function MeasurementEditPage() {
                   </Button>
                 )}
                 {!isNew && (
-                  <Button type="primary" icon={<PlusOutlined />} onClick={startNewRecord}>
-                    새 채촌
-                  </Button>
+                  <>
+                    <Can permission="MEASUREMENT_EDIT">
+                      <Upload
+                        accept="image/*"
+                        showUploadList={false}
+                        multiple
+                        beforeUpload={beforeUpload}
+                        disabled={images.length >= 50}
+                      >
+                        <Button
+                          icon={<UploadOutlined />}
+                          loading={uploadMutation.isPending}
+                          disabled={images.length >= 50}
+                        >
+                          사진 업로드 ({images.length}/50)
+                        </Button>
+                      </Upload>
+                    </Can>
+                    <Button type="primary" icon={<PlusOutlined />} onClick={startNewRecord}>
+                      새 채촌
+                    </Button>
+                  </>
                 )}
               </Space>
             </Space>
@@ -608,53 +651,7 @@ export function MeasurementEditPage() {
                   ]}
                 />
               </Space>
-              {!isNew && (
-                <Space direction="vertical" size={4}>
-                  <Typography.Text type="secondary">사진</Typography.Text>
-                  <Can permission="MEASUREMENT_EDIT">
-                    <Upload
-                      accept="image/*"
-                      showUploadList={false}
-                      multiple
-                      beforeUpload={beforeUpload}
-                      disabled={images.length >= 50}
-                    >
-                      <Button
-                        size="large"
-                        icon={<UploadOutlined />}
-                        loading={uploadMutation.isPending}
-                        disabled={images.length >= 50}
-                      >
-                        사진 업로드 ({images.length}/50)
-                      </Button>
-                    </Upload>
-                  </Can>
-                </Space>
-              )}
             </Space>
-
-            {/* 잠긴 이유가 서로 달라 안내도 나눈다 — 출력된 기록인가, 내가 완료한 기록인가. */}
-            {readOnly && (
-              <Alert
-                type="warning"
-                showIcon
-                message={
-                  locked ? '작업지시서 출력에 사용된 채촌입니다.' : '완료한 채촌입니다.'
-                }
-                description={
-                  locked
-                    ? '값을 바꾸면 이미 나간 지시서와 어긋나므로 수정·삭제가 잠겨 있습니다. 새로 재서 다른 기록으로 저장해 주세요.'
-                    : '완료한 치수는 수정할 수 없습니다. 다시 재야 하면 [새 채촌]에서 [직전 채촌 값 불러오기]로 값을 가져와 주세요.'
-                }
-                action={
-                  <Can permission="MEASUREMENT_EDIT">
-                    <Button size="small" type="primary" icon={<PlusOutlined />} onClick={startNewRecord}>
-                      새 채촌
-                    </Button>
-                  </Can>
-                }
-              />
-            )}
 
             {/* cm 입력 안내는 늘 같은 말이라 지웠다 — 인치 보기에서 값이 안 바뀌는 이유만 남긴다. */}
             {unit === 'INCH' && (
@@ -756,32 +753,31 @@ export function MeasurementEditPage() {
         </Card>
       </Col>
 
+      {/* 진행이 시작된(보기 전용) 채촌은 이 입력 패널 자체를 내지 않는다 — 새 채촌은 머리말 버튼으로 연다. */}
+      {!readOnly && (
       <Col xs={24} lg={9} xl={8}>
         <div style={{ position: 'sticky', top: 16 }}>
           <Card
             title={
-              readOnly
-                ? '진행이 시작된 채촌 — 보기 전용'
-                : isNarrow
-                  ? '저장'
-                  : unit === 'INCH'
-                  ? '인치 보기 — 입력은 cm 보기에서 합니다'
-                  : activeKey
-                    ? `입력 중: ${labelOf(FIELD_LABELS, activeKey)}`
-                    : '항목을 터치해 입력을 시작하세요'
+              isNarrow
+                ? '저장'
+                : unit === 'INCH'
+                ? '인치 보기 — 입력은 cm 보기에서 합니다'
+                : activeKey
+                  ? `입력 중: ${labelOf(FIELD_LABELS, activeKey)}`
+                  : '항목을 터치해 입력을 시작하세요'
             }
           >
             <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-              {/* 좁은 화면에서는 이 자리가 화면 맨 아래로 밀리므로 하단 고정 키패드를 대신 쓴다.
-                  출력된 채촌은 입력 자체가 막혀 있어 키패드를 두지 않는다. */}
-              {!isNarrow && !readOnly && (
+              {/* 좁은 화면에서는 이 자리가 화면 맨 아래로 밀리므로 하단 고정 키패드를 대신 쓴다. */}
+              {!isNarrow && (
                 <NumericKeypad
                   onPress={handleKeypadPress}
                   onDelete={handleKeypadDelete}
                   onPrev={() => moveActive(-1)}
                   onNext={() => moveActive(1)}
                   onDone={() => setActiveKey(null)}
-                  disabled={!activeKey || readOnly || unit === 'INCH'}
+                  disabled={!activeKey || unit === 'INCH'}
                 />
               )}
 
@@ -800,34 +796,6 @@ export function MeasurementEditPage() {
                     등록
                   </Button>
                 </Can>
-              ) : readOnly ? (
-                /* 출력됐거나 완료한 채촌 — 수정·삭제가 막혀 있으므로 안 눌리는 버튼을 두지 않는다.
-                   새로 재는 것만 남긴다 (현업 확정 2026-08-01, 완료까지 확대 2026-08-05). */
-                <Space direction="vertical" size="small" style={{ width: '100%' }}>
-                  <Can permission="MEASUREMENT_EDIT">
-                    <Button
-                      type="primary"
-                      size="large"
-                      block
-                      style={{ height: 56, fontSize: 18 }}
-                      icon={<PlusOutlined />}
-                      onClick={startNewRecord}
-                    >
-                      새 채촌
-                    </Button>
-                  </Can>
-                  {previousRecord && (
-                    <Button
-                      block
-                      icon={<DiffOutlined />}
-                      onClick={() =>
-                        navigate(`/measurements/compare?left=${previousRecord.id}&right=${session?.id}`)
-                      }
-                    >
-                      직전 채촌과 비교
-                    </Button>
-                  )}
-                </Space>
               ) : (
                 /* 주요 동작(저장)은 위 한 줄, 보조 동작(비교·삭제)은 아래 한 줄로 묶는다. */
                 <Can permission="MEASUREMENT_EDIT">
@@ -879,6 +847,7 @@ export function MeasurementEditPage() {
           </Card>
         </div>
       </Col>
+      )}
 
       {/* 폰·세로 태블릿용 하단 고정 키패드 — 이 폭에서는 오른쪽 키패드가 화면 밖으로 밀린다. */}
       {keypadSheetOpen && activeKey && (

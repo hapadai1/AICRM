@@ -5,7 +5,7 @@
  * 버전이 아니라 "구분 + 채촌일"로 고르는 것이 핵심이다.
  */
 import { LockOutlined } from '@ant-design/icons';
-import { Button, Space, Tag, Typography } from 'antd';
+import { Button, Space, Tag, Tooltip, Typography } from 'antd';
 import type { MeasurementSummary } from '../../api/measurements';
 import { buildRecordTitles } from './record-label';
 
@@ -66,11 +66,11 @@ export function MeasurementRecordStrip({
                   <Typography.Text style={{ color: 'inherit', fontSize: 12, opacity: 0.75 }}>
                     {record.measurementDate}
                   </Typography.Text>
-                  {/* 채촌은 '완료' 상태를 두지 않는다 (2026-08-05) — 잠긴 것만 표시한다. */}
+                  {/* 채촌은 '완료' 상태를 두지 않는다 (2026-08-05) — 잠긴 것만 자물쇠로 표시한다. */}
                   {record.locked && (
-                    <Tag color="default" icon={<LockOutlined />} style={{ marginInlineEnd: 0 }}>
-                      진행 시작
-                    </Tag>
+                    <Tooltip title="진행이 시작돼 수정·삭제가 잠긴 채촌입니다.">
+                      <Tag color="default" icon={<LockOutlined />} style={{ marginInlineEnd: 0 }} />
+                    </Tooltip>
                   )}
                 </Space>
               </Space>

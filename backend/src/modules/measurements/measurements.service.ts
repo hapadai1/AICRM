@@ -311,6 +311,7 @@ export class MeasurementsService {
         orderBy: [{ measurementDate: 'desc' }, { versionNo: 'desc' }],
         select: {
           id: true,
+          customerId: true,
           measurementDate: true,
           versionNo: true,
           measurementType: true,
@@ -321,7 +322,12 @@ export class MeasurementsService {
           },
         },
       });
-      // 정렬이 최신 순이라 계약별로 처음 만나는 세션이 최근 채촌이다.
+      // 고객별 최신 채촌 — 정렬이 최신 순이라 고객별로 처음 만나는 세션이 그 고객의 최근 채촌이다.
+      const customerLatest = new Map<string, (typeof sessions)[number]>();
+      for (const s of sessions) {
+        if (!customerLatest.has(s.customerId)) customerLatest.set(s.customerId, s);
+      }
+      // 채촌 건수·기록 여부(미채촌/기록됨 배지)는 '이 계약에 붙은' 채촌으로 센다.
       for (const s of sessions) {
         const contractIds = new Set<string>();
         if (s.relatedOrder) contractIds.add(s.relatedOrder.contractId);
@@ -330,13 +336,19 @@ export class MeasurementsService {
           const row = rows.get(contractId);
           if (!row) continue;
           row.measurementCount += 1;
-          if (row.lastSessionId === null) {
-            row.lastSessionId = s.id;
-            row.lastMeasurementDate = toDateString(s.measurementDate);
-            row.lastVersionNo = s.versionNo;
-            row.lastMeasurementType = s.measurementType;
-          }
         }
+      }
+      // 리스트 진입은 '계약에 붙은' 채촌이 아니라 '그 고객이 마지막으로 잰' 채촌을 연다
+      // (현업 확정 2026-08-16). 재채촌은 이미 붙은 품목에 다시 붙지 않으므로, 계약 연결만
+      // 따라가면 옛(잠긴) 기록에 머문다 — 채촌이 있는 계약은 고객 최신 채촌으로 이동 대상을 잡는다.
+      for (const row of rows.values()) {
+        if (row.measurementCount === 0) continue;
+        const latest = customerLatest.get(row.customerId);
+        if (!latest) continue;
+        row.lastSessionId = latest.id;
+        row.lastMeasurementDate = toDateString(latest.measurementDate);
+        row.lastVersionNo = latest.versionNo;
+        row.lastMeasurementType = latest.measurementType;
       }
     }
 
