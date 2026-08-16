@@ -193,7 +193,7 @@ export function ProductionPage() {
       title: '제작 진행률',
       key: 'progress',
       width: COL.wide,
-      render: (_, r) => <TrackProgressBars progress={r.trackProgress} />,
+      render: (_, r) => <TrackProgressBars progress={r.trackProgress} showLabels={false} />,
     },
   ];
 
