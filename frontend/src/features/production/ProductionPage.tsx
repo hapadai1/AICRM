@@ -164,7 +164,7 @@ export function ProductionPage() {
     {
       // 상세 화면 흐름의 현재 단계를 스타일 컨설팅과 같은 상태 배지로 보여 준다(진행률 앞).
       // 맞춤·렌탈이 함께 도는 계약은 트랙마다 나눠 두 줄로 적는다.
-      title: '맞춤/렌탈 상태',
+      title: '제작 관리 상태',
       key: 'productionStages',
       width: COL.status,
       render: (_, r) => {
