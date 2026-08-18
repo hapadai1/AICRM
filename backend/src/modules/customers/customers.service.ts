@@ -109,28 +109,54 @@ export class CustomersService {
       ];
     }
 
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.customer.findMany({
-        where,
-        select: CUSTOMER_SELECT,
-        orderBy: { createdAt: 'desc' },
-        skip: query.skip,
-        take: query.size,
-      }),
-      this.prisma.customer.count({ where }),
-    ]);
+    // 정렬 기준: 최근 방문일(VISITED 예약의 최신일) desc, 미방문 고객은 하단(설계서 07 §2).
+    // 최근 방문일은 예약에서 파생돼 DB orderBy 한 컬럼으로 표현할 수 없다 → 조건에 맞는 전체
+    // 고객 id에 방문일을 붙여 정렬한 뒤 페이지를 잘라, 페이지 행만 상세 조회한다.
+    const matched = await this.prisma.customer.findMany({
+      where,
+      select: { id: true, createdAt: true },
+    });
+    const total = matched.length;
 
-    // 목록 화면 요약 필드: 계약 건수·미수 잔금·최근 방문일 (CUST-001)
-    const ids = items.map((c) => (c as { id: string }).id);
-    const [contracts, visits, orders, journeys, stages] = ids.length
+    const matchedIds = matched.map((m) => m.id);
+    const visitMax = matchedIds.length
+      ? await this.prisma.appointment.groupBy({
+          by: ['customerId'],
+          where: { customerId: { in: matchedIds }, status: 'VISITED' },
+          _max: { scheduledStart: true },
+        })
+      : [];
+    const visitAtByCustomer = new Map<string, Date>();
+    for (const v of visitMax) {
+      if (v._max.scheduledStart) visitAtByCustomer.set(v.customerId, v._max.scheduledStart);
+    }
+
+    // 최근 방문일 desc(미방문 하단), 동률이면 등록일 desc로 안정 정렬.
+    matched.sort((a, b) => {
+      const va = visitAtByCustomer.get(a.id)?.getTime();
+      const vb = visitAtByCustomer.get(b.id)?.getTime();
+      if (va !== vb) {
+        if (va === undefined) return 1;
+        if (vb === undefined) return -1;
+        return vb - va;
+      }
+      return b.createdAt.getTime() - a.createdAt.getTime();
+    });
+
+    const ids = matched.slice(query.skip, query.skip + query.size).map((m) => m.id);
+    const pageRows = ids.length
+      ? await this.prisma.customer.findMany({ where: { id: { in: ids } }, select: CUSTOMER_SELECT })
+      : [];
+    const rowById = new Map(pageRows.map((r) => [(r as { id: string }).id, r]));
+    // ids 순서(정렬 결과)를 그대로 유지한다 — in 조회는 순서를 보장하지 않는다.
+    const items = ids.map((id) => rowById.get(id)!);
+
+    // 목록 화면 요약 필드: 계약 건수·최근 거래 유형·진행상태 (CUST-001)
+    const [contracts, orders, journeys, stages] = ids.length
       ? await this.prisma.$transaction([
           this.prisma.contract.findMany({
             where: { customerId: { in: ids }, status: { not: 'CANCELLED' } },
             select: { customerId: true },
-          }),
-          this.prisma.appointment.findMany({
-            where: { customerId: { in: ids }, status: 'VISITED' },
-            select: { customerId: true, scheduledStart: true },
           }),
           // 최근 거래 유형(CUST-001): 고객 계약의 주문 중 가장 최근 것의 거래 유형
           this.prisma.order.findMany({
@@ -147,17 +173,11 @@ export class CustomersService {
           // 단계 코드→표시명 매핑 (journey_stages는 소규모 시드 테이블)
           this.prisma.journeyStage.findMany({ select: { trackType: true, code: true, name: true } }),
         ])
-      : [[], [], [], [], []];
+      : [[], [], [], []];
 
     const contractCountByCustomer = new Map<string, number>();
     for (const c of contracts as { customerId: string }[]) {
       contractCountByCustomer.set(c.customerId, (contractCountByCustomer.get(c.customerId) ?? 0) + 1);
-    }
-    const visitByCustomer = new Map<string, string>();
-    for (const v of visits as { customerId: string; scheduledStart: Date }[]) {
-      const dateStr = v.scheduledStart.toISOString().slice(0, 10);
-      const prev = visitByCustomer.get(v.customerId);
-      if (!prev || dateStr > prev) visitByCustomer.set(v.customerId, dateStr);
     }
     // orders는 createdAt desc 정렬 → 고객별 첫 항목이 최근 거래 유형
     const lastTxByCustomer = new Map<string, string>();
@@ -186,7 +206,7 @@ export class CustomersService {
       return {
         ...c,
         contractCount: contractCountByCustomer.get(row.id) ?? 0,
-        lastVisitDate: visitByCustomer.get(row.id) ?? null,
+        lastVisitDate: visitAtByCustomer.get(row.id)?.toISOString().slice(0, 10) ?? null,
         lastTransactionType: lastTxByCustomer.get(row.id) ?? null,
         // 세부 진행상태: 진행 journey의 현재 단계(코드/표시명/트랙/상태). 없으면 null
         currentStage: journey
@@ -289,7 +309,13 @@ export class CustomersService {
                     optionSelectionSessions: {
                       where: { isCurrent: true },
                       orderBy: { selectionVersionNo: 'desc' },
-                      select: { status: true },
+                      select: { status: true, confirmedAt: true },
+                    },
+                    // 렌탈 품목의 스타일 컨설팅(렌탈 파트) 확정 여부.
+                    rentalSelectionSessions: {
+                      where: { isCurrent: true },
+                      orderBy: { selectionVersionNo: 'desc' },
+                      select: { status: true, confirmedAt: true },
                     },
                   },
                 },
@@ -396,6 +422,7 @@ export class CustomersService {
         status: c.status,
         currentVersionNo: c.currentVersion?.versionNo ?? null,
         totalAmount: Number(c.currentVersion?.totalAmount ?? 0),
+        createdAt: toDateOnly(c.createdAt),
         contractedAt: toDateOnly(c.contractedAt),
         completionDueDate: toDateOnly(c.currentVersion?.completionDueDate),
       })),
@@ -415,6 +442,11 @@ export class CustomersService {
           productCategory: i.productCategory,
           status: i.status,
           optionStatus: i.sourceContractItem.optionSelectionSessions[0]?.status ?? 'NOT_STARTED',
+          // 스타일 컨설팅 확정일 — 진행 요약에서 완료 상태에 완료일을 찍기 위함
+          optionConfirmedAt: toDateOnly(i.sourceContractItem.optionSelectionSessions[0]?.confirmedAt),
+          // 렌탈 품목의 스타일 컨설팅(렌탈 파트) 확정 여부
+          rentalConsultingConfirmed:
+            i.sourceContractItem.rentalSelectionSessions[0]?.status === 'CONFIRMED',
           measurementLinked: i.measurementLinks.length > 0,
           workOrderIssued: !!i.workOrder?.outputFileId,
         })),
@@ -429,6 +461,7 @@ export class CustomersService {
         fitPreference: m.fitPreference,
         relatedOrderId: m.relatedOrderId,
         completed: m.completedAt !== null,
+        completedAt: toDateOnly(m.completedAt),
       })),
       components: components.map((c) => ({
         id: c.id,

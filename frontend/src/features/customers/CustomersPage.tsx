@@ -26,13 +26,14 @@ export function CustomersPage() {
   const [q, setQ] = useState('');
   const [scope, setScope] = useState<'CONTRACT' | 'ALL'>('CONTRACT');
   const [transactionType, setTransactionType] = useState<'CUSTOM' | 'RENTAL' | undefined>(undefined);
+  const [status, setStatus] = useState<'PROSPECT' | 'CONTRACTED' | undefined>(undefined);
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(30);
   const [createOpen, setCreateOpen] = useState(false);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['customers', { q, scope, transactionType: transactionType ?? '', page, size }],
-    queryFn: () => fetchCustomers({ q, scope, transactionType, page, size }),
+    queryKey: ['customers', { q, scope, transactionType: transactionType ?? '', status: status ?? '', page, size }],
+    queryFn: () => fetchCustomers({ q, scope, transactionType, status, page, size }),
   });
 
   const runSearch = () => {
@@ -82,6 +83,29 @@ export function CustomersPage() {
       title: '고객 상태',
       dataIndex: 'customerStatus',
       width: COL.status,
+      // 최근 거래 유형과 동일하게 제목 옆 필터로 서버(status) 필터링. 비활성은 목록에서 항상 제외.
+      className: 'tx-type-filter-col',
+      filteredValue: status ? [status] : null,
+      filterIcon: (filtered) => <FilterOutlined style={{ color: filtered ? '#1677ff' : undefined }} />,
+      filterDropdown: ({ confirm }) => (
+        <div style={{ padding: 8 }}>
+          <Radio.Group
+            value={status ?? 'ALL'}
+            onChange={(e) => {
+              const v = e.target.value as 'ALL' | 'PROSPECT' | 'CONTRACTED';
+              setStatus(v === 'ALL' ? undefined : v);
+              setPage(1);
+              confirm({ closeDropdown: true });
+            }}
+          >
+            <Space direction="vertical">
+              <Radio value="ALL">전체</Radio>
+              <Radio value="CONTRACTED">{CUSTOMER_STATUS_META.CONTRACTED.label}</Radio>
+              <Radio value="PROSPECT">{CUSTOMER_STATUS_META.PROSPECT.label}</Radio>
+            </Space>
+          </Radio.Group>
+        </div>
+      ),
       render: (v: CustomerListItem['customerStatus']) => {
         const m = metaOf(CUSTOMER_STATUS_META, v);
         return <StatusBadge label={m.label} color={m.color} />;

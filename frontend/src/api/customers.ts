@@ -31,6 +31,8 @@ export interface CustomerListParams {
    * - ALL:      계약 유무와 무관한 전 고객
    */
   scope?: 'CONTRACT' | 'ALL';
+  /** 고객 상태 필터 (미지정=전체). INACTIVE는 목록에서 항상 제외된다 */
+  status?: 'PROSPECT' | 'CONTRACTED';
   transactionType?: 'CUSTOM' | 'RENTAL';
   /** 진행상태 검색: ACTIVE(진행중) | DONE(완료) | ALL(전체) */
   progress?: 'ACTIVE' | 'DONE' | 'ALL';
@@ -69,6 +71,8 @@ export interface CustomerContractRow {
   status: string;
   currentVersionNo: number | null;
   totalAmount: number;
+  /** 계약 작성일(초안 생성일) */
+  createdAt?: string | null;
   contractedAt?: string | null;
   completionDueDate?: string | null;
 }
@@ -79,6 +83,10 @@ export interface CustomerOrderItemRow {
   productCategory: string;
   status: string;
   optionStatus: 'NOT_STARTED' | 'IN_PROGRESS' | 'REVIEW' | 'CONFIRMED';
+  /** 스타일 컨설팅(옵션) 확정일 — CONFIRMED일 때만 채워진다 */
+  optionConfirmedAt?: string | null;
+  /** 렌탈 품목의 스타일 컨설팅(렌탈 파트) 확정 여부 */
+  rentalConsultingConfirmed?: boolean;
   measurementLinked: boolean;
   workOrderVersionCount: number;
 }
@@ -99,18 +107,31 @@ export interface CustomerMeasurementRow {
   type: 'INITIAL' | 'FITTING' | 'REMEASURE';
   staffName: string;
   usedByItems: string[];
+  /** 채촌 완료 여부 (completedAt 유무) */
+  completed?: boolean;
+  /** 채촌 완료일 — completed일 때만 채워진다 */
+  completedAt?: string | null;
 }
 
 export interface CustomerComponentRow {
   id: string;
+  /** 이 구성품이 속한 주문 품목 id (렌탈 컨설팅 확정 매핑용) */
+  orderItemId?: string;
   orderNo: string;
   itemName: string;
   componentType: string;
   status: string;
+  /** 이 구성품이 속한 주문의 거래 유형 (맞춤/렌탈) */
+  transactionType?: 'CUSTOM' | 'RENTAL';
   expectedInboundDate?: string | null;
   actualInboundAt?: string | null;
   actualOutboundAt?: string | null;
   rentalItemCode?: string | null;
+  /** 렌탈 배정(rentals) 항목이 가리키는 구성품 id — 구성품↔배정 매핑용 */
+  componentId?: string | null;
+  /** 렌탈 배정: 실제 출고(픽업)일 / 실제 반납일 */
+  actualPickupAt?: string | null;
+  actualReturnAt?: string | null;
 }
 
 export interface CustomerRepairRow {
@@ -156,6 +177,7 @@ export function fetchCustomers(params: CustomerListParams): Promise<Paged<Custom
     params: {
       q: params.q || undefined,
       scope: params.scope || undefined,
+      status: params.status || undefined,
       transactionType: params.transactionType || undefined,
       progress: params.progress && params.progress !== 'ALL' ? params.progress : undefined,
       page: params.page ?? 1,
