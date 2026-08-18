@@ -24,6 +24,8 @@ import { TrackProgressBars } from './TrackProgressBars';
 interface ContractRow extends ContractSummary {
   contractId: string;
   contractNo: string;
+  /** 계약일 (YYYY-MM-DD) — 계약 확정일, 없으면 생성일. 없으면 빈 문자열 */
+  contractDate: string;
   /** 계약 구분 이름 — 계약 목록의 같은 열. 계약에 구분이 없으면 null */
   contractTypeName: string | null;
   customerName: string;
@@ -57,6 +59,7 @@ function groupByContract(items: ProductionItem[]): ContractRow[] {
     .map((list) => ({
       contractId: list[0].contractId,
       contractNo: list[0].contractNo,
+      contractDate: list[0].contractDate ?? '',
       contractTypeName: list[0].contractTypeName,
       customerName: list[0].customerName,
       customerPhone: list[0].customerPhone,
@@ -149,10 +152,23 @@ export function ProductionPage() {
       align: 'center',
     },
     {
+      title: '계약일',
+      dataIndex: 'contractDate',
+      key: 'contractDate',
+      width: COL.name,
+      // 기본 정렬: 계약일 최신순(최근 계약이 위). 헤더 클릭으로 오름/내림 전환한다.
+      // contractDate는 'YYYY-MM-DD' 문자열이라 사전순 비교가 곧 날짜순이다. 없으면(빈 문자열) 뒤로.
+      sorter: (a, b) => (a.contractDate || '0').localeCompare(b.contractDate || '0'),
+      defaultSortOrder: 'descend',
+      render: (v: string) => v || <Typography.Text type="secondary">-</Typography.Text>,
+    },
+    {
       title: '완성 예정일',
       dataIndex: 'dueDate',
       key: 'dueDate',
       width: COL.name,
+      // 완성 예정일로도 정렬 가능. 미정(null)은 정렬 방향과 무관하게 뒤로 가도록 먼 미래로 취급한다.
+      sorter: (a, b) => (a.dueDate ?? '9999-99-99').localeCompare(b.dueDate ?? '9999-99-99'),
       render: (v: string | null) => v ?? <Typography.Text type="secondary">미정</Typography.Text>,
     },
     {
