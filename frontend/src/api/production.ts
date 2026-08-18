@@ -129,6 +129,9 @@ interface ProductionItemApiRow {
     contractId: string;
     contract: {
       contractNo: string;
+      /** 계약 확정일(ISO). 없으면 생성일(createdAt)로 대체 */
+      contractedAt: string | null;
+      createdAt: string;
       contractType: { name: string } | null;
       customer: { id: string; name: string; phone: string };
     };
@@ -197,6 +200,8 @@ export interface ProductionItem {
   transactionType: string;
   contractId: string;
   contractNo: string;
+  /** 계약일 (YYYY-MM-DD) — 계약 확정일, 없으면 생성일. 채촌 목록과 같은 규칙 */
+  contractDate?: string;
   /** 계약 구분 이름 (계약 목록의 같은 열). 계약에 구분이 없으면 null */
   contractTypeName: string | null;
   customerId: string;
@@ -235,6 +240,7 @@ function toProductionItem(row: ProductionItemApiRow): ProductionItem {
     transactionType: row.order.transactionType,
     contractId: row.order.contractId,
     contractNo: row.order.contract.contractNo,
+    contractDate: toDateOnly(row.order.contract.contractedAt ?? row.order.contract.createdAt),
     contractTypeName: row.order.contract.contractType?.name ?? null,
     customerId: row.order.contract.customer.id,
     customerName: row.order.contract.customer.name,

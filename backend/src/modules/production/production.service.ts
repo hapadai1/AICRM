@@ -502,6 +502,9 @@ export class ProductionService {
               contract: {
                 select: {
                   contractNo: true,
+                  // 목록의 계약일 열 — 계약 목록·채촌 목록과 같은 규칙(확정일, 없으면 생성일).
+                  contractedAt: true,
+                  createdAt: true,
                   // 목록의 계약 구분 열 — 계약 목록과 같은 값을 보여준다.
                   contractType: { select: { name: true } },
                   customer: { select: { id: true, name: true, phone: true } },
