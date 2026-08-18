@@ -78,3 +78,9 @@
 .step-body .ant-table-expanded-row > td {
   padding: 0 !important;
 }
+
+/* 수선 목록에서 펼친 행의 부모 줄 — 밑에 열리는 펼침 내용과 같은 색(antd colorFillAlter)으로
+ * 칠해 어느 행을 골랐는지 보이게 한다. 마우스를 올린 동안은 antd 호버색이 그대로 이긴다. */
+.ant-table-row.repair-row-expanded > .ant-table-cell {
+  background: rgba(0, 0, 0, 0.02);
+}

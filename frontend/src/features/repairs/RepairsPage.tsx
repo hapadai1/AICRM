@@ -401,6 +401,8 @@ export function RepairsPage() {
             onClick: () => setExpandedId((cur) => (cur === r.id ? null : r.id)),
             style: { cursor: 'pointer' },
           })}
+          // 펼친 행의 부모 줄을, 밑에 열리는 내용과 같은 색으로 칠해 선택한 행을 표시한다.
+          rowClassName={(r) => (r.id === expandedId ? 'repair-row-expanded' : '')}
           pagination={{
             current: page,
             pageSize: size,
