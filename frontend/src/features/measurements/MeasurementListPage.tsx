@@ -165,7 +165,8 @@ export function MeasurementListPage({
     return list;
   }, [query.data, customerId, embedded, filters]);
 
-  /** 표 변경은 페이지 이동만 반영한다(정렬은 서버 규칙 고정 — 미채촌 우선). */
+  // 표 변경 중 페이지 이동만 URL에 반영한다. 정렬은 컬럼 sorter로 표가 클라이언트에서
+  // 직접 처리하므로(기본: 계약일 최신순) 여기서 따로 다룰 게 없다.
   const handleTableChange = (pagination: TablePaginationConfig) => {
     update({ page: pagination.current ?? 1, size: pagination.pageSize ?? filters.size });
   };
@@ -202,11 +203,21 @@ export function MeasurementListPage({
     },
     // 기간 필터의 기준값이라 표에도 둔다 — 왜 이 건이 걸렸는지 열에서 바로 확인되어야 한다.
     // 계약일 전(작성중)은 작성일이 대신 들어온다 — 그 구분은 계약 상태 열이 한다.
-    { title: '계약일', dataIndex: 'contractDate', width: COL.name },
+    {
+      title: '계약일',
+      dataIndex: 'contractDate',
+      width: COL.name,
+      // 기본 정렬: 계약일 최신순(최근 계약이 위). 헤더 클릭으로 오름/내림 전환한다.
+      // contractDate는 'YYYY-MM-DD' 문자열이라 사전순 비교가 곧 날짜순이다.
+      sorter: (a, b) => a.contractDate.localeCompare(b.contractDate),
+      defaultSortOrder: 'descend',
+    },
     {
       title: '완료 예정일',
       dataIndex: 'dueDate',
       width: COL.name,
+      // 완료 예정일로도 정렬 가능. 미정(null)은 정렬 방향과 무관하게 뒤로 가도록 먼 미래로 취급한다.
+      sorter: (a, b) => (a.dueDate ?? '9999-99-99').localeCompare(b.dueDate ?? '9999-99-99'),
       render: (v: string | null) => v ?? <Typography.Text type="secondary">미정</Typography.Text>,
     },
     {
