@@ -294,12 +294,18 @@ export function OptionProgressListPage({
       dataIndex: 'contractDate',
       key: 'contractDate',
       width: COL.name,
+      // 기본 정렬: 계약일 최신순(최근 계약이 위). 헤더 클릭으로 오름/내림 전환한다.
+      // contractDate는 'YYYY-MM-DD' 문자열이라 사전순 비교가 곧 날짜순이다.
+      sorter: (a, b) => a.contractDate.localeCompare(b.contractDate),
+      defaultSortOrder: 'descend',
     },
     {
       title: '완성 예정일',
       dataIndex: 'dueDate',
       key: 'dueDate',
       width: COL.name,
+      // 완성 예정일로도 정렬 가능. 미정(null)은 정렬 방향과 무관하게 뒤로 가도록 먼 미래로 취급한다.
+      sorter: (a, b) => (a.dueDate ?? '9999-99-99').localeCompare(b.dueDate ?? '9999-99-99'),
       render: (v: string | null) => v ?? <Typography.Text type="secondary">미정</Typography.Text>,
     },
     {
