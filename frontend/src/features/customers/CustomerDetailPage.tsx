@@ -25,7 +25,7 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs from 'dayjs';
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import type { Appointment, Consultation } from '../../api/appointments';
 import { ApiError } from '../../api/client';
@@ -40,7 +40,6 @@ import {
   type CustomerRepairRow,
   type CustomerSaveBody,
 } from '../../api/customers';
-import { COMPONENT_STATUS_RANK } from '../../api/production';
 import { ALLOCATION_STATUS_META } from '../../api/rentals';
 import { repairStatusMeta } from '../../api/repairs';
 import {
@@ -54,6 +53,11 @@ import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { APPT_STATUS_META, SOURCE_META } from '../appointments/appointment-constants';
 import { CUSTOMER_STATUS_META, formatAmount } from './customer-constants';
+import {
+  buildContractTrackRows,
+  ProgressSummaryCard,
+  type SummaryRow,
+} from './contract-progress-summary';
 import { metaOf } from '../../shared/status-meta';
 import { usePageTitle } from '../../shared/page-title-store';
 
@@ -66,30 +70,6 @@ import { usePageTitle } from '../../shared/page-title-store';
 
 // 구성품 표시명은 중앙(api/code-labels) 공유 맵을 쓴다(관리자 편집 전 화면 반영).
 const COMPONENT_TYPE_LABEL = COMPONENT_TYPE_LABELS;
-
-/**
- * 진행 요약 한 줄의 상태 표기.
- * 완료된 단계는 "완료 + 완료일"을, 진행중 단계는 넘겨받은 상태 노드를 그대로 보여준다.
- */
-function ProgressStatus({
-  done,
-  doneDate,
-  ongoing,
-}: {
-  done: boolean;
-  doneDate?: string | null;
-  ongoing: ReactNode;
-}) {
-  if (done) {
-    return (
-      <Space size={6}>
-        <Tag color="success">완료</Tag>
-        <Typography.Text>완료일 {doneDate ?? '-'}</Typography.Text>
-      </Space>
-    );
-  }
-  return <>{ongoing}</>;
-}
 
 /** 요약표 탭 상단의 "해당 화면으로 이동" 링크 */
 function GoToScreen({ path, label }: { path: string; label: string }) {
@@ -184,210 +164,50 @@ export function CustomerDetailPage() {
     : { ...statusMeta, contractNo: null };
 
   /*
-    진행 요약 — 각 메뉴(예약·계약·컨설팅·채촌·제작·렌탈·수선)의 현재 상태만 읽어
-    보여주고 해당 메뉴로 이동만 시킨다. 저장·기능 없는 읽기 전용 파생 뷰다.
-    (진행 상태를 별도 테이블로 관리하던 방식을 걷어내고, 각 도메인 상태를 그대로 비춘다.)
+    진행 요약 — "현재 진행중인 트랙만" 블록으로 쌓는 읽기 전용 파생 뷰다.
+     · 계약 트랙(계약·컨설팅·채촌·제작): 현재(대표) 계약이 진행중일 때만, 그 계약 하나에
+       스코프해 노출한다(계약이 여러 건이어도 서로 섞이지 않는다). '완료'는 제작 관리까지
+       전량 출고돼야 성립하므로, 계약이 COMPLETED여도 그 계약의 제작이 남았으면 진행중으로 본다.
+     · 수선 트랙: 계약과 별개. 진행중 수선접수가 있으면 계약 블록 아래에 표시한다.
+     · 이전 계약의 진행 요약은 하단 '계약' 탭 → 계약 상세 안(계약서·버전 사이)에서 확인한다.
   */
-  // 각 영역을 그 고객의 전용 화면으로 딥링크한다 — 주문번호/계약번호 → 계약id 매핑.
-  const contractIdByNo = new Map(data.contracts.map((c) => [c.contractNo, c.id]));
-  const contractIdOfOrderNo = (orderNo: string) => {
-    const o = data.orders.find((x) => x.orderNo === orderNo);
-    return o?.contractNo ? contractIdByNo.get(o.contractNo) : undefined;
-  };
-
-  const summaryRows: { key: string; label: string; status: ReactNode; to: string }[] = [];
-  if (data.appointments.length || data.consultations.length) {
-    const latestAppt = data.appointments.reduce<Appointment | undefined>(
-      (m, a) => (!m || a.startAt > m.startAt ? a : m),
-      undefined,
-    );
-    summaryRows.push({
-      key: 'appt',
-      label: '예약·상담',
-      status: latestAppt ? (
-        <ProgressStatus
-          // 방문완료(VISITED)면 완료 칩 + 방문일. 예약·확정은 진행중, 취소·노쇼는 상태만.
-          done={latestAppt.status === 'VISITED'}
-          doneDate={dayjs(latestAppt.startAt).format('YYYY-MM-DD')}
-          ongoing={
-            <span>
-              {latestAppt.status === 'RESERVED' || latestAppt.status === 'CONFIRMED'
-                ? `진행중 · ${metaOf(APPT_STATUS_META, latestAppt.status).label}`
-                : metaOf(APPT_STATUS_META, latestAppt.status).label}
-            </span>
-          }
-        />
-      ) : (
-        <span>상담 {data.consultations.length}건</span>
-      ),
-      to: latestAppt ? `/appointments/${latestAppt.id}` : '/appointments',
-    });
-  }
-  if (data.contracts.length) {
-    const c = repContract ?? data.contracts[0];
-    summaryRows.push({
-      key: 'contract',
-      label: '계약',
-      // 계약서 코드는 사용자가 모르므로 뺀다.
-      // 완료: '완료' 칩 + 완료일 + 완료예정일.
-      // 진행중: 상태만 표시 — 서명 전은 모두 '임시저장', 서명 후는 '서명완료'.
-      status:
-        c.status === 'COMPLETED' ? (
-          <Space size={10} wrap>
-            <Tag color="success">완료</Tag>
-            <Typography.Text>완료일 {c.contractedAt ?? '-'}</Typography.Text>
-            <Typography.Text>완료예정일 {c.completionDueDate ?? '-'}</Typography.Text>
-          </Space>
-        ) : c.status === 'CANCELLED' ? (
-          <span>취소</span>
-        ) : (
-          <span>진행중 · {c.status === 'SIGNED' ? '서명완료' : '임시저장'}</span>
-        ),
-      to: `/contracts/${c.id}`,
-    });
-  }
-  const customOrder = data.orders.find(
-    (o) => o.transactionType === 'CUSTOM' && (o.items?.length ?? 0) > 0,
-  );
-  const customItems = data.orders
-    .filter((o) => o.transactionType === 'CUSTOM')
-    .flatMap((o) => o.items ?? []);
-  if (customItems.length) {
-    const confirmed = customItems.filter((i) => i.optionStatus === 'CONFIRMED').length;
-    const allConfirmed = confirmed === customItems.length;
-    // 완료일 = 품목별 확정일 중 가장 늦은 날짜(마지막 확정 시점)
-    const confirmedDates = customItems
-      .map((i) => i.optionConfirmedAt)
-      .filter((d): d is string => !!d)
-      .sort();
-    const confirmedDate = confirmedDates[confirmedDates.length - 1];
-    const optionContractId = customOrder?.contractNo
-      ? contractIdByNo.get(customOrder.contractNo)
-      : undefined;
-    summaryRows.push({
-      key: 'option',
-      label: '스타일 컨설팅',
-      status: (
-        <ProgressStatus
-          done={allConfirmed}
-          doneDate={confirmedDate}
-          ongoing={<span>{`진행중 · 옵션 확정 ${confirmed}/${customItems.length} 품목`}</span>}
-        />
-      ),
-      to: optionContractId ? `/contracts/${optionContractId}/options` : '/production',
-    });
-  }
-  if (data.measurements.length) {
-    // 백엔드가 versionNo 내림차순으로 내려주므로 [0]이 최신 채촌 세션이다.
-    const latestMeasure = data.measurements[0];
-    // 완료 판정은 제작 관리와 동일하게 "품목에 연결된(사용 중인) 채촌 존재" 기준으로 본다.
-    // (measurementSession.completedAt은 런타임에 세팅되지 않아 항상 진행중으로 보이던 문제 해결)
-    const linkedMeasure = data.measurements.find((m) => (m.usedByItems?.length ?? 0) > 0);
-    const measureDone = !!linkedMeasure;
-    const measureDate = linkedMeasure?.completedAt ?? linkedMeasure?.date;
-    summaryRows.push({
-      key: 'measure',
-      label: '채촌',
-      status: (
-        <Space size={6} wrap>
-          <ProgressStatus
-            done={measureDone}
-            doneDate={measureDate}
-            ongoing={<span>진행중 · 작성중</span>}
-          />
-          <Typography.Text>{`총 ${data.measurements.length}회`}</Typography.Text>
-        </Space>
-      ),
-      // 목록 필터가 아니라 이 고객의 최신 채촌 세션 상세로 바로 이동한다.
-      to: `/measurements/${latestMeasure.id}`,
-    });
-  }
-  // 구성품은 거래 유형으로 나눈다: 제작 관리는 맞춤(CUSTOM), 렌탈 탭/요약은 렌탈(RENTAL).
+  // 제작 관리 목록(하단 탭)은 맞춤(CUSTOM) 구성품만 보여준다 — 렌탈 제외.
   const customComponents = data.components.filter((c) => c.transactionType !== 'RENTAL');
-  const rentalComponents = data.components.filter((c) => c.transactionType === 'RENTAL');
-  if (customComponents.length) {
-    const prodContractId = contractIdOfOrderNo(customComponents[0].orderNo);
-    // 취소 구성품은 진행률·대표 상태 계산에서 제외한다(분모 왜곡·병목 오인 방지).
-    const activeComponents = customComponents.filter((c) => c.status !== 'CANCELLED');
-    const total = activeComponents.length;
-    const released = activeComponents.filter((c) => c.status === 'RELEASED').length;
-    // 완료일 = 실제 출고일 중 가장 늦은 날짜(마지막 출고 시점)
-    const outboundDates = activeComponents
-      .map((c) => c.actualOutboundAt)
-      .filter((d): d is string => !!d)
-      .sort();
-    const outboundDate = outboundDates[outboundDates.length - 1];
-    // 진행중 대표 상태 = 가장 덜 진행된 구성품(병목)의 상태
-    const leastStatus = [...activeComponents].sort(
-      (a, b) => (COMPONENT_STATUS_RANK[a.status] ?? 0) - (COMPONENT_STATUS_RANK[b.status] ?? 0),
-    )[0]?.status;
-    summaryRows.push({
-      key: 'production',
-      label: '제작 관리',
-      status: leastStatus ? (
-        <Space size={6} wrap>
-          <ProgressStatus
-            done={released === total}
-            doneDate={outboundDate}
-            // 상태 앞 동그라미(Badge) 없이 컨설팅·채촌과 같은 평문 스타일로 출력한다.
-            ongoing={<span>진행중 · {metaOf(COMPONENT_STATUS_META, leastStatus).label}</span>}
-          />
-          <Typography.Text>{`출고 ${released}/${total}`}</Typography.Text>
-        </Space>
-      ) : (
-        // 전 구성품이 취소된 경우
-        <Typography.Text>취소</Typography.Text>
-      ),
-      to: prodContractId ? `/contracts/${prodContractId}/production` : '/production',
-    });
-  }
-  if (rentalComponents.length) {
-    const rentalContractId = contractIdOfOrderNo(rentalComponents[0].orderNo);
-    // 스타일 컨설팅(렌탈 파트)에서 확정된 품목의 구성품 수 = 컨설팅 확정 진척.
-    const confirmedItemIds = new Set(
-      data.orders
-        .filter((o) => o.transactionType === 'RENTAL')
-        .flatMap((o) => (o.items ?? []).filter((it) => it.rentalConsultingConfirmed).map((it) => it.id)),
+  // 현재 계약의 맞춤 구성품(취소 제외) — 계약 완료(제작 전량 출고) 판정용.
+  const repOrderNos = new Set(
+    data.orders.filter((o) => o.contractNo === repContract?.contractNo).map((o) => o.orderNo),
+  );
+  const repActiveComponents = customComponents.filter(
+    (c) => repOrderNos.has(c.orderNo) && c.status !== 'CANCELLED',
+  );
+  const productionAllReleased =
+    repActiveComponents.length > 0 && repActiveComponents.every((c) => c.status === 'RELEASED');
+  const contractSettled =
+    repContract?.status === 'COMPLETED' &&
+    (repActiveComponents.length === 0 || productionAllReleased);
+  const contractInProgress = !!repContract && !contractSettled;
+
+  const summaryRows: SummaryRow[] = [];
+  if (contractInProgress && repContract) {
+    // 현재 계약 하나에 스코프 — 미연결 '작성중' 채촌 세션도 진행중인 이 계약에 귀속시킨다.
+    summaryRows.push(
+      ...buildContractTrackRows(data, repContract, { includeUnlinkedMeasures: true }),
     );
-    const confirmed = rentalComponents.filter(
-      (c) => c.orderItemId && confirmedItemIds.has(c.orderItemId),
-    ).length;
-    const total = rentalComponents.length;
-    // 렌탈 완료 = 모든 구성품이 출고(대여)→반납(RETURNED)까지 끝난 상태. 완료일 = 마지막 반납일.
-    const allocByComponentId = new Map(data.rentals.map((a) => [a.componentId, a]));
-    const returnedCount = rentalComponents.filter(
-      (c) => allocByComponentId.get(c.id)?.status === 'RETURNED',
-    ).length;
-    const returnDates = rentalComponents
-      .map((c) => allocByComponentId.get(c.id))
-      .filter((a) => a?.status === 'RETURNED')
-      .map((a) => a?.actualReturnAt)
-      .filter((d): d is string => !!d)
-      .sort();
-    summaryRows.push({
-      key: 'rental',
-      label: '렌탈',
-      status: (
-        <ProgressStatus
-          done={returnedCount === total}
-          doneDate={returnDates[returnDates.length - 1]}
-          // 진행중이면 다른 진행상황과 동일한 평문 스타일 — 컨설팅 확정 진척을 보여준다.
-          ongoing={<span>{`진행중 · 컨설팅 확정 ${confirmed}/${total}`}</span>}
-        />
-      ),
-      to: rentalContractId ? `/contracts/${rentalContractId}/production` : '/rentals',
-    });
   }
-  if (data.repairs.length) {
-    const latestRepair = data.repairs[0];
-    // 동그라미(Badge) 없이 컨설팅·채촌·제작과 같은 평문 스타일로 통일.
-    const repairLabel = repairStatusMeta(latestRepair.status).label;
-    const repairInProgress =
-      latestRepair.status !== 'RELEASED' && latestRepair.status !== 'CANCELLED';
+  // 수선 트랙 — 진행중(RELEASED·CANCELLED 아님) 수선접수를 계약 블록 아래에 건별로 표시.
+  for (const rp of data.repairs.filter(
+    (r) => r.status !== 'RELEASED' && r.status !== 'CANCELLED',
+  )) {
     summaryRows.push({
-      key: 'repair',
+      key: `repair-${rp.id}`,
       label: '수선',
-      status: <span>{repairInProgress ? `진행중 · ${repairLabel}` : repairLabel}</span>,
+      status: (
+        <Space size={6}>
+          <Tag color="success">진행중</Tag>
+          <span>{`${repairStatusMeta(rp.status).label}${rp.target ? ` (${rp.target})` : ''}`}</span>
+        </Space>
+      ),
+      done: false,
       to: `/repairs?customerId=${customer.id}&customerName=${encodeURIComponent(customer.name)}`,
     });
   }
@@ -510,6 +330,7 @@ export function CustomerDetailPage() {
   // 렌탈 탭: 계약에 포함된 렌탈 구성품에 실물 배정(있으면) 정보를 얹는다.
   // 배정 전이면 실물 관리 ID·배정 상태가 비어 '미배정'으로 표시된다.
   type RentalRow = CustomerComponentRow & { allocationStatus: string | null };
+  const rentalComponents = data.components.filter((c) => c.transactionType === 'RENTAL');
   const allocByComponentId = new Map(data.rentals.map((a) => [a.componentId, a]));
   const rentalRows: RentalRow[] = rentalComponents.map((c) => {
     const alloc = allocByComponentId.get(c.id);
@@ -634,39 +455,8 @@ export function CustomerDetailPage() {
         </Row>
       </Card>
 
-      {/* 진행 요약 — 각 메뉴의 현재 상태만 비추고 이동시킨다(읽기 전용). */}
-      {summaryRows.length > 0 && (
-        <Card title="진행 요약" size="small">
-          <List
-            size="small"
-            dataSource={summaryRows}
-            renderItem={(r) => (
-              <List.Item
-                actions={[
-                  <Button
-                    key="go"
-                    type="primary"
-                    ghost
-                    shape="round"
-                    size="small"
-                    onClick={() => navigate(r.to)}
-                  >
-                    작업화면으로 이동하기
-                  </Button>,
-                ]}
-              >
-                <List.Item.Meta
-                  title={r.label}
-                  // 진행 요약의 상태·날짜 글자를 굵기는 그대로 두고 색만 진하게(어둡게) 출력한다.
-                  description={
-                    <span style={{ color: 'rgba(0, 0, 0, 0.88)' }}>{r.status}</span>
-                  }
-                />
-              </List.Item>
-            )}
-          />
-        </Card>
-      )}
+      {/* 진행 요약 — 현재 진행중 트랙만 비추고 각 작업화면으로 이동시킨다(읽기 전용). */}
+      <ProgressSummaryCard rows={summaryRows} />
 
       <Card>
         <Tabs
