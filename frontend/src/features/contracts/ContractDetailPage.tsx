@@ -524,7 +524,6 @@ export function ContractDetailPage() {
       {/* 계약서 웹 표시 — 품목(벌) × 부위 × 유료옵션 계층·서명 상태 (설계서 v2 03 §6) */}
       {id && <ContractDocumentView contractId={id} />}
 
-
       {/*
         계약 상세는 최종 계약 내용만 보여준다(위 계약서 카드).
         품목 표·주문 목록은 각각 계약서 카드와 제작·입출고 화면에서 본다.
