@@ -34,9 +34,8 @@ export function ReauthModal({ open, onCancel, onSuccess, onLocked }: Props) {
   useEffect(() => {
     if (open) {
       form.resetFields();
-      if (import.meta.env.DEV) {
-        form.setFieldsValue({ password: DEFAULT_ADMIN_PASSWORD });
-      }
+      // 고객 테스트 단계 — 운영 빌드에서도 채운다(LoginPage와 같은 이유).
+      form.setFieldsValue({ password: DEFAULT_ADMIN_PASSWORD });
       setError(null);
     }
   }, [open, form]);

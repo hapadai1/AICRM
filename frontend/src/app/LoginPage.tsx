@@ -64,10 +64,11 @@ export function LoginPage() {
           layout="vertical"
           onFinish={onFinish}
           requiredMark={false}
-          // 개발 편의: 개발 모드에서만 시드 계정을 폼에 기본 입력해 둔다.
-          initialValues={
-            import.meta.env.DEV ? { loginId: 'admin', password: 'admin1234!' } : undefined
-          }
+          /*
+            고객 테스트 단계라 운영 빌드에서도 시드 계정을 채워 둔다 — 접속해서 [로그인]만
+            누르면 되게 한다. 실사용 계정을 나눠 주기 전에 이 프리필을 걷어내야 한다.
+          */
+          initialValues={{ loginId: 'admin', password: 'admin1234!' }}
         >
           <Form.Item
             name="loginId"
