@@ -50,11 +50,13 @@ import { FittingModal } from './FittingModal';
 import { StageProgress, type StageRow } from './StageProgress';
 import { OrderRequestModal } from './OrderRequestModal';
 import {
+  FLOW_TITLE_ACTION_SLOT,
   STAGE_BODY_INDENT,
   STAGE_LABEL_WIDTH,
   STAGE_SUMMARY_WIDTH,
-  bulkButtonStyle,
   docButtonStyle,
+  flowButtonStyle,
+  progressLabel,
 } from './production-layout';
 import {
   PREP_STAGE_CODE,
@@ -66,6 +68,13 @@ import {
 
 /** 수동 [고객 연락] 버튼을 다는 입고 단계 — 이 단계들만 발송 문구·마지막 발송일을 따로 읽는다. */
 const RECEIVE_CONTACT_STAGES = ['BASTING_RECEIVED', 'PRODUCT_RECEIVED'];
+
+/**
+ * 카드 머리글의 진행 표시가 시작하는 x — 아래 단계 줄 '완료 4/4'(요약) 열에 맞춘다(2026-08-20 현업 요청).
+ * 작은 세로 Steps의 아이콘 칸(≈40) + 단계명 칸(STAGE_LABEL_WIDTH) 근사치다.
+ * 정렬이 몇 px 어긋나면 앞의 아이콘 칸 값(40)만 조정하면 된다.
+ */
+const HEADER_SUMMARY_X = 40 + STAGE_LABEL_WIDTH;
 
 interface ProductionFlowCardProps {
   title: string;
@@ -459,17 +468,21 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
     const rows = rowsOf(i);
     const pending = rows.filter((r) => !r.target.completed);
     const isCurrent = detail?.currentStageCode === stage.code;
+    // 완료/진행중 강약(2026-08-20 현업 요청): 완료 단계는 흐리게 가라앉히고
+    // 진행중 단계는 보통 밝기로 둔다 — 대비만으로 진행중을 드러낸다(배경·액센트는 쓰지 않는다).
+    const isDone = rows.length > 0 ? pending.length === 0 : !!view?.completed;
 
     /*
-      요약은 `n/m 완료` 한 형식으로만 적는다 — 단계가 세로로 나란히 서 있어
+      요약은 `완료 n/m`·`진행중 n/m` 한 형식으로만 적는다 — 단계가 세로로 나란히 서 있어
       같은 자리에서 같은 모양을 비교하는 편이 빠르다(2026-08-04 현업 확정).
+      전 품목이 끝났을 때만 '완료', 한 건이라도 남으면 '진행중'이다(2026-08-20 현업 요청).
       진행 기록이 없어도 제작 상태로 지나간 품목은 끝난 것으로 센다.
     */
     const summary =
       rows.length > 0
-        ? `${rows.length - pending.length}/${rows.length} 완료`
+        ? progressLabel(rows.length - pending.length, rows.length)
         : view
-          ? `${view.completedCount}/${view.targetCount} 완료`
+          ? progressLabel(view.completedCount, view.targetCount)
           : '';
 
     // 앞 단계가 안 끝난 품목은 [전체 …] 대상에서도 빠진다 — 순서를 건너뛰지 않는다.
@@ -486,7 +499,7 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
           ? (blocked(pending[0]) ?? '아직 처리할 수 없습니다.')
           : null;
     const bulkButton = (
-      <Button size="small" disabled={!!bulkReason} style={bulkButtonStyle}>
+      <Button size="small" disabled={!!bulkReason} style={flowButtonStyle}>
         전체 {stage.action} ({ready.length})
       </Button>
     );
@@ -549,14 +562,6 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
       </Can>
     ) : null;
 
-    const bulk =
-      bulkAction || contactBulk ? (
-        <Space size={8}>
-          {bulkAction}
-          {contactBulk}
-        </Space>
-      ) : null;
-
     // 연락 문구는 방금 끝낸 단계의 것이다 — 현재 단계 줄에 상시 버튼으로 띄운다(같은 단계 한 번만).
     const contact =
       isCurrent && detail?.currentSuggestion ? (
@@ -608,7 +613,6 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
             onUndoComponent={(row, component) => undoComponentMutation.mutate({ stage, row, component })}
             undoBlockedReason={undoBlockedReasonAt(i)}
             blockedReason={blocked}
-            bulk={bulk}
             renderExtras={
               stage.extras === 'WORK_ORDER'
                 ? /*
@@ -636,27 +640,48 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
     return {
       title: (
         /*
-          단계 줄의 버튼은 아래 표의 [발주]와 같은 x에서 시작한다 —
-          단계명 칸(STAGE_LABEL_WIDTH) + 요약 칸(품목 열과 같은 폭)이 그 자리를 만든다.
-          완료 날짜는 버튼 뒤로 뺐다. 앞에 두면 길이가 들쭉날쭉해 버튼 자리가 흔들린다.
+          한 줄에 단계명·요약·완료일·전체처리([전체 입고])·고객 연락을 둔다.
+          단계명 칸(STAGE_LABEL_WIDTH) + 요약 칸(STAGE_SUMMARY_WIDTH = 품목+상태 열 폭)만큼
+          자리를 먼저 잡아, [전체 입고] 버튼이 아래 표의 [발주]·[입고] 버튼과 같은 x에서 시작하게 한다.
+          그 [전체 입고]는 처리 칸 폭(FLOW_TITLE_ACTION_SLOT)만큼 자리를 잡아, 뒤따르는 [고객 연락]이
+          아래 표의 완료일과 같은 열에서 시작한다(2026-08-20 현업 요청). 완료일은 요약과 같은 칸에
+          붙여 적는다 — 예전처럼 처리 버튼을 표 머리 행으로 내리면 그 사이가 비어 데이터가 빠진 듯 보였다.
         */
-        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ display: 'inline-block', minWidth: STAGE_LABEL_WIDTH }}>{stage.label}</span>
-          <span style={{ display: 'inline-block', minWidth: STAGE_SUMMARY_WIDTH, fontWeight: 400 }}>
+        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', rowGap: 4 }}>
+          {/* 완료 단계는 단계명도 회색으로 눌러 조용하게(opacity로 겹쳐 누르면 너무 흐려 읽기 힘들다). */}
+          <Typography.Text
+            type={isDone ? 'secondary' : undefined}
+            style={{ display: 'inline-block', minWidth: STAGE_LABEL_WIDTH }}
+          >
+            {stage.label}
+          </Typography.Text>
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+              minWidth: STAGE_SUMMARY_WIDTH,
+              fontWeight: 400,
+            }}
+          >
+            {/* 완료는 회색으로 가라앉히고 진행중은 파랑으로 강조한다(2026-08-20 현업 요청). */}
             <Typography.Text
-              type={rows.length > 0 ? (pending.length === 0 ? 'success' : undefined) : view?.completed ? 'success' : undefined}
               strong
+              type={isDone ? 'secondary' : undefined}
+              style={isDone ? undefined : { color: '#1677ff' }}
             >
               {summary}
             </Typography.Text>
-          </span>
-          <Space size={8} wrap>
-            {contact}
             {view?.completedAt && (
-              <Typography.Text type="secondary" style={{ fontWeight: 400 }}>
-                {view.completedAt.slice(0, 10)}
-              </Typography.Text>
+              <Typography.Text type="secondary">{view.completedAt.slice(0, 10)}</Typography.Text>
             )}
+          </span>
+          {bulkAction && (
+            <span style={{ display: 'inline-block', minWidth: FLOW_TITLE_ACTION_SLOT }}>{bulkAction}</span>
+          )}
+          <Space size={8} wrap>
+            {contactBulk}
+            {contact}
           </Space>
         </div>
       ),
@@ -673,18 +698,24 @@ export function ProductionFlowCard({ title, trackType, items, journey }: Product
     <>
       <Card
         size="small"
-        title={`${title} · ${items.length}품목`}
-        extra={
-          <Space size={8}>
-            <Typography.Text type="secondary">
-              {doneStages}/{totalStages} 단계
-            </Typography.Text>
-            <Progress
-              percent={Math.round((doneStages / totalStages) * 100)}
-              size="small"
-              style={{ width: 120 }}
-            />
-          </Space>
+        title={
+          /* 진행 표시를 우측 끝이 아니라 아래 단계 줄의 '완료 4/4'(요약) 열에 맞춘다(2026-08-20 현업 요청).
+             제목을 그 x(HEADER_SUMMARY_X)까지 폭으로 잡아, 뒤의 진행 표시가 요약 열에서 시작한다. */
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            <span style={{ display: 'inline-block', minWidth: HEADER_SUMMARY_X }}>
+              {title} · {items.length}품목
+            </span>
+            <Space size={8} style={{ fontWeight: 400 }}>
+              <Typography.Text type="secondary">
+                진행 {doneStages}/{totalStages} 단계
+              </Typography.Text>
+              <Progress
+                percent={Math.round((doneStages / totalStages) * 100)}
+                size="small"
+                style={{ width: 120 }}
+              />
+            </Space>
+          </div>
         }
       >
         <Steps

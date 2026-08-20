@@ -38,11 +38,36 @@ export const STAGE_BODY_INDENT = STAGE_LABEL_WIDTH - 8;
  */
 export const STAGE_SUMMARY_WIDTH = NAME_WIDTH + STATUS_WIDTH;
 
+/**
+ * 흐름 카드(맞춤·렌탈) 버튼 통일 폭 — [전체 …] 전체 처리 버튼과 표 안 품목 처리 버튼을
+ * 가장 긴 라벨(`전체 완성복발주 (3)`)이 들어가는 한 크기로 맞춘다(2026-08-20 현업 요청).
+ * 준비 카드는 이 폭을 쓰지 않는다(ACTION_WIDTH 유지).
+ */
+export const FLOW_BUTTON_WIDTH = 138;
+export const flowButtonStyle = { width: FLOW_BUTTON_WIDTH } as const;
+/**
+ * 흐름 카드 처리 칸 — 버튼 폭에 오른쪽 여백을 더해, 버튼이 완료일과 붙지 않게 띄운다
+ * (2026-08-20 현업 지적: 버튼·완료일·작업지시서 간격이 좁음). 버튼은 칸 왼쪽에 붙으므로
+ * 칸을 넓혀도 단계 줄의 [전체 …] 버튼과 같은 x에서 시작하는 정렬은 그대로다.
+ */
+export const FLOW_ACTION_COL_WIDTH = FLOW_BUTTON_WIDTH + 24;
+/** 완료일 칸 왼쪽 여백 — 처리 버튼과 붙지 않게. 단계 줄 [고객 연락] 정렬도 이 값을 함께 쓴다. */
+export const FLOW_DATE_PAD = 12;
+/**
+ * 단계 줄에서 [전체 …] 버튼이 차지하는 칸 — 처리 칸 폭 + 완료일 여백만큼 잡아,
+ * 뒤따르는 [고객 연락] 버튼이 아래 표의 완료일과 같은 열에서 시작하게 한다(2026-08-20 현업 요청).
+ */
+export const FLOW_TITLE_ACTION_SLOT = FLOW_ACTION_COL_WIDTH + FLOW_DATE_PAD;
+
+/**
+ * 진행 요약 한 줄 — 전 품목이 끝났을 때만 `완료 n/m`, 한 건이라도 남으면 `진행중 n/m`.
+ * 완료·진행중을 접두로 앞세워 상태를 먼저 읽게 한다(2026-08-20 현업 요청).
+ */
+export function progressLabel(done: number, total: number): string {
+  const prefix = total > 0 && done >= total ? '완료' : '진행중';
+  return `${prefix} ${done}/${total}`;
+}
+
 /** 버튼 하나의 고정 폭 style — 글자 수가 달라도 세로로 줄이 맞는다. */
 export const actionButtonStyle = { width: ACTION_WIDTH } as const;
 export const docButtonStyle = { width: DOC_WIDTH } as const;
-/**
- * 단계 줄의 [전체 …] 버튼 — 시작 x만 표의 처리 버튼과 맞추고 폭은 글자에 따라 늘어난다
- * (`전체 완성복발주 (2)`처럼 긴 이름이 잘리지 않게).
- */
-export const bulkButtonStyle = { minWidth: ACTION_WIDTH } as const;

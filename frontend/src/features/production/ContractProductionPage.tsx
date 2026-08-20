@@ -18,12 +18,8 @@ import { fetchProductionItems } from '../../api/production';
 import { BackButton } from '../../shared/BackButton';
 import { ProductionFlowCard } from './ProductionFlowCard';
 import { ProductionPrepCard } from './ProductionPrepCard';
-import { TrackProgressBars } from './TrackProgressBars';
-import { contractTrackProgress } from './production-stages';
 import {
   DdayTag,
-  ReceivedCell,
-  WorkOrderCell,
   itemComposition,
   summarizeContract,
 } from './production-summary';
@@ -67,8 +63,6 @@ export function ContractProductionPage() {
   }
 
   const summary = summarizeContract(items);
-  // 헤더 진행률은 흐름 카드와 같은 단계 기반(준비 제외, 제작 단계만) — 목록과도 같은 계산을 쓴다.
-  const trackProgress = contractTrackProgress(items);
   // 취소 품목은 진행에서 빼고 머리글에서만 알린다 — 단계 안에 두면 할 일처럼 보인다.
   const liveItems = items.filter((i) => i.itemStatus !== 'CANCELLED');
   const cancelledItems = items.filter((i) => i.itemStatus === 'CANCELLED');
@@ -113,15 +107,6 @@ export function ContractProductionPage() {
                 {summary.dueDate ?? <Typography.Text type="secondary">미정</Typography.Text>}
                 {summary.dueDate && <DdayTag due={summary.dueDate} />}
               </Space>
-            </Descriptions.Item>
-            <Descriptions.Item label="제작 진행률">
-              <TrackProgressBars progress={trackProgress} barWidth={140} />
-            </Descriptions.Item>
-            <Descriptions.Item label="입고">
-              <ReceivedCell summary={summary} />
-            </Descriptions.Item>
-            <Descriptions.Item label="작업지시서">
-              <WorkOrderCell summary={summary} />
             </Descriptions.Item>
           </Descriptions>
           {cancelledItems.length > 0 && (
