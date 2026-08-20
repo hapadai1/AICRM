@@ -79,6 +79,10 @@
   padding: 0 !important;
 }
 
+/* 제작 흐름 카드 — 완료/진행중 강약(2026-08-20 현업 요청).
+ * 완료 줄은 opacity로 누르지 않는다 — 회색 텍스트에 opacity까지 겹치면 너무 흐려 읽기 힘들다.
+ * 대신 완료는 텍스트를 회색(secondary)으로, 진행중은 검정 굵게 + 파랑 버튼으로 위계를 준다. */
+
 /* 수선 목록에서 펼친 행의 부모 줄 — 밑에 열리는 펼침 내용과 같은 색(antd colorFillAlter)으로
  * 칠해 어느 행을 골랐는지 보이게 한다. 마우스를 올린 동안은 antd 호버색이 그대로 이긴다. */
 .ant-table-row.repair-row-expanded > .ant-table-cell {

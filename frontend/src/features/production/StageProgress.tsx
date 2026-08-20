@@ -19,11 +19,12 @@ import type { StageItem } from '../../api/journeys';
 import { Can } from '../../shared/Can';
 import { labelOf } from '../../shared/status-meta';
 import {
-  ACTION_WIDTH,
   DATE_WIDTH,
+  FLOW_ACTION_COL_WIDTH,
+  FLOW_DATE_PAD,
   NAME_WIDTH,
   STATUS_WIDTH,
-  actionButtonStyle,
+  flowButtonStyle,
 } from './production-layout';
 import type { ProductionStage } from './production-stages';
 
@@ -61,12 +62,6 @@ interface StageProgressProps {
   renderExtras?: (item: ProductionItem, blocked: string | null) => ReactNode;
   /** 처리 중인 행 key */
   pendingKey?: string;
-  /**
-   * 단계 전체 처리 버튼([전체 발주]). 표의 **머리 행**에 넣는다 —
-   * 단계 줄에 따로 그리면 표 여백을 코드로 계산해 맞춰야 해서 몇 px씩 어긋났다
-   * (2026-08-05 현업 지적). 같은 표의 같은 열에 두면 브라우저가 맞춰 준다.
-   */
-  bulk?: ReactNode;
   /**
    * 아직 이 단계를 눌러선 안 되는 품목의 사유. 앞 단계를 건너뛰고 뒤 단계를 처리하면
    * 어디까지 왔는지가 기록에서 사라지므로, 순서를 화면이 지킨다.
@@ -108,7 +103,6 @@ export function StageProgress({
   renderExtras,
   pendingKey,
   blockedReason,
-  bulk,
 }: StageProgressProps) {
   if (rows.length === 0) return null;
 
@@ -133,12 +127,15 @@ export function StageProgress({
     상태는 `완료 / 미완료` 둘뿐이고 버튼도 줄마다 하나다 (2026-08-05 현업 확정).
     미완료면 그 단계 이름(`발주`), 완료면 그 이름에 취소를 붙인다(`발주 취소`).
     취소는 업무를 되돌리는 기능이 아니라 **시스템을 잘못 누른 것을 정정**하는 기능이다.
+
+    색 위계(2026-08-20 현업 요청): 완료는 회색(secondary)으로 죽이고,
+    미완료(지금 작업할 것)는 검정 굵게 살려 진행중 항목이 바로 보이게 한다.
   */
   const statusCell = (row: StageRow) =>
     row.target.completed ? (
-      <Typography.Text type="success">완료</Typography.Text>
+      <Typography.Text type="secondary">완료</Typography.Text>
     ) : (
-      <Typography.Text type="secondary">미완료</Typography.Text>
+      <Typography.Text strong>미완료</Typography.Text>
     );
 
   const actionCell = (row: StageRow) => {
@@ -155,7 +152,7 @@ export function StageProgress({
               disabled={!!locked}
               loading={pendingKey === row.key}
               onClick={() => onUncomplete(row)}
-              style={actionButtonStyle}
+              style={flowButtonStyle}
             >
               {stage.action} 취소
             </Button>
@@ -174,7 +171,7 @@ export function StageProgress({
             disabled={!!blocked}
             loading={pendingKey === row.key}
             onClick={() => onComplete(row)}
-            style={actionButtonStyle}
+            style={flowButtonStyle}
           >
             {stage.action}
           </Button>
@@ -188,12 +185,17 @@ export function StageProgress({
     const { target } = row;
     if (!target.completed || !target.completedAt) return null;
     const date = target.completedAt.slice(0, 10);
+    // 처리 버튼이 칸을 꽉 채워 완료일이 버튼에 붙는다 — 왼쪽 여백으로 띄운다(2026-08-20 현업 지적).
+    // 이 여백은 단계 줄 [고객 연락] 버튼 정렬(FLOW_TITLE_ACTION_SLOT)과 값을 공유한다.
+    const text = (
+      <Typography.Text type="secondary" style={{ paddingLeft: FLOW_DATE_PAD }}>
+        {date}
+      </Typography.Text>
+    );
     return target.completedByName ? (
-      <Tooltip title={`${target.completedByName} 처리`}>
-        <Typography.Text type="secondary">{date}</Typography.Text>
-      </Tooltip>
+      <Tooltip title={`${target.completedByName} 처리`}>{text}</Tooltip>
     ) : (
-      <Typography.Text type="secondary">{date}</Typography.Text>
+      text
     );
   };
 
@@ -216,9 +218,16 @@ export function StageProgress({
               : stage.effect === 'COMPONENT_RELEASE'
                 ? c.actualOutboundAt
                 : undefined;
+          // 완료된 세부 항목도 회색으로 가라앉힌다(2026-08-20 현업 요청) — 품목이 완료됐거나,
+          // 입출고처럼 구성품별로 끝내는 단계에서 그 구성품이 완료된 경우. 품목 단위 단계(발주·
+          // 가봉 피팅)에서는 품목 완료만 본다 — 품목은 미완료인데 구성품만 회색이면 어긋나 보인다.
+          const dim = row.target.completed || (perComponent && done);
           return (
             <Space key={c.id} size={8}>
-              <Typography.Text style={{ display: 'inline-block', minWidth: 120 }}>
+              <Typography.Text
+                type={dim ? 'secondary' : undefined}
+                style={{ display: 'inline-block', minWidth: 120 }}
+              >
                 {name}
               </Typography.Text>
               {/*
@@ -279,19 +288,30 @@ export function StageProgress({
               onClick={() => onToggleExpand(row.key)}
             />
           )}
-          <Typography.Text strong>{row.target.displayName}</Typography.Text>
+          {/* 완료 품목은 회색·보통 굵기로 눌러, 미완료(진행중) 품목명이 검정 굵게 도드라지게 한다. */}
+          <Typography.Text strong={!row.target.completed} type={row.target.completed ? 'secondary' : undefined}>
+            {row.target.displayName}
+          </Typography.Text>
         </Space>
       ),
     },
     { title: '', key: 'status', width: STATUS_WIDTH, render: (_, row) => statusCell(row) },
-    // 머리 행에는 [전체 …]만 둔다 — 열 이름을 적으면 단계마다 같은 말이 반복돼 시끄럽다.
-    { title: bulk ?? '', key: 'action', width: ACTION_WIDTH, render: (_, row) => actionCell(row) },
+    { title: '', key: 'action', width: FLOW_ACTION_COL_WIDTH, render: (_, row) => actionCell(row) },
     { title: '', key: 'date', width: DATE_WIDTH, render: (_, row) => dateCell(row) },
+    /*
+      서류 칸에는 폭을 주지 않는다 — table-layout: fixed에서 폭 없는 칸이 남는 자리를
+      혼자 흡수해, 앞의 품목·상태·처리·완료일 칸이 정확한 픽셀 폭을 지킨다. 덕분에
+      완료일이 어느 단계든 같은 x에 서고(발주·입고·출고 동일), 단계 줄의 [전체 …] 버튼도
+      아래 처리 버튼과 같은 열에서 시작한다(2026-08-20 현업 지적).
+      작업지시서 버튼은 완료일과 붙지 않게 왼쪽 여백을 준다.
+    */
     {
       title: '',
       key: 'extras',
       render: (_, row) =>
-        renderExtras && row.item ? renderExtras(row.item, blockedReason?.(row) ?? null) : null,
+        renderExtras && row.item ? (
+          <div style={{ paddingLeft: 12 }}>{renderExtras(row.item, blockedReason?.(row) ?? null)}</div>
+        ) : null,
     },
   ];
 
@@ -299,7 +319,8 @@ export function StageProgress({
     <Table<StageRow>
       size="small"
       rowKey="key"
-      showHeader={!!bulk}
+      showHeader={false}
+      tableLayout="fixed"
       columns={columns}
       dataSource={rows}
       pagination={false}

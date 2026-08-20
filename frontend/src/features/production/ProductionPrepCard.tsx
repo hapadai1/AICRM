@@ -167,11 +167,15 @@ export function ProductionPrepCard({
   return (
     <Card
       size="small"
-      title="준비"
-      extra={
-        <Typography.Text type={allDone ? 'success' : undefined} strong>
-          {allDone ? '준비 완료' : `${doneCount}/${rows.length} 진행중`}
-        </Typography.Text>
+      title={
+        /* '준비 완료'를 우측 끝이 아니라 아래 표의 상태(완료) 열에 맞춘다(2026-08-20 현업 요청).
+           '준비' 칸을 품목 열 폭 + 셀 여백(8)만큼 잡아 그 뒤 텍스트가 '완료' 열에서 시작한다. */
+        <span style={{ display: 'inline-flex', alignItems: 'baseline' }}>
+          <span style={{ display: 'inline-block', minWidth: NAME_WIDTH + 8 }}>준비</span>
+          <Typography.Text type={allDone ? 'success' : undefined} strong>
+            {allDone ? '준비 완료' : `${doneCount}/${rows.length} 진행중`}
+          </Typography.Text>
+        </span>
       }
     >
       <Table<PrepRow>
