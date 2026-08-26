@@ -36,6 +36,7 @@ import {
 } from '../../api/contracts';
 import { useModeStore } from '../../app/mode-store';
 import { Can } from '../../shared/Can';
+import { formatPhone } from '../../shared/phone';
 import { DataTable } from '../../shared/DataTable';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { LAYOUT } from '../../app/theme';
@@ -306,7 +307,7 @@ export function ContractListPage({
         <Space direction="vertical" size={0}>
           <Typography.Text>{name}</Typography.Text>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {row.customerPhone || '-'}
+            {formatPhone(row.customerPhone)}
           </Typography.Text>
         </Space>
       ),

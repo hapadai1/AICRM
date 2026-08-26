@@ -14,6 +14,7 @@ import { useEffect } from 'react';
 import { ApiError } from '../../api/client';
 import type { CustomerSummary } from '../../api/contracts';
 import { updateCustomer } from '../../api/customers';
+import { formatPhone } from '../../shared/phone';
 
 /** 계약서로 넘어가기 전 채워져 있어야 하는 고객 필드 (설계서 07 D7) */
 const REQUIRED_BODY_FIELDS = ['heightCm', 'weightKg', 'age'] as const;
@@ -81,7 +82,7 @@ export function CustomerInfoGateModal({ open, customer, onDone, onPickAgain }: P
       width={480}
     >
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-        <Alert type="info" message={`${customer.name} · ${customer.phone}`} />
+        <Alert type="info" message={`${customer.name} · ${formatPhone(customer.phone)}`} />
         <Form form={form} layout="vertical" requiredMark>
           <Form.Item label="키 (cm)" name="heightCm" rules={[{ required: true, message: '키를 입력해 주세요.' }]}>
             <InputNumber style={{ width: '100%' }} min={0} max={300} precision={0} autoFocus />

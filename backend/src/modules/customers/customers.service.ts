@@ -353,7 +353,7 @@ export class CustomersService {
             createdByUser: { select: { displayName: true } },
             orderItemLinks: {
               where: { isCurrent: true },
-              select: { orderItem: { select: { displayName: true } } },
+              select: { orderItem: { select: { id: true, displayName: true } } },
             },
           },
         }),
@@ -457,7 +457,10 @@ export class CustomersService {
         date: toDateOnly(m.measurementDate),
         type: m.measurementType,
         staffName: m.createdByUser.displayName,
+        // 표시용(이름 Tag)과 매칭용(주문품목 id)을 분리한다 — 진행 요약은 id로 계약 품목에 붙이고,
+        // 채촌 표는 이름을 그대로 보여 준다.
         usedByItems: m.orderItemLinks.map((l) => l.orderItem.displayName),
+        usedByItemIds: m.orderItemLinks.map((l) => l.orderItem.id),
         fitPreference: m.fitPreference,
         relatedOrderId: m.relatedOrderId,
         completed: m.completedAt !== null,

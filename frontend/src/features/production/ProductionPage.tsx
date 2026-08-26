@@ -7,6 +7,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { fetchProductionItems, type ProductionItem } from '../../api/production';
 import { LAYOUT } from '../../app/theme';
 import { DataTable } from '../../shared/DataTable';
+import { formatPhone } from '../../shared/phone';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { COL } from '../../shared/table-width';
 import { ItemCompositionCell } from '../contracts/ItemCompositionCell';
@@ -114,7 +115,7 @@ export function ProductionPage() {
             {r.customerName}
           </Typography.Text>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {r.customerPhone || '-'}
+            {formatPhone(r.customerPhone)}
           </Typography.Text>
         </Space>
       ),

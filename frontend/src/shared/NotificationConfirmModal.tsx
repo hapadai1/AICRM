@@ -1,6 +1,7 @@
 import { App, Button, Descriptions, Input, Modal, Space, Tag, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { sendNotification } from '../api/notifications';
+import { formatPhone } from './phone';
 
 /**
  * 고객 연락 발송 확인창 (개발설계서 05 G-06).
@@ -128,7 +129,7 @@ export function NotificationConfirmModal({ open, title, suggestion, onDone, onCa
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
         <Typography.Text type="secondary">고객에게 알림을 보낼까요?</Typography.Text>
         <Descriptions size="small" column={1} bordered>
-          <Descriptions.Item label="받는 사람">{suggestion.recipientPhone}</Descriptions.Item>
+          <Descriptions.Item label="받는 사람">{formatPhone(suggestion.recipientPhone)}</Descriptions.Item>
           <Descriptions.Item label="채널">
             <Tag color={channel === 'ALIMTALK' ? 'gold' : 'blue'}>
               {channel === 'ALIMTALK' ? '알림톡' : 'SMS'}

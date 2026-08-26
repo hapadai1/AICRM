@@ -175,7 +175,11 @@ export function AppLayout() {
   const overrideTitle = usePageTitleStore((s) => s.title);
   const overrideSubtitle = usePageTitleStore((s) => s.subtitle);
   const pageTitle = overrideTitle ?? menuTitle;
-  const trail = [menuGroup, overrideTitle ? menuTitle : undefined].filter(Boolean) as string[];
+  // 오버라이드가 '지정됨'(빈 문자열 포함)이면 메뉴명을 브레드크럼으로 민다.
+  // 상세 화면이 빈 제목('')을 넣으면 "고객 ›"처럼 경로만 남기고 제목 자리는 비운다.
+  const trail = [menuGroup, overrideTitle != null ? menuTitle : undefined].filter(
+    Boolean,
+  ) as string[];
 
   const handleLogout = async () => {
     try {
@@ -271,9 +275,11 @@ export function AppLayout() {
             {trail.length > 0 && (
               <Typography.Text type="secondary">{trail.join(' › ')} ›</Typography.Text>
             )}
-            <Typography.Title level={4} style={{ margin: 0 }}>
-              {pageTitle}
-            </Typography.Title>
+            {pageTitle && (
+              <Typography.Title level={4} style={{ margin: 0 }}>
+                {pageTitle}
+              </Typography.Title>
+            )}
             {overrideSubtitle && (
               <Typography.Text type="secondary">{overrideSubtitle}</Typography.Text>
             )}

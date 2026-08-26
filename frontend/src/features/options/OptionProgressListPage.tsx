@@ -12,6 +12,7 @@ import { fetchOptionProgress } from '../../api/options';
 import type { RentalProgressItem } from '../../api/rentals';
 import { fetchRentalSelectionProgress } from '../../api/rentals';
 import { DataTable, DEFAULT_PAGE_SIZE } from '../../shared/DataTable';
+import { formatPhone } from '../../shared/phone';
 import { COL } from '../../shared/table-width';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
@@ -252,7 +253,7 @@ export function OptionProgressListPage({
             {row.customerName}
           </Typography.Text>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {row.customerPhone || '-'}
+            {formatPhone(row.customerPhone)}
           </Typography.Text>
         </Space>
       ),

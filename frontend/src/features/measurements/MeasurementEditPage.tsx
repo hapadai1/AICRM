@@ -55,6 +55,7 @@ import {
   uploadMeasurementImage,
 } from '../../api/measurements';
 import { BackButton } from '../../shared/BackButton';
+import { formatPhone } from '../../shared/phone';
 import { Can } from '../../shared/Can';
 import { labelOf } from '../../shared/status-meta';
 import {
@@ -452,7 +453,7 @@ export function MeasurementEditPage() {
   /** 고객 검색 목록 — 고객 없이 [새 채촌]으로 들어왔을 때만 쓴다. */
   const customerOptions = (customerQuery.data?.data ?? []).map((c) => ({
     value: c.id,
-    label: `${c.name} (${c.phone})`,
+    label: `${c.name} (${formatPhone(c.phone)})`,
   }));
 
   const startNewRecord = () =>
@@ -539,7 +540,7 @@ export function MeasurementEditPage() {
                     {isNew ? pickedCustomer?.name : session?.customerName}
                   </Typography.Title>
                   <Typography.Text type="secondary">
-                    {isNew ? pickedCustomer?.phone : session?.customerPhone}
+                    {formatPhone(isNew ? pickedCustomer?.phone : session?.customerPhone)}
                   </Typography.Text>
                   {isNew ? (
                     <Tag color="blue">신규 채촌</Tag>

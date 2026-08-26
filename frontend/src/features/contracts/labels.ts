@@ -17,7 +17,7 @@ export const TRANSACTION_TYPE_LABEL: Record<TransactionType, string> = {
  * 계약 구분 관리 표시·저장과 계약서 작성 시 기본 품목 채우기에서 함께 쓴다.
  */
 const TRANSACTION_ORDER: Record<string, number> = { CUSTOM: 0, RENTAL: 1 };
-const CATEGORY_ORDER: Record<string, number> = { SUIT: 0, SHIRT: 1, SHOES: 2 };
+export const CATEGORY_ORDER: Record<string, number> = { SUIT: 0, SHIRT: 1, SHOES: 2 };
 
 export function sortByCatalogOrder<T extends { transactionType: string; productCategory: string }>(
   lines: readonly T[],

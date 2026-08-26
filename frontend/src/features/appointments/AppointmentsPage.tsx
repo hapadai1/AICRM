@@ -34,6 +34,7 @@ import {
 } from './appointment-constants';
 import { AppointmentFormModal } from './AppointmentFormModal';
 import { MonthCalendar } from './MonthCalendar';
+import { formatPhone } from '../../shared/phone';
 import { metaOf } from '../../shared/status-meta';
 import { COL } from '../../shared/table-width';
 
@@ -271,7 +272,7 @@ export function AppointmentsPage() {
     },
     // 미계약/계약 배지는 제거했다 — 가망/계약 고객 구분이 폐기되어 표시 의미가 없다(설계서 07 D8).
     { title: '고객명', dataIndex: 'customerName', width: COL.name },
-    { title: '전화번호', dataIndex: 'phone', width: COL.code },
+    { title: '전화번호', dataIndex: 'phone', width: COL.code, render: (v: string) => formatPhone(v) },
     { title: '예약 목적', dataIndex: 'purposeName', width: COL.name },
     {
       title: '출처',

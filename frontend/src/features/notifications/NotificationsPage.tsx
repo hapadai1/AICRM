@@ -38,6 +38,7 @@ import {
 } from '../../api/notifications';
 import type { NotificationRecord, NotificationStatus } from '../../api/notifications';
 import { Can } from '../../shared/Can';
+import { formatPhone } from '../../shared/phone';
 import { COL } from '../../shared/table-width';
 import { metaOf } from '../../shared/status-meta';
 import { DataTable } from '../../shared/DataTable';
@@ -100,11 +101,11 @@ export function NotificationsPage() {
       key: 'customer',
       width: COL.wide,
       render: (_, record) => (
-        <Typography.Text style={{ maxWidth: 180 }} ellipsis={{ tooltip: `${record.customerName ?? ''} ${record.phone}` }}>
+        <Typography.Text style={{ maxWidth: 180 }} ellipsis={{ tooltip: `${record.customerName ?? ''} ${formatPhone(record.phone)}` }}>
           {record.customerName ?? '-'}
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             {' '}
-            {record.phone}
+            {formatPhone(record.phone)}
           </Typography.Text>
         </Typography.Text>
       ),
@@ -320,7 +321,7 @@ export function NotificationsPage() {
             value={customerId ?? undefined}
             options={(customersQuery.data?.data ?? []).map((c) => ({
               value: c.id,
-              label: `${c.name} · ${c.phone}${c.customerStatus === 'PROSPECT' ? ' (미계약)' : ''}`,
+              label: `${c.name} · ${formatPhone(c.phone)}${c.customerStatus === 'PROSPECT' ? ' (미계약)' : ''}`,
             }))}
             onChange={(v: string | undefined) => setCustomerId(v ?? null)}
             notFoundContent={customersQuery.isFetching ? '검색 중…' : '검색 결과가 없습니다.'}

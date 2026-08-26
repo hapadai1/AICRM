@@ -10,6 +10,7 @@ import { Can } from '../../shared/Can';
 import { DataTable } from '../../shared/DataTable';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
+import { formatPhone } from '../../shared/phone';
 import { metaOf } from '../../shared/status-meta';
 import { COL } from '../../shared/table-width';
 import { CustomerRegisterModal } from './CustomerRegisterModal';
@@ -43,7 +44,7 @@ export function CustomersPage() {
 
   const columns: ColumnsType<CustomerListItem> = [
     { title: '고객명', dataIndex: 'name', width: COL.name },
-    { title: '전화번호', dataIndex: 'phone', width: COL.code },
+    { title: '전화번호', dataIndex: 'phone', width: COL.code, render: (v: string) => formatPhone(v) },
     {
       title: '최근 방문일',
       dataIndex: 'lastVisitDate',

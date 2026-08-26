@@ -35,6 +35,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ApiError } from '../../api/client';
 import { fetchCustomers } from '../../api/customers';
 import { BackButton } from '../../shared/BackButton';
+import { formatPhone } from '../../shared/phone';
 import { CustomerPickerModal, type PickedCustomer } from '../../shared/CustomerPickerModal';
 import { CustomerRegisterModal } from '../customers/CustomerRegisterModal';
 import { CustomerInfoGateModal, isCustomerInfoIncomplete } from './CustomerInfoGateModal';
@@ -490,7 +491,7 @@ export function ContractFormPage() {
                 {draftId && <StatusBadge label="작성중(임시저장)" color="gold" />}
               </Space>
               <Space size={8} split={<Typography.Text type="secondary">·</Typography.Text>} wrap>
-                <Typography.Text type="secondary">{customer?.phone ?? '-'}</Typography.Text>
+                <Typography.Text type="secondary">{formatPhone(customer?.phone)}</Typography.Text>
                 <Typography.Text type="secondary">
                   {appointmentId ? '예약에서 자동 연결' : '고객에서 연결'}
                 </Typography.Text>
@@ -522,7 +523,7 @@ export function ContractFormPage() {
                 onChange={(v: string) => selectCustomer(v)}
                 options={(customerSearchQuery.data?.data ?? []).map((c) => ({
                   value: c.id,
-                  label: `${c.name} (${c.phone})`,
+                  label: `${c.name} (${formatPhone(c.phone)})`,
                 }))}
               />
               <Button onClick={() => setPickerOpen(true)}>목록에서 찾기</Button>

@@ -14,6 +14,7 @@ import { fetchMeasurementTargets, type MeasurementTargetRow } from '../../api/me
 import { useAuthStore } from '../../app/auth-store';
 import { LAYOUT } from '../../app/theme';
 import { Can } from '../../shared/Can';
+import { formatPhone } from '../../shared/phone';
 import { DataTable } from '../../shared/DataTable';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
@@ -182,7 +183,7 @@ export function MeasurementListPage({
         <Space direction="vertical" size={0}>
           <Typography.Text strong>{row.customerName}</Typography.Text>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {row.customerPhone || '-'}
+            {formatPhone(row.customerPhone)}
           </Typography.Text>
         </Space>
       ),

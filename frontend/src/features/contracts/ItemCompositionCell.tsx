@@ -12,14 +12,20 @@
  */
 import { Space, Tag, Typography } from 'antd';
 import type { ProductCategory } from '../../api/contracts';
-import { PRODUCT_CATEGORY_LABEL, TRANSACTION_TYPE_LABEL, TRANSACTION_TYPE_TAG_COLOR } from './labels';
+import {
+  CATEGORY_ORDER,
+  PRODUCT_CATEGORY_LABEL,
+  TRANSACTION_TYPE_LABEL,
+  TRANSACTION_TYPE_TAG_COLOR,
+} from './labels';
 
 type Counts = Partial<Record<string, number>>;
 
-/** 품목 구성 요약 — "정장 2 · 셔츠 1". 빈 맵이면 빈 문자열 */
+/** 품목 구성 요약 — "정장 2 · 셔츠 1". 카테고리는 항상 정장→셔츠→구두 순. 빈 맵이면 빈 문자열 */
 export function itemComposition(counts: Counts): string {
   return Object.keys(counts)
     .filter((c) => (counts[c] ?? 0) > 0)
+    .sort((a, b) => (CATEGORY_ORDER[a] ?? 99) - (CATEGORY_ORDER[b] ?? 99))
     .map((c) => `${PRODUCT_CATEGORY_LABEL[c as ProductCategory] ?? c} ${counts[c]}`)
     .join(' · ');
 }

@@ -21,6 +21,7 @@ import { fetchRentalSelectionProgress, saveRentalLine, startRentalSelection } fr
 import { RentalCandidateModal } from '../rentals/RentalCandidateModal';
 import { useRentalCodeNames } from '../rentals/rental-codes';
 import { BackButton } from '../../shared/BackButton';
+import { formatPhone } from '../../shared/phone';
 import { PdfViewerModal } from '../../shared/PdfViewerModal';
 import { buildConsultingColumns } from './consulting-columns';
 import {
@@ -319,7 +320,7 @@ export function ContractOptionsPage() {
                 스타일 컨설팅 — {contract?.customerName ?? ''}
               </Typography.Title>
               <Typography.Text type="secondary">
-                {[contract?.customerPhone, contract?.contractNo].filter(Boolean).join(' · ')}
+                {[contract?.customerPhone && formatPhone(contract.customerPhone), contract?.contractNo].filter(Boolean).join(' · ')}
               </Typography.Text>
             </div>
             {/* 기능 버튼은 화면 우상단 한 곳에 모은다 — 화면 이동은 하단에 둔다. */}

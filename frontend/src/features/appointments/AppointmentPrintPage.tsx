@@ -7,6 +7,7 @@ import { fetchAppointments, type Appointment } from '../../api/appointments';
 import { useAuthStore } from '../../app/auth-store';
 import { APPT_STATUS_META } from './appointment-constants';
 import { metaOf } from '../../shared/status-meta';
+import { formatPhone } from '../../shared/phone';
 
 /**
  * 예약 일정 인쇄 (개발설계서 05 G-02).
@@ -130,7 +131,7 @@ export function AppointmentPrintPage() {
                 <tr key={a.id}>
                   <td>{a.startAt.slice(11, 16)}</td>
                   <td>{a.customerName}</td>
-                  <td>{a.phone}</td>
+                  <td>{formatPhone(a.phone)}</td>
                   <td>{a.purposeName}</td>
                   <td>{metaOf(APPT_STATUS_META, a.status).label}</td>
                   <td>{a.memo ?? ''}</td>

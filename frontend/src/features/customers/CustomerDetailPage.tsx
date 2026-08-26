@@ -1,11 +1,10 @@
-import { ArrowLeftOutlined, EditOutlined, FileAddOutlined, StopOutlined } from '@ant-design/icons';
+import { EditOutlined, FileAddOutlined, StopOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
   App,
   Button,
   Card,
-  Col,
   Descriptions,
   Empty,
   Form,
@@ -14,10 +13,8 @@ import {
   List,
   Modal,
   Result,
-  Row,
   Space,
   Spin,
-  Statistic,
   Table,
   Tabs,
   Tag,
@@ -40,8 +37,10 @@ import {
   type CustomerRepairRow,
   type CustomerSaveBody,
 } from '../../api/customers';
+import { fetchCustomerJourneys, fetchJourney } from '../../api/journeys';
 import { ALLOCATION_STATUS_META } from '../../api/rentals';
 import { repairStatusMeta } from '../../api/repairs';
+import { progressLabel } from '../production/production-layout';
 import {
   CONTRACT_STATUS_META,
   COMPONENT_STATUS_META,
@@ -52,13 +51,14 @@ import { BackButton } from '../../shared/BackButton';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { APPT_STATUS_META, SOURCE_META } from '../appointments/appointment-constants';
-import { CUSTOMER_STATUS_META, formatAmount } from './customer-constants';
+import { CUSTOMER_STATUS_META, formatAmount, formatPhone } from './customer-constants';
 import {
   buildContractTrackRows,
   ProgressSummaryCard,
   type SummaryRow,
 } from './contract-progress-summary';
 import { metaOf } from '../../shared/status-meta';
+import { ItemCompositionCell } from '../contracts/ItemCompositionCell';
 import { usePageTitle } from '../../shared/page-title-store';
 
 /*
@@ -98,6 +98,37 @@ export function CustomerDetailPage() {
     enabled: !!id,
   });
 
+  /*
+    제작 관리 요약을 진행(journey)의 현재 단계로 보여주기 위해, 제작관리 페이지와 같은 소스를 쓴다.
+    대표 계약(진행중 우선, 없으면 최신 완료)의 맞춤(CUSTOM) 진행을 골라 상세를 받아
+    "현재 단계명 + 진행중 완료/대상"(예: "가봉 피팅 진행중 2/4")을 만든다.
+    훅은 조건 없이 걸고, 아직 계약·진행 목록이 없으면 enabled=false로 쉰다.
+  */
+  const journeysQuery = useQuery({
+    queryKey: ['journeys', 'customer', id],
+    queryFn: () => fetchCustomerJourneys(id),
+    enabled: !!id,
+  });
+  const repContractForJourney =
+    data && data.customer.customerStatus !== 'INACTIVE'
+      ? (data.contracts.find((c) => c.status === 'DRAFT' || c.status === 'SIGNED') ??
+        data.contracts.find((c) => c.status === 'COMPLETED'))
+      : undefined;
+  const repOrderIds = new Set(
+    (data?.orders ?? [])
+      .filter((o) => o.contractNo === repContractForJourney?.contractNo)
+      .map((o) => o.id),
+  );
+  const customJourney =
+    (journeysQuery.data ?? []).find(
+      (j) => j.trackType === 'CUSTOM' && !!j.orderId && repOrderIds.has(j.orderId),
+    ) ?? null;
+  const journeyDetailQuery = useQuery({
+    queryKey: ['journeys', 'detail', customJourney?.id],
+    queryFn: () => fetchJourney(customJourney!.id),
+    enabled: !!customJourney,
+  });
+
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['customers'] });
     void queryClient.invalidateQueries({ queryKey: ['appointments'] });
@@ -124,8 +155,9 @@ export function CustomerDetailPage() {
     onError: (e) => message.error(e instanceof ApiError ? e.message : '비활성화에 실패했습니다.'),
   });
 
-  // 헤더 제목을 이 고객으로 바꾼다 — 목록과 상세가 헤더에서 구분되지 않던 문제(UI 정리).
-  usePageTitle(data?.customer?.name, data?.customer?.phone);
+  // 헤더는 브레드크럼("고객 ›")만 남긴다 — 고객명·전화번호는 아래 기본정보 카드로 옮겼다.
+  // 빈 제목('')은 "경로만 표시하고 제목 자리는 비움" 신호다(AppLayout 참고).
+  usePageTitle(data ? '' : undefined);
 
   if (isLoading) {
     return (
@@ -151,17 +183,26 @@ export function CustomerDetailPage() {
   const statusMeta = metaOf(CUSTOMER_STATUS_META, customer.customerStatus);
   const money = (v: number) => formatAmount(v);
 
-  // 헤더 배지: 계약서가 있으면 고객상태(미계약/계약) 대신 대표 계약서 상태를 보여준다.
-  // 대표 = 진행중(작성중·서명완료) 우선, 없으면 최신 계약완료. (data.contracts는 최신순)
-  // 취소만 있거나 계약서가 없으면 고객상태로, 비활성 고객은 항상 비활성으로 둔다.
+  // 1·2번째 카드의 정보 테이블(Descriptions) 열 폭을 맞추기 위한 공용 설정.
+  // column=3 고정 + info-desc 클래스(table-layout: fixed, index.css)로 6칸의 폭을 %로 못박는다.
+  // 라벨 칸(구분값)은 모두 같은 폭, 데이터 칸은 모두 같은 폭이며 라벨보다 넓다(3×13% + 3×20.33% = 100%).
+  // 긴 라벨(예: '매출(계약 합계)')은 칸 안에서 줄바꿈되게 둬(nowrap 제거) 옆 값과 겹치지 않게 한다.
+  const infoTableProps = {
+    column: 3,
+    bordered: true as const,
+    size: 'small' as const,
+    className: 'info-desc',
+    labelStyle: { width: '13%' },
+    contentStyle: { width: '20.33%' },
+  };
+
+  // 대표 계약 = 진행중(작성중·서명완료) 우선, 없으면 최신 계약완료. (data.contracts는 최신순)
+  // 진행 요약과 그 상단 계약 정보 블록을 이 계약 하나에 스코프한다. 비활성 고객은 대표 없음.
   const repContract =
     customer.customerStatus === 'INACTIVE'
       ? undefined
       : (data.contracts.find((c) => c.status === 'DRAFT' || c.status === 'SIGNED') ??
         data.contracts.find((c) => c.status === 'COMPLETED'));
-  const headerBadge = repContract
-    ? { ...metaOf(CONTRACT_STATUS_META, repContract.status), contractNo: repContract.contractNo }
-    : { ...statusMeta, contractNo: null };
 
   /*
     진행 요약 — "현재 진행중인 트랙만" 블록으로 쌓는 읽기 전용 파생 뷰다.
@@ -187,54 +228,102 @@ export function CustomerDetailPage() {
     (repActiveComponents.length === 0 || productionAllReleased);
   const contractInProgress = !!repContract && !contractSettled;
 
-  const summaryRows: SummaryRow[] = [];
+  // 제작 관리 행 — 진행(journey)의 현재 단계로 표시(제작관리 페이지와 동일). 완료 판정도 진행 완료 기준.
+  // 아직 완료 품목이 없으면 progressLabel이 "진행중 0/n"으로 낸다. 진행 상세 로딩 전에는 목록의
+  // 현재 단계명만으로 "가봉 피팅 진행중"을 먼저 보여 준다.
+  const journeyDetail = journeyDetailQuery.data;
+  const currentStageView = journeyDetail?.stages.find(
+    (s) => s.code === journeyDetail.currentStageCode,
+  );
+  const productionStage = customJourney
+    ? {
+        text: currentStageView
+          ? `${currentStageView.name} ${progressLabel(currentStageView.completedCount, currentStageView.targetCount)}`
+          : `${customJourney.currentStageName} 진행중`,
+        done: !!customJourney.completedAt,
+      }
+    : null;
+
+  const contractRows: SummaryRow[] = [];
   if (contractInProgress && repContract) {
     // 현재 계약 하나에 스코프 — 미연결 '작성중' 채촌 세션도 진행중인 이 계약에 귀속시킨다.
-    summaryRows.push(
-      ...buildContractTrackRows(data, repContract, { includeUnlinkedMeasures: true }),
+    contractRows.push(
+      ...buildContractTrackRows(data, repContract, {
+        includeUnlinkedMeasures: true,
+        productionStage,
+      }),
     );
   }
-  // 수선 트랙 — 진행중(RELEASED·CANCELLED 아님) 수선접수를 계약 블록 아래에 건별로 표시.
-  for (const rp of data.repairs.filter(
-    (r) => r.status !== 'RELEASED' && r.status !== 'CANCELLED',
-  )) {
-    summaryRows.push({
+  // 수선 트랙 — 맞춤·렌탈과 분리해 별개 그룹으로 표시(진행 요약 카드에서 가로줄로 구획).
+  // 진행중(RELEASED·CANCELLED 아님) 수선접수를 건별로 세운다.
+  const repairRows: SummaryRow[] = data.repairs
+    .filter((r) => r.status !== 'RELEASED' && r.status !== 'CANCELLED')
+    .map((rp) => ({
       key: `repair-${rp.id}`,
       label: '수선',
-      status: (
-        <Space size={6}>
-          <Tag color="success">진행중</Tag>
-          <span>{`${repairStatusMeta(rp.status).label}${rp.target ? ` (${rp.target})` : ''}`}</span>
-        </Space>
-      ),
+      // 진행중 표시는 앞의 단계 동그라미(번호)와 파랑 글자가 하므로 칩은 두지 않고 상세만 적는다.
+      status: <span>{`${repairStatusMeta(rp.status).label}${rp.target ? ` (${rp.target})` : ''}`}</span>,
       done: false,
       to: `/repairs?customerId=${customer.id}&customerName=${encodeURIComponent(customer.name)}`,
-    });
+    }));
+
+  /*
+    진행 요약 상단 — "무슨 계약의 요약인지"를 밝히는 정보 블록.
+    진행 요약과 같은 대표(진행중) 계약에 스코프한다. 촬영일·예식일은 그 계약의 주문에
+    복사된 값을 쓰되, 계약에 주문이 여러 건이면 값이 있는 첫 주문을 대표로 잡는다.
+  */
+  const repOrdersForInfo = data.orders.filter((o) => o.contractNo === repContract?.contractNo);
+  // 품목은 계약관리 목록의 '품목 구성' 열과 같은 규칙으로 낸다(ItemCompositionCell 공용):
+  // 거래구분(맞춤/렌탈)별로 카테고리 개수를 합쳐 "[맞춤] 정장 2 · 셔츠 1 / [렌탈] 정장 2".
+  const repCustomCounts: Record<string, number> = {};
+  const repRentalCounts: Record<string, number> = {};
+  for (const o of repOrdersForInfo) {
+    const bucket = o.transactionType === 'RENTAL' ? repRentalCounts : repCustomCounts;
+    for (const it of o.items ?? []) {
+      bucket[it.productCategory] = (bucket[it.productCategory] ?? 0) + 1;
+    }
   }
+  const repPhotoDate = repOrdersForInfo.find((o) => o.photoDate)?.photoDate ?? null;
+  const repWeddingDate = repOrdersForInfo.find((o) => o.weddingDate)?.weddingDate ?? null;
+  const contractInfo =
+    contractInProgress && repContract ? (
+      <Descriptions {...infoTableProps}>
+        <Descriptions.Item label="계약 번호">
+          <Link to={`/contracts/${repContract.id}`}>{repContract.contractNo}</Link>
+        </Descriptions.Item>
+        <Descriptions.Item label="계약 구분">{repContract.contractTypeName ?? '-'}</Descriptions.Item>
+        <Descriptions.Item label="품목">
+          <ItemCompositionCell customCounts={repCustomCounts} rentalCounts={repRentalCounts} />
+        </Descriptions.Item>
+        <Descriptions.Item label="촬영일">{repPhotoDate ?? '-'}</Descriptions.Item>
+        <Descriptions.Item label="예식일">{repWeddingDate ?? '-'}</Descriptions.Item>
+        <Descriptions.Item label="완료 예정일">{repContract.completionDueDate ?? '-'}</Descriptions.Item>
+      </Descriptions>
+    ) : undefined;
 
   const appointmentColumns: ColumnsType<Appointment> = [
     {
       title: '예약 일시',
       dataIndex: 'startAt',
-      width: 160,
+      width: 200,
       render: (v: string) => dayjs(v).format('YYYY-MM-DD (dd) HH:mm'),
     },
-    { title: '목적', dataIndex: 'purposeName', width: 110 },
+    { title: '목적', dataIndex: 'purposeName', width: 150 },
     {
       title: '출처',
       dataIndex: 'source',
-      width: 90,
+      width: 120,
       render: (v: Appointment['source']) => <Tag color={metaOf(SOURCE_META, v).color}>{metaOf(SOURCE_META, v).label}</Tag>,
     },
     {
       title: '상태',
       dataIndex: 'status',
-      width: 100,
+      width: 130,
       render: (v: Appointment['status']) => (
         <StatusBadge label={metaOf(APPT_STATUS_META, v).label} color={metaOf(APPT_STATUS_META, v).color} />
       ),
     },
-    { title: '메모', dataIndex: 'memo', ellipsis: true },
+    { title: '메모', dataIndex: 'memo', width: 320, ellipsis: true },
   ];
 
   const contractColumns: ColumnsType<CustomerContractRow> = [
@@ -363,7 +452,8 @@ export function CustomerDetailPage() {
   const repairColumns: ColumnsType<CustomerRepairRow> = [
     { title: '접수일', dataIndex: 'receivedDate', width: 120 },
     { title: '대상', dataIndex: 'target', width: 160 },
-    { title: '수선 내용', dataIndex: 'content' },
+    // 수선 내용에 고정 폭을 줘 상태가 우측 끝으로 밀리지 않고 바로 옆에 붙게 한다.
+    { title: '수선 내용', dataIndex: 'content', width: 400 },
     {
       title: '상태',
       dataIndex: 'status',
@@ -383,19 +473,9 @@ export function CustomerDetailPage() {
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Card>
         <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
-          <Space wrap>
-            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/customers')}>
-              목록
-            </Button>
-            <Typography.Title level={4} style={{ margin: 0 }}>
-              {customer.name}
-            </Typography.Title>
-            <Typography.Text type="secondary">{customer.phone}</Typography.Text>
-            <StatusBadge label={headerBadge.label} color={headerBadge.color} />
-            {headerBadge.contractNo && (
-              <Typography.Text type="secondary">({headerBadge.contractNo})</Typography.Text>
-            )}
-          </Space>
+          <Typography.Title level={4} style={{ margin: 0 }}>
+            {customer.name}
+          </Typography.Title>
           <Space wrap>
             <Can permission="CUSTOMER_EDIT">
               <Button
@@ -445,45 +525,39 @@ export function CustomerDetailPage() {
           />
         )}
 
-        <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
-          <Col xs={12} md={6}>
-            <Statistic title="계약 건수" value={summary.contractCount} suffix="건" />
-          </Col>
-          <Col xs={12} md={6}>
-            <Statistic title="매출(계약 합계)" value={money(summary.totalAmount)} />
-          </Col>
-        </Row>
+        <Descriptions {...infoTableProps} style={{ marginTop: 16 }}>
+          <Descriptions.Item label="전화번호">{formatPhone(customer.phone)}</Descriptions.Item>
+          <Descriptions.Item label="이메일">{customer.email ?? '-'}</Descriptions.Item>
+          <Descriptions.Item label="최초 예약일">
+            {customer.firstReservedAt ? dayjs(customer.firstReservedAt).format('YYYY-MM-DD') : '-'}
+          </Descriptions.Item>
+          <Descriptions.Item label="키">
+            {customer.heightCm != null ? `${customer.heightCm} cm` : '-'}
+          </Descriptions.Item>
+          <Descriptions.Item label="몸무게">
+            {customer.weightKg != null ? `${customer.weightKg} kg` : '-'}
+          </Descriptions.Item>
+          <Descriptions.Item label="나이">
+            {customer.age != null ? `${customer.age} 세` : '-'}
+          </Descriptions.Item>
+          <Descriptions.Item label="고객 상태">
+            <StatusBadge label={statusMeta.label} color={statusMeta.color} />
+          </Descriptions.Item>
+          <Descriptions.Item label="계약 건수">{summary.contractCount}건</Descriptions.Item>
+          <Descriptions.Item label="매출(계약 합계)">{money(summary.totalAmount)}</Descriptions.Item>
+          <Descriptions.Item label="특이사항" span={3}>
+            {customer.notes ?? '-'}
+          </Descriptions.Item>
+        </Descriptions>
       </Card>
 
-      {/* 진행 요약 — 현재 진행중 트랙만 비추고 각 작업화면으로 이동시킨다(읽기 전용). */}
-      <ProgressSummaryCard rows={summaryRows} />
+      {/* 진행 요약 — 상단에 무슨 계약의 요약인지 밝히고, 현재 진행중 트랙만 비춘다(읽기 전용). */}
+      <ProgressSummaryCard rows={contractRows} repairRows={repairRows} header={contractInfo} />
 
       <Card>
         <Tabs
-          defaultActiveKey="basic"
+          defaultActiveKey="appointments"
           items={[
-            {
-              key: 'basic',
-              label: '기본정보',
-              children: (
-                <Descriptions column={{ xs: 1, md: 2 }} bordered size="small">
-                  <Descriptions.Item label="이름">{customer.name}</Descriptions.Item>
-                  <Descriptions.Item label="전화번호">{customer.phone}</Descriptions.Item>
-                  <Descriptions.Item label="키">{customer.heightCm != null ? `${customer.heightCm} cm` : '-'}</Descriptions.Item>
-                  <Descriptions.Item label="몸무게">{customer.weightKg != null ? `${customer.weightKg} kg` : '-'}</Descriptions.Item>
-                  <Descriptions.Item label="나이">{customer.age != null ? `${customer.age} 세` : '-'}</Descriptions.Item>
-                  <Descriptions.Item label="이메일">{customer.email ?? '-'}</Descriptions.Item>
-                  <Descriptions.Item label="고객 상태">
-                    <StatusBadge label={statusMeta.label} color={statusMeta.color} />
-                  </Descriptions.Item>
-                  <Descriptions.Item label="최초 예약일">{customer.firstReservedAt ?? '-'}</Descriptions.Item>
-                  <Descriptions.Item label="계약 전환일">{customer.contractedAt ?? '-'}</Descriptions.Item>
-                  <Descriptions.Item label="특이사항" span={2}>
-                    {customer.notes ?? '-'}
-                  </Descriptions.Item>
-                </Descriptions>
-              ),
-            },
             {
               key: 'appointments',
               label: `예약·상담 (${data.appointments.length})`,

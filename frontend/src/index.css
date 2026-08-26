@@ -88,3 +88,15 @@
 .ant-table-row.repair-row-expanded > .ant-table-cell {
   background: rgba(0, 0, 0, 0.02);
 }
+
+/* 고객 상세 상단 정보 카드(기본정보·진행요약 계약정보) — 두 표의 열 폭을 동일하게.
+ * table-layout: fixed 로 내용 길이와 무관하게 라벨/값 열이 지정한 %폭 그대로 서서,
+ * 위아래 두 카드의 6칸(라벨 3 + 값 3)이 세로로 나란히 정렬된다. (Descriptions 기본은 auto라 어긋났다.)
+ * 긴 라벨이 좁은 칸을 넘치지 않게 라벨 셀은 줄바꿈을 허용한다. */
+.info-desc table {
+  table-layout: fixed;
+}
+.info-desc .ant-descriptions-item-label {
+  white-space: normal;
+  word-break: keep-all;
+}

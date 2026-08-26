@@ -98,6 +98,10 @@ export interface CustomerOrderRow {
   transactionType: 'CUSTOM' | 'RENTAL';
   status: string;
   completionDueDate?: string | null;
+  /** 촬영일 — 주문에 복사된 계약 버전 값 */
+  photoDate?: string | null;
+  /** 예식일 — 주문에 복사된 계약 버전 값 */
+  weddingDate?: string | null;
   items: CustomerOrderItemRow[];
 }
 
@@ -106,7 +110,10 @@ export interface CustomerMeasurementRow {
   date: string;
   type: 'INITIAL' | 'FITTING' | 'REMEASURE';
   staffName: string;
+  /** 이 채촌을 쓰는 주문 품목 이름(표시용 Tag) */
   usedByItems: string[];
+  /** 이 채촌을 쓰는 주문 품목 id(매칭용 — 진행 요약이 계약 품목에 붙일 때 쓴다) */
+  usedByItemIds: string[];
   /** 채촌 완료 여부 (completedAt 유무) */
   completed?: boolean;
   /** 채촌 완료일 — completed일 때만 채워진다 */

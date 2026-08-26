@@ -10,6 +10,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useState } from 'react';
 import { fetchCustomers } from '../api/customers';
 import type { CustomerListItem } from '../api/customers';
+import { formatPhone } from './phone';
 
 /** 호출부가 필요한 최소 정보 */
 export interface PickedCustomer {
@@ -61,7 +62,7 @@ export function CustomerPickerModal({
 
   const columns: ColumnsType<CustomerListItem> = [
     { title: '고객명', dataIndex: 'name', width: 110 },
-    { title: '전화번호', dataIndex: 'phone', width: 140 },
+    { title: '전화번호', dataIndex: 'phone', width: 140, render: (v: string) => formatPhone(v) },
     // 미계약/계약 상태 열은 제거했다 — 가망/계약 고객 구분 폐기(설계서 07 D8).
     { title: '최근 방문일', dataIndex: 'lastVisitDate', width: 110, render: (v?: string) => v ?? '-' },
     { title: '계약', dataIndex: 'contractCount', width: 70, align: 'right', render: (v: number) => `${v}건` },

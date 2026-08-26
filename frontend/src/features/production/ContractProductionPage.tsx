@@ -16,6 +16,7 @@ import { fetchContract } from '../../api/contracts';
 import { fetchCustomerJourneys } from '../../api/journeys';
 import { fetchProductionItems } from '../../api/production';
 import { BackButton } from '../../shared/BackButton';
+import { formatPhone } from '../../shared/phone';
 import { ProductionFlowCard } from './ProductionFlowCard';
 import { ProductionPrepCard } from './ProductionPrepCard';
 import {
@@ -94,7 +95,7 @@ export function ContractProductionPage() {
               제작 관리 — {contract?.customerName ?? ''}
             </Typography.Title>
             <Typography.Text type="secondary">
-              {[contract?.customerPhone, contract?.contractNo].filter(Boolean).join(' · ')}
+              {[contract?.customerPhone && formatPhone(contract.customerPhone), contract?.contractNo].filter(Boolean).join(' · ')}
             </Typography.Text>
           </div>
           <Descriptions size="small" column={3} colon={false}>

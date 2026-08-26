@@ -36,6 +36,7 @@ import {
 } from '../../api/rentals';
 import { LAYOUT } from '../../app/theme';
 import { DataTable } from '../../shared/DataTable';
+import { formatPhone } from '../../shared/phone';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { metaOf } from '../../shared/status-meta';
@@ -206,7 +207,7 @@ export function RentalHandoverPage() {
           <Typography.Text>{name}</Typography.Text>
           {r.customerPhone && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {r.customerPhone}
+              {formatPhone(r.customerPhone)}
             </Typography.Text>
           )}
         </Space>

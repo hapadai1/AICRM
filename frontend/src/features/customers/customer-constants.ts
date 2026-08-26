@@ -14,3 +14,6 @@ export function formatAmount(amount: number | null | undefined): string {
   if (amount === null || amount === undefined || Number.isNaN(Number(amount))) return '-';
   return `${Number(amount).toLocaleString('ko-KR')}원`;
 }
+
+// 전화번호 하이픈 포맷의 정본은 shared/phone 이다 — 전 화면 공용이라 재노출한다.
+export { formatPhone } from '../../shared/phone';

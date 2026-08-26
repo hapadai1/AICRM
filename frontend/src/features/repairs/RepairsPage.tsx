@@ -21,6 +21,7 @@ import { useSearchParams } from 'react-router-dom';
 import { ApiError } from '../../api/client';
 import { LAYOUT } from '../../app/theme';
 import { DataTable } from '../../shared/DataTable';
+import { formatPhone } from '../../shared/phone';
 import { COL } from '../../shared/table-width';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { fetchCustomers } from '../../api/customers';
@@ -255,7 +256,7 @@ export function RepairsPage() {
 
   const customerOptions = (customerQuery.data?.data ?? []).map((c) => ({
     value: c.id,
-    label: `${c.name} (${c.phone})`,
+    label: `${c.name} (${formatPhone(c.phone)})`,
   }));
   // URL로 넘어온 고객이 검색결과에 아직 없으면, 선택칩에 이름이 뜨도록 옵션을 미리 넣는다.
   if (urlCustomerId && !customerOptions.some((o) => o.value === urlCustomerId)) {
@@ -277,7 +278,7 @@ export function RepairsPage() {
         <Space direction="vertical" size={0}>
           <Typography.Text strong>{name}</Typography.Text>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {r.customerPhone}
+            {formatPhone(r.customerPhone)}
           </Typography.Text>
         </Space>
       ),

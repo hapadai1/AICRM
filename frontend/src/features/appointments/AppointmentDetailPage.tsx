@@ -48,6 +48,7 @@ import { CUSTOMER_STATUS_META } from '../customers/customer-constants';
 import { APPT_STATUS_META, CONSULTATION_INTERESTS, SOURCE_META, SYNC_STATUS_META } from './appointment-constants';
 import { AppointmentFormModal } from './AppointmentFormModal';
 import { metaOf } from '../../shared/status-meta';
+import { formatPhone } from '../../shared/phone';
 import type { Dayjs } from 'dayjs';
 import { usePageTitle } from '../../shared/page-title-store';
 
@@ -302,7 +303,7 @@ export function AppointmentDetailPage() {
           >
             <Descriptions column={1} size="small" bordered>
               <Descriptions.Item label="이름">{appointment.customerName}</Descriptions.Item>
-              <Descriptions.Item label="전화번호">{appointment.phone}</Descriptions.Item>
+              <Descriptions.Item label="전화번호">{formatPhone(appointment.phone)}</Descriptions.Item>
               <Descriptions.Item label="고객 상태">
                 {appointment.customerStatus ? (
                   <StatusBadge
