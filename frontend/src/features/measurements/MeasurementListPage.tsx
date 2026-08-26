@@ -171,7 +171,7 @@ export function MeasurementListPage({
     update({ page: pagination.current ?? 1, size: pagination.pageSize ?? filters.size });
   };
 
-  // 앞 다섯 열(고객·계약 구분·계약일·완료 예정일·계약 상태)은 계약 목록과 같은 규격·같은 값이다.
+  // 고객·계약 구분·품목 구성·계약일·완료 예정일·계약 상태 열은 계약 목록과 같은 규격·같은 값이다.
   // 계약 목록과 달리 여기에는 채촌 상태가 같이 서므로 열 이름에 "계약"을 붙여 구분한다.
   const columns: ColumnsType<MeasurementTargetRow> = [
     {
@@ -200,6 +200,15 @@ export function MeasurementListPage({
           </Typography.Text>
         </Space>
       ),
+    },
+    {
+      // 목록 네 곳(계약·스타일 컨설팅·채촌·제작)이 같은 칸을 쓴다 — 제작 관리 열이 기준이다.
+      // 채촌 대상은 맞춤 품목뿐이라 렌탈 줄은 나오지 않는다.
+      title: '품목 구성',
+      key: 'composition',
+      width: COL.wide,
+      ellipsis: true,
+      render: (_, row) => <ItemCompositionCell customCounts={row.categoryCounts} rentalCounts={{}} />,
     },
     // 기간 필터의 기준값이라 표에도 둔다 — 왜 이 건이 걸렸는지 열에서 바로 확인되어야 한다.
     // 계약일 전(작성중)은 작성일이 대신 들어온다 — 그 구분은 계약 상태 열이 한다.
@@ -236,28 +245,16 @@ export function MeasurementListPage({
       },
     },
     {
-      // 목록 네 곳(계약·스타일 컨설팅·채촌·제작)이 같은 칸을 쓴다 — 제작 관리 열이 기준이다.
-      // 채촌 대상은 맞춤 품목뿐이라 렌탈 줄은 나오지 않는다.
-      title: '품목 구성',
-      key: 'composition',
-      width: COL.wide,
-      ellipsis: true,
-      render: (_, row) => <ItemCompositionCell customCounts={row.categoryCounts} rentalCounts={{}} />,
-    },
-    {
+      // 스타일 컨설팅 목록(OPT-001)의 '스타일 컨설팅 상태' 열과 같은 표기를 그대로 쓴다
+      // — 확정 완료(녹색)/진행중(금색) 점+텍스트. 채촌 상태 열과도 같은 StatusBadge 규격이다.
       title: '스타일 컨설팅',
       key: 'consulting',
-      width: COL.wide,
+      width: COL.status,
       render: (_, row) =>
         row.consultingComplete ? (
-          <Tag color="green">전체 완료</Tag>
+          <StatusBadge label="확정 완료" color="green" />
         ) : (
-          <Space size={4}>
-            <Tag color="orange">미완료</Tag>
-            <Typography.Text type="secondary">
-              {row.consultingConfirmedCount}/{row.itemCount}
-            </Typography.Text>
-          </Space>
+          <StatusBadge label="진행중" color="gold" />
         ),
     },
     {
@@ -292,12 +289,21 @@ export function MeasurementListPage({
     },
   ];
 
+  // 임베드(고객모드)는 이미 고객이 정해진 화면이라 고객 열을 뺀다 — 폭 합도 이 목록 기준이다.
+  const shownColumns = embedded ? columns.filter((c) => c.key !== 'customer') : columns;
+
   const tableEl = (
     <DataTable<MeasurementTargetRow>
       rowKey="contractId"
       loading={query.isLoading}
       dataSource={rows}
-      columns={embedded ? columns.filter((c) => c.key !== 'customer') : columns}
+      columns={shownColumns}
+      // 창이 넓으면 표가 오른쪽 끝까지 채우고 남는 폭을 열들이 비례 배분한다(계약 목록과 동일).
+      // 열 폭 합을 직접 세어 넘겨, 열이 바뀌어도 기준이 따라온다.
+      fillWidth={shownColumns.reduce(
+        (sum, c) => sum + (typeof c.width === 'number' ? c.width : 0),
+        0,
+      )}
       onChange={handleTableChange}
       pagination={
         embedded

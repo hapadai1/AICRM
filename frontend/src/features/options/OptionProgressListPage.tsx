@@ -343,6 +343,8 @@ export function OptionProgressListPage({
       width: COL.wide,
       render: (_, row) => (
         <Progress
+          // 바가 열 폭을 꽉 채우면 너무 길어, 셀의 절반만 쓰고 나머지는 비워 둔다.
+          style={{ width: '50%' }}
           percent={row.totalStages ? Math.round((row.completedStages / row.totalStages) * 100) : 0}
           size="small"
           format={() => `${row.completedStages}/${row.totalStages}`}
@@ -374,6 +376,12 @@ export function OptionProgressListPage({
       loading={isLoading || rentalQuery.isLoading}
       dataSource={rows}
       columns={shownColumns}
+      // 창이 넓으면 표가 오른쪽 끝까지 채우고 남는 폭을 열들이 비례 배분한다(계약 목록과 동일).
+      // 열 폭 합을 직접 세어 넘겨, 열이 바뀌어도 기준이 따라온다.
+      fillWidth={shownColumns.reduce(
+        (sum, c) => sum + (typeof c.width === 'number' ? c.width : 0),
+        0,
+      )}
       // 임베드(고객모드)는 한 고객의 계약 몇 건뿐이라 페이징 없이 다 보여준다.
       pagination={
         embedded

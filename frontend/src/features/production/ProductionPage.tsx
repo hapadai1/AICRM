@@ -249,6 +249,12 @@ export function ProductionPage() {
             loading={itemsQuery.isLoading}
             dataSource={rows}
             columns={columns}
+            // 창이 넓으면 표가 오른쪽 끝까지 채우고 남는 폭을 열들이 비례 배분한다(계약 목록과 동일).
+            // 열 폭 합을 직접 세어 넘겨, 열이 바뀌어도 기준이 따라온다.
+            fillWidth={columns.reduce(
+              (sum, c) => sum + (typeof c.width === 'number' ? c.width : 0),
+              0,
+            )}
             pagination={{}}
             onRow={(r) => ({
               onClick: () => navigate(`/contracts/${r.contractId}/production`),
