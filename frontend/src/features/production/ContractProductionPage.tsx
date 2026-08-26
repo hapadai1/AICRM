@@ -102,7 +102,7 @@ export function ContractProductionPage() {
               {itemComposition(summary.categoryCounts) || '-'}
             </Descriptions.Item>
             <Descriptions.Item label="건수">{summary.itemCount}</Descriptions.Item>
-            <Descriptions.Item label="완성 예정일">
+            <Descriptions.Item label="완료 예정일">
               <Space size={6}>
                 {summary.dueDate ?? <Typography.Text type="secondary">미정</Typography.Text>}
                 {summary.dueDate && <DdayTag due={summary.dueDate} />}

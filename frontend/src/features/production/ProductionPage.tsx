@@ -145,13 +145,6 @@ export function ProductionPage() {
       ),
     },
     {
-      title: '건수',
-      dataIndex: 'itemCount',
-      key: 'itemCount',
-      width: COL.count,
-      align: 'center',
-    },
-    {
       title: '계약일',
       dataIndex: 'contractDate',
       key: 'contractDate',
@@ -163,11 +156,11 @@ export function ProductionPage() {
       render: (v: string) => v || <Typography.Text type="secondary">-</Typography.Text>,
     },
     {
-      title: '완성 예정일',
+      title: '완료 예정일',
       dataIndex: 'dueDate',
       key: 'dueDate',
       width: COL.name,
-      // 완성 예정일로도 정렬 가능. 미정(null)은 정렬 방향과 무관하게 뒤로 가도록 먼 미래로 취급한다.
+      // 완료 예정일로도 정렬 가능. 미정(null)은 정렬 방향과 무관하게 뒤로 가도록 먼 미래로 취급한다.
       sorter: (a, b) => (a.dueDate ?? '9999-99-99').localeCompare(b.dueDate ?? '9999-99-99'),
       render: (v: string | null) => v ?? <Typography.Text type="secondary">미정</Typography.Text>,
     },

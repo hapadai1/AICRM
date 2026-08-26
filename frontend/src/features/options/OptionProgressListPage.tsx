@@ -48,7 +48,7 @@ interface ContractRow {
   contractTypeName: string | null;
   customerName: string;
   customerPhone: string;
-  /** 완성 예정일(납기) — 계약 내 가장 이른 납기 (YYYY-MM-DD). 없으면 null */
+  /** 완료 예정일(납기) — 계약 내 가장 이른 납기 (YYYY-MM-DD). 없으면 null */
   dueDate: string | null;
   /** 건수 = 이 계약의 전체 품목 수(맞춤 + 렌탈). 확정 분모도 이 값이다. */
   itemCount: number;
@@ -284,8 +284,6 @@ export function OptionProgressListPage({
         <ItemCompositionCell customCounts={row.customCounts} rentalCounts={row.rentalCounts} />
       ),
     },
-    // 계약의 전체 품목 수(맞춤+렌탈). 확정 열의 분모(맞춤만)와 다를 수 있다.
-    { title: '건수', dataIndex: 'itemCount', key: 'itemCount', width: COL.count, align: 'center' },
     {
       // 기간 검색 기준이 계약일이라 값이 보여야 한다. 계약일 전(작성중)은 작성일을 대신 쓴다.
       // 그 구분은 계약 상태 열이 대신한다 — 계약일이 생기는 상태는 계약완료뿐이라,
@@ -300,11 +298,11 @@ export function OptionProgressListPage({
       defaultSortOrder: 'descend',
     },
     {
-      title: '완성 예정일',
+      title: '완료 예정일',
       dataIndex: 'dueDate',
       key: 'dueDate',
       width: COL.name,
-      // 완성 예정일로도 정렬 가능. 미정(null)은 정렬 방향과 무관하게 뒤로 가도록 먼 미래로 취급한다.
+      // 완료 예정일로도 정렬 가능. 미정(null)은 정렬 방향과 무관하게 뒤로 가도록 먼 미래로 취급한다.
       sorter: (a, b) => (a.dueDate ?? '9999-99-99').localeCompare(b.dueDate ?? '9999-99-99'),
       render: (v: string | null) => v ?? <Typography.Text type="secondary">미정</Typography.Text>,
     },

@@ -25,7 +25,7 @@ export interface ContractSummary {
   customCounts: Record<string, number>;
   /** 카테고리별 렌탈 품목 수 */
   rentalCounts: Record<string, number>;
-  /** 완성 예정일(납기) — 계약 내 가장 이른 납기 (YYYY-MM-DD). 없으면 null */
+  /** 완료 예정일(납기) — 계약 내 가장 이른 납기 (YYYY-MM-DD). 없으면 null */
   dueDate: string | null;
   receivedCount: number;
   releasedCount: number;

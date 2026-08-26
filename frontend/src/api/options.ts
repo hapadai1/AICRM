@@ -89,7 +89,7 @@ export interface OptionProgressItem {
   customerName: string;
   /** 고객 전화번호 (목록에서 고객 식별용) */
   customerPhone: string;
-  /** 완성 예정일(납기) ISO. 없으면 null */
+  /** 완료 예정일(납기) ISO. 없으면 null */
   completionDueDate: string | null;
   fabric: string | null;
   status: OptionStatus;
