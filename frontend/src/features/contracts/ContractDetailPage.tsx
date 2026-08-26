@@ -44,6 +44,7 @@ import {
   type TransactionType,
 } from '../../api/contracts';
 import { BackButton } from '../../shared/BackButton';
+import { formatPhone } from '../../shared/phone';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
 import { ContractDocumentView } from './ContractDocumentView';
@@ -423,12 +424,17 @@ export function ContractDetailPage() {
     <Flex vertical gap={16}>
       <Card loading={isLoading}>
         <Flex justify="space-between" align="center" wrap gap={12} style={{ marginBottom: 16 }}>
-          <Space size={12} wrap>
-            <Typography.Title level={4} style={{ margin: 0 }}>
-              계약 {detail?.contractNo}
-            </Typography.Title>
-            <StatusBadge label={statusMeta.label} color={statusMeta.color} />
-          </Space>
+          <Flex vertical>
+            <Space size={12} align="center">
+              <Typography.Title level={4} style={{ margin: 0 }}>
+                {detail?.customerName ?? '-'}
+              </Typography.Title>
+              <StatusBadge label={statusMeta.label} color={statusMeta.color} />
+            </Space>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {formatPhone(detail?.customerPhone)}
+            </Typography.Text>
+          </Flex>
           <Space wrap>
             <Button
               icon={<FileExcelOutlined />}
@@ -512,12 +518,12 @@ export function ContractDetailPage() {
           계약 비고 필드는 백엔드 스키마에 없어 표시하지 않는다 (docs/dev/08 §4).
         */}
         <Descriptions size="small" column={{ xs: 1, sm: 2, md: 3 }} bordered>
-          <Descriptions.Item label="고객">{detail?.customerName}</Descriptions.Item>
+          <Descriptions.Item label="계약 번호">{detail?.contractNo ?? '-'}</Descriptions.Item>
           <Descriptions.Item label="계약 구분">{detail?.contractTypeName}</Descriptions.Item>
           <Descriptions.Item label="계약일">{detail?.contractedAt ?? '-'}</Descriptions.Item>
-          <Descriptions.Item label="완료 예정일">{detail?.completionDueDate ?? '-'}</Descriptions.Item>
           <Descriptions.Item label="촬영일">{detail?.photoDate ?? '-'}</Descriptions.Item>
           <Descriptions.Item label="예식일">{detail?.weddingDate ?? '-'}</Descriptions.Item>
+          <Descriptions.Item label="완료 예정일">{detail?.completionDueDate ?? '-'}</Descriptions.Item>
         </Descriptions>
       </Card>
 
