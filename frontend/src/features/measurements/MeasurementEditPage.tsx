@@ -24,6 +24,7 @@ import {
   Card,
   Col,
   DatePicker,
+  Descriptions,
   Input,
   Row,
   Segmented,
@@ -38,9 +39,11 @@ import {
 import type { RcFile } from 'antd/es/upload';
 import dayjs from 'dayjs';
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ApiError } from '../../api/client';
+import { fetchContract } from '../../api/contracts';
 import { fetchCustomer, fetchCustomers } from '../../api/customers';
+import { ItemCompositionCell } from '../contracts/ItemCompositionCell';
 import type { MeasurementType } from '../../api/measurements';
 import {
   MEASUREMENT_FIELDS,
@@ -130,6 +133,25 @@ export function MeasurementEditPage() {
     enabled: isNew && !!customerId,
   });
   const pickedCustomer = pickedCustomerQuery.data?.customer;
+
+  // 머리말 계약 정보표(계약번호·구분·품목·촬영일·예식일·완료예정일)의 소스.
+  // 신규는 목록에서 계약이 정해져 들어오므로 URL(?contractId=)로, 기존은 세션의 연결 계약으로 잡는다.
+  const headerContractId = isNew ? searchParams.get('contractId') : (session?.contractId ?? null);
+  const headerContractQuery = useQuery({
+    queryKey: ['contracts', 'detail', headerContractId],
+    queryFn: () => fetchContract(headerContractId as string),
+    enabled: !!headerContractId,
+  });
+  const headerContract = headerContractQuery.data;
+  // 품목 구성은 계약 목록·고객 상세와 같은 규칙(ItemCompositionCell): 거래구분(맞춤/렌탈)별 카테고리 합계.
+  // 옵션 롤업 라인은 금액 합산용 시스템 라인이라 품목 수에서 뺀다.
+  const headerCustomCounts: Record<string, number> = {};
+  const headerRentalCounts: Record<string, number> = {};
+  for (const line of headerContract?.lines ?? []) {
+    if (line.isOptionRollup) continue;
+    const bucket = line.transactionType === 'RENTAL' ? headerRentalCounts : headerCustomCounts;
+    bucket[line.productCategory] = (bucket[line.productCategory] ?? 0) + line.quantity;
+  }
 
   // 이 고객이 저장한 채촌 목록 — 화면 맨 위 리스트와 회차 계산에 함께 쓴다.
   // 신규 작성 중에도 고객만 고르면 기존 기록을 바로 열 수 있어야 한다 (현업 확정 2026-08-01).
@@ -535,31 +557,26 @@ export function MeasurementEditPage() {
                   />
                 </Space>
               ) : (
-                <Space wrap align="center" size="small">
-                  <Typography.Title level={4} style={{ margin: 0 }}>
-                    {isNew ? pickedCustomer?.name : session?.customerName}
-                  </Typography.Title>
-                  <Typography.Text type="secondary">
-                    {formatPhone(isNew ? pickedCustomer?.phone : session?.customerPhone)}
-                  </Typography.Text>
-                  {isNew ? (
-                    <Tag color="blue">신규 채촌</Tag>
-                  ) : (
-                    <>
-                      <Tag>{session?.contractNo ?? '계약 미연결'}</Tag>
-                      {session?.linkedOrderItems.map((it) => (
-                        <Tag key={it.id} color="geekblue">
-                          {it.displayName}
-                        </Tag>
-                      ))}
-                      {/* 채촌은 상태를 두지 않는다 (2026-08-05) — 잠긴 것만 자물쇠로 알린다. */}
-                      {locked && (
+                // 고객명 + 칩(신규 채촌/자물쇠)을 한 줄에, 전화번호는 바로 밑에 (현업 확정 2026-08-28).
+                <Space direction="vertical" size={2}>
+                  <Space wrap align="center" size="small">
+                    <Typography.Title level={4} style={{ margin: 0 }}>
+                      {isNew ? pickedCustomer?.name : session?.customerName}
+                    </Typography.Title>
+                    {isNew ? (
+                      <Tag color="blue">신규 채촌</Tag>
+                    ) : (
+                      // 채촌은 상태를 두지 않는다 (2026-08-05) — 잠긴 것만 자물쇠로 알린다.
+                      locked && (
                         <Tooltip title="진행이 시작돼 수정·삭제가 잠긴 채촌입니다.">
                           <Tag icon={<LockOutlined />} style={{ marginInlineEnd: 0 }} />
                         </Tooltip>
-                      )}
-                    </>
-                  )}
+                      )
+                    )}
+                  </Space>
+                  <Typography.Text type="secondary">
+                    {formatPhone(isNew ? pickedCustomer?.phone : session?.customerPhone)}
+                  </Typography.Text>
                 </Space>
               )}
               {/* 기능 버튼은 머리말 우상단에 둔다. 사진 업로드는 [새 채촌] 왼쪽에 붙인다. */}
@@ -606,6 +623,37 @@ export function MeasurementEditPage() {
                 )}
               </Space>
             </Space>
+
+            {/* 계약 정보표 — 이 채촌이 속한 계약의 요약(계약 상세·고객 상세 머리말과 같은 규칙).
+                계약이 연결된 경우에만 낸다 — 계약 미연결 채촌은 표시할 값이 없다. */}
+            {headerContractId && headerContract && (
+              <Descriptions
+                column={3}
+                bordered
+                size="small"
+                className="info-desc"
+                labelStyle={{ width: '13%' }}
+                contentStyle={{ width: '20.33%' }}
+              >
+                <Descriptions.Item label="계약 번호">
+                  <Link to={`/contracts/${headerContract.id}`}>{headerContract.contractNo}</Link>
+                </Descriptions.Item>
+                <Descriptions.Item label="계약 구분">
+                  {headerContract.contractTypeName ?? '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="품목">
+                  <ItemCompositionCell
+                    customCounts={headerCustomCounts}
+                    rentalCounts={headerRentalCounts}
+                  />
+                </Descriptions.Item>
+                <Descriptions.Item label="촬영일">{headerContract.photoDate ?? '-'}</Descriptions.Item>
+                <Descriptions.Item label="예식일">{headerContract.weddingDate ?? '-'}</Descriptions.Item>
+                <Descriptions.Item label="완료 예정일">
+                  {headerContract.completionDueDate ?? '-'}
+                </Descriptions.Item>
+              </Descriptions>
+            )}
 
             {/* 이 고객의 채촌 이력 — 눌러서 기존 기록을 그대로 열어 본다 (현업 확정 2026-08-01).
                 저장한 기록이 0건이면 줄 자체가 나오지 않는다. */}
