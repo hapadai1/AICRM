@@ -148,6 +148,7 @@ interface ProductionItemApiRow {
     canIssue: boolean;
     optionConfirmedAt: string | null;
     measurementLinkedAt: string | null;
+    measurementSessionId: string | null;
   };
 }
 
@@ -188,6 +189,8 @@ export interface ProductionWorkOrderView {
   optionConfirmedAt?: string;
   /** 채촌 연결 시각 (YYYY-MM-DD HH:mm) */
   measurementLinkedAt?: string;
+  /** 지금 연결된 채촌 세션 id — 준비 카드가 기존 채촌을 열 때 쓴다. 미채촌이면 없음 */
+  measurementSessionId?: string;
 }
 
 /** 화면용 제작 품목 행 — 중첩 관계를 평면화한다. */
@@ -259,6 +262,7 @@ function toProductionItem(row: ProductionItemApiRow): ProductionItem {
       canIssue: row.workOrder.canIssue,
       optionConfirmedAt: toDateTime(row.workOrder.optionConfirmedAt),
       measurementLinkedAt: toDateTime(row.workOrder.measurementLinkedAt),
+      measurementSessionId: row.workOrder.measurementSessionId ?? undefined,
     },
   };
 }
