@@ -10,7 +10,7 @@
  */
 import { FilePdfOutlined, RightOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, App, Button, Card, Space, Spin, Table, Typography } from 'antd';
+import { Alert, App, Button, Card, Descriptions, Space, Spin, Table, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { fetchContract, setVestIncluded } from '../../api/contracts';
@@ -23,7 +23,9 @@ import { useRentalCodeNames } from '../rentals/rental-codes';
 import { BackButton } from '../../shared/BackButton';
 import { formatPhone } from '../../shared/phone';
 import { PdfViewerModal } from '../../shared/PdfViewerModal';
+import { StatusBadge } from '../../shared/StatusBadge';
 import { buildConsultingColumns } from './consulting-columns';
+import { groupByContract } from './OptionProgressListPage';
 import {
   AttrDraft,
   buildComponentRows,
@@ -226,6 +228,13 @@ export function ContractOptionsPage() {
     [customItems, rentalItems],
   );
 
+  // 헤더 상태 배지 — 리스트의 '스타일 컨설팅 상태'와 같은 판정을 쓰려고 groupByContract를
+  // 그대로 재사용한다(단일 소스). 이 화면은 계약 1건이라 첫 행만 본다.
+  const consulting = useMemo(
+    () => groupByContract(customItems, rentalItems)[0] ?? null,
+    [customItems, rentalItems],
+  );
+
   const itemOf = (row: ComponentRow) =>
     customItems.find((i) => i.contractItemId === row.contractItemId) ?? null;
 
@@ -314,14 +323,26 @@ export function ContractOptionsPage() {
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Card>
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
             <div>
-              <Typography.Title level={4} style={{ marginBottom: 4 }}>
-                스타일 컨설팅 — {contract?.customerName ?? ''}
-              </Typography.Title>
-              <Typography.Text type="secondary">
-                {[contract?.customerPhone && formatPhone(contract.customerPhone), contract?.contractNo].filter(Boolean).join(' · ')}
-              </Typography.Text>
+              {/* 이름 라인: 고객명 + 컨설팅 상태 배지 */}
+              <Space size={8} align="center" wrap style={{ marginBottom: 4 }}>
+                <Typography.Title level={4} style={{ margin: 0 }}>
+                  {contract?.customerName ?? ''}
+                </Typography.Title>
+                {consulting &&
+                  (consulting.confirmedCount === consulting.itemCount ? (
+                    <StatusBadge label="확정 완료" color="green" />
+                  ) : (
+                    <StatusBadge label="진행중" color="gold" />
+                  ))}
+              </Space>
+              <div>
+                {/* 계약번호는 아래 데이터 테이블에 있으므로 여기선 전화번호만 둔다. */}
+                <Typography.Text type="secondary">
+                  {contract?.customerPhone ? formatPhone(contract.customerPhone) : ''}
+                </Typography.Text>
+              </div>
             </div>
             {/* 기능 버튼은 화면 우상단 한 곳에 모은다 — 화면 이동은 하단에 둔다. */}
             <Button icon={<FilePdfOutlined />} onClick={() => setPdfOpen(true)}>
@@ -329,12 +350,31 @@ export function ContractOptionsPage() {
             </Button>
           </div>
           {contract && !contractEditable && (
+            // 보기 전용은 '이 화면의 모드' 알림이라 이름 라인과 분리해 전폭 띠로 둔다.
             <Alert
               type="info"
               showIcon
-              message="서명완료·계약완료 상태라 스타일 컨설팅은 보기 전용입니다."
-              description="수정하려면 계약 상세의 [수정하기]로 계약을 작성중으로 되돌린 뒤 진행해 주세요."
+              style={{ padding: '4px 12px' }}
+              message={
+                <div style={{ fontSize: 12, lineHeight: 1.45 }}>
+                  <div>서명완료·계약완료 상태라 스타일 컨설팅은 보기 전용입니다.</div>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    수정하려면 계약 상세의 [수정하기]로 계약을 작성중으로 되돌린 뒤 진행해 주세요.
+                  </Typography.Text>
+                </div>
+              }
             />
+          )}
+          {/* 파란 박스 자리 — 계약 요약을 표로 항상 띄운다(계약 상세와 같은 6개 항목). */}
+          {contract && (
+            <Descriptions size="small" column={{ xs: 1, sm: 2, md: 3 }} bordered>
+              <Descriptions.Item label="계약번호">{contract.contractNo || '-'}</Descriptions.Item>
+              <Descriptions.Item label="계약 구분">{contract.contractTypeName || '-'}</Descriptions.Item>
+              <Descriptions.Item label="계약일">{contract.contractedAt ?? '-'}</Descriptions.Item>
+              <Descriptions.Item label="촬영일">{contract.photoDate ?? '-'}</Descriptions.Item>
+              <Descriptions.Item label="예식일">{contract.weddingDate ?? '-'}</Descriptions.Item>
+              <Descriptions.Item label="완료 예정일">{contract.completionDueDate ?? '-'}</Descriptions.Item>
+            </Descriptions>
           )}
           {isLoading ? (
             <Spin style={{ display: 'block', margin: '48px auto' }} />
