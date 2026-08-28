@@ -43,6 +43,13 @@ export function OptionStagePage() {
   const session = sessionQuery.data ?? null;
   const notStarted = sessionQuery.isSuccess && session === null;
 
+  // 세션 원단이 비어도 부위별로 입력한 원단이 있으면 그걸 기존값으로 쓴다.
+  // 부위별 팝업(OptionStageModal)으로 만든 세션은 세션 원단이 비어 있고, 원단은
+  // 목록의 부위 행(components[].fabricName)에만 들어간다. 그래서 완료·확정된 옵션도
+  // 세션 원단은 null이라, 이 값 없이 게이트를 걸면 다시 원단부터 입력하라고 나온다.
+  const existingFabric =
+    session?.fabric ?? session?.components.find((c) => c.fabricName)?.fabricName ?? null;
+
   const startMutation = useMutation({
     mutationFn: (fabric: string) => startOptionSession(contractItemId ?? '', fabric),
     onSuccess: (created) => {
@@ -81,7 +88,7 @@ export function OptionStagePage() {
   // 확정 세션 재선택(설계서 §8.5): 확정본은 그대로 두고 선택값을 복사한 새 선택 버전을 만든다.
   // 시작 API가 이 분기를 담당하므로 원단만 그대로 넘기면 된다.
   const reopenMutation = useMutation({
-    mutationFn: () => startOptionSession(contractItemId ?? '', session?.fabric ?? undefined),
+    mutationFn: () => startOptionSession(contractItemId ?? '', existingFabric ?? undefined),
     onSuccess: (created) => {
       queryClient.setQueryData(['options', 'session', contractItemId], created);
       void queryClient.invalidateQueries({ queryKey: ['options'] });
@@ -119,8 +126,8 @@ export function OptionStagePage() {
     return <Spin style={{ display: 'block', margin: '80px auto' }} size="large" />;
   }
 
-  // 세션 없음 → 원단 입력 후 선택 시작 (원단은 첫 진입 시 수기 입력)
-  if (notStarted || (session && !session.fabric)) {
+  // 세션 없음, 또는 어디에도 원단이 없을 때만 원단 입력 후 선택 시작 (기존 원단이 있으면 그대로 진행)
+  if (notStarted || (session && !existingFabric)) {
     return (
       <Card style={{ maxWidth: 640, margin: '0 auto' }}>
         <Space direction="vertical" size="large" style={{ width: '100%' }}>
@@ -274,7 +281,7 @@ export function OptionStagePage() {
                 {session.displayName}
               </Typography.Title>
               <Typography.Text type="secondary">
-                {fabricFieldLabel(session.productCategory)}: {session.fabric ?? '미입력'} · 옵션 세트 V
+                {fabricFieldLabel(session.productCategory)}: {existingFabric ?? '미입력'} · 옵션 세트 V
                 {session.optionSetVersionNo}
               </Typography.Text>
             </div>
@@ -320,7 +327,10 @@ export function OptionStagePage() {
             {isConfirmed
               ? canReedit
                 ? `확정된 옵션입니다. 선택지를 누르면 새 선택 버전으로 변경을 시작합니다. (${stage.choices.length}개 선택지)`
-                : '확정된 옵션입니다. 계약이 작성중일 때만 변경할 수 있습니다.'
+                : session.inProduction
+                  ? // 계약은 작성중이어도 제작에 들어간 품목이면 canReedit=false — 사유를 정확히 안내한다.
+                    '확정된 옵션입니다. 제작이 진행 중인 품목이라 변경할 수 없습니다.'
+                  : '확정된 옵션입니다. 서명완료·계약완료 상태예요. 계약 상세의 [수정하기]로 작성중으로 되돌린 뒤 변경할 수 있습니다.'
               : `${stage.choices.length}개 선택지 중 하나를 눌러 선택하세요.`}
           </Typography.Text>
         </Space>
