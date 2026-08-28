@@ -89,6 +89,17 @@
   background: rgba(0, 0, 0, 0.02);
 }
 
+/* 표 안 기본(외곽선) 버튼의 hover 테두리 — '확인서 보기'·'옵션 선택/보기' 등.
+ * 행에 마우스를 올리면 행 배경이 옅은 파랑(theme.ts Table rowHoverBg #f5f8ff)으로 바뀌는데,
+ * antd 기본 버튼은 hover 시 테두리도 옅은 파랑(colorPrimaryHover #4096ff)이 되어 행 배경에
+ * 묻혀 버튼 윤곽이 사라져 보인다. hover·focus에서 테두리를 진한 브랜드 파랑(colorPrimary
+ * #1677ff)으로 유지해 윤곽을 살린다. variant-outlined 만 골라 primary(채운) 버튼은 건드리지 않는다.
+ * antd 규칙이 :where() 해시로 특정도가 낮지 않아 여기서 이기려면 !important 가 필요하다. */
+.ant-table .ant-btn-variant-outlined:not(:disabled):hover,
+.ant-table .ant-btn-variant-outlined:not(:disabled):focus-visible {
+  border-color: #1677ff !important;
+}
+
 /* 고객 상세 상단 정보 카드(기본정보·진행요약 계약정보) — 두 표의 열 폭을 동일하게.
  * table-layout: fixed 로 내용 길이와 무관하게 라벨/값 열이 지정한 %폭 그대로 서서,
  * 위아래 두 카드의 6칸(라벨 3 + 값 3)이 세로로 나란히 정렬된다. (Descriptions 기본은 auto라 어긋났다.)
