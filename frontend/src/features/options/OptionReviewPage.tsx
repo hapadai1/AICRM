@@ -11,6 +11,7 @@ import { Alert, Button, Card, Col, Flex, Image, Modal, Row, Space, Spin, Tag, To
 import type { CSSProperties } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { fetchFileObjectUrl } from '../../api/client';
+import { fetchContractFlow } from '../../api/contracts';
 import type { OptionComponentAttr, OptionReviewStage, OptionSurcharge } from '../../api/options';
 import {
   applyOptionSurcharge,
@@ -229,20 +230,49 @@ export function OptionReviewPage() {
 
   const confirmMutation = useMutation({
     mutationFn: () => confirmOptionSession(sessionId ?? '', review?.version ?? 0),
-    onSuccess: (result) => {
+    onSuccess: async (result) => {
       // 확정과 동시에 계약금액 반영까지 끝난다 (현업 확정 2026-07-31) — 미반영 안내가 필요 없다.
       const c = result.surcharge?.contract;
+      void queryClient.invalidateQueries({ queryKey: ['options'] });
+      void queryClient.invalidateQueries({ queryKey: ['workorders'] });
+      void queryClient.invalidateQueries({ queryKey: ['contracts'] });
+      void queryClient.invalidateQueries({ queryKey: ['customers'] });
+
+      // 이 품목까지 확정하면 계약의 모든 옵션이 끝났는지 확인한다 — 그러면 곧장 계약서
+      // 서명 단계로 안내한다. 아직 남은 품목이 있으면 지금처럼 토스트만 띄우고 목록으로 돌아간다.
+      const contractId = c?.contractId;
+      if (contractId) {
+        const flow = await fetchContractFlow(contractId).catch(() => null);
+        if (flow && flow.consulting.ready && !flow.signed && !flow.completed) {
+          modal.confirm({
+            title: '모든 스타일 선택이 끝났어요',
+            icon: <CheckCircleFilled style={{ color: '#52c41a' }} />,
+            width: 460,
+            content: (
+              <Typography.Text>
+                이 계약의 모든 품목 옵션이 확정되었습니다. 이제 계약서 서명과 계약 완료를 진행할 수
+                있어요.
+              </Typography.Text>
+            ),
+            okText: '계약서 서명하기',
+            cancelText: '닫기',
+            okButtonProps: { size: 'large', icon: <EditOutlined /> },
+            cancelButtonProps: { size: 'large' },
+            // 서명은 계약 작성(수정) 화면에서 한다 — 해당 계약을 열어 이동한다.
+            onOk: () => navigate(`/contracts/new?contractId=${contractId}`),
+            onCancel: () => navigate(`/contracts/${contractId}/options`),
+          });
+          return;
+        }
+      }
+
       message.success(
         c && (result.surcharge?.total ?? 0) > 0
           ? `옵션이 확정되어 계약금액에 반영되었습니다. 계약금액 ${won(c.totalAmount)}`
           : '옵션이 확정되었습니다. 작업지시서 출력이 가능합니다.',
       );
-      void queryClient.invalidateQueries({ queryKey: ['options'] });
-      void queryClient.invalidateQueries({ queryKey: ['workorders'] });
-      void queryClient.invalidateQueries({ queryKey: ['contracts'] });
-      void queryClient.invalidateQueries({ queryKey: ['customers'] });
       // 확정 후에는 전체 목록이 아니라 방금 온 계약(고객)의 품목 리스트로 돌아간다.
-      navigate(c?.contractId ? `/contracts/${c.contractId}/options` : '/options');
+      navigate(contractId ? `/contracts/${contractId}/options` : '/options');
     },
     onError: (e: Error) => message.error(e.message),
   });
@@ -344,70 +374,66 @@ export function OptionReviewPage() {
   const missingTotal = review.missingCount + review.missingOptionalCount;
 
   const openConfirmDialog = () => {
-    // 확정은 계약금액 반영을 함께 실행한다 — 계약서가 어떻게 바뀌는지 먼저 다 보여준다.
+    // 고객과 함께 보는 화면이라 '경고'가 아니라 '완료' 톤으로 보여준다.
+    // 확정은 계약금액 반영을 함께 실행하므로 최종 금액을 밝게 안내한다.
     const s = review.surcharge;
     const c = s.contract;
     const changesAmount = s.pending !== 0 && !!c;
-    // 베스트 제외는 금액을 자동으로 깎지 않는다(값이 그때그때 다르다) — 수기 조정을 알린다.
     const vestExcluded = review.vestExcluded;
-    const wide = changesAmount || vestExcluded;
+    const showDetail = changesAmount || vestExcluded;
     modal.confirm({
-      title: '옵션 최종 저장(확정)',
-      icon: <ExclamationCircleOutlined />,
-      width: wide ? 520 : undefined,
+      title: '옵션 선택이 완료되었어요',
+      icon: <CheckCircleFilled style={{ color: '#52c41a' }} />,
+      width: showDetail ? 480 : undefined,
       content: (
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          {wide && (
-            <Alert
-              type="warning"
-              showIcon
-              message="계약서 변경내용"
-              description={
-                <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                  {changesAmount && (
-                    <span>
-                      <Typography.Text strong>▸ 선택 옵션 추가금</Typography.Text>{' '}
-                      <Typography.Text strong style={{ color: '#cf1322' }}>
-                        {s.pending > 0 ? '+' : '-'}
-                        {won(Math.abs(s.pending))}
-                      </Typography.Text>
-                    </span>
-                  )}
-                  {vestExcluded && (
-                    <span>
-                      <Typography.Text strong>▸ 베스트 제외</Typography.Text>{' '}
-                      <Typography.Text>{review.displayName}</Typography.Text>
-                      <br />
-                      <Typography.Text type="secondary">
-                        베스트 금액은 자동 차감되지 않습니다. 계약서에서 수기로 조정해 주세요.
-                      </Typography.Text>
-                    </span>
-                  )}
-                  {changesAmount && (
-                    <span>
-                      계약금액 <Typography.Text delete>{won(c.totalAmount)}</Typography.Text> →{' '}
-                      <Typography.Text strong style={{ color: '#cf1322' }}>
-                        {won(c.afterTotalAmount)}
-                      </Typography.Text>
-                      <br />
-                      <Typography.Text type="secondary">
-                        계약 {c.contractNo} — 변경계약(새 버전)은 만들지 않고 현재 버전 금액을
-                        수정합니다.
-                      </Typography.Text>
-                    </span>
-                  )}
-                </Space>
-              }
-            />
-          )}
           <Typography.Text>
-            선택한 옵션을 확정합니다. 확정 후 옵션을 변경하면 작업지시서 재출력 필요 대상이 됩니다.
-            확정하시겠습니까?
+            선택하신 스타일로 확정합니다. 확정 후 옵션을 변경하면 작업지시서를 다시 출력해야 합니다.
           </Typography.Text>
+          {changesAmount && (
+            <Card
+              size="small"
+              style={{ background: '#f6ffed', borderColor: '#b7eb8f' }}
+              styles={{ body: { padding: '10px 14px' } }}
+            >
+              <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                최종 계약금액
+              </Typography.Text>
+              <div style={{ marginTop: 2 }}>
+                <Typography.Text type="secondary" style={{ fontSize: 15 }}>
+                  {won(c.totalAmount)}
+                </Typography.Text>
+                <Typography.Text type="secondary" style={{ margin: '0 8px' }}>
+                  →
+                </Typography.Text>
+                <Typography.Text strong style={{ fontSize: 20, color: '#389e0d' }}>
+                  {won(c.afterTotalAmount)}
+                </Typography.Text>
+              </div>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                계약 {c.contractNo}에 자동 반영됩니다.
+              </Typography.Text>
+            </Card>
+          )}
+          {vestExcluded && (
+            <Card
+              size="small"
+              style={{ background: '#fafafa' }}
+              styles={{ body: { padding: '10px 14px' } }}
+            >
+              <Typography.Text strong>베스트 제외</Typography.Text>{' '}
+              <Typography.Text>{review.displayName}</Typography.Text>
+              <br />
+              {/* 고객과 함께 보는 화면 — '수기 조정' 같은 내부 지시 대신 부드럽게 안내한다. */}
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                베스트 금액은 계약서에서 별도로 안내드립니다.
+              </Typography.Text>
+            </Card>
+          )}
         </Space>
       ),
       okText: changesAmount ? '확정하고 계약금액 반영' : '확정',
-      cancelText: '취소',
+      cancelText: '다시 보기',
       okButtonProps: { size: 'large' },
       cancelButtonProps: { size: 'large' },
       onOk: () => confirmMutation.mutateAsync(),
@@ -572,7 +598,10 @@ export function OptionReviewPage() {
           message={
             canEdit
               ? "확정된 옵션입니다. 카드를 눌러 열람하고, 바꾸려면 위 '옵션 변경'을 눌러 새 선택 버전을 시작하세요."
-              : '확정된 옵션입니다. 계약이 작성중일 때만 변경할 수 있습니다.'
+              : review.inProduction
+                ? // 계약은 작성중이어도 제작에 들어간 품목이면 canEdit=false — 사유를 정확히 안내한다.
+                  '확정된 옵션입니다. 제작이 진행 중인 품목이라 변경할 수 없습니다.'
+                : '확정된 옵션입니다. 서명완료·계약완료 상태예요. 계약 상세의 [수정하기]로 작성중으로 되돌린 뒤 변경할 수 있습니다.'
           }
         />
       )}

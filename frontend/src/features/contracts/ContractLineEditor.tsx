@@ -1,5 +1,5 @@
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
-import { Button, Flex, Input, InputNumber, Select, Space, Table, Tag } from 'antd';
+import { Button, Flex, Input, InputNumber, Popconfirm, Select, Space, Table, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { ProductCategory, TransactionType } from '../../api/contracts';
 import { PRODUCT_CATEGORY_LABEL, TRANSACTION_TYPE_LABEL } from './labels';
@@ -69,6 +69,27 @@ const CATEGORY_OPTIONS = (Object.keys(PRODUCT_CATEGORY_LABEL) as ProductCategory
  */
 interface EditorRow extends EditableLine {
   rowKey: string;
+}
+
+/** 옵션 반영 상태 표시 — 색점 + 상태 텍스트 (버튼처럼 보이는 태그 대신). */
+function OptionStatus({ color, text }: { color: string; text: string }) {
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        whiteSpace: 'nowrap',
+        fontSize: 13,
+        color: 'rgba(0,0,0,0.65)',
+      }}
+    >
+      <span
+        style={{ width: 7, height: 7, borderRadius: '50%', background: color, flex: '0 0 auto' }}
+      />
+      {text}
+    </span>
+  );
 }
 
 interface ContractLineEditorProps {
@@ -226,26 +247,35 @@ export function ContractLineEditor({ value, onChange, disabled }: ContractLineEd
       // 옵션 롤업 라인은 백엔드 소유라 삭제 버튼을 두지 않는다.
       render: (_, l) =>
         l.isOptionRollup ? null : (
-          <Space size={4}>
-            {/* 옵션 반영 배지 — 추가금 옵션을 안 골라 옵션 행이 없어도 '반영완료'로 확인된다.
-                반영 상태를 모르는 라인(신규·컨설팅 대상 아님)은 배지를 두지 않는다. */}
+          <Space size={8}>
+            {/* 옵션 반영 상태 — '점 + 상태' 텍스트로 표시(버튼처럼 보이지 않게).
+                추가금 옵션을 안 골라 옵션 행이 없어도 '반영완료'로 확인된다.
+                반영 상태를 모르는 라인(신규·컨설팅 대상 아님)은 표시를 두지 않는다. */}
             {l.optionReflected === true ? (
-              <Tag color="green" style={{ marginInlineEnd: 0 }}>
-                옵션 반영완료
-              </Tag>
+              <OptionStatus color="#52c41a" text="옵션 반영완료" />
             ) : l.optionReflected === false ? (
-              <Tag color="orange" style={{ marginInlineEnd: 0 }}>
-                옵션 미반영
-              </Tag>
+              <OptionStatus color="#faad14" text="옵션 미반영" />
             ) : null}
-            <Button
-              type="text"
-              danger
-              icon={<DeleteOutlined />}
+            <Popconfirm
+              title="품목 행 삭제"
+              description="이 품목 행을 삭제할까요? 되돌릴 수 없습니다."
+              okText="삭제"
+              okButtonProps={{ danger: true }}
+              cancelText="취소"
+              placement="topRight"
               disabled={disabled}
-              aria-label="품목 행 삭제"
-              onClick={() => onChange(value.filter((x) => x.key !== l.key))}
-            />
+              onConfirm={() => onChange(value.filter((x) => x.key !== l.key))}
+            >
+              <Tooltip title="이 품목 행을 삭제합니다">
+                <Button
+                  type="text"
+                  danger
+                  icon={<DeleteOutlined />}
+                  disabled={disabled}
+                  aria-label="품목 행 삭제"
+                />
+              </Tooltip>
+            </Popconfirm>
           </Space>
         ),
     },
