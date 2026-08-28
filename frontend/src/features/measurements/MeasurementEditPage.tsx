@@ -559,7 +559,7 @@ export function MeasurementEditPage() {
               ) : (
                 // 고객명 + 칩(신규 채촌/자물쇠)을 한 줄에, 전화번호는 바로 밑에 (현업 확정 2026-08-28).
                 <Space direction="vertical" size={2}>
-                  <Space wrap align="center" size="small">
+                  <Space wrap align="center" size={12}>
                     <Typography.Title level={4} style={{ margin: 0 }}>
                       {isNew ? pickedCustomer?.name : session?.customerName}
                     </Typography.Title>
@@ -574,7 +574,7 @@ export function MeasurementEditPage() {
                       )
                     )}
                   </Space>
-                  <Typography.Text type="secondary">
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     {formatPhone(isNew ? pickedCustomer?.phone : session?.customerPhone)}
                   </Typography.Text>
                 </Space>
