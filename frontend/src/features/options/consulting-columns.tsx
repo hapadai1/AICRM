@@ -10,16 +10,12 @@ import {
   MoreOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
-import { Button, Checkbox, Dropdown, Input, Progress, Space, Tooltip, Typography } from 'antd';
+import { Button, Checkbox, Dropdown, Input, Progress, Space, Tag, Tooltip, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { OptionProgressItem } from '../../api/options';
 import { componentGroupLabel } from '../../api/options';
 import type { RentalProgressItem } from '../../api/rentals';
-import { RENTAL_SELECTION_STATUS_META } from '../../api/rentals';
 import type { useRentalCodeNames } from '../rentals/rental-codes';
-import { StatusBadge } from '../../shared/StatusBadge';
-import { metaOf } from '../../shared/status-meta';
-import { OPTION_STATUS_META } from './option-meta';
 import {
   AttrDraft,
   ComponentRow,
@@ -28,6 +24,35 @@ import {
   isOptionDone,
   RentalDraft,
 } from './consulting-rows';
+import { rentalSelectionDone } from './style-confirm';
+
+/**
+ * 품목 밑 상태 칩 — 스타일 컨설팅 상세 전용 표기 (전역 상태 메타와 별개, 현업 확정 2026-08-28).
+ * - 맞춤: 옵션 선택 완료(REVIEW) → '옵션 선택완료', 확인서 보기까지 완료(CONFIRMED) → '확인서 완료'.
+ * - 렌탈: 확인서 단계가 없어 실물 선정이 끝나면 그 자체가 종료 단계다. 맞춤의 '확인서 완료'와
+ *   같은 의미로 '옵션 선택완료'(초록)로 표기한다.
+ */
+function consultingStatusChip(
+  row: ComponentRow,
+  rentalItems: RentalProgressItem[],
+): { label: string; color: string } {
+  if (row.kind === 'RENTAL') {
+    const item = rentalItems.find((i) => i.contractItemId === row.contractItemId);
+    if (item && rentalSelectionDone(item)) return { label: '옵션 선택완료', color: 'green' };
+    if (row.status === 'NOT_STARTED') return { label: '미시작', color: 'default' };
+    return { label: '옵션 선택중', color: 'blue' };
+  }
+  switch (row.status) {
+    case 'CONFIRMED':
+      return { label: '확인서 완료', color: 'green' };
+    case 'REVIEW':
+      return { label: '옵션 선택완료', color: 'orange' };
+    case 'IN_PROGRESS':
+      return { label: '옵션 선택중', color: 'blue' };
+    default:
+      return { label: '미시작', color: 'default' };
+  }
+}
 
 export interface ConsultingColumnsContext {
   attrDrafts: Record<string, AttrDraft>;
@@ -79,27 +104,24 @@ export function buildConsultingColumns(ctx: ConsultingColumnsContext): ColumnsTy
     {
       title: '품목',
       key: 'item',
-      width: 220,
+      width: 190,
       onCell: spanCell,
-      render: (_, row) => (
-        <Space direction="vertical" size={2}>
-          <Typography.Text strong style={{ fontSize: 15 }}>
-            {row.displayName}
-          </Typography.Text>
-          <StatusBadge
-            label={
-              row.kind === 'CUSTOM'
-                ? metaOf(OPTION_STATUS_META, row.status).label
-                : metaOf(RENTAL_SELECTION_STATUS_META, row.status).label
-            }
-            color={
-              row.kind === 'CUSTOM'
-                ? metaOf(OPTION_STATUS_META, row.status).color
-                : metaOf(RENTAL_SELECTION_STATUS_META, row.status).color
-            }
-          />
-        </Space>
-      ),
+      render: (_, row) => {
+        const chip = consultingStatusChip(row, rentalItems);
+        return (
+          <Space direction="vertical" size={2}>
+            <Typography.Text strong style={{ fontSize: 15 }}>
+              {row.displayName}
+            </Typography.Text>
+            <Tag
+              color={chip.color === 'default' ? undefined : chip.color}
+              style={{ marginInlineEnd: 0, fontWeight: 500, borderRadius: 10 }}
+            >
+              {chip.label}
+            </Tag>
+          </Space>
+        );
+      },
     },
     {
       title: '부위',
@@ -113,7 +135,7 @@ export function buildConsultingColumns(ctx: ConsultingColumnsContext): ColumnsTy
       // 맞춤은 원단(수기), 렌탈은 선택한 물품의 사이즈 — 부위 행의 첫 지정 항목이다.
       title: '원단 · 사이즈 (렌탈)',
       key: 'first',
-      width: 240,
+      width: 190,
       render: (_, row) => {
         // 렌탈은 사이즈를 여기서 고르지 않는다 — [렌탈 검색] 팝업에서 고른 물품의 규격을 읽기만 한다.
         // 셀에서 고르면 고를 때마다 저장돼 토스트가 연달아 떴다 (현업 확정 2026-07-31).
@@ -141,7 +163,7 @@ export function buildConsultingColumns(ctx: ConsultingColumnsContext): ColumnsTy
     {
       title: '컬러 (렌탈)',
       key: 'second',
-      width: 200,
+      width: 160,
       render: (_, row) => {
         // 렌탈은 고른 물품의 컬러를 읽기만 한다 — 변경은 [렌탈 검색] 팝업에서만 한다.
         if (row.kind === 'RENTAL') {
@@ -169,7 +191,7 @@ export function buildConsultingColumns(ctx: ConsultingColumnsContext): ColumnsTy
       // 렌탈 비고는 수선 명령(수치 등)을 적는 칸이다 (설계서 04 §4.2).
       title: '패턴 · 비고(렌탈)',
       key: 'third',
-      width: 220,
+      width: 180,
       render: (_, row) => {
         if (row.kind === 'RENTAL') {
           const draft = rentalDrafts[row.key] ?? EMPTY_RENTAL;
@@ -203,35 +225,6 @@ export function buildConsultingColumns(ctx: ConsultingColumnsContext): ColumnsTy
       },
     },
     {
-      title: '진행 · 선택 실물',
-      key: 'progress',
-      width: 190,
-      render: (_, row) => {
-        if (row.kind === 'RENTAL')
-          return row.selectedItemCode ? (
-            <Typography.Text strong>{row.selectedItemCode}</Typography.Text>
-          ) : (
-            <Typography.Text type="secondary">미선택</Typography.Text>
-          );
-        const total = row.totalStages ?? 0;
-        const done = row.completedStages ?? 0;
-        if (total === 0) return <Typography.Text type="secondary">단계 없음</Typography.Text>;
-        return (
-          <Space>
-            <Progress
-              percent={Math.round((done / total) * 100)}
-              size="small"
-              style={{ width: 80 }}
-              showInfo={false}
-            />
-            <Typography.Text>
-              {done}/{total} 단계
-            </Typography.Text>
-          </Space>
-        );
-      },
-    },
-    {
       /*
         베스트 행에만 붙는 [베스트 제외] 체크박스 (현업 확정 2026-08-01).
         계약 시점에는 3피스로 갈지 모르니 계약서는 베스트를 다루지 않고, 옷을 고르면서
@@ -254,6 +247,38 @@ export function buildConsultingColumns(ctx: ConsultingColumnsContext): ColumnsTy
             </span>
           </Tooltip>
         ),
+    },
+    {
+      title: '진행 · 선택 실물',
+      key: 'progress',
+      width: 170,
+      render: (_, row) => {
+        if (row.kind === 'RENTAL')
+          return row.selectedItemCode ? (
+            // 실물 코드는 마지막 '-' 뒤 일련번호만 노출한다 (전체 코드는 툴팁으로 확인).
+            <Tooltip title={row.selectedItemCode}>
+              <Typography.Text strong>{row.selectedItemCode.split('-').pop()}</Typography.Text>
+            </Tooltip>
+          ) : (
+            <Typography.Text type="secondary">미선택</Typography.Text>
+          );
+        const total = row.totalStages ?? 0;
+        const done = row.completedStages ?? 0;
+        if (total === 0) return <Typography.Text type="secondary">단계 없음</Typography.Text>;
+        return (
+          <Space>
+            <Progress
+              percent={Math.round((done / total) * 100)}
+              size="small"
+              style={{ width: 80 }}
+              showInfo={false}
+            />
+            <Typography.Text>
+              {done}/{total} 단계
+            </Typography.Text>
+          </Space>
+        );
+      },
     },
     {
       title: '옵션',
