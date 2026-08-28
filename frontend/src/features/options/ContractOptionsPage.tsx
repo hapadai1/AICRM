@@ -326,7 +326,7 @@ export function ContractOptionsPage() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
             <div>
               {/* 이름 라인: 고객명 + 컨설팅 상태 배지 */}
-              <Space size={8} align="center" wrap style={{ marginBottom: 4 }}>
+              <Space size={12} align="center" wrap>
                 <Typography.Title level={4} style={{ margin: 0 }}>
                   {contract?.customerName ?? ''}
                 </Typography.Title>
@@ -339,7 +339,7 @@ export function ContractOptionsPage() {
               </Space>
               <div>
                 {/* 계약번호는 아래 데이터 테이블에 있으므로 여기선 전화번호만 둔다. */}
-                <Typography.Text type="secondary">
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                   {contract?.customerPhone ? formatPhone(contract.customerPhone) : ''}
                 </Typography.Text>
               </div>

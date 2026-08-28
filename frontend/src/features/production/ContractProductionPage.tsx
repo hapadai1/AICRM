@@ -10,20 +10,19 @@
  * 한쪽만 있는 계약은 그 흐름이 화면 폭을 다 쓴다.
  */
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Card, Col, Descriptions, Row, Space, Typography } from 'antd';
-import { useParams } from 'react-router-dom';
+import { Alert, Card, Col, Descriptions, Flex, Row, Space, Typography } from 'antd';
+import { Link, useParams } from 'react-router-dom';
 import { fetchContract } from '../../api/contracts';
 import { fetchCustomerJourneys } from '../../api/journeys';
 import { fetchProductionItems } from '../../api/production';
 import { BackButton } from '../../shared/BackButton';
 import { formatPhone } from '../../shared/phone';
+import { StatusBadge } from '../../shared/StatusBadge';
+import { ItemCompositionCell } from '../contracts/ItemCompositionCell';
+import { CONTRACT_STATUS_META, metaOf } from '../contracts/labels';
 import { ProductionFlowCard } from './ProductionFlowCard';
 import { ProductionPrepCard } from './ProductionPrepCard';
-import {
-  DdayTag,
-  itemComposition,
-  summarizeContract,
-} from './production-summary';
+import { DdayTag, summarizeContract } from './production-summary';
 
 export function ContractProductionPage() {
   const { id = '' } = useParams();
@@ -64,6 +63,7 @@ export function ContractProductionPage() {
   }
 
   const summary = summarizeContract(items);
+  const statusMeta = metaOf(CONTRACT_STATUS_META, contract?.status ?? '');
   // 취소 품목은 진행에서 빼고 머리글에서만 알린다 — 단계 안에 두면 할 일처럼 보인다.
   const liveItems = items.filter((i) => i.itemStatus !== 'CANCELLED');
   const cancelledItems = items.filter((i) => i.itemStatus === 'CANCELLED');
@@ -90,19 +90,34 @@ export function ContractProductionPage() {
       {/* 목록에서 고른 그 행이 머리글에 그대로 나온다 (계산은 production-summary 공유) */}
       <Card>
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          <div>
-            <Typography.Title level={4} style={{ marginBottom: 4 }}>
-              제작 관리 — {contract?.customerName ?? ''}
-            </Typography.Title>
-            <Typography.Text type="secondary">
-              {[contract?.customerPhone && formatPhone(contract.customerPhone), contract?.contractNo].filter(Boolean).join(' · ')}
+          <Flex vertical>
+            <Space size={12} align="center">
+              <Typography.Title level={4} style={{ margin: 0 }}>
+                {contract?.customerName ?? '-'}
+              </Typography.Title>
+              <StatusBadge label={statusMeta.label} color={statusMeta.color} />
+            </Space>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {formatPhone(contract?.customerPhone)}
             </Typography.Text>
-          </div>
-          <Descriptions size="small" column={3} colon={false}>
-            <Descriptions.Item label="품목 구성">
-              {itemComposition(summary.categoryCounts) || '-'}
+          </Flex>
+          <Descriptions size="small" column={{ xs: 1, sm: 2, md: 3 }} bordered>
+            <Descriptions.Item label="계약 번호">
+              {contract?.contractNo ? (
+                <Link to={`/contracts/${id}`}>{contract.contractNo}</Link>
+              ) : (
+                '-'
+              )}
             </Descriptions.Item>
-            <Descriptions.Item label="건수">{summary.itemCount}</Descriptions.Item>
+            <Descriptions.Item label="계약 구분">{contract?.contractTypeName ?? '-'}</Descriptions.Item>
+            <Descriptions.Item label="품목">
+              <ItemCompositionCell
+                customCounts={summary.customCounts}
+                rentalCounts={summary.rentalCounts}
+              />
+            </Descriptions.Item>
+            <Descriptions.Item label="촬영일">{contract?.photoDate ?? '-'}</Descriptions.Item>
+            <Descriptions.Item label="예식일">{contract?.weddingDate ?? '-'}</Descriptions.Item>
             <Descriptions.Item label="완료 예정일">
               <Space size={6}>
                 {summary.dueDate ?? <Typography.Text type="secondary">미정</Typography.Text>}
