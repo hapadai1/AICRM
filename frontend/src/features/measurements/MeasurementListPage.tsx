@@ -279,7 +279,9 @@ export function MeasurementListPage({
               type="primary"
               icon={<PlusOutlined />}
               onClick={() =>
-                navigate(`/measurements/new?customerId=${row.customerId}&orderId=${row.orderId}`)
+                navigate(
+                  `/measurements/new?customerId=${row.customerId}&orderId=${row.orderId}&contractId=${row.contractId}`,
+                )
               }
             >
               채촌
@@ -317,7 +319,7 @@ export function MeasurementListPage({
         const target = row.lastSessionId
           ? `/measurements/${row.lastSessionId}`
           : canMeasure
-            ? `/measurements/new?customerId=${row.customerId}&orderId=${row.orderId}`
+            ? `/measurements/new?customerId=${row.customerId}&orderId=${row.orderId}&contractId=${row.contractId}`
             : null;
         return {
           onClick: () => {
