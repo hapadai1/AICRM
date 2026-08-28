@@ -67,6 +67,10 @@ export function ProductionPrepCard({
   const customItems = items.filter((i) => i.transactionType !== 'RENTAL');
   // 채촌은 맞춤 주문에 붙는다 — 계약의 맞춤 주문 하나가 채촌 입력 대상이다.
   const customOrderId = customItems[0]?.orderId;
+  // 이미 이 계약에 연결된 채촌 세션이 있으면 그 상세를 연다 — 준비는 '보기' 성격이라
+  // 완료된 채촌을 다시 신규로 만들지 않는다. 없으면(미채촌) 아래에서 신규 채촌으로 보낸다.
+  const linkedSessionId = customItems.find((i) => i.workOrder.measurementSessionId)?.workOrder
+    .measurementSessionId;
   const measureDates = customItems
     .map((i) => i.workOrder.measurementLinkedAt)
     .filter((v): v is string => !!v)
@@ -119,9 +123,14 @@ export function ProductionPrepCard({
         <Button
           size="small"
           style={actionButtonStyle}
-          // 목록을 거치지 않고 이 계약의 맞춤 주문에 바로 채촌을 입력한다(채촌 목록의 [채촌] 버튼과 동일 경로).
+          // 연결된 채촌이 있으면 그 상세로(신규 채촌 칩 없이 내용을 그대로 보여준다),
+          // 없으면 목록을 거치지 않고 이 계약의 맞춤 주문에 바로 신규 채촌을 입력한다.
           onClick={() =>
-            navigate(`/measurements/new?customerId=${customerId}&orderId=${customOrderId}`)
+            navigate(
+              linkedSessionId
+                ? `/measurements/${linkedSessionId}`
+                : `/measurements/new?customerId=${customerId}&orderId=${customOrderId}`,
+            )
           }
         >
           채촌

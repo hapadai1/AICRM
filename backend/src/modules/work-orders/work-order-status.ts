@@ -46,7 +46,7 @@ export const workOrderStatusSelect = Prisma.validator<Prisma.OrderItemSelect>()(
     where: { isCurrent: true },
     orderBy: { linkedAt: Prisma.SortOrder.desc },
     take: 1,
-    select: { linkedAt: true },
+    select: { linkedAt: true, measurementSessionId: true },
   },
   workOrder: {
     select: {
@@ -117,6 +117,11 @@ export interface WorkOrderView {
    */
   optionConfirmedAt: string | null;
   measurementLinkedAt: string | null;
+  /**
+   * 지금 이 품목에 연결된 채촌 세션 id — 제작 관리의 `준비`가 이 값으로 기존 채촌을 연다.
+   * 연결이 없으면(미채촌) null이고, 그때만 준비 카드가 신규 채촌으로 보낸다.
+   */
+  measurementSessionId: string | null;
 }
 
 /** 위 workOrderStatusSelect를 포함한 OrderItem에서 작업지시서 뷰를 만든다 */
@@ -137,5 +142,6 @@ export function buildWorkOrderView(item: OrderItemWithWorkOrderStatus): WorkOrde
     canIssue: status !== 'WAITING',
     optionConfirmedAt: session?.confirmedAt?.toISOString() ?? null,
     measurementLinkedAt: link?.linkedAt.toISOString() ?? null,
+    measurementSessionId: link?.measurementSessionId ?? null,
   };
 }
