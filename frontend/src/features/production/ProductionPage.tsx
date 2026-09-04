@@ -221,31 +221,33 @@ export function ProductionPage() {
   return (
     <PageShell>
       <PageCard>
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          <ListToolbar
-            filters={
-              <>
-                <Input.Search
-                  allowClear
-                  style={{ width: LAYOUT.searchWidth }}
-                  placeholder="고객명 · 전화번호 검색"
-                  defaultValue={keyword}
-                  onSearch={(v) => setParams({ q: v.trim() || undefined })}
-                />
-                {/* 상태 — 컨설팅·채촌 목록과 같은 3칸 구성. 기본 전체. */}
-                <Segmented
-                  value={state}
-                  onChange={(v) => setParams({ state: v === 'ALL' ? undefined : (v as string) })}
-                  options={[
-                    { label: '전체', value: 'ALL' },
-                    { label: '진행중', value: 'ONGOING' },
-                    { label: '완료', value: 'DONE' },
-                  ]}
-                />
-              </>
-            }
-          />
-          <DataTable<ContractRow>
+        <ListToolbar
+          filters={
+            <>
+              <Input.Search
+                allowClear
+                style={{ width: LAYOUT.searchWidth }}
+                placeholder="고객명 · 전화번호 검색"
+                defaultValue={keyword}
+                onSearch={(v) => setParams({ q: v.trim() || undefined })}
+              />
+              {/* 상태 — 컨설팅·채촌 목록과 같은 3칸 구성. 기본 전체. */}
+              <Segmented
+                value={state}
+                onChange={(v) => setParams({ state: v === 'ALL' ? undefined : (v as string) })}
+                options={[
+                  { label: '전체', value: 'ALL' },
+                  { label: '진행중', value: 'ONGOING' },
+                  { label: '완료', value: 'DONE' },
+                ]}
+              />
+            </>
+          }
+        />
+      </PageCard>
+
+      <PageCard>
+        <DataTable<ContractRow>
             rowKey="contractId"
             loading={itemsQuery.isLoading}
             dataSource={rows}
@@ -263,7 +265,6 @@ export function ProductionPage() {
             })}
             locale={{ emptyText: '제작 대상 품목이 있는 계약이 없습니다.' }}
           />
-        </Space>
       </PageCard>
     </PageShell>
   );

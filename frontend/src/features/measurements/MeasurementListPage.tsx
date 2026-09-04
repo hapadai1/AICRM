@@ -340,7 +340,6 @@ export function MeasurementListPage({
   return (
     <PageShell>
       <PageCard>
-      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
         <ListToolbar
           filters={
             <>
@@ -407,10 +406,9 @@ export function MeasurementListPage({
             </Can>
           }
         />
-
-        {tableEl}
-      </Space>
       </PageCard>
+
+      <PageCard>{tableEl}</PageCard>
     </PageShell>
   );
 }
