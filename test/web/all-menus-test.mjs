@@ -101,10 +101,8 @@ await step('대시보드', 'dashboard', async () => {
   await contentOk();
 });
 
-await step('진행 현황(Journey)', 'journeys', async () => {
-  await page.goto(`${BASE}/journeys`);
-  await contentOk();
-});
+// 진행 현황(Journey) 전용 화면은 아직 미구현("Phase 0에서 구현 예정")이며
+// 라우트·메뉴 모두 없다. 화면이 실제로 생기면 이 단계를 다시 추가한다.
 
 await step('예약 목록·캘린더', 'appointments', async () => {
   await page.goto(`${BASE}/appointments`);

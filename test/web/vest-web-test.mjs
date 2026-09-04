@@ -104,6 +104,22 @@ try {
   await page.waitForTimeout(600);
   await shot('customer-selected');
 
+  // 고객 신체정보(키·체중·나이)가 비어 있으면 "고객 정보 확인" 모달이 뜬다.
+  // 뜬 경우에만 채우고 저장; 안 뜨면 그대로 진행.
+  const infoModal = page.locator('.ant-modal-content', { hasText: '고객 정보 확인' });
+  if (await infoModal.count()) {
+    const modalNums = infoModal.locator('.ant-input-number-input');
+    if (await modalNums.count()) await modalNums.nth(0).fill('178'); // 키(cm)
+    const modalTexts = infoModal.locator('input.ant-input:not(.ant-input-number-input)');
+    // 체중·나이는 일반 입력으로 노출되므로 순서대로 채운다.
+    const textCount = await modalTexts.count();
+    if (textCount >= 1) await modalTexts.nth(textCount - 2).fill('72'); // 체중(kg)
+    if (textCount >= 1) await modalTexts.nth(textCount - 1).fill('35'); // 나이
+    await infoModal.getByRole('button', { name: '저장하고 계약서 작성' }).click();
+    await infoModal.waitFor({ state: 'hidden' });
+    await page.waitForTimeout(400);
+  }
+
   await pickSelect(page.locator('.ant-select', { hasText: '계약 구분 선택' }).first(), null, CONTRACT_TYPE);
   await page.waitForTimeout(400);
 
@@ -131,7 +147,7 @@ try {
 
   // 5) 스타일 컨설팅 — 정장은 상의·하의·베스트 세 부위로 나온다
   await page.getByRole('button', { name: '스타일 컨설팅으로 이동' }).click();
-  await page.getByText('스타일 컨설팅 —').waitFor();
+  await page.getByRole('heading', { name: '스타일 컨설팅' }).waitFor();
   await page.locator('td', { hasText: '베스트' }).first().waitFor();
   await shot('consulting-with-vest-row');
 
