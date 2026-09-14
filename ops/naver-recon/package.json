@@ -1,0 +1,9 @@
+{
+  "name": "aicrm-naver-recon",
+  "private": true,
+  "description": "네이버 예약 파트너센터 정찰 스크립트 — 실제 예약 목록 JSON/HTML을 1회 캡처해 어댑터 구현 근거를 만든다. 실행 방법: recon.mjs 상단 주석 참고.",
+  "type": "module",
+  "dependencies": {
+    "playwright-core": "^1.62.1"
+  }
+}
