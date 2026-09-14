@@ -6,6 +6,10 @@ build/
 .env
 storage/
 storage-test/
+
+# 네이버 예약 정찰/수집 산출물 (세션·예약 개인정보 포함 — 절대 커밋 금지)
+ops/naver-recon/out/
+ops/naver-recon/.profile/
 backend/prisma/migrations/**/README.md
 
 # 빌드 산출물
