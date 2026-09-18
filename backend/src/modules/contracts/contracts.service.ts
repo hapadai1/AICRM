@@ -24,11 +24,14 @@ import {
 import {
   asAuditClient,
   assertVersionMatch,
+  CLEARED_SIGNATURES,
+  ContractFormFields,
   ContractLineSummarySource,
   DETAIL_INCLUDE,
   getContractOrThrow,
   lineSummary,
   nextNo,
+  toFormFieldData,
   toLineData,
   updateContractGuarded,
   VERSION_INCLUDE,
@@ -130,6 +133,7 @@ export class ContractsService {
           completionDueDate: toDate(dto.completionDueDate),
           photoDate: toDate(dto.photoDate),
           weddingDate: toDate(dto.weddingDate),
+          ...toFormFieldData(dto),
           createdBy: actor.id,
           lines: { create: lines.map((l, i) => toLineData(l, i)) },
         },
@@ -336,10 +340,9 @@ export class ContractsService {
           ...(dto.completionDueDate !== undefined ? { completionDueDate: toDate(dto.completionDueDate) } : {}),
           ...(dto.photoDate !== undefined ? { photoDate: toDate(dto.photoDate) } : {}),
           ...(dto.weddingDate !== undefined ? { weddingDate: toDate(dto.weddingDate) } : {}),
-          // 서명 후 내용 수정 시 서명 무효화 (설계서 03 §2.6) — 재서명 강제.
-          ...(draft.signatureFileId
-            ? { signatureFileId: null, signedAt: null, signerName: null }
-            : {}),
+          ...toFormFieldData(dto),
+          // 서명 후 내용 수정 시 서명 무효화 (설계서 03 §2.6) — 담당자·고객 모두 재서명 강제.
+          ...(draft.signatureFileId || draft.staffSignatureFileId ? CLEARED_SIGNATURES : {}),
         },
       });
       const updatedContract = await tx.contract.update({
@@ -547,6 +550,8 @@ export class ContractsService {
       signed,
       signedAt: version?.signedAt ?? null,
       signerName: version?.signerName ?? null,
+      staffSignerName: version?.staffSignerName ?? null,
+      checklistAgreedAt: version?.checklistAgreedAt ?? null,
       /** 서명 가능 = 작성중 + 컨설팅 전 품목 확정 */
       canSign: contract.status === 'DRAFT' && consulting.ready,
       /** 완료 가능 = 서명완료 */
@@ -630,7 +635,7 @@ export class ContractsService {
       weddingDate: Date | null;
       signedAt: Date | null;
       signerName: string | null;
-    },
+    } & Required<ContractFormFields>,
     lines: ContractLineSummarySource[],
   ) {
     return {
@@ -643,6 +648,13 @@ export class ContractsService {
       weddingDate: version.weddingDate,
       signedAt: version.signedAt,
       signerName: version.signerName,
+      paymentMethod: version.paymentMethod,
+      depositorName: version.depositorName,
+      paymentDate: version.paymentDate,
+      asPeriod: version.asPeriod,
+      memo: version.memo,
+      urgentProductionTerm: version.urgentProductionTerm,
+      trFabricTerm: version.trFabricTerm,
       lines: lines.map(lineSummary),
     };
   }

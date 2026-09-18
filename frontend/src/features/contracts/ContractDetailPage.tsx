@@ -30,6 +30,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ApiError } from '../../api/client';
 import { useModeStore } from '../../app/mode-store';
 import {
+  AS_PERIOD_LABEL,
   cancelContract,
   createContractRevision,
   deleteContract,
@@ -38,7 +39,9 @@ import {
   completeContract,
   fetchContractFlow,
   fetchContractVersions,
+  PAYMENT_METHOD_LABEL,
   removeSignature,
+  SPECIAL_TERM_LABEL,
   type ContractVersion,
   type ProductCategory,
   type TransactionType,
@@ -341,7 +344,8 @@ export function ContractDetailPage() {
           </Typography.Text>
           {flow?.signerName && (
             <Typography.Text type="secondary">
-              서명자: {flow.signerName}
+              고객 서명: {flow.signerName}
+              {flow.staffSignerName ? ` · 계약담당자 서명: ${flow.staffSignerName}` : ''}
               {flow.signedAt ? ` · ${flow.signedAt.slice(0, 16).replace('T', ' ')}` : ''}
             </Typography.Text>
           )}
@@ -515,7 +519,7 @@ export function ContractDetailPage() {
         {/*
           금액(품목 합계·총 계약금액)은 아래 계약서 카드의 요약에서만 보여준다. 여기서 또 쓰면
           같은 숫자가 두 번 나오고, 3열 표에 빈 칸이 남는다.
-          계약 비고 필드는 백엔드 스키마에 없어 표시하지 않는다 (docs/dev/08 §4).
+          결제·AS·특약·메모는 매장 계약서 양식 기재 항목이다 (2026-09-17).
         */}
         <Descriptions size="small" column={{ xs: 1, sm: 2, md: 3 }} bordered>
           <Descriptions.Item label="계약 번호">{detail?.contractNo ?? '-'}</Descriptions.Item>
@@ -524,6 +528,30 @@ export function ContractDetailPage() {
           <Descriptions.Item label="촬영일">{detail?.photoDate ?? '-'}</Descriptions.Item>
           <Descriptions.Item label="예식일">{detail?.weddingDate ?? '-'}</Descriptions.Item>
           <Descriptions.Item label="완료 예정일">{detail?.completionDueDate ?? '-'}</Descriptions.Item>
+          <Descriptions.Item label="결제방법">
+            {detail?.paymentMethod ? PAYMENT_METHOD_LABEL[detail.paymentMethod] : '-'}
+          </Descriptions.Item>
+          <Descriptions.Item label="입금자명">{detail?.depositorName ?? '-'}</Descriptions.Item>
+          <Descriptions.Item label="결제날짜">{detail?.paymentDate ?? '-'}</Descriptions.Item>
+          <Descriptions.Item label="무상 AS">{detail ? AS_PERIOD_LABEL[detail.asPeriod] : '-'}</Descriptions.Item>
+          <Descriptions.Item label="특약" span={2}>
+            {[
+              detail?.urgentProductionTerm ? SPECIAL_TERM_LABEL.urgentProductionTerm : null,
+              detail?.trFabricTerm ? SPECIAL_TERM_LABEL.trFabricTerm : null,
+            ]
+              .filter(Boolean)
+              .join(' / ') || '-'}
+          </Descriptions.Item>
+          <Descriptions.Item label="서명" span={3}>
+            {flow?.signed
+              ? `계약담당자 ${flow.staffSignerName ?? '-'} · 고객 ${flow.signerName ?? '-'}${
+                  flow.checklistAgreedAt ? ' · 체크리스트 동의' : ''
+                }`
+              : '미서명'}
+          </Descriptions.Item>
+          <Descriptions.Item label="메모" span={3}>
+            <Typography.Text style={{ whiteSpace: 'pre-wrap' }}>{detail?.memo ?? '-'}</Typography.Text>
+          </Descriptions.Item>
         </Descriptions>
       </Card>
 

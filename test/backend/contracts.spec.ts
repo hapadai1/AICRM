@@ -1,11 +1,13 @@
 import { randomUUID } from 'crypto';
+import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 import { ContractsModule } from '../../backend/src/modules/contracts/contracts.module';
 import {
   api,
   auth,
   createTestContext,
   signAndCompleteContract,
-  SIGN_PNG,
+  signaturePayload,
   TestContext,
   truncateBusinessData,
 } from './helpers';
@@ -760,7 +762,7 @@ describe('계약 흐름 — 작성중→컨설팅→서명완료→계약완료 
     return api(ctx)
       .post(`/api/v1/contracts/${contractId}/versions/${versionId}/signature`)
       .set(auth(ctx))
-      .send({ imageDataUrl: SIGN_PNG, signerName: '홍길동' });
+      .send(signaturePayload('홍길동'));
   }
 
   const flowOf = async (contractId: string) =>
@@ -804,7 +806,7 @@ describe('계약 흐름 — 작성중→컨설팅→서명완료→계약완료 
     const badType = await api(ctx)
       .post(`/api/v1/contracts/${contractId}/versions/${currentVersionId}/signature`)
       .set(auth(ctx))
-      .send({ imageDataUrl: 'data:image/jpeg;base64,AAAA', signerName: '홍길동' });
+      .send(signaturePayload('홍길동', { imageDataUrl: 'data:image/jpeg;base64,AAAA' }));
     expect(badType.status).toBe(400);
 
     const saved = await sign(contractId, currentVersionId).expect(201);
@@ -899,6 +901,209 @@ describe('계약 흐름 — 작성중→컨설팅→서명완료→계약완료 
     expect(res.headers['content-type']).toContain('spreadsheetml');
     const version = await ctx.prisma.contractVersion.findUniqueOrThrow({ where: { id: versionId } });
     expect(version.excelFileId).toBeNull();
+  });
+
+  it('계약담당자 서명·체크리스트 동의가 빠지면 서명할 수 없다 (계약서 양식 2026-09-17)', async () => {
+    const { contractId, versionId } = await draftContract();
+    await confirmConsulting(contractId);
+
+    const { staffImageDataUrl: _omit, ...noStaff } = signaturePayload('홍길동');
+    await api(ctx)
+      .post(`/api/v1/contracts/${contractId}/versions/${versionId}/signature`)
+      .set(auth(ctx))
+      .send(noStaff)
+      .expect(400);
+
+    const notAgreed = await api(ctx)
+      .post(`/api/v1/contracts/${contractId}/versions/${versionId}/signature`)
+      .set(auth(ctx))
+      .send(signaturePayload('홍길동', { checklistAgreed: false }));
+    expect(notAgreed.status).toBeGreaterThanOrEqual(400);
+    expect(notAgreed.body.error.code).toBe('VALIDATION_ERROR');
+    expect((await ctx.prisma.contract.findUniqueOrThrow({ where: { id: contractId } })).status).toBe('DRAFT');
+  });
+
+  it('서명하면 계약담당자 서명·서명자·동의 시각이 함께 저장되고, 서명을 지우면 모두 지워진다', async () => {
+    const { contractId, currentVersionId } = await signedContract();
+    const signed = await ctx.prisma.contractVersion.findUniqueOrThrow({ where: { id: currentVersionId } });
+    expect(signed.staffSignatureFileId).toBeTruthy();
+    expect(signed.staffSignerName).toBe('담당직원');
+    expect(signed.staffSignerId).toBe(adminId);
+    expect(signed.staffSignedAt).toBeTruthy();
+    expect(signed.checklistAgreedAt).toBeTruthy();
+
+    const flow = await flowOf(contractId);
+    expect(flow.staffSignerName).toBe('담당직원');
+
+    await api(ctx)
+      .delete(`/api/v1/contracts/${contractId}/versions/${currentVersionId}/signature`)
+      .set(auth(ctx))
+      .expect(200);
+    const cleared = await ctx.prisma.contractVersion.findUniqueOrThrow({ where: { id: currentVersionId } });
+    expect(cleared).toMatchObject({
+      signatureFileId: null,
+      staffSignatureFileId: null,
+      staffSignerName: null,
+      checklistAgreedAt: null,
+    });
+  });
+
+  it('결제·AS·특약·메모를 저장하고, 수정하기 새 버전에 이어 받는다 (서명·동의는 다시 받는다)', async () => {
+    const { contractId, versionId } = await draftContract();
+    await api(ctx)
+      .patch(`/api/v1/contracts/${contractId}`)
+      .set(auth(ctx))
+      .send({
+        paymentMethod: 'TRANSFER',
+        depositorName: ' 정이한 ',
+        paymentDate: '2026-09-13',
+        asPeriod: 'ONE_YEAR',
+        memo: '사전계약 650,000 + 175,000 입금',
+        urgentProductionTerm: true,
+      })
+      .expect(200);
+    const saved = await ctx.prisma.contractVersion.findUniqueOrThrow({ where: { id: versionId } });
+    expect(saved).toMatchObject({
+      paymentMethod: 'TRANSFER',
+      depositorName: '정이한',
+      asPeriod: 'ONE_YEAR',
+      memo: '사전계약 650,000 + 175,000 입금',
+      urgentProductionTerm: true,
+      trFabricTerm: false,
+    });
+    expect(saved.paymentDate?.toISOString().slice(0, 10)).toBe('2026-09-13');
+
+    // 잘못된 결제방법은 거부
+    await api(ctx).patch(`/api/v1/contracts/${contractId}`).set(auth(ctx)).send({ paymentMethod: 'BITCOIN' }).expect(400);
+
+    await confirmConsulting(contractId);
+    await sign(contractId, versionId).expect(201);
+    await api(ctx)
+      .post(`/api/v1/contracts/${contractId}/complete`)
+      .set(auth(ctx))
+      .send({ version: await rowVersion(contractId) })
+      .expect(200);
+    const revision = await api(ctx)
+      .post(`/api/v1/contracts/${contractId}/revisions`)
+      .set(auth(ctx))
+      .send({ changeReason: '셔츠 추가' })
+      .expect(201);
+    const next = await ctx.prisma.contractVersion.findUniqueOrThrow({ where: { id: revision.body.data.id } });
+    expect(next).toMatchObject({
+      paymentMethod: 'TRANSFER',
+      depositorName: '정이한',
+      asPeriod: 'ONE_YEAR',
+      urgentProductionTerm: true,
+      signatureFileId: null,
+      staffSignatureFileId: null,
+      checklistAgreedAt: null,
+    });
+  });
+
+  it('계약서 엑셀은 매장 양식에 값·체크·서명 2장을 싣는다', async () => {
+    const { contractId, versionId } = await draftContract();
+    await api(ctx)
+      .patch(`/api/v1/contracts/${contractId}`)
+      .set(auth(ctx))
+      .send({
+        weddingDate: '2026-10-25',
+        completionDueDate: '2026-10-02',
+        paymentMethod: 'CARD',
+        depositorName: '정이한',
+        paymentDate: '2026-09-13',
+        asPeriod: 'SIX_MONTHS',
+        memo: '1+1 맞춤',
+        trFabricTerm: true,
+      })
+      .expect(200);
+    await confirmConsulting(contractId);
+    await sign(contractId, versionId).expect(201);
+
+    const res = await api(ctx)
+      .get(`/api/v1/contracts/${contractId}/excel`)
+      .set(auth(ctx))
+      .buffer(true)
+      .parse((r, cb) => {
+        const chunks: Buffer[] = [];
+        r.on('data', (c: Buffer) => chunks.push(c));
+        r.on('end', () => cb(null, Buffer.concat(chunks)));
+      })
+      .expect(200);
+    const file = res.body as Buffer;
+
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(file as unknown as ExcelJS.Buffer);
+    const ws = wb.worksheets[0];
+    const text = (address: string) => String(ws.getCell(address).value ?? '');
+    const customer = await ctx.prisma.contract.findUniqueOrThrow({ where: { id: contractId }, include: { customer: true } });
+
+    // 최종 양식(2026-09-18): 프레임 B~AX · 박스 C~AW, 행/열이 이전 양식보다 한 칸씩 밀려 있다.
+    expect(text('C4')).toContain('☑');
+    expect(text('I6')).toBe(customer.customer.name);
+    expect(text('AD6')).toBe('010 - 2222 - 3333');
+    expect([text('AG7'), text('AM7'), text('AS7')]).toEqual(['2026 년', '10 월', '25 일']);
+
+    // MEMO: 값은 라벨 오른쪽(L열)·AS 첫 줄과 같은 10행부터. 박스 선은 병합 후에도 남는다.
+    expect(text('C9')).toBe('MEMO');
+    expect(text('L10')).toContain('맞춤 정장 1벌');
+    expect(text('L10')).toContain('필요일정 10/02');
+    expect(text('L10')).toContain('1+1 맞춤');
+    expect(ws.getCell('L9').border?.top?.style).toBe('thin');
+    expect(ws.getCell('P14').border?.bottom?.style).toBe('thin');
+
+    expect(text('AH10')).toMatch(/^☑ 6개월/);
+    expect(text('AH11')).toMatch(/^□ 1년/);
+    expect(ws.getCell('I16').value).toBe(1_500_000);
+    expect(text('AS16')).toContain('☑');
+    expect(text('AH16')).toContain('□');
+    expect(text('I17')).toBe('정이한');
+    expect([text('AG17'), text('AM17'), text('AS17')]).toEqual(['2026 년', '09 월', '13 일']);
+    expect(text('C25')).toBe('☑');
+    expect(text('C41')).toBe('☑');
+
+    // 서명 줄: 라벨(오른쪽 정렬) | 이름(왼쪽 정렬) | "서명"(서명이 있으면 연하게)
+    expect(text('K48')).toBe('위 내용을 전달하였습니다.');
+    expect(text('Z48')).toBe('계약담당자 :');
+    expect(ws.getCell('Z48').alignment?.horizontal).toBe('right');
+    expect(text('AG48')).toBe('담당직원');
+    expect(ws.getCell('AG48').alignment?.horizontal).toBe('left');
+    expect(text('Z50')).toBe('고객명 :');
+    expect(text('AG50')).toBe('홍길동');
+    expect(text('AM48')).toBe('서명');
+    expect(ws.getCell('AM48').font?.color?.argb).toBe('FFC8C8C8');
+    expect(ws.getCell('AM50').font?.color?.argb).toBe('FFC8C8C8');
+    // 서식 공유로 옆 문장까지 연해지지 않는다
+    expect(ws.getCell('K48').font?.color?.argb).not.toBe('FFC8C8C8');
+
+    expect(text('C54')).toContain('□');
+    expect(text('C55')).toContain('☑');
+
+    // 인쇄: 프레임까지만 인쇄 영역으로 잡고 가로·세로 가운데 맞춤
+    // 드로잉: 양식 그림 6장(로고·QR·모서리 4) + 서명 2장
+    const zip = await JSZip.loadAsync(file);
+    const sheet = await zip.file('xl/worksheets/sheet1.xml')!.async('string');
+    expect(sheet).toContain('<printOptions horizontalCentered="1" verticalCentered="1"/>');
+    expect(await zip.file('xl/workbook.xml')!.async('string')).toContain('$B2:$AX57');
+    expect(sheet).toMatch(/<drawing r:id="[^"]+"\/>/);
+    const drawing = await zip.file('xl/drawings/drawing1.xml')!.async('string');
+    expect(drawing.match(/<xdr:pic>/g)).toHaveLength(8);
+    expect(drawing).toContain('계약담당자 서명');
+    expect(drawing).toContain('고객 서명');
+    expect(zip.file('xl/media/contract-signature-staff.png')).toBeTruthy();
+    expect(zip.file('xl/media/contract-signature-customer.png')).toBeTruthy();
+  });
+
+  it('계약담당자 서명이 없는 버전은 완료할 수 없다', async () => {
+    const { contractId, currentVersionId } = await signedContract();
+    await ctx.prisma.contractVersion.update({
+      where: { id: currentVersionId },
+      data: { staffSignatureFileId: null },
+    });
+    const res = await api(ctx)
+      .post(`/api/v1/contracts/${contractId}/complete`)
+      .set(auth(ctx))
+      .send({ version: await rowVersion(contractId) });
+    expect(res.body.error.code).toBe('CONTRACT_SIGNATURE_REQUIRED');
   });
 
   it('서명한 계약서를 고치면 서명이 무효화되고 작성중으로 돌아간다 (회귀)', async () => {

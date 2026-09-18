@@ -12,6 +12,7 @@ import {
   Avatar,
   Button,
   Card,
+  Checkbox,
   Col,
   DatePicker,
   Divider,
@@ -20,6 +21,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Radio,
   Row,
   Select,
   Space,
@@ -46,14 +48,20 @@ import {
   fetchContractFlow,
   fetchContractTypes,
   fetchCustomerSummary,
+  AS_PERIOD_LABEL,
+  PAYMENT_METHOD_LABEL,
   saveSignature,
+  SPECIAL_TERM_LABEL,
   updateContractDraft,
+  type AsPeriod,
   type ContractDetail,
   type ContractDraftInput,
+  type PaymentMethod,
 } from '../../api/contracts';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
-import { ContractSignPad } from './ContractSignPad';
+import { useAuthStore } from '../../app/auth-store';
+import { ContractSignFlow, type ContractSignResult } from './ContractSignFlow';
 import {
   ContractLineEditor,
   createLine,
@@ -79,7 +87,15 @@ interface FormValues {
   weddingDate?: Dayjs;
   /** 품목 합계로 자동 계산된다. [직접 입력]을 켜면 수기 조정(할인 등)도 가능하다. */
   totalAmount?: number;
-  note?: string;
+  // --- 매장 계약서 양식 기재 항목 (2026-09-17) ---
+  paymentMethod?: PaymentMethod;
+  depositorName?: string;
+  paymentDate?: Dayjs;
+  asPeriod?: AsPeriod;
+  /** 계약서 MEMO 칸 — 품목 요약·필요일정은 출력 시 자동으로 앞에 붙는다 */
+  memo?: string;
+  urgentProductionTerm?: boolean;
+  trFabricTerm?: boolean;
 }
 
 const fmt = (v?: Dayjs): string | undefined => (v ? v.format('YYYY-MM-DD') : undefined);
@@ -190,7 +206,13 @@ export function ContractFormPage() {
       photoDate: draft.photoDate ? dayjs(draft.photoDate) : undefined,
       weddingDate: draft.weddingDate ? dayjs(draft.weddingDate) : undefined,
       totalAmount: draft.totalAmount,
-      // 계약 비고 필드는 백엔드 스키마에 없어 불러오지 않는다 (docs/dev/08 §4).
+      paymentMethod: draft.paymentMethod,
+      depositorName: draft.depositorName,
+      paymentDate: draft.paymentDate ? dayjs(draft.paymentDate) : undefined,
+      asPeriod: draft.asPeriod,
+      memo: draft.memo,
+      urgentProductionTerm: draft.urgentProductionTerm,
+      trFabricTerm: draft.trFabricTerm,
     });
     // 품목 라인은 최상위가 아니라 현재 버전 아래에 있다 — api/contracts.ts 에서 평면화해 전달한다.
     const loaded = draft.lines.map((l) =>
@@ -260,7 +282,14 @@ export function ContractFormPage() {
       // 자동 모드는 품목 합계를 그대로 보낸다(폼 값 동기화 타이밍에 기대지 않는다).
       // lineTotal에는 옵션 롤업 라인이 포함돼, 계약 금액이 옵션 추가금액까지 담은 전체 금액이 된다.
       totalAmount: manualTotal ? (values.totalAmount ?? 0) : lineTotal,
-      note: values.note,
+      // 비워 둔 칸은 null로 보내 저장값을 지운다.
+      paymentMethod: values.paymentMethod ?? null,
+      depositorName: values.depositorName?.trim() || null,
+      paymentDate: fmt(values.paymentDate) ?? null,
+      asPeriod: values.asPeriod,
+      memo: values.memo?.trim() || null,
+      urgentProductionTerm: !!values.urgentProductionTerm,
+      trFabricTerm: !!values.trFabricTerm,
       // 옵션 롤업 라인은 백엔드가 소유·재생성하므로 저장 본문에서 뺀다(보내면 일반 품목으로 굳는다).
       lines: lines
         .filter((l) => !l.isOptionRollup)
@@ -313,8 +342,9 @@ export function ContractFormPage() {
   const flow = flowQuery.data;
 
   // 서명은 작성중인 현재 버전에 붙는다. 내용을 고친 뒤에는 먼저 임시저장해야 한다.
+  const staffName = useAuthStore((state) => state.user?.displayName);
   const signMutation = useMutation({
-    mutationFn: (input: { imageDataUrl: string; signerName: string }) =>
+    mutationFn: (input: ContractSignResult) =>
       saveSignature(draftId!, flow!.currentVersionId!, {
         ...input,
         version: draftDetail?.version,
@@ -542,7 +572,7 @@ export function ContractFormPage() {
       <Form<FormValues>
         form={form}
         layout="vertical"
-        initialValues={{ contractedAt: dayjs() }}
+        initialValues={{ contractedAt: dayjs(), asPeriod: 'SIX_MONTHS' }}
         onValuesChange={() => setDirty(true)}
       >
         <Card title="계약 정보" style={{ marginBottom: 16 }}>
@@ -585,9 +615,6 @@ export function ContractFormPage() {
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item name="note" label="비고" style={{ marginBottom: 0 }}>
-            <Input.TextArea rows={2} placeholder="계약 특이사항" maxLength={500} />
-          </Form.Item>
         </Card>
 
         {/* 옵션 반영 배지는 품목 헤더가 아니라 각 품목 행(삭제 버튼 옆)에 둔다 —
@@ -696,6 +723,69 @@ export function ContractFormPage() {
             )}
           </Flex>
         </Card>
+
+        {/*
+          매장 계약서 양식(종이)에 적던 항목 (2026-09-17). 계약서 엑셀의 같은 칸에 그대로 찍힌다.
+          고객 체크리스트 동의와 서명은 [서명하기]에서 받는다.
+        */}
+        <Card title="결제 · AS · 특약" style={{ marginTop: 16 }}>
+          <Row gutter={16}>
+            <Col xs={24} md={8}>
+              <Form.Item name="paymentMethod" label="결제방법">
+                <Radio.Group
+                  optionType="button"
+                  options={(Object.keys(PAYMENT_METHOD_LABEL) as PaymentMethod[]).map((v) => ({
+                    value: v,
+                    label: PAYMENT_METHOD_LABEL[v],
+                  }))}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={12} md={8}>
+              <Form.Item name="depositorName" label="입금자명">
+                <Input maxLength={80} placeholder="계좌이체 시 입금자명" />
+              </Form.Item>
+            </Col>
+            <Col xs={12} md={8}>
+              <Form.Item name="paymentDate" label="결제날짜">
+                <DatePicker style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={16}>
+            <Col xs={24} md={8}>
+              <Form.Item name="asPeriod" label="무상 AS (수선범위 이내 한함)">
+                <Radio.Group
+                  optionType="button"
+                  options={(Object.keys(AS_PERIOD_LABEL) as AsPeriod[]).map((v) => ({
+                    value: v,
+                    label: AS_PERIOD_LABEL[v].replace(' AS 무상', ''),
+                  }))}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={16}>
+              <Form.Item label="특약">
+                <Flex vertical gap={4}>
+                  <Form.Item name="urgentProductionTerm" valuePropName="checked" noStyle>
+                    <Checkbox>{SPECIAL_TERM_LABEL.urgentProductionTerm}</Checkbox>
+                  </Form.Item>
+                  <Form.Item name="trFabricTerm" valuePropName="checked" noStyle>
+                    <Checkbox>{SPECIAL_TERM_LABEL.trFabricTerm}</Checkbox>
+                  </Form.Item>
+                </Flex>
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item
+            name="memo"
+            label="메모"
+            extra="계약서 MEMO 칸에 실립니다. 품목 요약(예: 맞춤 정장 2벌 / 맞춤 셔츠 1장)과 필요일정(완료 예정일)은 자동으로 앞에 붙습니다."
+            style={{ marginBottom: 0 }}
+          >
+            <Input.TextArea rows={3} maxLength={1000} placeholder="예: 사전계약 650,000 + 175,000 입금 / 가봉 시 긴급비용 10만 추가" />
+          </Form.Item>
+        </Card>
       </Form>
 
       {/* 목록·계약 상세 등 여러 경로로 들어오므로 뒤로가기로 통일 */}
@@ -729,16 +819,18 @@ export function ContractFormPage() {
         open={signOpen}
         title="계약서 서명"
         footer={null}
-        width={560}
+        width={620}
         destroyOnHidden
+        maskClosable={false}
         onCancel={() => setSignOpen(false)}
       >
         {flow?.currentVersionId && (
-          <ContractSignPad
-            defaultSignerName={customer?.name}
+          <ContractSignFlow
+            defaultStaffName={staffName}
+            defaultCustomerName={customer?.name}
             saving={signMutation.isPending}
             onCancel={() => setSignOpen(false)}
-            onSave={(imageDataUrl, signerName) => signMutation.mutate({ imageDataUrl, signerName })}
+            onSubmit={(result) => signMutation.mutate(result)}
           />
         )}
       </Modal>

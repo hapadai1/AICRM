@@ -58,6 +58,12 @@ export class ContractLineDto {
   sortOrder?: number;
 }
 
+/** 계약서 양식 결제방법 칸: 현금·계좌이체·카드 */
+export const PAYMENT_METHODS = ['CASH', 'TRANSFER', 'CARD'] as const;
+
+/** 계약서 양식 무상 AS 칸: 6개월·1년·평생 */
+export const AS_PERIODS = ['SIX_MONTHS', 'ONE_YEAR', 'LIFETIME'] as const;
+
 class ContractAmountsDto {
   @IsOptional()
   @Type(() => Number)
@@ -76,6 +82,42 @@ class ContractAmountsDto {
   @IsOptional()
   @IsDateString()
   weddingDate?: string;
+
+  // --- 매장 계약서 양식 기재 항목 (2026-09-17) ---
+
+  /** 결제방법. null 은 미입력으로 되돌린다(IsOptional이 null 검증을 건너뛴다). */
+  @IsOptional()
+  @IsIn(PAYMENT_METHODS as unknown as string[])
+  paymentMethod?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  depositorName?: string | null;
+
+  @IsOptional()
+  @IsDateString()
+  paymentDate?: string | null;
+
+  @IsOptional()
+  @IsIn(AS_PERIODS as unknown as string[])
+  asPeriod?: string;
+
+  /** 계약서 MEMO 칸 자유 메모 */
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  memo?: string | null;
+
+  /** 특약: 긴급 일정으로 인한 바로 제작 */
+  @IsOptional()
+  @IsBoolean()
+  urgentProductionTerm?: boolean;
+
+  /** 특약: TR 원단 변질·변형 */
+  @IsOptional()
+  @IsBoolean()
+  trFabricTerm?: boolean;
 }
 
 export class CreateContractDto extends ContractAmountsDto {
@@ -201,16 +243,37 @@ export class CreateRevisionDto extends ContractAmountsDto {
   lines?: ContractLineDto[];
 }
 
+/**
+ * 서명 저장 — 계약서 양식의 두 서명을 한 번에 받는다 (2026-09-17).
+ * 계약담당자 "위 내용을 전달하였습니다" + 고객 체크리스트 동의 + 고객 "위 내용을 이해하였습니다".
+ * 셋 중 하나라도 빠진 서명본이 생기지 않도록 한 요청·한 트랜잭션으로 저장한다.
+ */
 export class SaveSignatureDto {
-  /** data:image/png;base64,... 형식 */
+  /** 고객 서명 — data:image/png;base64,... 형식 */
   @IsString()
   @Matches(/^data:image\/png;base64,/, { message: 'imageDataUrl은 PNG dataURL이어야 합니다.' })
   imageDataUrl: string;
 
+  /** 고객 서명자명 */
   @IsString()
   @IsNotEmpty()
   @MaxLength(80)
   signerName: string;
+
+  /** 계약담당자 서명 — data:image/png;base64,... 형식 */
+  @IsString()
+  @Matches(/^data:image\/png;base64,/, { message: 'staffImageDataUrl은 PNG dataURL이어야 합니다.' })
+  staffImageDataUrl: string;
+
+  /** 계약담당자명 (기본: 로그인 직원 이름) */
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(80)
+  staffSignerName: string;
+
+  /** 고객 체크리스트 전체 동의 — true 여야 서명할 수 있다 */
+  @IsBoolean()
+  checklistAgreed: boolean;
 
   /** 낙관적 잠금: contracts.row_version */
   @IsOptional()

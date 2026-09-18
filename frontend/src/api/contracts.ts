@@ -88,7 +88,56 @@ interface ContractVersionApiRow {
   confirmedAt?: string | null;
   createdAt: string;
   lines?: ContractLineApiRow[];
+  // 매장 계약서 양식 기재 항목 (2026-09-17)
+  paymentMethod?: PaymentMethod | null;
+  depositorName?: string | null;
+  paymentDate?: string | null;
+  asPeriod?: AsPeriod | null;
+  memo?: string | null;
+  urgentProductionTerm?: boolean;
+  trFabricTerm?: boolean;
 }
+
+/** 계약서 양식 결제방법 칸 */
+export type PaymentMethod = 'CASH' | 'TRANSFER' | 'CARD';
+export const PAYMENT_METHOD_LABEL: Record<PaymentMethod, string> = {
+  CASH: '현금',
+  TRANSFER: '계좌이체',
+  CARD: '카드',
+};
+
+/** 계약서 양식 무상 AS 칸 */
+export type AsPeriod = 'SIX_MONTHS' | 'ONE_YEAR' | 'LIFETIME';
+export const AS_PERIOD_LABEL: Record<AsPeriod, string> = {
+  SIX_MONTHS: '6개월 AS 무상',
+  ONE_YEAR: '1년 AS 무상',
+  LIFETIME: '평생 AS 무상',
+};
+
+/**
+ * 고객 체크리스트 — 계약서 양식에 인쇄된 문구 그대로 (서명 전 고객 동의용).
+ * 양식이 바뀌면 백엔드 templates/suit-agency-contract.xlsx 와 함께 고친다.
+ */
+export const CUSTOMER_CHECKLIST: string[] = [
+  '맞춤의 특성상 교환이나 환불이 불가합니다. (단, 일부 디자인 변경은 가능합니다)',
+  '조율된 가봉 일정에 방문하지 않을 경우 약속 드린 필요 일정에 맞추어 제작이 어려울 수 있습니다. (가봉이 12일 이상 미루어진 후의 오차(최초 측정된 사이즈 기준)는 책임지지 않습니다.)',
+  '가봉 / 완성 / 수선 이후 1개월 이내 찾아가지 않는 옷의 분실은 책임지지 않습니다.',
+  '납품 전 사이즈 수정이 가능한 범위 안에 있는 모든 건들은 수선을 통해 처리해 드립니다. (단, 수선 이후 미세하게 보이는 봉제선 등의 불가피한 사항은 불량에 해당하지 않습니다.)',
+  '납품 후 제품에 대해서는 슈트에이전시의 기준에 맞추어 A/S 진행해 드립니다. (단, 원단의 손실, 과도한 체형의 변화에 대해서는 수선이 불가능하며 원단 자체의 문제에 대해서는 원단사 기준에 맞추어 처리해드립니다.)',
+  '납품 이후 발생하는 모든 문제에 대해서는 수선을 통해 처리해 드리며 원단 오염 등 기타 문제에 대해서는 납품 이후 A/S 기준에 맞추어 처리해 드립니다. (원단 오염 처리 불가)',
+  '불량 사유가 없음에도 지속적인 A/S 요청 시 무상 A/S 기간을 13개월로 제한합니다. (계약일로부터 13개월 무상 A/S 기간 이후 택배비, 수선비가 청구될 수 있습니다.)',
+  '슈트에이전시는 대중적인 기준에 맞추어 제안 드리고 있으며 고객 선택 사항에 대한 책임은 지지 않습니다.',
+  '택배 발송 시 발생하는 제품의 구김이나 손상은 책임지지 않습니다.',
+  '동일 원단으로 재구매 할 경우, 원단 색상이 상이하거나 품절일 수 있습니다.',
+  '고객의 사정으로 바로 픽업 및 택배 수령의 경우 모든 문제점은 수선 범위안에서 수선으로 처리해 드립니다.',
+  '같은 사이즈로 재단을 하더라도 원단의 중량감에 따라 미비한 착용감의 차이가 발생할 순 있습니다.',
+];
+
+/** 계약서 양식 특약 문구 */
+export const SPECIAL_TERM_LABEL = {
+  urgentProductionTerm: '긴급 일정으로 인한 바로 제작의 경우 필요 일정 활용 후 수선을 통해 보정',
+  trFabricTerm: 'TR 원단의 경우 원단의 변질 또는 변형이 심할 수 있음',
+} as const;
 
 /** 목록 응답의 currentVersion 은 select 가 좁다 */
 interface ContractListVersionApiRow {
@@ -234,6 +283,14 @@ export interface ContractDetail {
   completionDueDate?: string;
   photoDate?: string;
   weddingDate?: string;
+  /** 계약서 양식 기재 항목 (현재 버전) */
+  paymentMethod?: PaymentMethod;
+  depositorName?: string;
+  paymentDate?: string;
+  asPeriod: AsPeriod;
+  memo?: string;
+  urgentProductionTerm: boolean;
+  trFabricTerm: boolean;
   lines: ContractLine[];
   versions: ContractVersion[];
   orders: ContractOrderSummary[];
@@ -342,6 +399,13 @@ function toContractDetail(row: ContractDetailApiRow): ContractDetail {
     completionDueDate: toDateOnly(current?.completionDueDate),
     photoDate: toDateOnly(current?.photoDate),
     weddingDate: toDateOnly(current?.weddingDate),
+    paymentMethod: current?.paymentMethod ?? undefined,
+    depositorName: current?.depositorName ?? undefined,
+    paymentDate: toDateOnly(current?.paymentDate),
+    asPeriod: current?.asPeriod ?? 'SIX_MONTHS',
+    memo: current?.memo ?? undefined,
+    urgentProductionTerm: current?.urgentProductionTerm ?? false,
+    trFabricTerm: current?.trFabricTerm ?? false,
     // 품목 라인은 최상위가 아니라 현재 적용 버전 아래에 있다.
     lines: (current?.lines ?? []).map(toLine),
     versions: (row.versions ?? []).map(toVersion),
@@ -367,7 +431,14 @@ export interface ContractDraftInput {
   photoDate?: string;
   weddingDate?: string;
   totalAmount: number;
-  note?: string;
+  /** 계약서 양식 기재 항목 — 미입력은 null 로 보내 지운다 */
+  paymentMethod?: PaymentMethod | null;
+  depositorName?: string | null;
+  paymentDate?: string | null;
+  asPeriod?: AsPeriod;
+  memo?: string | null;
+  urgentProductionTerm?: boolean;
+  trFabricTerm?: boolean;
   lines: ContractLineInput[];
 }
 
@@ -490,7 +561,7 @@ function toLinePayload(lines: ContractLineInput[]) {
 
 /**
  * 계약 초안 본문을 백엔드 CreateContractDto 허용 필드로만 정제한다.
- * appointmentId·contractTypeName·contractedAt·note는 백엔드에 컬럼/필드가 없어 제외한다(전엔 조용히 버려짐).
+ * appointmentId·contractTypeName·contractedAt은 백엔드에 컬럼/필드가 없어 제외한다(전엔 조용히 버려짐).
  */
 function toDraftPayload(body: Partial<ContractDraftInput>): Record<string, unknown> {
   return {
@@ -500,6 +571,13 @@ function toDraftPayload(body: Partial<ContractDraftInput>): Record<string, unkno
     ...(body.photoDate !== undefined ? { photoDate: body.photoDate } : {}),
     ...(body.weddingDate !== undefined ? { weddingDate: body.weddingDate } : {}),
     ...(body.totalAmount !== undefined ? { totalAmount: body.totalAmount } : {}),
+    ...(body.paymentMethod !== undefined ? { paymentMethod: body.paymentMethod } : {}),
+    ...(body.depositorName !== undefined ? { depositorName: body.depositorName } : {}),
+    ...(body.paymentDate !== undefined ? { paymentDate: body.paymentDate } : {}),
+    ...(body.asPeriod !== undefined ? { asPeriod: body.asPeriod } : {}),
+    ...(body.memo !== undefined ? { memo: body.memo } : {}),
+    ...(body.urgentProductionTerm !== undefined ? { urgentProductionTerm: body.urgentProductionTerm } : {}),
+    ...(body.trFabricTerm !== undefined ? { trFabricTerm: body.trFabricTerm } : {}),
     ...(body.lines ? { lines: toLinePayload(body.lines) } : {}),
   };
 }
@@ -562,10 +640,16 @@ export async function fetchCustomerSummary(id: string): Promise<CustomerSummary>
 
 // ---------- 전자서명 (설계서 v2 03 §3·§4) ----------
 
-/** 서명 저장 요청 본문. imageDataUrl 은 `data:image/png;base64,...` 형식이어야 한다. */
+/**
+ * 서명 저장 요청 본문. 이미지는 `data:image/png;base64,...` 형식이어야 한다.
+ * 계약서 양식대로 계약담당자 서명·고객 체크리스트 동의·고객 서명을 한 번에 보낸다.
+ */
 export interface SaveSignatureInput {
   imageDataUrl: string;
   signerName: string;
+  staffImageDataUrl: string;
+  staffSignerName: string;
+  checklistAgreed: boolean;
   /** 낙관적 잠금 — contracts.rowVersion (ContractDetail.version) */
   version?: number;
 }
@@ -608,6 +692,9 @@ export interface ContractFlow {
   signed: boolean;
   signedAt: string | null;
   signerName: string | null;
+  /** 계약담당자 서명자명 */
+  staffSignerName: string | null;
+  checklistAgreedAt: string | null;
   canSign: boolean;
   canComplete: boolean;
   completed: boolean;

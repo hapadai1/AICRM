@@ -2,8 +2,9 @@ import { NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { BusinessException } from '../../common/business.exception';
+import { toDateOrNull } from '../../common/date';
 import { PrismaService } from '../../prisma/prisma.service';
-import { ContractLineDto } from './contracts.dto';
+import { ContractLineDto, UpdateContractDto } from './contracts.dto';
 
 /**
  * 계약 도메인 공용 상수·헬퍼 (2026-08-05 분리).
@@ -167,6 +168,91 @@ export async function nextNo(tx: Prisma.TransactionClient, kind: 'CTR' | 'ORD'):
   const seq = lastNo ? Number(lastNo.slice(prefix.length)) + 1 : 1;
   return `${prefix}${String(seq).padStart(3, '0')}`;
 }
+
+const TRANSACTION_LABEL: Record<string, string> = { CUSTOM: '맞춤', RENTAL: '렌탈' };
+const QUANTITY_UNIT: Record<string, string> = { SUIT: '벌', SHIRT: '장', SHOES: '켤레' };
+
+/**
+ * 계약서 양식 MEMO 칸 내용 (2026-09-17).
+ * 종이에 손으로 적던 순서대로 — 품목 요약("맞춤 정장 2벌 / 맞춤 셔츠 1장"), 베스트 제외,
+ * 필요일정(완료 예정일), 그리고 직원 자유 메모(분할 결제 내역 등).
+ */
+export function buildContractMemoLines(input: {
+  lines: ReadonlyArray<{ transactionType: string; productCategory: string; quantity: number }>;
+  vestExcludedItems: string[];
+  completionDueDate: Date | null;
+  memo: string | null;
+}): string[] {
+  const out: string[] = [];
+  const items = sortDocumentLines(input.lines.filter((l) => l.quantity > 0)).map(
+    (l) =>
+      `${TRANSACTION_LABEL[l.transactionType] ?? l.transactionType} ${CATEGORY_LABEL[l.productCategory] ?? l.productCategory} ` +
+      `${l.quantity}${QUANTITY_UNIT[l.productCategory] ?? '개'}`,
+  );
+  if (items.length > 0) out.push(items.join(' / '));
+  if (input.vestExcludedItems.length > 0) out.push(`베스트 제외: ${input.vestExcludedItems.join(', ')}`);
+  if (input.completionDueDate) {
+    const d = input.completionDueDate.toISOString().slice(5, 10).replace('-', '/');
+    out.push(`필요일정 ${d}`);
+  }
+  const memo = input.memo?.trim();
+  if (memo) out.push(...memo.split(/\r?\n/));
+  return out;
+}
+
+/** 계약서 양식 기재 항목 (2026-09-17) — 버전에 그대로 저장·복사하는 필드 */
+export type ContractFormFields = Pick<
+  Prisma.ContractVersionUncheckedCreateInput,
+  | 'paymentMethod'
+  | 'depositorName'
+  | 'paymentDate'
+  | 'asPeriod'
+  | 'memo'
+  | 'urgentProductionTerm'
+  | 'trFabricTerm'
+>;
+
+/**
+ * 요청 본문의 양식 기재 항목 → 버전 저장값. **보낸 필드만** 싣는다(PATCH 부분 수정).
+ * 빈 문자열은 미입력(null)으로 저장한다.
+ */
+export function toFormFieldData(dto: Partial<UpdateContractDto>): ContractFormFields {
+  const text = (v: string | null | undefined) => (v?.trim() ? v.trim() : null);
+  return {
+    ...(dto.paymentMethod !== undefined ? { paymentMethod: dto.paymentMethod || null } : {}),
+    ...(dto.depositorName !== undefined ? { depositorName: text(dto.depositorName) } : {}),
+    ...(dto.paymentDate !== undefined ? { paymentDate: toDateOrNull(dto.paymentDate) } : {}),
+    ...(dto.asPeriod !== undefined ? { asPeriod: dto.asPeriod } : {}),
+    ...(dto.memo !== undefined ? { memo: text(dto.memo) } : {}),
+    ...(dto.urgentProductionTerm !== undefined ? { urgentProductionTerm: dto.urgentProductionTerm } : {}),
+    ...(dto.trFabricTerm !== undefined ? { trFabricTerm: dto.trFabricTerm } : {}),
+  };
+}
+
+/** 수정하기(버전업) — 직전 확정본의 양식 기재 항목을 새 버전으로 옮긴다. 서명·동의는 옮기지 않는다. */
+export function copyFormFields(base: Required<ContractFormFields>): ContractFormFields {
+  return {
+    paymentMethod: base.paymentMethod,
+    depositorName: base.depositorName,
+    paymentDate: base.paymentDate,
+    asPeriod: base.asPeriod,
+    memo: base.memo,
+    urgentProductionTerm: base.urgentProductionTerm,
+    trFabricTerm: base.trFabricTerm,
+  };
+}
+
+/** 서명 무효화 — 고객·담당자 서명과 체크리스트 동의를 함께 지운다. */
+export const CLEARED_SIGNATURES = {
+  signatureFileId: null,
+  signedAt: null,
+  signerName: null,
+  staffSignatureFileId: null,
+  staffSignerId: null,
+  staffSignerName: null,
+  staffSignedAt: null,
+  checklistAgreedAt: null,
+} satisfies Prisma.ContractVersionUncheckedUpdateInput;
 
 /**
  * 계약서 라인 저장값. 베스트는 여기서 다루지 않는다 (현업 확정 2026-08-01) —

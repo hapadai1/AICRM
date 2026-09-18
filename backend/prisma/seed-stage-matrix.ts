@@ -387,6 +387,19 @@ async function createContract(
         : null,
       signedAt: signed ? at(-31, 11) : null,
       signerName: signed ? args.customerName.replace(/^\S+\s/, '') : null,
+      // 계약서 양식 서명 2종 (2026-09-17) — 계약담당자 서명·체크리스트 동의도 고객 서명과 함께 받는다.
+      staffSignatureFileId: signed
+        ? await createFile(tx, {
+            storageKey: `signatures/${versionId}-staff.png`,
+            originalName: `${args.customerName}_담당자서명.png`,
+            mimeType: 'image/png',
+            buffer: PLACEHOLDER_PNG,
+          })
+        : null,
+      staffSignerId: signed ? args.adminId : null,
+      staffSignerName: signed ? '관리자' : null,
+      staffSignedAt: signed ? at(-31, 11) : null,
+      checklistAgreedAt: signed ? at(-31, 11) : null,
     },
   });
   await tx.contract.update({ where: { id: contractId }, data: { currentVersionId: versionId } });
@@ -844,7 +857,7 @@ async function resetStageMatrix(): Promise<number> {
   ).map((c) => c.id);
   const versions = await prisma.contractVersion.findMany({
     where: { contractId: { in: contractIds } },
-    select: { id: true, signatureFileId: true, excelFileId: true },
+    select: { id: true, signatureFileId: true, staffSignatureFileId: true, excelFileId: true },
   });
   const versionIds = versions.map((v) => v.id);
   const contractItemIds = (
@@ -879,7 +892,7 @@ async function resetStageMatrix(): Promise<number> {
   ).map((m) => m.id);
   const fileIds = [
     ...workOrderFileIds,
-    ...versions.flatMap((v) => [v.signatureFileId, v.excelFileId]).filter((id): id is string => !!id),
+    ...versions.flatMap((v) => [v.signatureFileId, v.staffSignatureFileId, v.excelFileId]).filter((id): id is string => !!id),
   ];
 
   await prisma.$transaction(

@@ -1,11 +1,13 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { toDateOnlyStringOrNull, toLocalDateOnlyString as localDateString } from '../../common/date';
 import { AuthUser } from '../../common/decorators';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FilesService } from '../files/files.service';
 import { COMPONENT_GROUP_LABELS, componentGroupsFor } from '../options/option-component-groups';
-import { buildContractExcel, ContractExcelLine } from './contract-excel';
+import { buildContractExcel } from './contract-excel';
 import {
+  buildContractMemoLines,
   CATEGORY_LABEL,
   COMPONENT_LABEL,
   componentLabels,
@@ -122,38 +124,39 @@ export class ContractDocumentService {
       return { buffer: stored, fileName: `contract-${contract.contractNo}.xlsx` };
     }
 
-    // 베스트는 자기 행을 갖지 않는다 (현업 확정 2026-08-01) — 웹 계약서와 같은 규칙.
-    const lines: ContractExcelLine[] = sortDocumentLines(
-      version.lines.filter((l) => !l.isOptionRollup),
-    ).map((l) => ({
-      category: CATEGORY_LABEL[l.productCategory] ?? l.productCategory,
-      components: componentLabels(l.productCategory),
-      quantity: l.quantity,
-    }));
-    // 옵션 목록 뒤에 "베스트 제외 — 정장 #2"를 붙인다 (현업 확정 2026-08-01).
-    // 계약서가 베스트를 다루지 않으니, 3피스로 계약하고 2피스로 만든다는 사실이 종이에도 남아야 한다.
-    const options = [...(await this.loadContractOptions(id)), ...(await this.loadVestExclusions(id))];
+    const readPng = (fileId: string | null) => (fileId ? this.files.readBuffer(fileId) : Promise.resolve(null));
+    const [signaturePng, staffSignaturePng, vestExclusions] = await Promise.all([
+      readPng(version.signedAt ? version.signatureFileId : null),
+      readPng(version.staffSignatureFileId),
+      this.loadVestExclusions(id),
+    ]);
 
-    let signature: { pngBuffer: Buffer; signerName: string; signedAt: Date } | null = null;
-    if (version.signatureFileId && version.signedAt) {
-      const pngBuffer = await this.files.readBuffer(version.signatureFileId);
-      signature = { pngBuffer, signerName: version.signerName ?? '', signedAt: version.signedAt };
-    }
-
+    // 매장 계약서 양식 (2026-09-17). 품목·옵션표 칸이 없어 품목은 MEMO 칸에 요약한다.
     const buffer = await buildContractExcel({
-      contractNo: contract.contractNo,
-      status: contract.status,
-      contractedAt: contract.contractedAt,
+      // 작성중에는 계약일이 비어 있다 — 화면과 같이 최초 작성일로 채운다.
+      contractDate: localDateString(contract.contractedAt ?? contract.createdAt),
       customer: { name: contract.customer?.name ?? '', phone: contract.customer?.phone ?? null },
-      contractType: contract.contractType?.name ?? null,
-      lines,
-      options: options.map((o) => ({ optionName: o.optionName })),
+      photoDate: toDateOnlyStringOrNull(version.photoDate),
+      weddingDate: toDateOnlyStringOrNull(version.weddingDate),
+      memoLines: buildContractMemoLines({
+        lines: version.lines.filter((l) => !l.isOptionRollup),
+        vestExcludedItems: vestExclusions.map((v) => v.displayName),
+        completionDueDate: version.completionDueDate,
+        memo: version.memo,
+      }),
+      asPeriod: version.asPeriod,
       totalAmount: Number(version.totalAmount), // D7: 총액만
-      completionDueDate: version.completionDueDate,
-      photoDate: version.photoDate,
-      weddingDate: version.weddingDate,
-      signature,
-      issuedAt: new Date(),
+      paymentMethod: version.paymentMethod,
+      depositorName: version.depositorName,
+      paymentDate: toDateOnlyStringOrNull(version.paymentDate),
+      checklistAgreed: version.checklistAgreedAt != null,
+      urgentProductionTerm: version.urgentProductionTerm,
+      trFabricTerm: version.trFabricTerm,
+      staff: { name: version.staffSignerName, signaturePng: staffSignaturePng },
+      customerSign: {
+        name: version.signerName ?? contract.customer?.name ?? null,
+        signaturePng,
+      },
     });
 
     if (opts.audit !== false) {
@@ -190,13 +193,12 @@ export class ContractDocumentService {
   }
 
   /**
-   * 컨설팅에서 베스트를 뺀 벌 — 계약서 옵션 목록에 "베스트 제외 — 정장 #2"로 싣는다
-   * (현업 확정 2026-08-01). 금액은 없다 — 베스트 값은 계약서에서 수기로 조정한다.
+   * 컨설팅에서 베스트를 뺀 벌 — 계약서 MEMO 칸에 "베스트 제외: 정장 #2"로 싣는다
+   * (현업 확정 2026-08-01). 계약서가 베스트를 다루지 않으니, 3피스로 계약하고
+   * 2피스로 만든다는 사실이 종이에도 남아야 한다. 금액은 계약서에서 수기로 조정한다.
    */
-  private async loadVestExclusions(
-    contractId: string,
-  ): Promise<Array<{ optionName: string; extraPrice: number }>> {
-    const items = await this.prisma.contractItem.findMany({
+  private async loadVestExclusions(contractId: string): Promise<Array<{ displayName: string }>> {
+    return this.prisma.contractItem.findMany({
       where: {
         contractId,
         status: { not: 'CANCELLED' },
@@ -205,7 +207,6 @@ export class ContractDocumentService {
       select: { displayName: true },
       orderBy: [{ productCategory: 'asc' }, { sequenceNo: 'asc' }],
     });
-    return items.map((i) => ({ optionName: `베스트 제외 — ${i.displayName}`, extraPrice: 0 }));
   }
 
   /**

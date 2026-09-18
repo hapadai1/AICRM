@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { ContractsModule } from '../../backend/src/modules/contracts/contracts.module';
 import { OptionsModule } from '../../backend/src/modules/options/options.module';
-import { api, auth, createTestContext, SIGN_PNG, TestContext, truncateBusinessData } from './helpers';
+import { api, auth, createTestContext, signaturePayload, TestContext, truncateBusinessData } from './helpers';
 
 /**
  * 베스트(3피스) E2E — 계약부터 주문까지 화면 버튼 순서 그대로 밟는다 (현업 확정 2026-07-30·31).
@@ -177,7 +177,7 @@ describe('베스트 E2E — 계약 → 컨설팅 → 서명 → 계약완료 →
     await api(ctx)
       .post(`/api/v1/contracts/${contractId}/versions/${contract.currentVersionId}/signature`)
       .set(auth(ctx))
-      .send({ imageDataUrl: SIGN_PNG, signerName: 'E2E' })
+      .send(signaturePayload('E2E'))
       .expect((r) => {
         if (r.status !== 200 && r.status !== 201) throw new Error(`서명 실패: ${JSON.stringify(r.body)}`);
       });

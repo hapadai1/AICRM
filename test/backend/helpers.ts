@@ -48,6 +48,20 @@ export const SIGN_PNG =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
 
 /**
+ * 서명 저장 본문 — 계약서 양식대로 계약담당자 서명 + 체크리스트 동의 + 고객 서명을 함께 보낸다.
+ */
+export function signaturePayload(signerName: string, overrides: Record<string, unknown> = {}) {
+  return {
+    imageDataUrl: SIGN_PNG,
+    signerName,
+    staffImageDataUrl: SIGN_PNG,
+    staffSignerName: '담당직원',
+    checklistAgreed: true,
+    ...overrides,
+  };
+}
+
+/**
  * 계약을 실제 흐름대로 완료시켜 주문·주문품목을 만든다 (현업 확정 2026-07-30).
  *
  * 작성중 → **컨설팅 전 품목 확정** → 서명(서명완료) → 계약완료(주문 물리화).
@@ -127,7 +141,7 @@ export async function signAndCompleteContract(
   const signRes = await request(ctx.app.getHttpServer())
     .post(`/api/v1/contracts/${contractId}/versions/${contract.currentVersionId}/signature`)
     .set(auth(ctx))
-    .send({ imageDataUrl: SIGN_PNG, signerName: '테스트서명' });
+    .send(signaturePayload('테스트서명'));
   if (signRes.status !== 201 && signRes.status !== 200)
     throw new Error(`서명 실패(${signRes.status}): ${JSON.stringify(signRes.body)}`);
 

@@ -28,14 +28,18 @@ export function toDateOnlyStringOrNull(value: Date | null | undefined): string |
   return value ? toDateOnlyString(value) : null;
 }
 
+/** 시각(timestamptz) → 로컬(매장) 달력 'YYYY-MM-DD'. 계약일·서명일처럼 시각으로 저장된 값의 날짜 표기용. */
+export function toLocalDateOnlyString(value: Date): string {
+  return [
+    String(value.getFullYear()),
+    String(value.getMonth() + 1).padStart(2, '0'),
+    String(value.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
 /** 로컬 달력 기준 오늘 'YYYY-MM-DD' — 업무의 '오늘'은 매장 달력을 따른다. */
 export function todayDateOnly(): string {
-  const now = new Date();
-  return [
-    String(now.getFullYear()),
-    String(now.getMonth() + 1).padStart(2, '0'),
-    String(now.getDate()).padStart(2, '0'),
-  ].join('-');
+  return toLocalDateOnlyString(new Date());
 }
 
 /** 로컬 달력 기준 오늘의 UTC 자정 Date (@db.Date 비교·이벤트 일자용) */

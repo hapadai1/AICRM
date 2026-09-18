@@ -14,9 +14,12 @@ import { CompleteContractDto, ContractLineDto, CreateRevisionDto, SaveSignatureD
 import {
   asAuditClient,
   assertVersionMatch,
+  CLEARED_SIGNATURES,
+  copyFormFields,
   decodeSignaturePng,
   getContractOrThrow,
   lineSummary,
+  toFormFieldData,
   toLineData,
   updateContractGuarded,
   VERSION_INCLUDE,
@@ -45,6 +48,7 @@ export class ContractVersionsService {
    * → 컨설팅 선택·주문·주문품목·작업지시서·입출고·채촌이 그대로 이어진다. 수량을 실제로 바꾸면
    * 이후 임시저장(update)에서 syncContractItems 가 **차이만** 반영한다(늘어난 것만 새 품목).
    * 서명은 복사하지 않는다 — 고친 계약서에는 다시 서명을 받아야 한다.
+   * 결제·AS·특약·메모 같은 양식 기재 항목은 이어 받고, 체크리스트 동의는 서명과 함께 다시 받는다.
    */
   async createRevision(id: string, dto: CreateRevisionDto, actor: AuthUser) {
     const contract = await getContractOrThrow(this.prisma, id);
@@ -99,6 +103,8 @@ export class ContractVersionsService {
           completionDueDate: dto.completionDueDate !== undefined ? toDate(dto.completionDueDate) : base.completionDueDate,
           photoDate: dto.photoDate !== undefined ? toDate(dto.photoDate) : base.photoDate,
           weddingDate: dto.weddingDate !== undefined ? toDate(dto.weddingDate) : base.weddingDate,
+          ...copyFormFields(base),
+          ...toFormFieldData(dto),
           createdBy: actor.id,
           lines: { create: lines.map((l, i) => toLineData(l, i)) },
         },
@@ -158,6 +164,11 @@ export class ContractVersionsService {
     if (!version) throw new NotFoundException('계약 버전이 없습니다.');
     if (!version.signatureFileId || !version.signedAt)
       throw new BusinessException('CONTRACT_SIGNATURE_REQUIRED', '서명을 받은 뒤 계약을 완료할 수 있습니다.');
+    if (!version.staffSignatureFileId || !version.checklistAgreedAt)
+      throw new BusinessException(
+        'CONTRACT_SIGNATURE_REQUIRED',
+        '계약담당자 서명과 고객 체크리스트 동의를 받은 뒤 계약을 완료할 수 있습니다.',
+      );
 
     // 엑셀은 트랜잭션 밖에서 만든다 — 파일 생성이 오래 걸려 잠금을 오래 쥐면 안 된다.
     // 실패하면 완료 자체가 진행되지 않으므로 고아 파일도 남지 않는다.
@@ -225,11 +236,15 @@ export class ContractVersionsService {
   // ---------------------------------------------------------------------------
 
   /**
-   * 서명 저장·교체 (현업 확정 2026-07-30).
+   * 서명 저장 (현업 확정 2026-07-30, 양식 서명 2종 2026-09-17).
    *
    * 서명은 **스타일 컨설팅까지 끝난 작성중 계약서**에 받고, 받으면 상태가 서명완료가 된다.
    * 옵션 추가금액이 서명 전에 총액에 반영되므로, 서명본 금액과 이후 재출력 금액이
    * 어긋나지 않는다(설계서 03 M1). 이미지는 files 모듈에 저장하고 버전에 연결한다.
+   *
+   * 매장 계약서 양식대로 계약담당자 서명("위 내용을 전달하였습니다") · 고객 체크리스트 동의 ·
+   * 고객 서명("위 내용을 이해하였습니다")을 **한 번에** 받는다. 하나라도 빠진 서명본은 만들지 않는다.
+   * 담당자는 서명을 받은 로그인 직원이다(작성자와 다를 수 있다).
    */
   async saveSignature(id: string, versionId: string, dto: SaveSignatureDto, actor: AuthUser) {
     const contract = await getContractOrThrow(this.prisma, id);
@@ -237,11 +252,20 @@ export class ContractVersionsService {
     if (!version || version.contractId !== id) throw new NotFoundException('계약 버전이 없습니다.');
     await this.assertSignable(contract, version);
     assertVersionMatch(contract.rowVersion, dto.version);
+    if (dto.checklistAgreed !== true)
+      throw new BusinessException('VALIDATION_ERROR', '고객 체크리스트에 동의해야 서명할 수 있습니다.', [
+        { field: 'checklistAgreed', reason: 'REQUIRED' },
+      ]);
 
     const buffer = decodeSignaturePng(dto.imageDataUrl);
+    const staffBuffer = decodeSignaturePng(dto.staffImageDataUrl);
     // 파일 저장은 별도 커밋이라도 무방하다(롤백 시 고아 PNG는 무해). 버전 연결·감사는 tx로 묶는다.
     const file = await this.files.saveBuffer(
       { buffer, mimeType: 'image/png', originalName: `signature-${versionId}.png` },
+      actor,
+    );
+    const staffFile = await this.files.saveBuffer(
+      { buffer: staffBuffer, mimeType: 'image/png', originalName: `staff-signature-${versionId}.png` },
       actor,
     );
 
@@ -252,7 +276,16 @@ export class ContractVersionsService {
       await this.confirmDraftRentalSelections(tx, id, actor, signedAt);
       await tx.contractVersion.update({
         where: { id: versionId },
-        data: { signatureFileId: file.id, signedAt, signerName: dto.signerName },
+        data: {
+          signatureFileId: file.id,
+          signedAt,
+          signerName: dto.signerName,
+          staffSignatureFileId: staffFile.id,
+          staffSignerId: actor.id,
+          staffSignerName: dto.staffSignerName,
+          staffSignedAt: signedAt,
+          checklistAgreedAt: signedAt,
+        },
       });
       // 서명을 받으면 상태가 서명완료로 넘어간다 → 그 뒤로는 계약완료만 남는다.
       await updateContractGuarded(tx, id, contract.rowVersion, { status: 'SIGNED' });
@@ -262,7 +295,13 @@ export class ContractVersionsService {
           action: 'SIGN',
           entityType: 'CONTRACT_VERSION',
           entityId: versionId,
-          after: { signerName: dto.signerName, signedAt, status: 'SIGNED' },
+          after: {
+            signerName: dto.signerName,
+            staffSignerName: dto.staffSignerName,
+            checklistAgreed: true,
+            signedAt,
+            status: 'SIGNED',
+          },
         },
         asAuditClient(tx),
       );
@@ -272,6 +311,8 @@ export class ContractVersionsService {
       versionId,
       signatureFileId: file.id,
       signerName: dto.signerName,
+      staffSignatureFileId: staffFile.id,
+      staffSignerName: dto.staffSignerName,
       signedAt,
       downloadUrl: file.downloadUrl,
     };
@@ -290,7 +331,7 @@ export class ContractVersionsService {
     await this.prisma.$transaction(async (tx) => {
       await tx.contractVersion.update({
         where: { id: versionId },
-        data: { signatureFileId: null, signedAt: null, signerName: null },
+        data: CLEARED_SIGNATURES,
       });
       if (contract.status === 'SIGNED') {
         await updateContractGuarded(tx, id, contract.rowVersion, { status: 'DRAFT' });
@@ -305,7 +346,11 @@ export class ContractVersionsService {
           action: 'DELETE',
           entityType: 'CONTRACT_VERSION',
           entityId: versionId,
-          before: { signatureFileId: version.signatureFileId, status: contract.status },
+          before: {
+            signatureFileId: version.signatureFileId,
+            staffSignatureFileId: version.staffSignatureFileId,
+            status: contract.status,
+          },
         },
         asAuditClient(tx),
       );
@@ -391,6 +436,10 @@ export class ContractVersionsService {
       signerName: version.signerName,
       signedAt: version.signedAt,
       downloadUrl: version.signatureFileId ? `/api/v1/files/${version.signatureFileId}` : null,
+      staffSignerName: version.staffSignerName,
+      staffSignedAt: version.staffSignedAt,
+      staffDownloadUrl: version.staffSignatureFileId ? `/api/v1/files/${version.staffSignatureFileId}` : null,
+      checklistAgreedAt: version.checklistAgreedAt,
     };
   }
 
