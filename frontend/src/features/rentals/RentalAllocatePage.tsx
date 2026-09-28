@@ -340,7 +340,10 @@ export function RentalAllocatePage() {
             조회 전입니다 — 품목·컬러·사이즈를 고르고 [조회]를 누르면 날짜별 가용 수가 표시됩니다.
           </Typography.Text>
         )}
+        {/* 날짜 숫자를 칸 왼쪽 끝으로, 요일 헤더는 가운데로 옮긴다 (index.css .cal-date-left) —
+            예약 화면 월간 달력과 같은 자리에서 날짜가 읽히게 맞춘다. */}
         <Calendar
+          className="cal-date-left"
           value={month}
           onPanelChange={(value) => {
             setMonth(value);

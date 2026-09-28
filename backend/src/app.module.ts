@@ -27,7 +27,9 @@ import { PrismaModule } from './prisma/prisma.module';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
+    // backend/.env 를 먼저 읽고(우선), 저장소 루트 .env 로 보충한다.
+    // 네이버 예약 연동 설정·계정은 루트 .env 에 둔다 (운영자가 관리하는 파일).
+    ConfigModule.forRoot({ isGlobal: true, envFilePath: ['.env', '../.env'] }),
     // 렌탈 정비 완료 자동 가용 전환(매일 00:05)에 쓴다.
     ScheduleModule.forRoot(),
     PrismaModule,

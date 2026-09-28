@@ -14,23 +14,32 @@ interface PageTitleState {
   title: string | null;
   /** 제목 아래(옆)에 붙는 보조 설명 — 계약번호·전화번호 등 */
   subtitle: string | null;
-  set: (title: string | null, subtitle?: string | null) => void;
+  /** true 면 제목을 큰 글씨 대신 경로(작은 글씨)의 마지막 칸으로 붙인다. */
+  subtle: boolean;
+  set: (title: string | null, subtitle?: string | null, subtle?: boolean) => void;
 }
 
 export const usePageTitleStore = create<PageTitleState>((set) => ({
   title: null,
   subtitle: null,
-  set: (title, subtitle = null) => set({ title, subtitle }),
+  subtle: false,
+  set: (title, subtitle = null, subtle = false) => set({ title, subtitle, subtle }),
 }));
 
 /**
  * 상세 화면에서 헤더 제목을 지정한다.
  * 데이터 로딩 중이면 undefined 를 넘겨 두면 되고, 값이 들어오는 순간 헤더가 바뀐다.
+ * 화면 안에 이미 같은 제목이 있으면 subtle 로 넘겨 "예약 › 예약 상세"처럼 경로만 남긴다.
  */
-export function usePageTitle(title?: string | null, subtitle?: string | null): void {
+export function usePageTitle(
+  title?: string | null,
+  subtitle?: string | null,
+  options?: { subtle?: boolean },
+): void {
   const set = usePageTitleStore((s) => s.set);
+  const subtle = options?.subtle ?? false;
   useEffect(() => {
-    set(title ?? null, subtitle ?? null);
-    return () => set(null, null);
-  }, [title, subtitle, set]);
+    set(title ?? null, subtitle ?? null, subtle);
+    return () => set(null, null, false);
+  }, [title, subtitle, subtle, set]);
 }

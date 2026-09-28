@@ -1,6 +1,5 @@
 import {
   LeftOutlined,
-  PlusOutlined,
   PrinterOutlined,
   RightOutlined,
   SearchOutlined,
@@ -13,11 +12,13 @@ import dayjs, { type Dayjs } from 'dayjs';
 import { useMemo, useState, type CSSProperties } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  fetchAppointments,
+  fetchAllAppointments,
+  fetchNaverMenus,
   syncNaverReservations,
   type Appointment,
   type AppointmentSource,
   type AppointmentStatus,
+  type NaverSyncResult,
 } from '../../api/appointments';
 import { ApiError } from '../../api/client';
 import { LAYOUT, SEMANTIC_COLOR } from '../../app/theme';
@@ -27,12 +28,12 @@ import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
 import {
   APPT_STATUS_META,
-  SOURCE_META,
   SYNC_STATUS_META,
   TIMETABLE_END_HOUR,
   TIMETABLE_START_HOUR,
+  appointmentKindLabel,
+  naverMenuLabel,
 } from './appointment-constants';
-import { AppointmentFormModal } from './AppointmentFormModal';
 import { MonthCalendar } from './MonthCalendar';
 import { formatPhone } from '../../shared/phone';
 import { metaOf } from '../../shared/status-meta';
@@ -41,6 +42,32 @@ import { COL } from '../../shared/table-width';
 const { RangePicker } = DatePicker;
 
 type ViewMode = 'day' | 'week' | 'month' | 'list';
+
+/**
+ * 예약 화면은 네이버 예약만 다룬다.
+ * 매장 예약은 전부 네이버 예약으로 들어오고 CRM에서 직접 받는 예약은 없어서,
+ * 출처 구분 보기(전체/CRM/네이버)는 의미 없는 선택지만 늘렸다.
+ * 조회를 NAVER로 고정하고, 그 자리에 예약 목적(네이버 메뉴) 구분 버튼을 둔다.
+ */
+const SOURCE: AppointmentSource = 'NAVER';
+
+/** 예약 목적(네이버 메뉴) 구분 버튼의 "전체" 값 — 메뉴 ID와 겹치지 않는다 */
+const ALL_MENUS = 'ALL';
+
+/** 동기화 결과 한 줄 요약 — 0건 항목은 뺀다 */
+function syncSummary(r: NaverSyncResult): string {
+  const parts = [
+    r.created && `신규 ${r.created}건`,
+    r.updated && `변경 ${r.updated}건`,
+    r.cancelled && `취소 ${r.cancelled}건`,
+  ].filter(Boolean);
+  // 요청마다 네이버에 접속하지 않으므로, 몇 시에 받아 온 데이터인지 함께 알려 준다
+  const basis = r.fetchedAt
+    ? ` (${dayjs(r.fetchedAt).format('HH:mm')} ${r.fromCache ? '수집본 기준' : '수집'})`
+    : '';
+  const head = `네이버 ${r.firstLoad ? '첫 적재(과거·미래 30일)' : '동기화'} 완료${basis} — 조회 ${r.fetched}건`;
+  return parts.length ? `${head}, ${parts.join(', ')}` : `${head}, 바뀐 예약 없음`;
+}
 
 /**
  * 목록 뷰 기본 상태 필터 (설계서 07 D4) — 아직 맞이하지 않은 예약.
@@ -63,7 +90,6 @@ function AppointmentCard({
   fixedWidth?: number;
 }) {
   const statusMeta = metaOf(APPT_STATUS_META, appointment.status);
-  const sourceMeta = metaOf(SOURCE_META, appointment.source);
   const syncMeta = metaOf(SYNC_STATUS_META, appointment.syncStatus);
   const cancelled = appointment.status === 'CANCELLED' || appointment.status === 'NO_SHOW';
   return (
@@ -86,10 +112,7 @@ function AppointmentCard({
         {appointment.customerName}
       </div>
       <div style={{ fontSize: 11, lineHeight: '18px' }}>
-        <Tag color={sourceMeta.color} style={{ fontSize: 10, lineHeight: '14px', marginInlineEnd: 4, paddingInline: 4 }}>
-          {sourceMeta.label}
-        </Tag>
-        {appointment.purposeName} · {statusMeta.label}
+        {appointmentKindLabel(appointment)} · {statusMeta.label}
         {appointment.syncStatus !== 'NORMAL' && (
           <Tag color={syncMeta.color} style={{ fontSize: 10, lineHeight: '14px', marginInlineStart: 4, paddingInline: 4 }}>
             {syncMeta.label}
@@ -210,15 +233,18 @@ export function AppointmentsPage() {
   const [listRange, setListRange] = useState<[Dayjs | null, Dayjs | null]>(() => [dayjs(), null]);
   const [keyword, setKeyword] = useState('');
   const [q, setQ] = useState('');
-  const [createOpen, setCreateOpen] = useState(false);
+  // 예약 목적(네이버 메뉴) 구분 보기 — 캘린더·목록·인쇄 모두에 적용한다
+  const [naverMenuId, setNaverMenuId] = useState<string | undefined>();
+
+  const { data: naverMenus } = useQuery({ queryKey: ['appointments', 'naver-menus'], queryFn: fetchNaverMenus });
 
   const [fromStr, toStr] = useMemo<[string | undefined, string | undefined]>(() => {
     const range = (a: Dayjs, b: Dayjs): [string, string] => [a.format('YYYY-MM-DD'), b.format('YYYY-MM-DD')];
     if (mode === 'day') return range(baseDate, baseDate);
     if (mode === 'week') return range(baseDate.startOf('week'), baseDate.endOf('week'));
-    // 월간은 앞뒤 주가 캘린더에 걸쳐 보이므로 그 범위까지 함께 가져온다.
-    if (mode === 'month')
-      return range(baseDate.startOf('month').startOf('week'), baseDate.endOf('month').endOf('week'));
+    // 월간 캘린더는 그 달 날짜만 그린다(MonthCalendar) — 앞뒤 주까지 가져올 이유가 없다.
+    // 인쇄도 이 범위를 그대로 써서 "9월 일정표"에 8월 말·10월 초가 섞이지 않는다.
+    if (mode === 'month') return range(baseDate.startOf('month'), baseDate.endOf('month'));
     return [listRange[0]?.format('YYYY-MM-DD'), listRange[1]?.format('YYYY-MM-DD')];
   }, [mode, baseDate, listRange]);
 
@@ -228,21 +254,37 @@ export function AppointmentsPage() {
   const listQ = isList ? q : '';
 
   const { data, isLoading } = useQuery({
-    queryKey: ['appointments', { fromStr: fromStr ?? '', toStr: toStr ?? '', listQ, isList }],
+    queryKey: ['appointments', { fromStr: fromStr ?? '', toStr: toStr ?? '', listQ, isList, naverMenuId }],
+    // 기간 전체를 받는다 — 한 요청은 최대 100건이라, 한 페이지만 받으면 예약이 많은 달의
+    // 뒤쪽 날짜가 통째로 비어 "예약 없는 날"로 보인다(8월 150건 중 50건이 그렇게 빠져 있었다).
     queryFn: () =>
-      fetchAppointments({ q: listQ || undefined, from: fromStr, to: toStr, statuses: listStatuses, size: 100 }),
+      fetchAllAppointments({
+        q: listQ || undefined,
+        from: fromStr,
+        to: toStr,
+        statuses: listStatuses,
+        source: SOURCE,
+        naverMenuId,
+      }),
   });
-  const appointments = data?.data ?? [];
+  const appointments = data ?? [];
 
   const runSearch = () => setQ(keyword.trim());
 
   const syncMutation = useMutation({
     mutationFn: syncNaverReservations,
     onSuccess: (result) => {
-      message.success(
-        `네이버 동기화 완료: 신규 ${result.created}건, 변경 ${result.updated}건` +
-          (result.conflicts > 0 ? `, 충돌 ${result.conflicts}건 확인 필요` : ''),
-      );
+      message.success(syncSummary(result));
+      if (result.conflicts > 0) {
+        message.warning(`CRM에서 수정한 예약 중 ${result.conflicts}건이 네이버에서도 바뀌었습니다. 확인이 필요합니다.`);
+      }
+      if (result.failed > 0) {
+        message.error(
+          `${result.failed}건은 가져오지 못했습니다 (네이버 예약번호 ${result.failures
+            .map((f) => f.externalId)
+            .join(', ')}). 나머지는 정상 반영됐습니다.`,
+        );
+      }
       void queryClient.invalidateQueries({ queryKey: ['appointments'] });
     },
     onError: (e) => message.error(e instanceof ApiError ? e.message : '네이버 동기화에 실패했습니다.'),
@@ -260,6 +302,12 @@ export function AppointmentsPage() {
     const query = new URLSearchParams();
     if (fromStr) query.set('from', fromStr);
     if (toStr) query.set('to', toStr);
+    query.set('source', SOURCE);
+    if (naverMenuId) {
+      query.set('naverMenuId', naverMenuId);
+      const menuName = naverMenus?.find((m) => m.id === naverMenuId)?.name;
+      if (menuName) query.set('naverMenuName', menuName);
+    }
     window.open(`/appointments/print?${query.toString()}`, '_blank');
   };
 
@@ -273,12 +321,21 @@ export function AppointmentsPage() {
     // 미계약/계약 배지는 제거했다 — 가망/계약 고객 구분이 폐기되어 표시 의미가 없다(설계서 07 D8).
     { title: '고객명', dataIndex: 'customerName', width: COL.name },
     { title: '전화번호', dataIndex: 'phone', width: COL.code, render: (v: string) => formatPhone(v) },
-    { title: '예약 목적', dataIndex: 'purposeName', width: COL.name },
     {
-      title: '출처',
-      dataIndex: 'source',
-      width: COL.status,
-      render: (v: AppointmentSource) => <Tag color={metaOf(SOURCE_META, v).color}>{metaOf(SOURCE_META, v).label}</Tag>,
+      // 화면에서 "예약 목적"은 네이버 예약 메뉴를 가리킨다 — 예약이 전부 네이버로 들어오므로
+      // 손님이 실제로 고른 그 이름이 곧 목적이다. 내부 매핑값(purposeName, "가봉 피팅")은
+      // 같은 뜻을 한 번 더 보여 주는 셈이라 열에서 뺐다.
+      title: '예약 목적',
+      dataIndex: 'naverMenu',
+      width: COL.name,
+      render: (v?: string | null) =>
+        v ? (
+          <Typography.Text ellipsis={{ tooltip: v }} style={{ maxWidth: 160 }}>
+            {naverMenuLabel(v)}
+          </Typography.Text>
+        ) : (
+          '-'
+        ),
     },
     {
       title: '상태',
@@ -329,6 +386,23 @@ export function AppointmentsPage() {
                   { label: '목록', value: 'list' },
                 ]}
               />
+              {/*
+                * 예약 목적 구분 — 눌러서 바로 그 목적의 예약만 본다.
+                * 건수는 일부러 붙이지 않는다 — 서버가 주는 count 는 적재된 전체 누적이라
+                * 화면의 기간·검색과 무관하게 고정된 값이어서 오히려 오해를 준다.
+                * 표시명은 키워드만 쓰고(가봉_조율의 시간 → 가봉) 원문은 툴팁으로 남긴다.
+                */}
+              <Segmented
+                value={naverMenuId ?? ALL_MENUS}
+                onChange={(v) => setNaverMenuId(v === ALL_MENUS ? undefined : (v as string))}
+                options={[
+                  { label: '전체', value: ALL_MENUS },
+                  ...(naverMenus ?? []).map((m) => ({
+                    value: m.id,
+                    label: <span title={m.name}>{naverMenuLabel(m.name)}</span>,
+                  })),
+                ]}
+              />
               {mode === 'list' ? (
                 <>
                   {/* 통합 검색 1필드 — 예약자 이름·전화번호·예약 목적을 한 번에 찾는다(설계서 07 D4) */}
@@ -350,7 +424,6 @@ export function AppointmentsPage() {
                     value={listRange}
                     onChange={(v) => setListRange([v?.[0] ?? null, v?.[1] ?? null])}
                   />
-                  <Typography.Text type="secondary">예약접수·확정 건만</Typography.Text>
                 </>
               ) : (
                 <Space size={4}>
@@ -362,6 +435,7 @@ export function AppointmentsPage() {
               )}
             </>
           }
+          info={isList ? <Typography.Text type="secondary">예약접수·확정 건만 보여 줍니다.</Typography.Text> : null}
           actions={
             <>
               {/* 설계 PDF 1페이지 "CRM 일정 달력 출력" */}
@@ -371,11 +445,6 @@ export function AppointmentsPage() {
               <Can permission="NAVER_SYNC">
                 <Button icon={<SyncOutlined />} loading={syncMutation.isPending} onClick={() => syncMutation.mutate()}>
                   네이버 동기화
-                </Button>
-              </Can>
-              <Can permission="APPOINTMENT_EDIT">
-                <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-                  예약 추가
                 </Button>
               </Can>
             </>
@@ -418,8 +487,6 @@ export function AppointmentsPage() {
           />
         )}
       </Space>
-
-      <AppointmentFormModal open={createOpen} defaultDate={baseDate} onClose={() => setCreateOpen(false)} />
       </PageCard>
     </PageShell>
   );

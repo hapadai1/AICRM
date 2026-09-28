@@ -251,6 +251,13 @@ model Appointment {
   scheduledEnd   DateTime? @map("scheduled_end") @db.Timestamptz(6)
   status         String    @default("RESERVED") @map("status") @db.VarChar(20)
   notes          String?   @map("notes")
+  /**
+   * 네이버 예약 메뉴 원본 (NAVER 출처만). 예약 목적은 CRM 공통 코드로 합쳐지므로
+   * "예복상담"과 "비즈니스 맞춤정장"이 둘 다 맞춤 상담이 되는 등 구분이 사라진다 —
+   * 네이버 메뉴별로 나눠 보기 위해 원본을 보존한다.
+   */
+  naverBizItemId   String? @map("naver_biz_item_id") @db.VarChar(40)
+  naverBizItemName String? @map("naver_biz_item_name") @db.VarChar(100)
   naverUpdatedAt DateTime? @map("naver_updated_at") @db.Timestamptz(6)
   syncedAt       DateTime? @map("synced_at") @db.Timestamptz(6)
   localOverride  Boolean   @default(false) @map("local_override")
@@ -266,6 +273,7 @@ model Appointment {
   @@unique([source, externalId])
   @@index([scheduledStart, status])
   @@index([customerId])
+  @@index([naverBizItemName])
   @@map("appointments")
 }
 

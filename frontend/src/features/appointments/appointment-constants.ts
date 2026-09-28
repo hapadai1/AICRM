@@ -1,8 +1,27 @@
 import type {
+  Appointment,
   AppointmentSource,
   AppointmentStatus,
   AppointmentSyncStatus,
 } from '../../api/appointments';
+
+/**
+ * 예약 목적 짧은 표시명 — "가봉_조율의 시간" → "가봉".
+ * 화면의 "예약 목적"은 네이버 예약 메뉴를 가리킨다. 메뉴명이 "키워드_감성 문구" 형태라
+ * 카드·표에서는 키워드만 보여 준다(원문은 툴팁).
+ */
+export function naverMenuLabel(name?: string | null): string {
+  if (!name) return '';
+  return name.split('_')[0].trim() || name;
+}
+
+/**
+ * 예약 종류 표시명. 네이버 메뉴를 쓰고, 없을 때만 내부 매핑값(purposeName)으로 떨어진다 —
+ * 매핑값으로 합치면 "예복상담"과 "비즈니스 맞춤정장"이 둘 다 "맞춤 상담"이 되어 구분이 사라진다.
+ */
+export function appointmentKindLabel(a: Pick<Appointment, 'naverMenu' | 'purposeName'>): string {
+  return naverMenuLabel(a.naverMenu) || a.purposeName;
+}
 
 interface Meta {
   label: string;

@@ -1,5 +1,5 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
+import { Test, TestingModuleBuilder } from '@nestjs/testing';
 import { randomUUID } from 'crypto';
 import request from 'supertest';
 import { seedJourneyStages } from '../../backend/prisma/journey-stage-seed';
@@ -15,11 +15,17 @@ export interface TestContext {
 /**
  * Nest 앱을 테스트 DB(aicrm_test)로 기동하고 admin 토큰을 발급받는다.
  * 아직 AppModule에 등록되지 않은 개발 중 모듈은 extraModules로 주입해 테스트한다.
+ * 외부 연동(네이버 등)을 가짜로 바꿔야 하면 configure 에서 overrideProvider 를 건다.
  */
-export async function createTestContext(extraModules: unknown[] = []): Promise<TestContext> {
-  const moduleRef = await Test.createTestingModule({
-    imports: [AppModule, ...(extraModules as never[])],
-  }).compile();
+export async function createTestContext(
+  extraModules: unknown[] = [],
+  configure: (builder: TestingModuleBuilder) => TestingModuleBuilder = (b) => b,
+): Promise<TestContext> {
+  const moduleRef = await configure(
+    Test.createTestingModule({
+      imports: [AppModule, ...(extraModules as never[])],
+    }),
+  ).compile();
   const app = moduleRef.createNestApplication();
   app.setGlobalPrefix('api/v1');
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));

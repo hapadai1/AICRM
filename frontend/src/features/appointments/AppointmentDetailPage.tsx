@@ -1,4 +1,4 @@
-import { ArrowLeftOutlined, EditOutlined, FileAddOutlined, LinkOutlined, UserOutlined } from '@ant-design/icons';
+import { EditOutlined, FileAddOutlined, LinkOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
@@ -172,7 +172,8 @@ export function AppointmentDetailPage() {
     onError: (e) => onApiError(e, '상담 저장에 실패했습니다.'),
   });
 
-  usePageTitle(appointment ? '예약 상세' : null, appointment?.customerName);
+  // 헤더는 경로만 작은 글씨로 남긴다(예약 › 예약 상세). 고객명은 아래 정보 카드에 이미 있다.
+  usePageTitle(appointment ? '예약 상세' : null, null, { subtle: true });
 
   if (isLoading) {
     return (
@@ -204,15 +205,36 @@ export function AppointmentDetailPage() {
       <Card>
         <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
           <Space wrap>
-            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/appointments')}>
-              목록
-            </Button>
-            <Typography.Title level={4} style={{ margin: 0 }}>
-              예약 상세
-            </Typography.Title>
+            {/* 화면 이름(예약 상세)은 헤더 경로가 이미 말해 준다 — 여기는 누구의 예약인지를 보여준다.
+                고객 정보 카드를 없앤 대신 이름·전화번호·고객 상태를 이 줄에 모았다. */}
+            <div>
+              {/* 고객 상세 화면의 고객명과 같은 크기(level 4 = 20px)로 맞춘다. */}
+              <Typography.Title level={4} style={{ margin: 0 }}>
+                {appointment.customerId ? (
+                  // 제목이라 평소엔 검은색이고, 커서를 올릴 때만 링크로 보인다(index.css).
+                  <Typography.Link
+                    className="appt-customer-link"
+                    onClick={() => navigate(`/customers/${appointment.customerId}`)}
+                  >
+                    {appointment.customerName}
+                  </Typography.Link>
+                ) : (
+                  appointment.customerName
+                )}
+              </Typography.Title>
+              <Typography.Text type="secondary">{formatPhone(appointment.phone)}</Typography.Text>
+            </div>
             <Tag color={sourceMeta.color}>{sourceMeta.label}</Tag>
             <StatusBadge label={statusMeta.label} color={statusMeta.color} />
             <StatusBadge label={`동기화: ${syncMeta.label}`} color={syncMeta.color} />
+            {appointment.customerStatus ? (
+              <StatusBadge
+                label={metaOf(CUSTOMER_STATUS_META, appointment.customerStatus).label}
+                color={metaOf(CUSTOMER_STATUS_META, appointment.customerStatus).color}
+              />
+            ) : (
+              <Typography.Text type="secondary">미연결 (신규 예약 고객)</Typography.Text>
+            )}
           </Space>
           <Space wrap>
             <Can permission="APPOINTMENT_EDIT">
@@ -282,98 +304,85 @@ export function AppointmentDetailPage() {
             }
           />
         )}
-      </Card>
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} lg={12}>
-          <Card
-            title={
-              <Space>
-                <UserOutlined />
-                고객 정보
+        {!appointment.customerId && phoneMatch && (
+          <Alert
+            style={{ marginTop: 16 }}
+            type="info"
+            showIcon
+            message={
+              <Space wrap>
+                <span>
+                  동일 전화번호의 기존 고객이 있습니다: <b>{phoneMatch.name}</b>
+                </span>
+                <Tag color={metaOf(CUSTOMER_STATUS_META, phoneMatch.customerStatus).color}>
+                  {metaOf(CUSTOMER_STATUS_META, phoneMatch.customerStatus).label}
+                </Tag>
+                <Can permission="APPOINTMENT_EDIT">
+                  <Button
+                    size="small"
+                    icon={<LinkOutlined />}
+                    loading={linkMutation.isPending}
+                    onClick={() => linkMutation.mutate(phoneMatch.id)}
+                  >
+                    기존 고객 연결
+                  </Button>
+                </Can>
               </Space>
             }
-            extra={
-              appointment.customerId ? (
-                <Button type="link" onClick={() => navigate(`/customers/${appointment.customerId}`)}>
-                  고객 상세 보기
-                </Button>
-              ) : undefined
-            }
-          >
-            <Descriptions column={1} size="small" bordered>
-              <Descriptions.Item label="이름">{appointment.customerName}</Descriptions.Item>
-              <Descriptions.Item label="전화번호">{formatPhone(appointment.phone)}</Descriptions.Item>
-              <Descriptions.Item label="고객 상태">
-                {appointment.customerStatus ? (
-                  <StatusBadge
-                    label={metaOf(CUSTOMER_STATUS_META, appointment.customerStatus).label}
-                    color={metaOf(CUSTOMER_STATUS_META, appointment.customerStatus).color}
-                  />
-                ) : (
-                  <Typography.Text type="secondary">미연결 (신규 예약 고객)</Typography.Text>
-                )}
-              </Descriptions.Item>
-            </Descriptions>
-            {!appointment.customerId && phoneMatch && (
-              <Alert
-                style={{ marginTop: 12 }}
-                type="info"
-                showIcon
-                message={
-                  <Space wrap>
-                    <span>
-                      동일 전화번호의 기존 고객이 있습니다: <b>{phoneMatch.name}</b>
-                    </span>
-                    <Tag color={metaOf(CUSTOMER_STATUS_META, phoneMatch.customerStatus).color}>
-                      {metaOf(CUSTOMER_STATUS_META, phoneMatch.customerStatus).label}
-                    </Tag>
-                    <Can permission="APPOINTMENT_EDIT">
-                      <Button
-                        size="small"
-                        icon={<LinkOutlined />}
-                        loading={linkMutation.isPending}
-                        onClick={() => linkMutation.mutate(phoneMatch.id)}
-                      >
-                        기존 고객 연결
-                      </Button>
-                    </Can>
-                  </Space>
-                }
-              />
-            )}
-          </Card>
-        </Col>
-        <Col xs={24} lg={12}>
-          <Card
-            title="예약 정보"
-            extra={
-              <Can permission="APPOINTMENT_EDIT">
-                <Button type="link" icon={<EditOutlined />} onClick={() => setEditOpen(true)}>
-                  예약 수정
-                </Button>
-              </Can>
-            }
-          >
-            <Descriptions column={1} size="small" bordered>
-              <Descriptions.Item label="예약 목적">{appointment.purposeName}</Descriptions.Item>
-              <Descriptions.Item label="예약 일시">
-                {formatDateTime(appointment.startAt)} ~ {dayjs(appointment.endAt).format('HH:mm')}
-              </Descriptions.Item>
-              {appointment.naverReservationId && (
-                <Descriptions.Item label="네이버 예약 ID">{appointment.naverReservationId}</Descriptions.Item>
-              )}
-              {appointment.visitedAt && (
-                <Descriptions.Item label="실제 방문시각">{formatDateTime(appointment.visitedAt)}</Descriptions.Item>
-              )}
-              {appointment.cancelReason && (
-                <Descriptions.Item label="취소 사유">{appointment.cancelReason}</Descriptions.Item>
-              )}
-              <Descriptions.Item label="메모">{appointment.memo || '-'}</Descriptions.Item>
-            </Descriptions>
-          </Card>
-        </Col>
-      </Row>
+          />
+        )}
+      </Card>
+
+      <Card
+        title="예약 정보"
+        // 제목과 표가 맞붙어 한 덩어리로 읽히도록 구분선을 빼고 위아래 여백을 줄였다.
+        styles={{
+          header: { borderBottom: 'none', minHeight: 'auto', padding: '12px 16px 0' },
+          body: { paddingTop: 12 },
+        }}
+        extra={
+          <Can permission="APPOINTMENT_EDIT">
+            <Button type="link" icon={<EditOutlined />} onClick={() => setEditOpen(true)}>
+              예약 수정
+            </Button>
+          </Can>
+        }
+      >
+        {/* 네 항목이 한 줄에 들어간다. 라벨 칸은 width:1 + nowrap 으로 글자 폭만큼만 차지하고
+            (bordered 표는 table-layout:auto), 남는 폭은 값 칸이 나눠 가진다. */}
+        <Descriptions
+          column={{ xs: 1, sm: 2, lg: 4 }}
+          size="small"
+          bordered
+          styles={{
+            label: { width: 1, whiteSpace: 'nowrap', padding: '8px 14px' },
+            content: { whiteSpace: 'nowrap', padding: '8px 14px' },
+          }}
+        >
+          {/* 예약 목적 = 손님이 네이버에서 고른 메뉴 원문("가봉_조율의 시간").
+              내부 매핑값(purposeName, "가봉 피팅")은 같은 뜻이라 따로 보여 주지 않는다. */}
+          <Descriptions.Item label="예약 목적">
+            {appointment.naverMenu || appointment.purposeName}
+          </Descriptions.Item>
+          <Descriptions.Item label="예약 일시">
+            {formatDateTime(appointment.startAt)} ~ {dayjs(appointment.endAt).format('HH:mm')}
+          </Descriptions.Item>
+          {appointment.naverReservationId && (
+            <Descriptions.Item label="네이버 예약 ID">{appointment.naverReservationId}</Descriptions.Item>
+          )}
+          {appointment.visitedAt && (
+            <Descriptions.Item label="실제 방문시각">{formatDateTime(appointment.visitedAt)}</Descriptions.Item>
+          )}
+          {appointment.cancelReason && (
+            <Descriptions.Item label="취소 사유">{appointment.cancelReason}</Descriptions.Item>
+          )}
+          {/* 메모만 줄바꿈 허용 — 길어도 표를 옆으로 늘리지 않고 이 칸 안에서 접힌다. */}
+          <Descriptions.Item label="메모" styles={{ content: { whiteSpace: 'normal' } }}>
+            {appointment.memo || '-'}
+          </Descriptions.Item>
+        </Descriptions>
+      </Card>
 
       <Card title="상담 기록">
         <Can permission="CONSULTATION_EDIT">

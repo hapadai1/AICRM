@@ -16,3 +16,7 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret';
 process.env.JWT_ACCESS_EXPIRES = '30m';
 process.env.REFRESH_TOKEN_DAYS = '14';
 process.env.FILE_STORAGE_PATH = process.env.FILE_STORAGE_PATH || './storage-test';
+
+// 네이버 예약 자동 수집은 테스트에서 절대 켜지 않는다 — 실제 브라우저가 떠서
+// 운영 계정으로 네이버에 접속하게 된다. 파싱 검증은 저장된 캡처(픽스처)로만 한다.
+process.env.NAVER_BOOKING_SYNC_ENABLED = 'false';

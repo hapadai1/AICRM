@@ -35,6 +35,9 @@ import readline from 'readline';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..');
 const DOCTOR = process.argv.includes('--doctor');
+// --auto: 이미 로그인된 세션(.profile)을 전제로, 사람 대기 없이 목록을 열어
+// 자연스러운 대기·스크롤 후 캡처를 저장하고 스스로 종료한다. 조회(GET)만 발생한다.
+const AUTO = process.argv.includes('--auto');
 
 // ---------- .env 로드 (루트 .env, 외부 의존성 없이 단순 파싱) ----------
 function loadEnv() {
@@ -69,7 +72,7 @@ if (DOCTOR) {
   if (!env.NAVER_BOOKING_BIZ_ID) problems.push('.env 에 NAVER_BOOKING_BIZ_ID 가 없다 (기본값 1581427 사용 예정)');
   if (!env.NAVER_BOOKING_ID) problems.push('.env 에 NAVER_BOOKING_ID 가 없다 (수동 로그인이라 필수는 아님)');
   try {
-    const browser = await chromium.launch({ channel: 'chrome', headless: true });
+    const browser = await chromium.launch({ channel: 'chrome', headless: true, chromiumSandbox: true });
     await browser.close();
     console.log('✅ 시스템 크롬 실행 확인');
   } catch (e) {
@@ -95,6 +98,7 @@ mkdirSync(OUT, { recursive: true });
 const context = await chromium.launchPersistentContext(join(HERE, '.profile'), {
   channel: 'chrome',
   headless: false,
+  chromiumSandbox: true, // 샌드박스 유지 — --no-sandbox 경고 바 제거, 일반 크롬과 동일 실행
   viewport: null, // 실제 창 크기 그대로 (고정 뷰포트는 자동화 신호)
   locale: 'ko-KR',
   timezoneId: 'Asia/Seoul',
@@ -134,26 +138,74 @@ context.on('response', async (resp) => {
   }
 });
 
-console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-console.log('크롬 창이 열린다. 네이버 로그인 화면이 나오면 직접 로그인하세요.');
-console.log('(캡차·2단계인증이 떠도 사람이 직접 처리하면 된다. 세션은 저장되어 재사용됨)');
-console.log(`조회 창: ${ymd(start)} ~ ${ymd(end)}`);
-console.log('로그인 후 예약 목록에서 자유롭게 탐색 — 예약 상세 1건 클릭, 기간 변경,');
-console.log('상태 필터(확정/취소) 변경까지 해보면 필드 파악에 가장 좋다.');
-console.log('');
-console.log('👉 탐색을 마치면 이 터미널에서 Enter 를 누르세요 (저장 후 종료).');
-console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+if (AUTO) {
+  console.log(`[auto] 저장된 세션으로 예약 목록을 연다: ${ymd(start)} ~ ${ymd(end)}`);
+} else {
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log('크롬 창이 열린다. 네이버 로그인 화면이 나오면 직접 로그인하세요.');
+  console.log('(캡차·2단계인증이 떠도 사람이 직접 처리하면 된다. 세션은 저장되어 재사용됨)');
+  console.log(`조회 창: ${ymd(start)} ~ ${ymd(end)}`);
+  console.log('로그인 후 예약 목록에서 자유롭게 탐색 — 예약 상세 1건 클릭, 기간 변경,');
+  console.log('상태 필터(확정/취소) 변경까지 해보면 필드 파악에 가장 좋다.');
+  console.log('');
+  console.log('👉 탐색을 마치면 이 터미널에서 Enter 를 누르세요 (저장 후 종료).');
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+}
 
 await page.goto(LIST_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 }).catch(() => {});
 
-// ---------- 사용자가 Enter 를 누를 때까지 캡처 유지 ----------
-await new Promise((resolve) => {
-  const rl = readline.createInterface({ input: process.stdin });
-  rl.once('line', () => {
-    rl.close();
-    resolve();
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+if (AUTO) {
+  // ---------- 자동 모드: 사람 같은 대기·스크롤 후 종료 ----------
+  await sleep(9000 + Math.random() * 3000); // SPA 데이터 로딩 대기
+  let landed = page.url();
+  console.log(`[auto] 현재 URL: ${landed}`);
+  if (/nid\.naver\.com/.test(landed)) {
+    // 세션 없음 → 사람 로그인을 기다렸다가 이어서 자동 캡처 (최대 15분).
+    // 리다이렉트 도중의 순간적인 partner URL 을 로그인 완료로 오인하지 않도록,
+    // partner 도메인에 "안정적으로 머무는지"를 재확인하고 실패하면 계속 기다린다.
+    console.log('[auto] 🔑 열린 크롬 창에서 로그인해 주세요 — "로그인 상태 유지" 반드시 체크!');
+    const deadline = Date.now() + 15 * 60_000;
+    const onPartner = () => /partner\.booking\.naver\.com/.test(page.url());
+    let loggedIn = false;
+    while (Date.now() < deadline && !loggedIn) {
+      await sleep(3000);
+      if (!onPartner()) continue;
+      await sleep(5000); // 리다이렉트 안정화 대기
+      if (!onPartner()) continue;
+      console.log('[auto] 로그인 후보 감지 — 목록 재진입으로 세션 검증');
+      if (!page.url().includes('booking-list-view')) {
+        await page.goto(LIST_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 }).catch(() => {});
+      }
+      await sleep(9000 + Math.random() * 3000);
+      loggedIn = onPartner(); // 세션이 없으면 nid 로 다시 튕긴다
+      if (!loggedIn) console.log('[auto] 아직 로그인 전 — 계속 대기한다');
+    }
+    if (loggedIn) console.log('[auto] ✅ 로그인 확정 — 예약 목록 캡처를 계속한다');
+    landed = page.url();
+  }
+  if (/nid\.naver\.com/.test(landed)) {
+    console.log('[auto] ⚠️ 로그인이 완료되지 않아 캡처 없이 종료한다');
+  } else {
+    // 목록을 사람처럼 천천히 스크롤 (조회만 발생)
+    for (let i = 0; i < 3; i += 1) {
+      await page.mouse.wheel(0, 500 + Math.floor(Math.random() * 300)).catch(() => {});
+      await sleep(1200 + Math.random() * 1500);
+    }
+    await sleep(4000);
+  }
+  writeFileSync(join(OUT, 'meta.json'), JSON.stringify({ finalUrl: landed, listUrl: LIST_URL }, null, 2));
+} else {
+  // ---------- 수동 모드: 사용자가 Enter 를 누를 때까지 캡처 유지 ----------
+  await new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin });
+    rl.once('line', () => {
+      rl.close();
+      resolve();
+    });
   });
-});
+}
 
 // ---------- 마무리 저장 ----------
 try {

@@ -38,6 +38,8 @@ export class AppointmentListQueryDto extends PageQueryDto {
   /** 예약 목적 코드 콤마 목록 (예: FITTING,INITIAL_CONSULTATION) — purpose보다 우선 */
   @IsOptional() @IsString() purposeCodes?: string;
   @IsOptional() @IsIn([...APPOINTMENT_SOURCES]) source?: string;
+  /** 네이버 예약 메뉴 ID (NAVER 출처만 해당). 메뉴 이름은 파트너센터에서 바뀔 수 있어 ID 로 거른다 */
+  @IsOptional() @IsString() naverMenuId?: string;
   @IsOptional() @IsIn([...APPOINTMENT_STATUSES]) status?: string;
   /** 예약 상태 콤마 목록 (예: RESERVED,CONFIRMED) — status보다 우선 */
   @IsOptional() @IsString() statuses?: string;

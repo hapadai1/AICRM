@@ -1,0 +1,37 @@
+[
+  {
+    "bizItemId": 7372067,
+    "name": "예복상담_기억에 남을 순간",
+    "bizItemType": "STANDARD",
+    "order": 1,
+    "isImp": true
+  },
+  {
+    "bizItemId": 7372095,
+    "name": "비즈니스 맞춤정장_그 날을 입다.",
+    "bizItemType": "STANDARD",
+    "order": 2,
+    "isImp": true
+  },
+  {
+    "bizItemId": 7372106,
+    "name": "PICKUP_마침내 만나는 순간",
+    "bizItemType": "STANDARD",
+    "order": 3,
+    "isImp": true
+  },
+  {
+    "bizItemId": 7372140,
+    "name": "렌탈(정장대여)",
+    "bizItemType": "STANDARD",
+    "order": 4,
+    "isImp": true
+  },
+  {
+    "bizItemId": 7372120,
+    "name": "가봉_조율의 시간",
+    "bizItemType": "STANDARD",
+    "order": 5,
+    "isImp": true
+  }
+]

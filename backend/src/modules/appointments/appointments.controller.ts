@@ -29,6 +29,13 @@ export class AppointmentsController {
     return this.appointmentsService.listPurposes();
   }
 
+  /** 수집된 네이버 예약 메뉴 목록 — 예약 화면의 메뉴별 보기 선택지 */
+  @Get('appointments/naver-menus')
+  @RequirePermission('APPOINTMENT_VIEW')
+  listNaverMenus() {
+    return this.appointmentsService.listNaverMenus();
+  }
+
   @Post('appointments')
   @RequirePermission('APPOINTMENT_EDIT')
   create(@Body() dto: CreateAppointmentDto, @CurrentUser() actor: AuthUser) {

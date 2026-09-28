@@ -52,6 +52,10 @@ export function toAppointmentView(appt: AppointmentWithRefs) {
     version: appt.rowVersion,
     syncStatus: appointmentSyncStatus(appt),
     naverReservationId: appt.externalId,
+    /** 네이버 예약 메뉴 이름 (예: "예복상담"). CRM 예약은 null */
+    naverMenu: appt.naverBizItemName,
+    /** 네이버 예약 메뉴 ID — 이름이 바뀌어도 그대로라 구분 보기의 기준으로 쓴다 */
+    naverMenuId: appt.naverBizItemId,
     createdAt: appt.createdAt,
     updatedAt: appt.updatedAt,
   };

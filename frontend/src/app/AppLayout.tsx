@@ -174,12 +174,16 @@ export function AppLayout() {
   // 메뉴명은 그 앞의 경로로 밀려나 지금 어느 메뉴 안인지도 함께 보인다.
   const overrideTitle = usePageTitleStore((s) => s.title);
   const overrideSubtitle = usePageTitleStore((s) => s.subtitle);
-  const pageTitle = overrideTitle ?? menuTitle;
+  const overrideSubtle = usePageTitleStore((s) => s.subtle);
+  // subtle 이면 제목도 경로의 마지막 칸으로 내려가 "예약 › 예약 상세"만 작은 글씨로 남는다.
+  const pageTitle = overrideSubtle ? '' : overrideTitle ?? menuTitle;
   // 오버라이드가 '지정됨'(빈 문자열 포함)이면 메뉴명을 브레드크럼으로 민다.
-  // 상세 화면이 빈 제목('')을 넣으면 "고객 ›"처럼 경로만 남기고 제목 자리는 비운다.
-  const trail = [menuGroup, overrideTitle != null ? menuTitle : undefined].filter(
-    Boolean,
-  ) as string[];
+  // 상세 화면이 빈 제목('')을 넣으면 "고객"처럼 경로만 남기고 제목 자리는 비운다.
+  const trail = [
+    menuGroup,
+    overrideTitle != null ? menuTitle : undefined,
+    overrideSubtle ? overrideTitle : undefined,
+  ].filter(Boolean) as string[];
 
   const handleLogout = async () => {
     try {
@@ -273,7 +277,10 @@ export function AppLayout() {
         >
           <Space align="center" size={8}>
             {trail.length > 0 && (
-              <Typography.Text type="secondary">{trail.join(' › ')} ›</Typography.Text>
+              <Typography.Text type="secondary">
+                {trail.join(' › ')}
+                {pageTitle ? ' ›' : ''}
+              </Typography.Text>
             )}
             {pageTitle && (
               <Typography.Title level={4} style={{ margin: 0 }}>

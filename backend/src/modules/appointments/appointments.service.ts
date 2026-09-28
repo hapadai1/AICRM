@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { BusinessException } from '../../common/business.exception';
@@ -9,6 +9,8 @@ import { AuditService } from '../audit/audit.service';
 import { CustomersService } from '../customers/customers.service';
 import {
   NAVER_RESERVATION_ADAPTER,
+  NaverFetchOptions,
+  NaverFetchWindow,
   NaverReservationAdapter,
   NaverReservationRecord,
 } from './adapters/naver-reservation.adapter';
@@ -45,8 +47,14 @@ const CONSULTATION_INCLUDE = {
   staff: { select: { id: true, displayName: true } },
 } as const;
 
+/** 네이버 예약이 하나도 없을 때(첫 적재) 조회 창 — 최근 이력과 이미 잡힌 다음 달 예약까지 채운다. */
+const NAVER_FIRST_LOAD_WINDOW: NaverFetchWindow = { lookbackDays: 30, lookaheadDays: 30 };
+
+type NaverApplyOutcome = 'created' | 'updated' | 'cancelled' | 'conflicts' | 'unchanged';
 @Injectable()
 export class AppointmentsService {
+  private readonly logger = new Logger(AppointmentsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
@@ -88,11 +96,15 @@ export class AppointmentsService {
     } else if (query.status) where.status = query.status;
 
     if (query.source) where.source = query.source;
+    if (query.naverMenuId) where.naverBizItemId = query.naverMenuId;
     if (query.customerId) where.customerId = query.customerId;
 
     // 통합 검색 (설계서 07 D4): 한 필드로 고객명·전화번호·예약 목적명을 함께 찾는다.
     // 목적명은 customer가 아닌 purpose 관계라 고객 하위 OR에 넣을 수 없다 —
     // where.OR 최상위에 두어야 기간·상태·customerId 조건과 AND로 결합된다.
+    // 네이버 메뉴명(naverBizItemName)도 함께 찾는다 — 화면이 "예약 목적"으로 보여 주는 값이
+    // 바로 이것이라, 빠뜨리면 "PICKUP"으로 검색했을 때 아무것도 나오지 않는다
+    // (내부 매핑값은 "완성복 출고"다).
     const keyword = query.q?.trim();
     if (keyword) {
       // 자릿수 검증 없이 숫자만 뽑아 비교한다
@@ -101,6 +113,7 @@ export class AppointmentsService {
       const or: Prisma.AppointmentWhereInput[] = [
         { customer: { name: { contains: keyword, mode: 'insensitive' } } },
         { purpose: { name: { contains: keyword, mode: 'insensitive' } } },
+        { naverBizItemName: { contains: keyword, mode: 'insensitive' } },
       ];
       if (digits) or.push({ customer: { phoneNormalized: { contains: digits } } });
       where.OR = or;
@@ -126,6 +139,70 @@ export class AppointmentsService {
       select: { id: true, code: true, name: true, sortOrder: true },
       orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }],
     });
+  }
+
+  /**
+   * 예약 화면의 "네이버 메뉴별 보기" 선택지와 건수.
+   *
+   * 기준은 **파트너센터에 등록된 상품 목록**이다 — 적재된 예약에서만 뽑으면 예약이 0건인 상품이
+   * 화면에서 사라진다 (렌탈처럼 예약이 드문 메뉴가 실제로 그렇게 빠졌다). 상품 마스터를 기준으로
+   * 두면 예약이 없어도 선택지에 남고, 순서도 파트너센터 설정을 그대로 따른다.
+   *
+   * `count` 는 적재된 전체 누적 건수다 — 기간·상태를 가리지 않으므로 화면에는 띄우지 않는다
+   * (화면의 기간과 무관한 고정 숫자여서 오해를 준다). 필터 정확성 검증에 쓰려고 응답에는 남긴다.
+   *
+   * 상품 마스터에 없는 메뉴(파트너센터에서 삭제됐지만 과거 예약은 남은 경우)도 잃지 않도록
+   * 적재분에서 뽑아 뒤에 이름순으로 붙인다. 이름은 마스터가 더 최신이라 마스터 쪽을 우선한다.
+   * 상품 마스터를 아직 수집하지 못한 환경(연동 스텁·저장본 없음)에서는 예전처럼 적재분만 쓴다.
+   */
+  async listNaverMenus() {
+    const rows = await this.prisma.appointment.groupBy({
+      by: ['naverBizItemId', 'naverBizItemName'],
+      where: { source: 'NAVER', naverBizItemId: { not: null } },
+      _count: { _all: true },
+      _max: { syncedAt: true },
+    });
+    const byId = new Map<string, { id: string; name: string; count: number; seenAt: number }>();
+    for (const r of rows) {
+      const id = r.naverBizItemId as string;
+      const seenAt = r._max.syncedAt?.getTime() ?? 0;
+      const cur = byId.get(id);
+      if (!cur) {
+        byId.set(id, { id, name: r.naverBizItemName ?? id, count: r._count._all, seenAt });
+        continue;
+      }
+      cur.count += r._count._all;
+      if (seenAt > cur.seenAt) Object.assign(cur, { name: r.naverBizItemName ?? id, seenAt });
+    }
+    // 상품 마스터를 못 읽어도(저장본 없음·파일 손상) 메뉴 목록 자체는 내려간다
+    const master = await this.naverAdapter.fetchBizItems().catch((e) => {
+      this.logger.warn(`네이버 상품 목록을 읽지 못해 적재분만으로 메뉴를 구성한다: ${e instanceof Error ? e.message : e}`);
+      return [];
+    });
+
+    const menus = master.map(({ id, name }) => ({ id, name, count: byId.get(id)?.count ?? 0 }));
+    const inMaster = new Set(master.map((m) => m.id));
+    const orphans = [...byId.values()]
+      .filter((v) => !inMaster.has(v.id))
+      .map(({ id, name, count }) => ({ id, name, count }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+    return [...menus, ...orphans];
+  }
+
+  /**
+   * 파트너센터에서 메뉴 이름을 바꾸면, 이번 조회 창 밖의 예전 예약에도 새 이름을 입힌다.
+   * 같은 메뉴가 옛 이름·새 이름으로 갈라져 보이지 않게 하기 위함이다.
+   * 표시용 이름만 맞추는 것이라 행 버전·감사 로그는 건드리지 않는다.
+   */
+  private async propagateNaverMenuRenames(records: NaverReservationRecord[]): Promise<void> {
+    const latest = new Map<string, string>();
+    for (const r of records) if (r.bizItemId && r.bizItemName) latest.set(r.bizItemId, r.bizItemName);
+    for (const [id, name] of latest) {
+      await this.prisma.appointment.updateMany({
+        where: { source: 'NAVER', naverBizItemId: id, NOT: { naverBizItemName: name } },
+        data: { naverBizItemName: name },
+      });
+    }
   }
 
   /**
@@ -283,8 +360,10 @@ export class AppointmentsService {
     const now = new Date();
     let data: Prisma.AppointmentUpdateInput;
     if (resolution === 'NAVER') {
-      const records = await this.naverAdapter.fetchReservations();
+      // 버튼을 누를 때마다 네이버에 접속하지 않는다 — 가장 최근 수집본에서 원본을 찾는다
+      const { records } = await this.naverAdapter.fetchReservations(undefined, { cacheOnly: true });
       const record = records.find((r) => r.externalId === before.externalId);
+      // 원본을 못 찾아도 보호만 풀면 다음 주기 수집이 네이버 값으로 맞춘다
       data = {
         localOverride: false,
         syncedAt: now,
@@ -295,6 +374,8 @@ export class AppointmentsService {
               status: record.status,
               notes: record.notes ?? before.notes,
               naverUpdatedAt: record.naverUpdatedAt ? new Date(record.naverUpdatedAt) : now,
+              naverBizItemId: record.bizItemId ?? before.naverBizItemId,
+              naverBizItemName: record.bizItemName ?? before.naverBizItemName,
             }
           : {}),
       };
@@ -457,90 +538,194 @@ export class AppointmentsService {
   }
 
   /**
-   * 네이버 예약 수동 동기화 (단방향 수집).
-   * source+externalId 기준 upsert, 취소는 삭제 없이 CANCELLED 반영.
-   * CRM 수정본(localOverride)은 자동 덮어쓰지 않는다 (데이터모델 5.3 규칙).
+   * 네이버 예약 동기화 (단방향 수집, 설계서 16.1).
+   *
+   * - source+externalId 기준 upsert. 취소는 삭제하지 않고 CANCELLED 로 남긴다.
+   * - 상태는 허용 전이(ALLOWED_TRANSITIONS)대로만 앞으로 간다. 네이버에는 여전히 "확정"으로 남아 있어도,
+   *   직원이 CRM 에서 방문·노쇼·취소 처리한 예약을 되돌리지 않는다.
+   * - CRM 수정본(localOverride)은 덮어쓰지 않는다 (데이터모델 5.3). 네이버 쪽 변경 시각만 받아 두어
+   *   화면에 충돌로 뜨게 한다 — syncedAt 은 "CRM 이 네이버 값을 반영한 시각"이라 여기서 올리면 충돌이 지워진다.
+   * - 바뀐 게 없으면 쓰지 않는다. 주기 수집마다 행 버전을 올리면 직원이 편집 중인 예약이
+   *   저장 때 버전 충돌로 튕기고, 감사 로그도 수집 건수만큼 매번 쌓인다.
+   * - 한 건의 오류(이상한 전화번호 등)가 나머지 적재를 막지 않도록 건별로 격리하고 결과에 남긴다.
+   * - 일정이 변경된 예약은 네이버 목록에서 사라지고 새 예약번호로만 다시 나타난다 — 새 예약이 가리키는
+   *   이전 예약번호를 따라가 옛 예약을 취소 처리한다. 그러지 않으면 바뀌기 전 시각에 유령 예약이 남는다.
+   * - 네이버 예약이 아직 하나도 없는 첫 적재는 과거·미래 30일을 넓게 가져온다.
+   * - 요청마다 네이버에 접속하지 않는다. 최근 수집본이 있으면 그것으로 반영한다 (options 참고).
    */
-  async syncNaverReservations(actor: AuthUser) {
-    const reservations = await this.naverAdapter.fetchReservations();
+  async syncNaverReservations(actor: AuthUser, window?: NaverFetchWindow, options?: NaverFetchOptions) {
+    // 실수집기가 넣은 예약은 항상 네이버 메뉴가 있다 — 출처만 NAVER 인 데모·수기 데이터가 있어도
+    // 아직 실제로 가져온 적이 없으면 첫 적재로 본다.
+    const firstLoad =
+      !window &&
+      (await this.prisma.appointment.count({ where: { source: 'NAVER', naverBizItemName: { not: null } } })) === 0;
+    const fetched = await this.naverAdapter.fetchReservations(
+      window ?? (firstLoad ? NAVER_FIRST_LOAD_WINDOW : undefined),
+      options,
+    );
+    const reservations = fetched.records;
     const now = new Date();
-    let created = 0;
-    let updated = 0;
-    let cancelled = 0;
+    await this.propagateNaverMenuRenames(reservations);
+    const counts: Record<NaverApplyOutcome, number> = {
+      created: 0,
+      updated: 0,
+      cancelled: 0,
+      conflicts: 0,
+      unchanged: 0,
+    };
+    const failures: Array<{ externalId: string; reason: string }> = [];
 
     for (const record of reservations) {
-      const existing = await this.prisma.appointment.findFirst({
-        where: { source: 'NAVER', externalId: record.externalId },
-      });
-      if (!existing) {
-        await this.createFromNaver(record, now, actor);
-        created += 1;
-        if (record.status === 'CANCELLED') cancelled += 1;
-        continue;
+      try {
+        counts[await this.applyNaverRecord(record, now, actor)] += 1;
+      } catch (e) {
+        failures.push({ externalId: record.externalId, reason: e instanceof Error ? e.message : String(e) });
       }
-
-      if (record.status === 'CANCELLED') {
-        if (existing.status !== 'CANCELLED') {
-          const after = await this.prisma.appointment.update({
-            where: { id: existing.id },
-            data: {
-              status: 'CANCELLED',
-              naverUpdatedAt: record.naverUpdatedAt ? new Date(record.naverUpdatedAt) : now,
-              syncedAt: now,
-              rowVersion: { increment: 1 },
-            },
-          });
-          await this.audit.log({
-            userId: actor.id,
-            action: 'CANCEL',
-            entityType: 'APPOINTMENT',
-            entityId: existing.id,
-            before: existing,
-            after,
-            reason: '네이버 예약 취소 동기화',
-          });
-          cancelled += 1;
-        }
-        continue;
-      }
-
-      if (existing.localOverride) {
-        // CRM 로컬 수정과 충돌: 자동 덮어쓰기 대신 동기화 시각만 기록 (확인 대상)
-        await this.prisma.appointment.update({
-          where: { id: existing.id },
-          data: {
-            syncedAt: now,
-            naverUpdatedAt: record.naverUpdatedAt ? new Date(record.naverUpdatedAt) : existing.naverUpdatedAt,
-          },
-        });
-        continue;
-      }
-
-      const after = await this.prisma.appointment.update({
-        where: { id: existing.id },
-        data: {
-          scheduledStart: new Date(record.scheduledStart),
-          scheduledEnd: record.scheduledEnd ? new Date(record.scheduledEnd) : null,
-          status: record.status,
-          notes: record.notes ?? existing.notes,
-          naverUpdatedAt: record.naverUpdatedAt ? new Date(record.naverUpdatedAt) : now,
-          syncedAt: now,
-          rowVersion: { increment: 1 },
-        },
-      });
-      await this.audit.log({
-        userId: actor.id,
-        action: 'UPDATE',
-        entityType: 'APPOINTMENT',
-        entityId: existing.id,
-        before: existing,
-        after,
-        reason: '네이버 예약 변경 동기화',
-      });
-      updated += 1;
     }
 
-    return { fetched: reservations.length, created, updated, cancelled };
+    // 새 예약을 모두 반영한 뒤에 처리한다 — 취소 메모가 가리킬 새 예약이 이미 있어야 한다
+    let superseded = 0;
+    for (const record of reservations) {
+      try {
+        if (await this.supersedePreviousBooking(record, now, actor)) superseded += 1;
+      } catch (e) {
+        failures.push({ externalId: record.externalId, reason: e instanceof Error ? e.message : String(e) });
+      }
+    }
+
+    return {
+      fetched: reservations.length,
+      ...counts,
+      /** 일정 변경으로 대체되어 취소 처리한 옛 예약 건수 */
+      superseded,
+      failed: failures.length,
+      failures,
+      firstLoad,
+      /** 반영한 데이터를 네이버에서 받아 온 시각 */
+      fetchedAt: fetched.fetchedAt ?? null,
+      /** true 면 이번 요청은 네이버에 접속하지 않고 저장된 수집본을 썼다 */
+      fromCache: fetched.fromCache,
+    };
+  }
+
+  /** 네이버 예약 1건을 CRM 에 반영하고 무엇을 했는지 돌려준다. */
+  private async applyNaverRecord(
+    record: NaverReservationRecord,
+    now: Date,
+    actor: AuthUser,
+  ): Promise<NaverApplyOutcome> {
+    const existing = await this.prisma.appointment.findFirst({
+      where: { source: 'NAVER', externalId: record.externalId },
+    });
+    if (!existing) {
+      await this.createFromNaver(record, now, actor);
+      return 'created';
+    }
+
+    const naverUpdatedAt = record.naverUpdatedAt ? new Date(record.naverUpdatedAt) : existing.naverUpdatedAt;
+    const naverTimeMoved = naverUpdatedAt?.getTime() !== existing.naverUpdatedAt?.getTime();
+
+    if (existing.localOverride) {
+      if (naverTimeMoved) {
+        await this.prisma.appointment.update({ where: { id: existing.id }, data: { naverUpdatedAt } });
+      }
+      const naverChanged = !!naverUpdatedAt && (!existing.syncedAt || naverUpdatedAt > existing.syncedAt);
+      return naverChanged ? 'conflicts' : 'unchanged';
+    }
+
+    const status =
+      record.status === existing.status || (ALLOWED_TRANSITIONS[existing.status] ?? []).includes(record.status)
+        ? record.status
+        : existing.status;
+    const purpose = await this.resolvePurpose(record.purposeCode);
+    const next = {
+      scheduledStart: new Date(record.scheduledStart),
+      scheduledEnd: record.scheduledEnd ? new Date(record.scheduledEnd) : null,
+      status,
+      notes: record.notes ?? existing.notes,
+      purposeId: purpose.id,
+      naverBizItemId: record.bizItemId ?? existing.naverBizItemId,
+      naverBizItemName: record.bizItemName ?? existing.naverBizItemName,
+    };
+
+    const changed =
+      next.scheduledStart.getTime() !== existing.scheduledStart.getTime() ||
+      (next.scheduledEnd?.getTime() ?? null) !== (existing.scheduledEnd?.getTime() ?? null) ||
+      next.status !== existing.status ||
+      next.notes !== existing.notes ||
+      next.purposeId !== existing.purposeId ||
+      next.naverBizItemId !== existing.naverBizItemId ||
+      next.naverBizItemName !== existing.naverBizItemName;
+
+    if (!changed) {
+      // 네이버 변경 시각만 움직였다면 맞춰 본 시각을 함께 올려 "네이버 변경" 표시가 남지 않게 한다
+      if (naverTimeMoved) {
+        await this.prisma.appointment.update({
+          where: { id: existing.id },
+          data: { naverUpdatedAt, syncedAt: now },
+        });
+      }
+      return 'unchanged';
+    }
+
+    const after = await this.prisma.appointment.update({
+      where: { id: existing.id },
+      data: { ...next, naverUpdatedAt: naverUpdatedAt ?? now, syncedAt: now, rowVersion: { increment: 1 } },
+    });
+    const becameCancelled = status === 'CANCELLED' && existing.status !== 'CANCELLED';
+    await this.audit.log({
+      userId: actor.id,
+      action: becameCancelled ? 'CANCEL' : 'UPDATE',
+      entityType: 'APPOINTMENT',
+      entityId: existing.id,
+      before: existing,
+      after,
+      reason: becameCancelled ? '네이버 예약 취소 동기화' : '네이버 예약 변경 동기화',
+    });
+    return becameCancelled ? 'cancelled' : 'updated';
+  }
+
+  /**
+   * 일정 변경으로 대체된 옛 예약을 취소 처리한다 (설계서 19 — 삭제하지 않고 CANCELLED 로 보존).
+   *
+   * 이미 끝난 예약(방문·노쇼·취소)은 건드리지 않는다. 네이버 목록에서 사라져도 그날 실제로 일어난 일이
+   * 더 정확하기 때문이다. CRM 수정본(localOverride)이어도 취소는 한다 — 값이 엇갈린 게 아니라
+   * 그 예약 자체가 네이버에서 없어진 것이라 화면에 남겨 둘 이유가 없다.
+   *
+   * @returns 이번에 취소 처리했으면 true (이미 취소된 건·대상 없음은 false)
+   */
+  private async supersedePreviousBooking(
+    record: NaverReservationRecord,
+    now: Date,
+    actor: AuthUser,
+  ): Promise<boolean> {
+    if (!record.previousExternalId) return false;
+    const previous = await this.prisma.appointment.findFirst({
+      where: { source: 'NAVER', externalId: record.previousExternalId },
+    });
+    if (!previous) return false;
+    if (!(ALLOWED_TRANSITIONS[previous.status] ?? []).includes('CANCELLED')) return false;
+
+    const reason = `일정 변경으로 예약번호 ${record.externalId} 로 대체됨`;
+    const after = await this.prisma.appointment.update({
+      where: { id: previous.id },
+      data: {
+        status: 'CANCELLED',
+        notes: previous.notes ? `${previous.notes}\n[일정변경] ${reason}` : `[일정변경] ${reason}`,
+        syncedAt: now,
+        rowVersion: { increment: 1 },
+      },
+    });
+    await this.audit.log({
+      userId: actor.id,
+      action: 'CANCEL',
+      entityType: 'APPOINTMENT',
+      entityId: previous.id,
+      before: previous,
+      after,
+      reason,
+    });
+    return true;
   }
 
   private async createFromNaver(record: NaverReservationRecord, now: Date, actor: AuthUser) {
@@ -562,6 +747,8 @@ export class AppointmentsService {
         scheduledEnd: record.scheduledEnd ? new Date(record.scheduledEnd) : null,
         status: record.status,
         notes: record.notes,
+        naverBizItemId: record.bizItemId,
+        naverBizItemName: record.bizItemName,
         naverUpdatedAt: record.naverUpdatedAt ? new Date(record.naverUpdatedAt) : now,
         syncedAt: now,
       },

@@ -346,12 +346,20 @@ describe('예약·상담 (Phase 2 + 연동정합화 §1)', () => {
     expect(customer.customerStatus).toBe('PROSPECT'); // 미계약 고객 상담 이력 보존
   });
 
-  it('네이버 동기화(스텁)는 {fetched, created, updated, cancelled} 결과를 반환한다', async () => {
+  it('네이버 동기화(스텁)는 건수 요약과 실패 목록을 반환한다', async () => {
     const res = await api(ctx)
       .post('/api/v1/integrations/naver/reservations/sync')
       .set(auth(ctx))
       .expect(201);
-    expect(res.body.data).toEqual({ fetched: 0, created: 0, updated: 0, cancelled: 0 });
+    expect(res.body.data).toMatchObject({
+      fetched: 0,
+      created: 0,
+      updated: 0,
+      cancelled: 0,
+      conflicts: 0,
+      failed: 0,
+      failures: [],
+    });
   });
   /** 개발설계서 05 G-01 — 설계 PDF 1페이지 "용도·예산·희망 스타일·납기 확인" */
   it('초도 상담 항목(용도·예산·스타일·납기)을 저장하고 정정할 수 있다', async () => {

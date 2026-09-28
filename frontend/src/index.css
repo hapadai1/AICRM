@@ -111,3 +111,38 @@
   white-space: normal;
   word-break: keep-all;
 }
+
+/* 예약 상세 상단의 고객명 — 고객 상세로 가는 링크지만 화면에서는 페이지 제목 노릇을 한다.
+ * 36px 짜리 글자가 파랗게 서 있으면 너무 튀어, 평소엔 제목색(검정)으로 두고
+ * 커서를 올릴 때만 링크처럼 보이게 한다.
+ * antd 의 a.ant-typography 보다 우선하도록 태그를 붙여 선택자를 올린다. */
+a.appt-customer-link {
+  color: inherit;
+  /* antd 의 .ant-typography 는 링크 글자를 기본 크기(14px)로 되돌린다.
+   * 이 링크는 제목(<h2>) 안에 들어가므로 바깥 제목의 크기·굵기를 그대로 물려받게 한다. */
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+}
+a.appt-customer-link:hover {
+  color: #1677ff;
+  text-decoration: underline;
+}
+
+/* 월간 달력(렌탈 예약) — 날짜 숫자를 칸 왼쪽 끝으로, 요일 헤더를 가운데로.
+ * antd Calendar full 모드는 패널 전체에 text-align: end 를 걸어 날짜 숫자와 요일 헤더가
+ * 모두 우측 끝에 붙는다. 칸 내용(가용 건수)은 왼쪽에서 시작하므로 어느 칸의 날짜인지
+ * 눈이 매번 되짚어야 했다(현업 요청 2026-09-28). 예약 화면 월간 달력(MonthCalendar)과
+ * 같은 자리에서 읽히게 맞춘다.
+ * - 날짜 숫자: 패널에서 물려받은 정렬을 직접 지정으로 덮는다.
+ * - 요일 헤더: antd 규칙(.ant-picker-calendar-full .ant-picker-panel .ant-picker-body th)이
+ *   클래스 넷짜리라 여기서 이기려면 !important 가 필요하다. 우측 여백도 함께 지운다.
+ * 이 클래스를 붙인 달력에만 적용된다 — 렌탈 후보 모달의 작은 달력(fullscreen={false})은
+ * 원래 날짜가 가운데라 건드리지 않는다. */
+.cal-date-left .ant-picker-calendar-date-value {
+  text-align: left;
+}
+.cal-date-left .ant-picker-content th {
+  text-align: center !important;
+  padding-inline-end: 0 !important;
+}

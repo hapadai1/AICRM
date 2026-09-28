@@ -10,6 +10,9 @@ storage-test/
 # 네이버 예약 정찰/수집 산출물 (세션·예약 개인정보 포함 — 절대 커밋 금지)
 ops/naver-recon/out/
 ops/naver-recon/.profile/
+docs/naver-booking/
+# 실제 고객 계약서 원본(실명·연락처·서명·결제금액 — 절대 커밋 금지). 출력용 양식은 backend/src/modules/contracts/templates/ 에 있다
+docs/data/계약서/
 backend/prisma/migrations/**/README.md
 
 # 빌드 산출물

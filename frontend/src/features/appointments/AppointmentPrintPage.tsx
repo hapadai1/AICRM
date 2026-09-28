@@ -3,9 +3,9 @@ import { Spin } from 'antd';
 import dayjs from 'dayjs';
 import { useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { fetchAppointments, type Appointment } from '../../api/appointments';
+import { fetchAllAppointments } from '../../api/appointments';
 import { useAuthStore } from '../../app/auth-store';
-import { APPT_STATUS_META } from './appointment-constants';
+import { APPT_STATUS_META, appointmentKindLabel, naverMenuLabel } from './appointment-constants';
 import { metaOf } from '../../shared/status-meta';
 import { formatPhone } from '../../shared/phone';
 
@@ -14,26 +14,8 @@ import { formatPhone } from '../../shared/phone';
  * 설계 PDF 1페이지 "CRM 일정 달력 출력/확인"의 출력 쪽.
  *
  * 별도 경로(`/appointments/print`)로 열어 메뉴·버튼 없이 표만 인쇄한다.
- * 목록 API를 그대로 쓰되 백엔드 size 상한(100)을 넘길 수 있어 페이지를 순회한다.
+ * 기간 전체를 받아야 해서 목록 API를 페이지 순회로 훑는다(fetchAllAppointments).
  */
-
-const PAGE_SIZE = 100;
-/** 폭주 방지 상한. 한 달치 예약이 이보다 많을 일은 없다. */
-const MAX_PAGES = 20;
-
-async function fetchAllAppointments(params: {
-  from: string;
-  to: string;
-  purposeCodes: string[];
-}): Promise<Appointment[]> {
-  const all: Appointment[] = [];
-  for (let page = 1; page <= MAX_PAGES; page += 1) {
-    const res = await fetchAppointments({ ...params, page, size: PAGE_SIZE });
-    all.push(...res.data);
-    if (all.length >= res.page.totalElements || res.data.length === 0) break;
-  }
-  return all.sort((a, b) => a.startAt.localeCompare(b.startAt));
-}
 
 const PRINT_STYLE = `
   @page { size: A4 portrait; margin: 12mm; }
@@ -56,11 +38,17 @@ export function AppointmentPrintPage() {
   const from = params.get('from') ?? dayjs().format('YYYY-MM-DD');
   const to = params.get('to') ?? from;
   const purposeCodes = (params.get('purposeCodes') ?? '').split(',').filter(Boolean);
+  // 화면에서 예약 목적(네이버 메뉴)으로 좁혀 봤다면 인쇄도 같은 범위로
+  const sourceParam = params.get('source');
+  const source = sourceParam === 'NAVER' || sourceParam === 'CRM' ? sourceParam : undefined;
+  const naverMenuId = params.get('naverMenuId') ?? undefined;
+  const naverMenuName = params.get('naverMenuName') ?? '';
 
   const { data, isLoading } = useQuery({
-    queryKey: ['appointments', 'print', { from, to, purposeCodes }],
-    queryFn: () => fetchAllAppointments({ from, to, purposeCodes }),
+    queryKey: ['appointments', 'print', { from, to, purposeCodes, source, naverMenuId }],
+    queryFn: () => fetchAllAppointments({ from, to, purposeCodes, source, naverMenuId }),
   });
+  const scopeLabel = naverMenuId ? ` · ${naverMenuLabel(naverMenuName) || '메뉴 선택'}` : '';
 
   // 표가 다 그려진 뒤 한 번만 인쇄창을 띄운다.
   useEffect(() => {
@@ -89,7 +77,8 @@ export function AppointmentPrintPage() {
       <div style={{ marginBottom: 12 }}>
         <h2 style={{ margin: 0 }}>예약 일정표</h2>
         <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
-          기간 {from} ~ {to} · 총 {data.length}건 · 출력 {dayjs().format('YYYY-MM-DD HH:mm')}
+          기간 {from} ~ {to}
+          {scopeLabel} · 총 {data.length}건 · 출력 {dayjs().format('YYYY-MM-DD HH:mm')}
           {userName ? ` · ${userName}` : ''}
         </div>
       </div>
@@ -118,7 +107,8 @@ export function AppointmentPrintPage() {
             </tr>
           )}
           {data.map((a) => {
-            const date = a.startAt.slice(0, 10);
+            // startAt 은 UTC(…Z) — 문자열을 자르면 9시간 이른 시각·전날 날짜가 찍힌다
+            const date = dayjs(a.startAt).format('YYYY-MM-DD');
             const isNewDay = date !== lastDate;
             lastDate = date;
             return (
@@ -129,10 +119,10 @@ export function AppointmentPrintPage() {
                   </tr>
                 )}
                 <tr key={a.id}>
-                  <td>{a.startAt.slice(11, 16)}</td>
+                  <td>{dayjs(a.startAt).format('HH:mm')}</td>
                   <td>{a.customerName}</td>
                   <td>{formatPhone(a.phone)}</td>
-                  <td>{a.purposeName}</td>
+                  <td>{appointmentKindLabel(a)}</td>
                   <td>{metaOf(APPT_STATUS_META, a.status).label}</td>
                   <td>{a.memo ?? ''}</td>
                 </tr>
