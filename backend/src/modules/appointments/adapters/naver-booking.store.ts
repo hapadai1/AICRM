@@ -28,6 +28,8 @@ export interface StoredNaverFetch {
   /** 저장 당시 파싱 결과 — 사람이 파일을 열어 볼 때 읽기 쉽게 둔다 */
   records: MapResult['records'];
   unmappedBizItems: string[];
+  /** 매핑 규칙에 없던 네이버 상태 코드 (예약 대기로 넣었다) — 옛 저장본에는 없다 */
+  unknownStatusCodes?: string[];
   skipped: MapResult['skipped'];
   /** 네이버 응답 원본 */
   raw: NaverBookingRaw[];
@@ -76,6 +78,7 @@ export class NaverBookingStore {
       count: input.raw.length,
       records: parsed.records,
       unmappedBizItems: parsed.unmappedBizItems,
+      unknownStatusCodes: parsed.unknownStatusCodes,
       skipped: parsed.skipped,
       raw: input.raw,
       bizItemsRaw,

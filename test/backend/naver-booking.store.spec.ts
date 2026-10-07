@@ -10,6 +10,7 @@ import {
   NaverBizItemRaw,
   NaverBookingRaw,
 } from '../../backend/src/modules/appointments/adapters/naver-booking.mapper';
+import { kstDate } from '../../backend/src/modules/appointments/adapters/naver-booking.paging';
 import { NaverBookingStore } from '../../backend/src/modules/appointments/adapters/naver-booking.store';
 import { NaverFetchWindow } from '../../backend/src/modules/appointments/adapters/naver-reservation.adapter';
 
@@ -113,8 +114,8 @@ describe('네이버 수집본 저장·재사용', () => {
 
     it('저장본보다 넓은 기간을 요청하면 새로 수집한다', async () => {
       const adapter = adapterFor();
-      await adapter.fetchReservations(); // 기본 창 (과거 2일~미래 7일)
-      const wider: NaverFetchWindow = { lookbackDays: 30, lookaheadDays: 30 };
+      await adapter.fetchReservations(); // 기본 창 (과거 7일~미래 45일)
+      const wider: NaverFetchWindow = { lookbackDays: 60, lookaheadDays: 60 };
       expect((await adapter.fetchReservations(wider)).fromCache).toBe(false);
       expect(adapter.scrapes).toBe(2);
       // 넓게 받아 둔 뒤의 좁은 요청은 저장본으로 충분하다
@@ -133,6 +134,37 @@ describe('네이버 수집본 저장·재사용', () => {
       const adapter = adapterFor({ NAVER_BOOKING_MIN_FETCH_INTERVAL_MIN: '30' });
       expect((await adapter.fetchReservations()).fromCache).toBe(false);
       expect(adapter.scrapes).toBe(1);
+    });
+
+    it('수집이 멈춘 동안의 날짜를 잃지 않도록 공백만큼 과거를 더 본다', async () => {
+      // 예약은 이용일 당일까지 늘어난다 — 공백보다 과거 조회가 짧으면 그 사이 날짜가 덜 찬 채로 굳는다
+      const store = new NaverBookingStore(dir);
+      await store.save({
+        fetchedAt: new Date(Date.now() - 20 * 86_400_000),
+        from: '2000-01-01',
+        to: '2100-01-01',
+        raw: fixture,
+      });
+      const adapter = adapterFor({ NAVER_BOOKING_LOOKBACK_DAYS: '7', NAVER_BOOKING_LOOKAHEAD_DAYS: '45' });
+      await adapter.fetchReservations();
+      expect(adapter.scrapes).toBe(1);
+      const saved = JSON.parse(readFileSync(join(dir, 'latest.json'), 'utf8'));
+      expect(saved.from).toBe(kstDate(new Date(Date.now() - 21 * 86_400_000))); // 공백 20일 + 마지막 수집일
+      expect(saved.to).toBe(kstDate(new Date(Date.now() + 45 * 86_400_000)));
+    });
+
+    it('공백 보정에도 상한이 있다 — 켠 뒤 과거 전체를 긁지 않는다', async () => {
+      const store = new NaverBookingStore(dir);
+      await store.save({
+        fetchedAt: new Date(Date.now() - 300 * 86_400_000),
+        from: '2000-01-01',
+        to: '2100-01-01',
+        raw: fixture,
+      });
+      const adapter = adapterFor({ NAVER_BOOKING_MAX_LOOKBACK_DAYS: '45' });
+      await adapter.fetchReservations();
+      const saved = JSON.parse(readFileSync(join(dir, 'latest.json'), 'utf8'));
+      expect(saved.from).toBe(kstDate(new Date(Date.now() - 45 * 86_400_000)));
     });
 
     it('명시적 적재(maxAgeMinutes 0)는 저장본이 있어도 새로 수집한다', async () => {

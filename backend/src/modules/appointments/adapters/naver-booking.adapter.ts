@@ -75,18 +75,44 @@ export class NaverBookingAdapter implements NaverReservationAdapter {
 
   /** 조회 창: 과거 N일(취소·변경 반영) ~ 미래 M일. 호출부가 넘기면 그 값을 쓴다(첫 적재 등). */
   private range(window?: NaverFetchWindow): { start: Date; end: Date } {
-    const back = window?.lookbackDays ?? Number(this.config.get('NAVER_BOOKING_LOOKBACK_DAYS') ?? 2);
-    const ahead = window?.lookaheadDays ?? Number(this.config.get('NAVER_BOOKING_LOOKAHEAD_DAYS') ?? 7);
+    const back = window?.lookbackDays ?? Number(this.config.get('NAVER_BOOKING_LOOKBACK_DAYS') ?? 7);
+    const ahead = window?.lookaheadDays ?? Number(this.config.get('NAVER_BOOKING_LOOKAHEAD_DAYS') ?? 45);
     const now = Date.now();
     return { start: new Date(now - back * 86_400_000), end: new Date(now + ahead * 86_400_000) };
   }
 
+  /**
+   * 실제로 쓸 조회 창 — 수집이 멈춘 동안 생긴 예약을 영구히 잃지 않도록 과거 일수를 자동으로 늘린다.
+   *
+   * 어떤 날짜의 예약은 그 날 당일까지 계속 늘어난다(실측: 이용일 1일 전 60%, 3~4일 전 32%,
+   * 5~7일 전 17%만 들어와 있다). 그래서 미리 긁어 둔 값은 언제나 덜 찬 상태이고, 그 날짜를
+   * **이용일 당일 또는 그 이후에 한 번 더** 긁어야 비로소 채워진다.
+   * 과거 조회 일수가 수집 공백보다 짧으면 그 사이 날짜는 덜 찬 채로 영구히 고정된다
+   * (서버가 꺼져 있던 2026-10-01~04 가 실제로 그렇게 굳었다).
+   *
+   * 그래서 "마지막 수집 이후 지난 날수 + 하루" 만큼은 반드시 다시 본다. 상한을 두어
+   * 오래 멈췄다 켠 뒤 과거 전체를 긁지는 않는다(그건 scripts/naver-sync.ts 의 몫).
+   */
+  private effectiveWindow(window: NaverFetchWindow | undefined, lastFetchedAt?: string): NaverFetchWindow | undefined {
+    if (window) return window; // 호출부가 명시한 창은 그대로 쓴다 (기간 지정 적재·첫 적재)
+    if (!lastFetchedAt) return undefined;
+    const back = Number(this.config.get('NAVER_BOOKING_LOOKBACK_DAYS') ?? 7);
+    const ahead = Number(this.config.get('NAVER_BOOKING_LOOKAHEAD_DAYS') ?? 45);
+    const maxBack = Number(this.config.get('NAVER_BOOKING_MAX_LOOKBACK_DAYS') ?? 45);
+    // 마지막 수집 날짜 자체도 다시 봐야 한다 (그날 수집 이후 들어온 예약이 있다) — 그래서 +1
+    const gapDays = Math.floor((Date.now() - Date.parse(lastFetchedAt)) / 86_400_000) + 1;
+    const lookbackDays = Math.min(maxBack, Math.max(back, Number.isFinite(gapDays) ? gapDays : back));
+    if (lookbackDays > back) {
+      this.logger.warn(`수집 공백 — 과거 조회를 ${back}일에서 ${lookbackDays}일로 늘린다`);
+    }
+    return { lookbackDays, lookaheadDays: ahead };
+  }
+
   private listUrl(window?: NaverFetchWindow): string {
     const { start, end } = this.range(window);
-    const ymd = (d: Date) => d.toISOString().slice(0, 10);
     return (
       `https://partner.booking.naver.com/bizes/${this.bizId}/booking-list-view` +
-      `?dateDropdownType=WEEK&startDateTime=${ymd(start)}&endDateTime=${ymd(end)}&dateFilter=USEDATE`
+      `?dateDropdownType=WEEK&startDateTime=${kstDate(start)}&endDateTime=${kstDate(end)}&dateFilter=USEDATE`
     );
   }
 
@@ -106,13 +132,16 @@ export class NaverBookingAdapter implements NaverReservationAdapter {
   }
 
   private async fetchOrReuse(window: NaverFetchWindow | undefined, options: NaverFetchOptions): Promise<NaverFetchResult> {
-    const { start, end } = this.range(window);
-    const want = { from: kstDate(start), to: kstDate(end) };
     const saved = await this.store.latest();
 
     if (options.cacheOnly) {
       return { records: saved?.parsed.records ?? [], fetchedAt: saved?.fetchedAt, fromCache: true };
     }
+
+    // 수집 공백만큼 과거를 더 본다 — 저장본을 읽은 뒤에야 알 수 있어 여기서 창을 확정한다
+    const effective = this.effectiveWindow(window, saved?.fetchedAt);
+    const { start, end } = this.range(effective);
+    const want = { from: kstDate(start), to: kstDate(end) };
 
     const maxAge = options.maxAgeMinutes ?? Number(this.config.get('NAVER_BOOKING_MIN_FETCH_INTERVAL_MIN') ?? 30);
     if (saved && maxAge > 0) {
@@ -132,18 +161,23 @@ export class NaverBookingAdapter implements NaverReservationAdapter {
     }
 
     const fetchedAt = new Date();
-    const { bookings: raw, bizItems } = await this.scrape(window);
+    const { bookings: raw, bizItems } = await this.scrape(effective);
     const stored = await this.store.save({ fetchedAt, ...want, raw, bizItemsRaw: bizItems }).catch((e) => {
       // 저장 실패로 이번 수집까지 버리지는 않는다 — 다음 요청이 다시 수집하게 될 뿐이다
       this.logger.warn(`수집본 저장 실패: ${e instanceof Error ? e.message : e}`);
       return null;
     });
-    const { records, unmappedBizItems, skipped } = stored ?? mapNaverBookings(raw);
+    const { records, unmappedBizItems, unknownStatusCodes, skipped } = stored ?? mapNaverBookings(raw);
     if (!bizItems.length) {
       this.logger.warn('예약 상품(메뉴) 목록 응답을 잡지 못했다 — 직전 저장본의 상품 목록을 유지한다');
     }
     if (unmappedBizItems.length) {
       this.logger.warn(`목적 매핑 규칙에 없는 네이버 메뉴: ${unmappedBizItems.join(', ')} — 기본 목적으로 수집했다`);
+    }
+    if (unknownStatusCodes?.length) {
+      this.logger.warn(
+        `상태 매핑 규칙에 없는 네이버 상태 코드: ${unknownStatusCodes.join(', ')} — 예약 대기로 수집했다`,
+      );
     }
     if (skipped.length) this.logger.warn(`건너뛴 예약 ${skipped.length}건: ${JSON.stringify(skipped)}`);
     this.logger.log(`네이버 예약 ${records.length}건 수집 (원본 ${raw.length}건, ${want.from}~${want.to})`);

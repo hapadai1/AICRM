@@ -48,7 +48,7 @@ export interface NaverBookingRaw {
  * 네이버 예약 상태 → CRM 예약 상태 (설계서 5.2).
  * 캡처 데이터에서 확인한 코드는 RC03·RC04·RC08 세 가지이며,
  * RC02(확정 대기)는 "예약 후 업체 확인" 설정에서 나타나므로 함께 정의해 둔다.
- * 노쇼 코드는 실데이터로 확인하지 못해 넣지 않았다 — 처음 보는 코드는 건너뛰고 로그로 알린다.
+ * 노쇼 코드는 실데이터로 확인하지 못해 넣지 않았다 — 처음 보는 코드는 예약 대기로 넣고 로그로 알린다.
  */
 const STATUS_MAP: Record<string, NaverReservationRecord['status']> = {
   RC02: 'RESERVED', // 예약 신청 (업체 확정 대기)
@@ -108,6 +108,8 @@ function buildNotes(raw: NaverBookingRaw): string | undefined {
     parts.push('[취소사유] 고객 직접 취소');
   }
   if (raw.previousBookingId) parts.push(`[일정변경] 이전 예약번호 ${raw.previousBookingId}`);
+  // 처음 보는 상태 코드는 예약을 버리지 않고 메모로 알린다 (아래 mapNaverBookings 참고)
+  if (!STATUS_MAP[raw.bookingStatusCode]) parts.push(`[상태확인] 네이버 상태코드 ${raw.bookingStatusCode}`);
   return parts.length ? parts.join('\n') : undefined;
 }
 
@@ -117,6 +119,8 @@ export interface MapResult {
   unmappedBizItems: string[];
   /** 필수값이 없어 건너뛴 예약 (예약번호와 사유) */
   skipped: Array<{ bookingId: unknown; reason: string }>;
+  /** 매핑 규칙에 없는 네이버 상태 코드 — 예약 대기로 넣고 운영자가 규칙을 보완하도록 노출한다. */
+  unknownStatusCodes: string[];
 }
 
 /**
@@ -128,6 +132,7 @@ export interface MapResult {
 export function mapNaverBookings(rawList: NaverBookingRaw[]): MapResult {
   const records: NaverReservationRecord[] = [];
   const unmapped = new Set<string>();
+  const unknownStatuses = new Set<string>();
   const skipped: MapResult['skipped'] = [];
 
   for (const raw of rawList ?? []) {
@@ -136,11 +141,10 @@ export function mapNaverBookings(rawList: NaverBookingRaw[]): MapResult {
       skipped.push({ bookingId: raw?.bookingId, reason: '예약번호 또는 예약 일시 없음' });
       continue;
     }
+    // 처음 보는 상태 코드라도 예약 자체는 잃지 않는다 — 네이버에 있는데 CRM 에 없는 쪽이
+    // 상태가 한 칸 뒤처진 쪽보다 나쁘다. 예약 대기로 넣고 메모·로그로 알린다.
     const status = STATUS_MAP[raw.bookingStatusCode];
-    if (!status) {
-      skipped.push({ bookingId: raw.bookingId, reason: `알 수 없는 상태 코드 ${raw.bookingStatusCode}` });
-      continue;
-    }
+    if (!status) unknownStatuses.add(raw.bookingStatusCode);
     const purposeCode = resolvePurposeCode(raw.bizItemName);
     if (!purposeCode) unmapped.add(raw.bizItemName);
 
@@ -153,7 +157,7 @@ export function mapNaverBookings(rawList: NaverBookingRaw[]): MapResult {
       scheduledEnd: raw.snapshotJson?.endDateTime
         ? new Date(raw.snapshotJson.endDateTime).toISOString()
         : undefined,
-      status,
+      status: status ?? 'RESERVED',
       naverUpdatedAt: latestChangedAt(raw),
       notes: buildNotes(raw),
       bizItemId: raw.bizItemId != null ? String(raw.bizItemId) : undefined,
@@ -162,7 +166,7 @@ export function mapNaverBookings(rawList: NaverBookingRaw[]): MapResult {
     });
   }
 
-  return { records, unmappedBizItems: [...unmapped], skipped };
+  return { records, unmappedBizItems: [...unmapped], unknownStatusCodes: [...unknownStatuses], skipped };
 }
 
 /**
