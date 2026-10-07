@@ -159,13 +159,20 @@ describe('네이버 예약 파싱 (설계서 16.1 수집 매핑)', () => {
     expect(mapNaverBookings([raw]).records[0].naverUpdatedAt).toBe('2026-09-03T12:00:00+09:00');
   });
 
-  it('예약 일시나 상태가 이상한 건은 건너뛰고 사유를 남긴다', () => {
-    const broken: NaverBookingRaw[] = [
-      { ...fixture[0], bookingId: 1, snapshotJson: null },
-      { ...fixture[0], bookingId: 2, bookingStatusCode: 'RC99' },
-    ];
+  it('예약 일시가 없는 건만 건너뛰고 사유를 남긴다', () => {
+    const broken: NaverBookingRaw[] = [{ ...fixture[0], bookingId: 1, snapshotJson: null }];
     const { records, skipped } = mapNaverBookings(broken);
     expect(records).toHaveLength(0);
-    expect(skipped.map((s) => s.bookingId)).toEqual([1, 2]);
+    expect(skipped.map((s) => s.bookingId)).toEqual([1]);
+  });
+
+  it('처음 보는 상태 코드는 버리지 않고 예약 대기로 넣으면서 알린다', () => {
+    const { records, skipped, unknownStatusCodes } = mapNaverBookings([
+      { ...fixture[0], bookingId: 2, bookingStatusCode: 'RC99' },
+    ]);
+    expect(skipped).toEqual([]);
+    expect(unknownStatusCodes).toEqual(['RC99']);
+    expect(records[0].status).toBe('RESERVED');
+    expect(records[0].notes).toContain('[상태확인] 네이버 상태코드 RC99');
   });
 });

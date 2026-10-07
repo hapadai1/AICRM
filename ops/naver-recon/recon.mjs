@@ -53,8 +53,8 @@ function loadEnv() {
 
 const env = loadEnv();
 const BIZ_ID = env.NAVER_BOOKING_BIZ_ID ?? '1581427';
-const LOOKBACK = Number(env.NAVER_BOOKING_LOOKBACK_DAYS ?? 2);
-const LOOKAHEAD = Number(env.NAVER_BOOKING_LOOKAHEAD_DAYS ?? 7);
+const LOOKBACK = Number(env.NAVER_BOOKING_LOOKBACK_DAYS ?? 7);
+const LOOKAHEAD = Number(env.NAVER_BOOKING_LOOKAHEAD_DAYS ?? 45);
 
 function ymd(d) {
   return d.toISOString().slice(0, 10);
