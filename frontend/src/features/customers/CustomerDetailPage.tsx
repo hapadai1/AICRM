@@ -50,7 +50,12 @@ import {
 import { BackButton } from '../../shared/BackButton';
 import { Can } from '../../shared/Can';
 import { StatusBadge } from '../../shared/StatusBadge';
-import { APPT_STATUS_META, SOURCE_META } from '../appointments/appointment-constants';
+import {
+  APPT_STATUS_META,
+  CANCELLED_TEXT_STYLE,
+  isCancelledAppointment,
+  SOURCE_META,
+} from '../appointments/appointment-constants';
 import { CUSTOMER_STATUS_META, formatAmount, formatPhone } from './customer-constants';
 import {
   buildContractTrackRows,
@@ -306,7 +311,12 @@ export function CustomerDetailPage() {
       title: '예약 일시',
       dataIndex: 'startAt',
       width: 200,
-      render: (v: string) => dayjs(v).format('YYYY-MM-DD (dd) HH:mm'),
+      // 일정이 바뀌어 취소된 옛 예약도 이력으로 남는다 — 바뀌기 전 시각임을 선으로 알린다
+      render: (v: string, r) => (
+        <span style={isCancelledAppointment(r) ? CANCELLED_TEXT_STYLE : undefined}>
+          {dayjs(v).format('YYYY-MM-DD (dd) HH:mm')}
+        </span>
+      ),
     },
     { title: '목적', dataIndex: 'purposeName', width: 150 },
     {

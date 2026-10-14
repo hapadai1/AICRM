@@ -1,9 +1,27 @@
+import type { CSSProperties } from 'react';
 import type {
   Appointment,
   AppointmentSource,
   AppointmentStatus,
   AppointmentSyncStatus,
 } from '../../api/appointments';
+
+/**
+ * 더 이상 일어나지 않는 예약인지 — 취소·노쇼.
+ *
+ * 네이버는 손님이 일정을 바꾸면 옛 예약을 취소로 남기고 새 예약번호를 발급한다(설계서 19:
+ * 지우지 않고 CANCELLED 로 보존). 그래서 달력·목록에는 같은 손님이 두 줄로 보이게 되고,
+ * 바뀌기 전 일정이 살아 있는 예약처럼 보이면 그 시간에 손님을 기다리게 된다.
+ * 어느 화면에서 보든 한눈에 구분되도록 취소선·흐리게를 같은 기준으로 입힌다.
+ */
+export function isCancelledAppointment(a: Pick<Appointment, 'status'>): boolean {
+  return a.status === 'CANCELLED' || a.status === 'NO_SHOW';
+}
+
+/** 취소·노쇼 예약의 글자 — 취소선 */
+export const CANCELLED_TEXT_STYLE: CSSProperties = { textDecoration: 'line-through' };
+/** 취소·노쇼 예약의 줄·카드 전체 — 흐리게 (살아 있는 예약이 먼저 눈에 들어오게) */
+export const CANCELLED_ROW_STYLE: CSSProperties = { opacity: 0.55 };
 
 /**
  * 예약 목적 짧은 표시명 — "가봉_조율의 시간" → "가봉".

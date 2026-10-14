@@ -5,7 +5,13 @@ import { useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { fetchAllAppointments } from '../../api/appointments';
 import { useAuthStore } from '../../app/auth-store';
-import { APPT_STATUS_META, appointmentKindLabel, naverMenuLabel } from './appointment-constants';
+import {
+  APPT_STATUS_META,
+  appointmentKindLabel,
+  CANCELLED_TEXT_STYLE,
+  isCancelledAppointment,
+  naverMenuLabel,
+} from './appointment-constants';
 import { metaOf } from '../../shared/status-meta';
 import { formatPhone } from '../../shared/phone';
 
@@ -118,7 +124,8 @@ export function AppointmentPrintPage() {
                     <td colSpan={6}>{dayjs(date).format('YYYY-MM-DD (dd)')}</td>
                   </tr>
                 )}
-                <tr key={a.id}>
+                {/* 취소·노쇼는 인쇄물에도 선을 그어 둔다 — 종이만 보고 손님을 기다리는 일이 없게 */}
+                <tr key={a.id} style={isCancelledAppointment(a) ? CANCELLED_TEXT_STYLE : undefined}>
                   <td>{dayjs(a.startAt).format('HH:mm')}</td>
                   <td>{a.customerName}</td>
                   <td>{formatPhone(a.phone)}</td>

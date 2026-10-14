@@ -27,12 +27,15 @@ import { DataTable } from '../../shared/DataTable';
 import { ListToolbar, PageCard, PageShell } from '../../shared/PageShell';
 import { StatusBadge } from '../../shared/StatusBadge';
 import {
+  appointmentKindLabel,
   APPT_STATUS_META,
+  CANCELLED_ROW_STYLE,
+  CANCELLED_TEXT_STYLE,
+  isCancelledAppointment,
+  naverMenuLabel,
   SYNC_STATUS_META,
   TIMETABLE_END_HOUR,
   TIMETABLE_START_HOUR,
-  appointmentKindLabel,
-  naverMenuLabel,
 } from './appointment-constants';
 import { MonthCalendar } from './MonthCalendar';
 import { formatPhone } from '../../shared/phone';
@@ -91,7 +94,7 @@ function AppointmentCard({
 }) {
   const statusMeta = metaOf(APPT_STATUS_META, appointment.status);
   const syncMeta = metaOf(SYNC_STATUS_META, appointment.syncStatus);
-  const cancelled = appointment.status === 'CANCELLED' || appointment.status === 'NO_SHOW';
+  const cancelled = isCancelledAppointment(appointment);
   return (
     <div
       onClick={() => onOpen(appointment.id)}
@@ -105,10 +108,10 @@ function AppointmentCard({
         // 가로 나열(고정폭)일 땐 gap이 간격을 잡으므로 marginBottom을 두지 않는다.
         marginBottom: fixedWidth ? 0 : 4,
         width: fixedWidth,
-        opacity: cancelled ? 0.55 : 1,
+        ...(cancelled ? CANCELLED_ROW_STYLE : null),
       }}
     >
-      <div style={{ fontSize: 12, fontWeight: 600, textDecoration: cancelled ? 'line-through' : undefined }}>
+      <div style={{ fontSize: 12, fontWeight: 600, ...(cancelled ? CANCELLED_TEXT_STYLE : null) }}>
         {appointment.customerName}
       </div>
       <div style={{ fontSize: 11, lineHeight: '18px' }}>
@@ -316,10 +319,22 @@ export function AppointmentsPage() {
       title: '예약 일시',
       dataIndex: 'startAt',
       width: COL.datetime,
-      render: (v: string) => dayjs(v).format('YYYY-MM-DD (dd) HH:mm'),
+      // 일정이 바뀌어 취소된 옛 예약은 목록에도 남는다 — 바뀌기 전 시각임을 선으로 알린다
+      render: (v: string, r) => (
+        <span style={isCancelledAppointment(r) ? CANCELLED_TEXT_STYLE : undefined}>
+          {dayjs(v).format('YYYY-MM-DD (dd) HH:mm')}
+        </span>
+      ),
     },
     // 미계약/계약 배지는 제거했다 — 가망/계약 고객 구분이 폐기되어 표시 의미가 없다(설계서 07 D8).
-    { title: '고객명', dataIndex: 'customerName', width: COL.name },
+    {
+      title: '고객명',
+      dataIndex: 'customerName',
+      width: COL.name,
+      render: (v: string, r) => (
+        <span style={isCancelledAppointment(r) ? CANCELLED_TEXT_STYLE : undefined}>{v}</span>
+      ),
+    },
     { title: '전화번호', dataIndex: 'phone', width: COL.code, render: (v: string) => formatPhone(v) },
     {
       // 화면에서 "예약 목적"은 네이버 예약 메뉴를 가리킨다 — 예약이 전부 네이버로 들어오므로
@@ -458,7 +473,10 @@ export function AppointmentsPage() {
             columns={columns}
             dataSource={appointments}
             pagination={{}}
-            onRow={(r) => ({ onClick: () => openDetail(r.id), style: { cursor: 'pointer' } })}
+            onRow={(r) => ({
+              onClick: () => openDetail(r.id),
+              style: { cursor: 'pointer', ...(isCancelledAppointment(r) ? CANCELLED_ROW_STYLE : null) },
+            })}
             locale={{ emptyText: <Empty description="조건에 해당하는 예약이 없습니다." /> }}
           />
         ) : isLoading ? (
