@@ -3,7 +3,13 @@ import dayjs, { type Dayjs } from 'dayjs';
 import type { CSSProperties } from 'react';
 import type { Appointment } from '../../api/appointments';
 import { SEMANTIC_COLOR } from '../../app/theme';
-import { APPT_STATUS_META, appointmentKindLabel } from './appointment-constants';
+import {
+  APPT_STATUS_META,
+  appointmentKindLabel,
+  CANCELLED_ROW_STYLE,
+  CANCELLED_TEXT_STYLE,
+  isCancelledAppointment,
+} from './appointment-constants';
 import { metaOf } from '../../shared/status-meta';
 
 /**
@@ -150,32 +156,39 @@ function DayCell({
       >
         {day.date()}
       </div>
-      {rows.slice(0, MAX_VISIBLE).map((a) => (
-        <div
-          key={a.id}
-          onClick={(e) => {
-            e.stopPropagation();
-            onOpen(a.id);
-          }}
-          style={{
-            cursor: 'pointer',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            fontSize: 12,
-          }}
-          title={`${dayjs(a.startAt).format('HH:mm')} ${a.customerName} · ${appointmentKindLabel(a)}`}
-        >
-          <Badge
-            color={metaOf(APPT_STATUS_META, a.status).color}
-            text={
-              <span style={{ fontSize: 12 }}>
-                {dayjs(a.startAt).format('HH:mm')} {a.customerName}
-              </span>
-            }
-          />
-        </div>
-      ))}
+      {rows.slice(0, MAX_VISIBLE).map((a) => {
+        // 일정이 바뀌어 취소된 옛 예약은 지우지 않고 남으므로, 살아 있는 줄과 구분되게 긋는다
+        const cancelled = isCancelledAppointment(a);
+        return (
+          <div
+            key={a.id}
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpen(a.id);
+            }}
+            style={{
+              cursor: 'pointer',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              fontSize: 12,
+              ...(cancelled ? CANCELLED_ROW_STYLE : null),
+            }}
+            title={`${dayjs(a.startAt).format('HH:mm')} ${a.customerName} · ${appointmentKindLabel(a)}${
+              cancelled ? ` (${metaOf(APPT_STATUS_META, a.status).label})` : ''
+            }`}
+          >
+            <Badge
+              color={metaOf(APPT_STATUS_META, a.status).color}
+              text={
+                <span style={{ fontSize: 12, ...(cancelled ? CANCELLED_TEXT_STYLE : null) }}>
+                  {dayjs(a.startAt).format('HH:mm')} {a.customerName}
+                </span>
+              }
+            />
+          </div>
+        );
+      })}
       {rows.length > MAX_VISIBLE && (
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           +{rows.length - MAX_VISIBLE}건
